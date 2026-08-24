@@ -1,0 +1,10 @@
+[package]
+name = "scannerd-radio"
+version.workspace = true
+edition.workspace = true
+description = "Multi-device SDR management and IQ fan-out for scannerd"
+
+[dependencies]
+anyhow.workspace = true
+num-complex.workspace = true
+soapysdr.workspace = true

@@ -1,0 +1,28 @@
+[workspace]
+resolver = "3"
+members = ["crates/dsp", "crates/engine", "crates/radio", "crates/server"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+
+[workspace.dependencies]
+anyhow = "1.0"
+aes = { version = "0.8", features = ["zeroize"] }
+cipher = "0.4"
+des = { version = "0.8", features = ["zeroize"] }
+clap = { version = "4.6", features = ["derive"] }
+num-complex = "0.4.6"
+rustfft = "6.4.1"
+rmbe = "0.1.0"
+blip25-vocoder = { version = "1.0.0", default-features = false, features = ["decode"] }
+soapysdr = { version = "0.5.1", features = ["log"] }
+serde = { version = "1.0", features = ["derive"] }
+toml = "0.9"
+zeroize = { version = "1.8", features = ["zeroize_derive"] }
+scannerd-dsp = { path = "crates/dsp" }
+scannerd-engine = { path = "crates/engine" }
+scannerd-radio = { path = "crates/radio" }
+
+[profile.release]
+opt-level = 3

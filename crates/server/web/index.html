@@ -1,0 +1,2847 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>uSDR</title>
+<style>
+  :root {
+    --page: #0a0d11;
+    --body: #171c22;
+    --bezel: #22282f;
+    --lcd: #04090f;
+    --lcd-grid: #12303f;
+    --line: #2a343e;
+    --text: #dbe7ee;
+    --dim: #7f97a6;
+    --faint: #4a5b6a;
+    --accent: #35a7e8;
+    --green: #2bff6a;
+    --amber: #ffb428;
+    --red: #ff5a4a;
+    --mono: ui-monospace, "JetBrains Mono", "DejaVu Sans Mono", Menlo, monospace;
+    --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+
+  * { box-sizing: border-box; }
+
+  /* Every live readout is tabular: digits that change must not change width. */
+  .fd, .fdot, .val, .scr-clock, .meter-num, .spec-scale, .spec-edge,
+  .scope-axis, .badge, .spec-readout, .note {
+    font-variant-numeric: tabular-nums;
+  }
+
+  body {
+    margin: 0; padding: 18px 16px 40px;
+    background: radial-gradient(1200px 600px at 50% -10%, #131a21 0%, var(--page) 70%);
+    color: var(--text); font-family: var(--sans); font-size: 14px;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .wrap { max-width: 1180px; margin: 0 auto; }
+
+  /* ---------- the rig ---------- */
+
+  .rig {
+    background: linear-gradient(#2a3037, #1a1f25 18%, #161b21 100%);
+    border: 1px solid #0a0d10;
+    border-radius: 12px;
+    padding: 14px;
+    box-shadow: 0 18px 50px rgba(0,0,0,0.55), inset 0 1px 0 rgba(255,255,255,0.06);
+  }
+
+  .rig-brand {
+    display: flex; align-items: baseline; gap: 10px;
+    padding: 0 4px 10px;
+  }
+  .rig-brand .mark {
+    font-weight: 800; font-size: 17px; letter-spacing: 0.06em; color: #eaf2f7;
+  }
+  .rig-brand .sub {
+    font-size: 10px; letter-spacing: 0.18em; color: var(--faint); text-transform: uppercase;
+  }
+  .rig-brand .conn {
+    margin-left: auto; font: 11px/1 var(--mono); color: var(--dim);
+  }
+
+  .screen {
+    background: var(--lcd);
+    border: 1px solid #000;
+    border-radius: 5px;
+    padding: 8px 10px 10px;
+    box-shadow: inset 0 0 0 1px rgba(120,180,220,0.07), inset 0 2px 14px rgba(0,0,0,0.8);
+    font-family: var(--mono);
+  }
+
+  /* top strip */
+  .scr-top {
+    display: flex; align-items: center; gap: 8px; margin-bottom: 6px;
+  }
+  .badge {
+    font-size: 11px; font-weight: 700; letter-spacing: 0.04em;
+    padding: 3px 9px; border-radius: 3px;
+    background: #16222c; color: #a9c2d1; border: 1px solid #24333f;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: center;
+  }
+  #badgeMode { width: 58px; }
+  #badgeSpan { width: 74px; }
+  /* The classifier's label swings from "IDLE" to "P25 Phase 2 (TDMA)". */
+  #badgeProto { width: 190px; }
+  .badge.blue { background: #1c6fc4; color: #fff; border-color: #2f88e0; }
+  .badge.live { background: #0d4a2a; color: var(--green); border-color: #17703f; }
+  .filt-glyph { opacity: 0.75; }
+  .modesw { display: inline-flex; gap: 2px; }
+  .modebtn {
+    font: 700 10px/1 var(--sans); letter-spacing: 0.06em;
+    padding: 5px 9px; border-radius: 3px; cursor: pointer;
+    background: #101a22; color: #6f8797; border: 1px solid #1e2b35;
+  }
+  .modebtn:hover { color: #a9c2d1; border-color: #2b3d4c; }
+  .modebtn.on { background: #1c6fc4; color: #fff; border-color: #2f88e0; }
+  .scr-top .spacer { flex: 1; }
+  .scr-vfo { font-size: 11px; color: var(--dim); letter-spacing: 0.05em; }
+  .scr-vfo b { color: var(--text); }
+  .scr-clock { font-size: 15px; color: #eaf2f7; letter-spacing: 0.02em; width: 52px; text-align: right; }
+
+  /* meter + frequency */
+  .scr-head {
+    display: grid; grid-template-columns: 232px 1fr; align-items: end;
+    gap: 14px; margin-bottom: 8px;
+  }
+  .meter { padding-bottom: 2px; }
+  /* Ticks sit at their real dB positions, not evenly spaced: S1–S9 is 6 dB a
+     unit and the overrange is 20 dB a step, so even spacing would put every
+     label somewhere the needle never agrees with. */
+  .meter-scale {
+    position: relative; height: 11px;
+    font-size: 9px; color: var(--dim); letter-spacing: 0.02em; margin-bottom: 2px;
+  }
+  .meter-scale span {
+    position: absolute; transform: translateX(-50%); white-space: nowrap;
+  }
+  .meter-scale .hi { color: var(--red); }
+  .meter-ticks {
+    position: absolute; inset: 0; pointer-events: none;
+  }
+  .meter-ticks i {
+    position: absolute; top: 0; bottom: 0; width: 1px; background: rgba(255,255,255,0.18);
+  }
+  .meter-row { display: flex; align-items: center; gap: 6px; }
+  .meter-label { font-size: 9px; color: var(--dim); width: 26px; }
+  /* The colour belongs to the *scale*, not to the reading. Painting the
+     gradient on the fill meant its red section started partway along whatever
+     the fill happened to be, so a mid-scale signal showed half a red bar. The
+     bar carries the gradient and a mask hides the part not reached, which puts
+     red where the scale says red: past S9. */
+  .meter-bar {
+    position: relative; flex: 1; height: 20px;
+    background: linear-gradient(90deg,
+      #1b8fd8 0%, #35a7e8 44.4%, #ff5a4a 44.5%, #ff8a5a 100%);
+    border: 1px solid #1b2933; border-radius: 2px; overflow: hidden;
+  }
+  .meter-mask {
+    position: absolute; top: 0; bottom: 0; right: 0; left: 0;
+    background: #071016;
+    transition: left 90ms linear;
+  }
+  .meter-peak {
+    position: absolute; top: 0; bottom: 0; width: 2px; background: #ffdf6a; opacity: 0.9;
+    transition: left 140ms linear;
+  }
+  .meter-num {
+    font-size: 10px; color: var(--dim); margin-top: 2px;
+    height: 13px; white-space: nowrap; overflow: hidden;
+  }
+
+  /* frequency readout */
+  .freq {
+    display: flex; align-items: baseline; justify-content: flex-end;
+    gap: 0; cursor: default; user-select: none; line-height: 1;
+  }
+  .fd {
+    font-size: 42px; font-weight: 600; color: #fff; letter-spacing: -0.01em;
+    display: inline-block; width: 26px; text-align: center;
+    padding: 0 1px; border-radius: 3px; cursor: ns-resize;
+    transition: background 90ms, color 90ms;
+  }
+  .fd.lead { color: #35485a; }
+  .fd:hover { background: rgba(53,167,232,0.22); }
+  .fd.sel { background: rgba(53,167,232,0.34); color: #fff; box-shadow: inset 0 -2px 0 var(--accent); }
+  .fdot { font-size: 42px; font-weight: 600; color: #7f97a6; padding: 0 3px; }
+  .fdot.lead { color: #35485a; }
+  .funit { font-size: 13px; color: var(--dim); margin-left: 8px; align-self: flex-end; padding-bottom: 4px; }
+  .freq-entry {
+    font: 600 34px var(--mono); background: #071019; color: #fff;
+    border: 1px solid var(--accent); border-radius: 4px; padding: 2px 10px;
+    width: 320px; text-align: right; outline: none;
+  }
+  /* A small control strip that belongs to the dial, sitting with it rather
+     than in the bank of unrelated controls below the rig. */
+  .vfo-bar {
+    display: flex; align-items: center; justify-content: flex-end; gap: 7px;
+    margin-bottom: 4px;
+  }
+  .vfo-bar label {
+    font-size: 9px; letter-spacing: 0.12em; color: var(--dim); text-transform: uppercase;
+  }
+  .vfo-bar select { padding: 2px 6px; font-size: 11px; }
+  .vfo-step {
+    font: 10px var(--mono); color: var(--accent); min-width: 62px; text-align: right;
+  }
+  .freq-hint {
+    text-align: right; font-size: 9px; color: var(--faint); letter-spacing: 0.06em;
+    margin-top: 3px; text-transform: uppercase;
+  }
+
+  /* spectrum */
+  .spec-edge {
+    display: flex; justify-content: space-between;
+    font-size: 10px; color: var(--dim); padding: 0 2px 2px;
+    height: 14px; white-space: nowrap;
+  }
+  .spec-edge span { width: 90px; }
+  .spec-edge span:last-child { text-align: right; }
+  .spec-canvases {
+    position: relative; border: 1px solid #16222c; border-radius: 2px;
+    overflow: hidden; background: #000; line-height: 0;
+  }
+  #sdrSpectrumCanvas { width: 100%; height: 168px; display: block; cursor: crosshair; }
+  #sdrWaterfallCanvas { width: 100%; height: 260px; display: block; cursor: crosshair; }
+  .spec-readout {
+    position: absolute; top: 6px; right: 8px; pointer-events: none;
+    font: 11px/1.2 var(--mono); color: #9fe6ff; background: rgba(4,10,16,0.9);
+    padding: 3px 8px; border-radius: 3px; border: 1px solid rgba(120,200,240,0.28);
+  }
+  .spec-scale {
+    display: flex; justify-content: space-between;
+    font-size: 10px; color: var(--dim); padding: 3px 2px 0;
+    height: 16px; white-space: nowrap; overflow: hidden;
+  }
+  .spec-scale span { flex: 1; text-align: center; }
+  .spec-scale span:first-child { text-align: left; }
+  .spec-scale span:last-child { text-align: right; }
+
+  /* audio scope */
+  .scr-scope { margin-top: 8px; }
+  .scope-title {
+    text-align: center; font-size: 11px; letter-spacing: 0.22em; color: #b9cddb;
+    background: #0b1620; border: 1px solid #16222c; border-bottom: none;
+    padding: 3px 0; border-radius: 2px 2px 0 0;
+  }
+  .scope-panes {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 1px;
+    background: #16222c; border: 1px solid #16222c; border-radius: 0 0 2px 2px;
+  }
+  .scope-pane { background: #000; position: relative; line-height: 0; }
+  .scope-pane canvas { width: 100%; height: 108px; display: block; }
+  .scope-axis {
+    display: flex; justify-content: space-between; padding: 2px 6px 3px;
+    font-size: 9px; color: var(--dim); background: #050c12; line-height: 1.2;
+    height: 15px; white-space: nowrap; overflow: hidden;
+  }
+  #scopeLevel { width: 96px; }
+  #scopeTime { width: 78px; text-align: right; }
+
+  /* soft keys */
+  .softkeys {
+    display: grid; grid-template-columns: repeat(8, 1fr); gap: 6px; margin-top: 10px;
+  }
+  .softkey {
+    font: 600 11px/1 var(--sans); letter-spacing: 0.08em;
+    padding: 9px 4px; border-radius: 4px; cursor: pointer;
+    background: linear-gradient(#2d353d, #1d242b); color: #c4d5e0;
+    border: 1px solid #10151a;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.08), 0 2px 4px rgba(0,0,0,0.4);
+  }
+  .softkey:hover { background: linear-gradient(#353f48, #232b33); }
+  .softkey:active { transform: translateY(1px); }
+  .softkey.on { background: linear-gradient(#1f6fb8, #17537f); color: #fff; border-color: #0d2c45; }
+
+  /* control panel under the rig */
+  /* Grouped rather than one long run of controls: the bank reads as
+     "radio", "display", "audio" instead of nine unrelated widgets in a row,
+     and related things stay together when it wraps on a narrow window. */
+  .panelrow {
+    display: flex; flex-wrap: wrap; align-items: stretch; gap: 0;
+    background: var(--body); border: 1px solid #0d1115; border-radius: 8px;
+    padding: 4px 6px; margin-top: 12px;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.04);
+  }
+  .ctlgroup {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 14px;
+    padding: 8px 14px;
+    border-right: 1px solid #232a31;
+  }
+  .ctlgroup:last-child { border-right: none; }
+  .ctlgroup > .grouplabel {
+    font-size: 8px; letter-spacing: 0.16em; color: var(--faint);
+    text-transform: uppercase; writing-mode: vertical-rl; transform: rotate(180deg);
+    align-self: stretch; padding: 2px 0; opacity: 0.8;
+  }
+  .ctl { display: flex; align-items: center; gap: 7px; }
+
+  @media (max-width: 900px) {
+    .ctlgroup { border-right: none; border-bottom: 1px solid #232a31; width: 100%; }
+    .ctlgroup > .grouplabel { writing-mode: horizontal-tb; transform: none; }
+  }
+  .ctl > label {
+    font-size: 9px; letter-spacing: 0.12em; color: var(--dim); text-transform: uppercase;
+  }
+  select, input[type="range"] { accent-color: var(--accent); }
+  select {
+    background: #0d1319; color: var(--text); border: 1px solid #27323c;
+    border-radius: 4px; padding: 4px 7px; font: 12px var(--mono);
+  }
+  input[type="range"] { width: 96px; }
+  .val { font: 11px var(--mono); color: var(--text); width: 58px; white-space: nowrap; }
+  .ctl input[type="checkbox"] { accent-color: var(--accent); }
+  .ctl .cb { display: flex; align-items: center; gap: 5px; font-size: 11px; color: var(--dim); }
+
+  /* Always occupies its row. An error that pops in and out of the layout
+     moves every panel below it at the worst possible moment. */
+  #err {
+    margin: 12px 0 0; padding: 6px 12px; border-radius: 6px;
+    height: 30px; line-height: 18px; overflow: hidden;
+    background: #2a1414; border: 1px solid #5b2020; color: #ffb4a8;
+    font: 12px var(--mono);
+    white-space: nowrap; text-overflow: ellipsis;
+  }
+  #err:empty { background: transparent; border-color: transparent; }
+
+  /* ---------- panels below ---------- */
+
+  .panel {
+    background: #10151b; border: 1px solid var(--line); border-radius: 8px;
+    margin-top: 12px; overflow: hidden;
+  }
+  .panel > h2 {
+    margin: 0; padding: 9px 14px; font-size: 11px; font-weight: 700;
+    letter-spacing: 0.14em; text-transform: uppercase; color: #a9c2d1;
+    background: #141b22; border-bottom: 1px solid var(--line);
+    display: flex; align-items: center; gap: 10px;
+  }
+  .panel > h2 .note {
+    font-weight: 400; letter-spacing: 0.02em;
+    text-transform: none; font-size: 10px; color: var(--faint);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .panel > h2 .note:first-of-type { margin-left: auto; }
+  #sdrInspectStatusBadge { width: 108px; text-align: right; }
+  #sdrInspectFreqBadge { width: 104px; text-align: right; }
+  .panel-body { padding: 12px 14px; }
+
+  .sdr-classifier-grid {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px;
+  }
+  .sdr-classifier-cell {
+    background: #0a1017; border: 1px solid #1b242e;
+    border-radius: 5px; padding: 8px 10px;
+    height: 74px; overflow: hidden;
+  }
+  /* One line each, clipped. A long protocol string must not reflow the row. */
+  .sdr-classifier-value, .sdr-classifier-subvalue {
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .sdr-classifier-value { height: 17px; line-height: 17px; }
+  .sdr-classifier-subvalue { height: 14px; line-height: 14px; }
+  .sdr-peak-buttons {
+    height: 46px; overflow-y: auto; align-content: flex-start; overscroll-behavior: contain;
+  }
+  .sdr-classifier-label {
+    font-size: 9px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--faint);
+  }
+  .sdr-classifier-value { font-family: var(--mono); }
+  .sdr-classifier-subvalue { font-family: var(--mono); }
+  .sdr-peak-buttons { display: flex; flex-wrap: wrap; gap: 5px; }
+  .sdr-preset-btn {
+    font-family: var(--mono); border-radius: 3px; cursor: pointer;
+    background: #0f172a; color: #cbd5e1; border: 1px solid #1e293b; padding: 2px 7px; font-size: 10px;
+  }
+  .sdr-preset-btn:hover { border-color: var(--accent); }
+  /* Fixed heights, never max-height. These lists grow several rows a second;
+     letting them size to content made every panel below them jump. */
+  .sdr-classifier-log, .sdr-decode-log {
+    height: 190px; overflow-y: auto; overflow-x: hidden;
+    font-family: var(--mono); font-size: 11px;
+    background: #060b10; border: 1px solid #17212a; border-radius: 4px; padding: 6px;
+    overscroll-behavior: contain;
+  }
+  .sdr-decode-log { height: 250px; }
+  .sdr-classifier-log > *, .sdr-decode-log > * {
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .sdr-decode-event { padding: 2px 0; border-bottom: 1px solid #101820; }
+  .data-empty { color: var(--faint); font-size: 11px; padding: 4px; }
+  .sdr-decode-toolbar {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 7px; margin-bottom: 9px;
+  }
+  .sdr-decode-toolbar button, .sdr-decode-toolbar a {
+    font: 11px var(--sans); padding: 4px 9px; border-radius: 4px; cursor: pointer;
+    background: #1a222a; color: #c4d5e0; border: 1px solid #27323c; text-decoration: none;
+  }
+  .sdr-decode-toolbar button:hover, .sdr-decode-toolbar a:hover { border-color: var(--accent); }
+  .sdr-decode-toolbar audio { height: 28px; }
+
+  /* The third pane: whatever frame is selected, shown as it came off the air. */
+  .bytes-pane {
+    margin-top: 8px; border: 1px solid #17212a; border-radius: 4px;
+    background: #04080d; overflow: hidden;
+  }
+  .bytes-head {
+    display: flex; align-items: center; gap: 10px;
+    padding: 4px 8px; background: #0b1219; border-bottom: 1px solid #17212a;
+    font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; color: #a9c2d1;
+  }
+  .bytes-meta {
+    margin-left: auto; text-transform: none; letter-spacing: 0;
+    font: 10px var(--mono); color: var(--faint);
+  }
+  .bytes-body {
+    margin: 0; padding: 8px; height: 132px; overflow: auto;
+    font: 11px/1.45 var(--mono); color: #9fe6ff; white-space: pre;
+  }
+  .sdr-decode-event.sel { background: #0c1a26; box-shadow: inset 2px 0 0 var(--accent); }
+  .sdr-replay-status { font-size: 10px; color: var(--faint); }
+
+  @media (max-width: 760px) {
+    .scr-head { grid-template-columns: 1fr; }
+    .fd, .fdot { font-size: 30px; }
+    .scope-panes { grid-template-columns: 1fr; }
+    .softkeys { grid-template-columns: repeat(3, 1fr); }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="rig">
+    <div class="rig-brand">
+      <span class="mark">uSDR</span>
+      <span class="sub">RTL-SDR Spectrum Monitor</span>
+      <span class="conn" id="conn">connecting…</span>
+    </div>
+
+    <div class="screen">
+      <div class="scr-top">
+        <span class="modesw" role="group" aria-label="Demodulator mode">
+          <button type="button" class="modebtn on" data-mode="nfm">NFM</button>
+          <button type="button" class="modebtn" data-mode="wfm">WFM</button>
+          <button type="button" class="modebtn" data-mode="p25">P25</button>
+          <button type="button" class="modebtn" data-mode="dmr">DMR</button>
+          <button type="button" class="modebtn" data-mode="packet">PACKET</button>
+          <button type="button" class="modebtn" data-mode="auto" title="Run every decoder on the tuned channel at once">AUTO</button>
+        </span>
+        <svg class="filt-glyph" width="34" height="12" viewBox="0 0 34 12" aria-hidden="true">
+          <path d="M1 11 L9 2 L25 2 L33 11" fill="none" stroke="#8fb6cc" stroke-width="1.2"/>
+        </svg>
+        <span class="badge" id="badgeSpan">2.048M</span>
+        <span class="badge" id="badgeProto">IDLE</span>
+        <span class="spacer"></span>
+        <span class="scr-vfo">VFO <b>A</b></span>
+        <span class="scr-clock" id="scrClock">--:--</span>
+      </div>
+
+      <div class="scr-head">
+        <div class="meter">
+          <div class="meter-scale" id="meterScale"></div>
+          <div class="meter-row">
+            <span class="meter-label">S/Po</span>
+            <div class="meter-bar">
+              <div class="meter-mask" id="meterMask"></div>
+              <div class="meter-peak" id="meterPeak" style="left:0"></div>
+            </div>
+          </div>
+          <div class="meter-num" id="meterNum">RF —  ·  SNR —</div>
+        </div>
+
+        <div>
+          <div class="vfo-bar">
+            <label for="snapSel">Step</label>
+            <select id="snapSel" title="Tuning step that clicks and the dial snap to">
+              <option value="auto">Auto</option>
+              <option value="100">100 Hz</option>
+              <option value="1000">1 kHz</option>
+              <option value="2500">2.5 kHz</option>
+              <option value="5000">5 kHz</option>
+              <option value="6250">6.25 kHz</option>
+              <option value="12500">12.5 kHz</option>
+              <option value="25000">25 kHz</option>
+              <option value="100000">100 kHz</option>
+              <option value="200000">200 kHz</option>
+            </select>
+            <span class="vfo-step" id="snapEffective">6.25 kHz</span>
+          </div>
+          <div class="freq" id="freqReadout"></div>
+          <div class="freq-hint" id="freqHint">click to tune · scroll a digit · double-click to type</div>
+        </div>
+      </div>
+
+      <div class="spec-edge">
+        <span id="edgeLo">—</span>
+        <span id="edgeHi">—</span>
+      </div>
+      <div class="spec-canvases" id="sdrCanvasWrap">
+        <canvas id="sdrSpectrumCanvas"></canvas>
+        <canvas id="sdrWaterfallCanvas"></canvas>
+        <div class="spec-readout" id="sdrHoverReadout" hidden></div>
+      </div>
+      <div class="spec-scale" id="specScale"></div>
+
+      <div class="scr-scope">
+        <div class="scope-title" id="scopeTitle">AUDIO SCOPE</div>
+        <div class="scope-panes">
+          <div class="scope-pane">
+            <canvas id="scopeSpecCanvas"></canvas>
+            <div class="scope-axis" id="scopeAxis">
+              <span>0</span><span>1.0</span><span>2.0</span><span>3.0</span><span>4.0kHz</span>
+            </div>
+          </div>
+          <div class="scope-pane">
+            <canvas id="scopeWaveCanvas"></canvas>
+            <div class="scope-axis">
+              <span id="scopeLevel">LEVEL: —</span><span id="scopeTime">8ms/Div</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="softkeys">
+      <button type="button" class="softkey on" id="keyPeak">PEAK</button>
+      <button type="button" class="softkey on" id="keyAuto">AUTO RNG</button>
+      <button type="button" class="softkey" id="keyPalette">PALETTE</button>
+      <button type="button" class="softkey" id="keyFill">FILL</button>
+      <button type="button" class="softkey" id="keyCenter">CENTER</button>
+      <button type="button" class="softkey" id="keyZoomOut" title="Zoom out">ZOOM −</button>
+      <button type="button" class="softkey" id="keyZoomIn" title="Zoom in on the tuned frequency">ZOOM +</button>
+      <button type="button" class="softkey" id="keySpur" title="Nudge the LO and mark anything that does not move — those are internal, not on the air">SPUR CHK</button>
+    </div>
+  </div>
+
+  <div class="panelrow">
+    <div class="ctlgroup">
+      <span class="grouplabel">Radio</span>
+      <div class="ctl">
+        <label for="sdrRadioSel">Device</label>
+        <select id="sdrRadioSel" style="min-width:200px"></select>
+      </div>
+      <div class="ctl">
+        <label for="sdrRateSel">Span</label>
+        <select id="sdrRateSel">
+          <option value="250000">250 kHz</option>
+          <option value="1024000">1.024 MHz</option>
+          <option value="1536000">1.536 MHz</option>
+          <option value="2048000" selected>2.048 MHz</option>
+          <option value="2400000">2.4 MHz</option>
+          <option value="3200000">3.2 MHz</option>
+        </select>
+      </div>
+      <div class="ctl">
+        <label>Gain</label>
+        <span class="cb"><input type="checkbox" id="sdrAgc" checked> AGC</span>
+        <input type="range" id="sdrGainRange" min="0" max="50" step="1" value="40" disabled>
+        <span class="val" id="sdrGainVal">auto</span>
+      </div>
+    </div>
+
+    <div class="ctlgroup">
+      <span class="grouplabel">Front end</span>
+      <div class="ctl">
+        <span class="cb"><input type="checkbox" id="chkLoOffset"> LO offset</span>
+        <span class="cb"><input type="checkbox" id="chkClipGuard"> clip guard</span>
+      </div>
+      <div class="ctl">
+        <label for="ppmInput">ppm</label>
+        <input type="number" id="ppmInput" step="0.1" min="-200" max="200" value="0"
+               style="width:72px; background:#0d1319; color:var(--text); border:1px solid #27323c;
+                      border-radius:4px; padding:3px 6px; font:11px var(--mono)">
+        <button type="button" class="sdr-preset-btn" id="btnCalibrate"
+                title="Tune to a signal whose exact frequency you know, then calibrate from it">calibrate</button>
+        <span class="val" id="freqErrVal" style="width:96px">err —</span>
+      </div>
+    </div>
+
+    <div class="ctlgroup">
+      <span class="grouplabel">Display</span>
+      <div class="ctl">
+        <label>Range</label>
+        <input type="range" id="sdrMinDb" min="-120" max="-20" step="2" value="-90" title="floor dB">
+        <input type="range" id="sdrMaxDb" min="-60" max="0" step="2" value="-10" title="ceiling dB">
+        <span class="val" id="sdrRangeVal">-90..-10</span>
+      </div>
+    </div>
+
+    <div class="ctlgroup">
+      <span class="grouplabel">Audio</span>
+      <div class="ctl">
+        <button type="button" class="softkey" id="btnListen" style="padding:5px 14px">LISTEN</button>
+        <input type="range" id="volRange" min="0" max="100" step="1" value="60" title="volume">
+        <span class="val" id="volVal">60%</span>
+      </div>
+    </div>
+  </div>
+
+  <div id="err"></div>
+
+  <section class="panel">
+    <h2>Digital Signal Classifier
+      <span class="note" id="sdrInspectStatusBadge">IDLE</span>
+      <span class="note" id="sdrInspectFreqBadge">—</span>
+    </h2>
+    <div class="panel-body">
+      <div class="sdr-classifier-grid">
+        <div class="sdr-classifier-cell">
+          <div class="sdr-classifier-label">Protocol</div>
+          <div id="sdrClassProtocol" class="sdr-classifier-value" style="font-size:13px; font-weight:700; color:#38bdf8; margin-top:3px;">Idle / Noise</div>
+          <div id="sdrClassDetails" class="sdr-classifier-subvalue" style="font-size:11px; color:#94a3b8; margin-top:2px;">Waiting for carrier…</div>
+        </div>
+        <div class="sdr-classifier-cell">
+          <div class="sdr-classifier-label">Modulation</div>
+          <div id="sdrClassModulation" class="sdr-classifier-value" style="font-size:12px; font-weight:600; margin-top:3px;">—</div>
+          <div id="sdrClassConfidence" class="sdr-classifier-subvalue" style="font-size:11px; color:#94a3b8; margin-top:2px;">Confidence: —</div>
+        </div>
+        <div class="sdr-classifier-cell">
+          <div class="sdr-classifier-label">Signal</div>
+          <div id="sdrClassPower" class="sdr-classifier-value" style="font-size:12px; font-weight:600; margin-top:3px;">RF: — · SNR: —</div>
+          <div id="sdrClassDev" class="sdr-classifier-subvalue" style="font-size:11px; color:#94a3b8; margin-top:2px;">Dev: —</div>
+        </div>
+        <div class="sdr-classifier-cell">
+          <div class="sdr-classifier-label">Peaks in span</div>
+          <div id="sdrPeakButtons" class="sdr-peak-buttons" style="margin-top:5px;"></div>
+        </div>
+      </div>
+      <div style="display:flex; align-items:center; gap:10px; margin:10px 0 5px;">
+        <span class="sdr-classifier-label">Classification log</span>
+        <button type="button" class="sdr-preset-btn" style="margin-left:auto" onclick="clearSdrClassLog()">clear</button>
+      </div>
+      <div id="sdrClassLog" class="sdr-classifier-log"></div>
+    </div>
+  </section>
+
+  <section class="panel">
+    <h2>Last heard — digital voice
+      <span class="note" id="callsNote">P25 and DMR calls are kept here until the server restarts</span>
+    </h2>
+    <div class="panel-body">
+      <div id="callsList" class="sdr-classifier-log" style="height:150px">
+        <div class="data-empty">No digital voice calls yet.</div>
+      </div>
+      <audio id="callAudio" controls preload="none" style="width:100%; height:30px; margin-top:8px"></audio>
+    </div>
+  </section>
+
+  <section class="panel">
+    <h2>Protocol Decode / FEC
+      <span class="note" id="decodeCount">0 frames</span>
+      <span class="note">click a frame to expand · valid green, rejected red</span>
+    </h2>
+    <div class="panel-body">
+      <div class="sdr-decode-toolbar">
+        <button type="button" onclick="playSdrCapture('voice')">Play voice (20s)</button>
+        <button type="button" onclick="playSdrCapture('discriminator')">Play discriminator</button>
+        <a href="/api/sdr/capture.wav?kind=voice" download="usdr-voice.wav">Voice WAV</a>
+        <a href="/api/sdr/capture.wav?kind=discriminator" download="usdr-discriminator.wav">Disc WAV</a>
+        <a href="/api/sdr/capture.wav?kind=iq" download="usdr-iq.wav" title="Stereo WAV: left=I, right=Q">I/Q WAV</a>
+        <button type="button" onclick="replayCurrentSdrIq()" title="Run the rolling I/Q capture through a fresh classifier">Replay current I/Q</button>
+        <button type="button" onclick="$('sdrReplayFile').click()">Replay saved I/Q…</button>
+        <input id="sdrReplayFile" type="file" accept="audio/wav,.wav" hidden onchange="replaySdrFile(this.files && this.files[0])">
+        <input type="text" id="decodeFilter" placeholder="filter: protocol, kind or text"
+               oninput="setDecodeFilter(this.value)"
+               style="flex:1; min-width:150px; background:#0d1319; color:var(--text);
+                      border:1px solid #27323c; border-radius:4px; padding:4px 8px;
+                      font:11px var(--mono); outline:none">
+        <button type="button" onclick="expandAllDecodes(false)">Collapse all</button>
+        <button type="button" onclick="clearSdrDecodeLog()">Clear</button>
+        <audio id="sdrCaptureAudio" controls preload="none"></audio>
+        <span id="sdrReplayStatus" class="sdr-replay-status">I/Q replay uses the same native decoders as live inspection.</span>
+      </div>
+      <div id="sdrDecodeLog" class="sdr-decode-log">
+        <div class="data-empty">Waiting for P25, DMR, NXDN, ProVoice, EDACS/ESK, X2-TDMA, dPMR, M17, YSF, D-STAR, trunking, pager, and decoder diagnostics…</div>
+      </div>
+      <div class="bytes-pane">
+        <div class="bytes-head">
+          <span id="bytesTitle">Frame bytes</span>
+          <span class="bytes-meta" id="bytesMeta">select a frame</span>
+          <button type="button" class="sdr-preset-btn" id="bytesCopy" onclick="copyFrameBytes()">copy</button>
+        </div>
+        <pre id="decodeBytes" class="bytes-body">no frame selected</pre>
+      </div>
+    </div>
+  </section>
+
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+function esc(s) { return String(s).replace(/[<>&"]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;'}[c])); }
+
+// This build has one mode. The classifier panels were lifted from a multi-mode
+// client and gate their repaints on it, so it is a constant rather than a
+// thing that changes.
+const opMode = 'sdr';
+
+function computeAutoRange(pwr) {
+  if (!pwr || !pwr.length) return;
+  let sample = [];
+  const step = Math.max(1, Math.floor(pwr.length / 64));
+  for (let i = 0; i < pwr.length; i += step) sample.push(pwr[i]);
+  sample.sort((a, b) => a - b);
+  const p15 = sample[Math.floor(sample.length * 0.15)];
+  const p99 = sample[Math.floor(sample.length * 0.98)];
+  const targetMin = Math.max(-120, Math.min(-20, Math.floor((p15 - 5) / 5) * 5));
+  const targetMax = Math.max(targetMin + 25, Math.min(0, Math.ceil((Math.max(p99 + 10, p15 + 35)) / 5) * 5));
+  if (Math.abs(sdrMinDb - targetMin) >= 4 || Math.abs(sdrMaxDb - targetMax) >= 4) {
+    sdrMinDb = targetMin;
+    sdrMaxDb = targetMax;
+    if ($('sdrMinDb')) $('sdrMinDb').value = sdrMinDb;
+    if ($('sdrMaxDb')) $('sdrMaxDb').value = sdrMaxDb;
+    if ($('sdrRangeVal')) $('sdrRangeVal').textContent = sdrMinDb + '..' + sdrMaxDb;
+  }
+}
+
+let sdrInspectHz = 155000000;
+let sdrLastPeaks = [];
+let sdrLastClassification = null;
+
+/// Tune to a frequency picked out of a list — a peak marker, a logged decode.
+/// Same thing as clicking it on the display, so it goes through the same path
+/// and the readout moves with it.
+async function inspectSdrHz(hz) {
+  if ($('sdrInspectFreqBadge')) {
+    $('sdrInspectFreqBadge').textContent = (hz / 1e6).toFixed(4) + ' MHz';
+  }
+  await tuneRxHz(snapHz(hz, false));
+}
+
+const sdrClassLogData = [];
+let sdrLastDetected = null;
+let sdrLastLoggedKey = '';
+let sdrLastLoggedTime = 0;
+
+function clearSdrClassLog() {
+  sdrClassLogData.length = 0;
+  const el = $('sdrClassLog');
+  if (el) el.innerHTML = '<div class="data-empty" style="padding:6px; color:#4a5b73; font-size:10px;">Log cleared. Waiting for new transmissions...</div>';
+}
+
+function updateSdrClassification(c, inspectHz) {
+  const now = Date.now();
+  const isRealProtocol = c.protocol && c.protocol !== 'Idle / Noise' && c.protocol !== 'Noise';
+
+  if (isRealProtocol) {
+    sdrLastDetected = {
+      ...c,
+      inspectHz,
+      time: now,
+    };
+
+    // Rate-limit duplicate updates for same protocol on same frequency
+    // Details such as correlation and error counts change every frame. Group by
+    // frequency/protocol so telemetry updates do not flood or churn the log.
+    const logKey = `${(inspectHz / 1e6).toFixed(4)}_${c.protocol}`;
+    if (logKey !== sdrLastLoggedKey || (now - sdrLastLoggedTime) > 3000) {
+      sdrLastLoggedKey = logKey;
+      sdrLastLoggedTime = now;
+      sdrClassLogData.unshift({
+        t: now,
+        freqHz: inspectHz,
+        protocol: c.protocol,
+        modulation: c.modulation,
+        confidence: c.confidence,
+        rfDbfs: c.rfDbfs,
+        snrDb: c.snrDb,
+        details: c.details || '',
+      });
+      if (sdrClassLogData.length > 50) sdrClassLogData.pop();
+      renderSdrClassLog();
+    }
+  }
+
+  // Display smoothing: If currently idle but we had a detection within 3.5 seconds, show held detection
+  let displayObj = c;
+  let isHeld = false;
+  let holdRemaining = 0;
+
+  if (!isRealProtocol && sdrLastDetected && (now - sdrLastDetected.time < 3500)) {
+    displayObj = sdrLastDetected;
+    isHeld = true;
+    holdRemaining = ((3500 - (now - sdrLastDetected.time)) / 1000).toFixed(1);
+  }
+
+  if ($('sdrInspectFreqBadge')) {
+    $('sdrInspectFreqBadge').textContent = (inspectHz / 1e6).toFixed(4) + ' MHz';
+  }
+  if ($('sdrInspectStatusBadge')) {
+    if (c.active) {
+      $('sdrInspectStatusBadge').textContent = 'ACTIVE';
+      $('sdrInspectStatusBadge').style.background = '#064e3b';
+      $('sdrInspectStatusBadge').style.color = '#34d399';
+    } else if (isHeld) {
+      $('sdrInspectStatusBadge').textContent = `HELD ${holdRemaining}s`;
+      $('sdrInspectStatusBadge').style.background = '#854d0e';
+      $('sdrInspectStatusBadge').style.color = '#fef08a';
+    } else {
+      $('sdrInspectStatusBadge').textContent = 'IDLE';
+      $('sdrInspectStatusBadge').style.background = '#1e293b';
+      $('sdrInspectStatusBadge').style.color = '#94a3b8';
+    }
+  }
+  if ($('sdrClassProtocol')) {
+    let color = '#38bdf8';
+    if (displayObj.protocol.includes('P25')) color = '#4ade80';
+    else if (displayObj.protocol.includes('DMR')) color = '#60a5fa';
+    else if (displayObj.protocol.includes('SmartNet') || displayObj.protocol.includes('SmartZone')) color = '#fb7185';
+    else if (displayObj.protocol.includes('POCSAG') || displayObj.protocol.includes('FLEX')) color = '#facc15';
+    else if (displayObj.protocol.includes('APRS')) color = '#fb923c';
+    else if (displayObj.protocol.includes('NXDN')) color = '#22d3ee';
+    else if (displayObj.protocol.includes('GMSK') || displayObj.protocol.includes('AIS')) color = '#2dd4bf';
+    else if (displayObj.protocol.includes('Packet') || displayObj.protocol.includes('Telemetry')) color = '#f59e0b';
+    else if (displayObj.protocol.includes('Unclassified')) color = '#94a3b8';
+    else if (displayObj.protocol.includes('Analog')) color = '#c084fc';
+    else if (displayObj.protocol.includes('SAME')) color = '#f472b6';
+    else if (displayObj.protocol.includes('Carrier')) color = '#a78bfa';
+    $('sdrClassProtocol').textContent = displayObj.protocol;
+    $('sdrClassProtocol').title = displayObj.protocol;
+    $('sdrClassProtocol').style.color = color;
+  }
+  if ($('sdrClassDetails')) {
+    $('sdrClassDetails').textContent = displayObj.details || (c.active ? 'Active Carrier' : 'Waiting for carrier...');
+    $('sdrClassDetails').title = $('sdrClassDetails').textContent;
+  }
+  if ($('sdrClassModulation')) {
+    $('sdrClassModulation').textContent = displayObj.modulation || '---';
+    $('sdrClassModulation').title = $('sdrClassModulation').textContent;
+  }
+  if ($('sdrClassConfidence')) {
+    const pct = displayObj.confidence > 0 ? (displayObj.confidence * 100).toFixed(0) : '0';
+    $('sdrClassConfidence').textContent = `Confidence: ${pct}%`;
+  }
+  if ($('sdrClassPower')) {
+    const rf = c.rfDbfs != null ? c.rfDbfs.toFixed(1) : (displayObj.rfDbfs != null ? displayObj.rfDbfs.toFixed(1) : '---');
+    const snr = c.snrDb != null ? c.snrDb.toFixed(1) : (displayObj.snrDb != null ? displayObj.snrDb.toFixed(1) : '0.0');
+    $('sdrClassPower').textContent = `RF: ${rf} dBFS · SNR: ${snr} dB`;
+  }
+  if ($('sdrClassDev')) {
+    const peak = c.peakDevHz != null ? (c.peakDevHz / 1e3).toFixed(1) : '0.0';
+    const rms = c.rmsDevHz != null ? (c.rmsDevHz / 1e3).toFixed(1) : '0.0';
+    const dc = c.centerOffsetHz != null ? (c.centerOffsetHz > 0 ? '+' : '') + c.centerOffsetHz.toFixed(0) + ' Hz' : '0 Hz';
+    $('sdrClassDev').textContent = `Dev: Peak ${peak}k · RMS ${rms}k · DC: ${dc}`;
+  }
+}
+
+function renderSdrClassLog() {
+  const el = $('sdrClassLog');
+  if (!el) return;
+  if (!sdrClassLogData.length) {
+    el.innerHTML = '<div class="data-empty" style="padding:6px; color:#4a5b73; font-size:10px;">Classified transmissions will be recorded here...</div>';
+    return;
+  }
+  keepScrollAnchored(el, () => {
+  el.innerHTML = sdrClassLogData.map(e => {
+    let color = '#38bdf8';
+    if (e.protocol.includes('P25')) color = '#4ade80';
+    else if (e.protocol.includes('DMR')) color = '#60a5fa';
+    else if (e.protocol.includes('SmartNet') || e.protocol.includes('SmartZone')) color = '#fb7185';
+    else if (e.protocol.includes('POCSAG') || e.protocol.includes('FLEX')) color = '#facc15';
+    else if (e.protocol.includes('APRS')) color = '#fb923c';
+    else if (e.protocol.includes('NXDN')) color = '#22d3ee';
+    else if (e.protocol.includes('GMSK') || e.protocol.includes('AIS')) color = '#2dd4bf';
+    else if (e.protocol.includes('Packet') || e.protocol.includes('Telemetry')) color = '#f59e0b';
+    else if (e.protocol.includes('Unclassified')) color = '#94a3b8';
+    else if (e.protocol.includes('Analog')) color = '#c084fc';
+    else if (e.protocol.includes('SAME')) color = '#f472b6';
+
+    const timeStr = new Date(e.t).toLocaleTimeString();
+    const freqStr = (e.freqHz / 1e6).toFixed(4) + ' MHz';
+    const snrStr = e.snrDb != null ? `SNR +${e.snrDb.toFixed(1)}dB` : '';
+    const detailsStr = e.details ? `· <span style="color:#cbd5e1">${esc(e.details)}</span>` : '';
+
+    return `<div style="display:flex; align-items:baseline; gap:8px; padding:2px 4px; border-bottom:1px solid #0f172a; font-size:11px; min-height:21px; white-space:nowrap; overflow:hidden;">
+      <span style="color:#64748b; font-size:10px; flex-shrink:0;">${timeStr}</span>
+      <span style="color:#38bdf8; font-weight:600; flex-shrink:0; cursor:pointer;" onclick="inspectSdrHz(${e.freqHz})" title="Tune inspector here">${freqStr}</span>
+      <span style="color:${color}; font-weight:700; flex-shrink:0;">[${esc(e.protocol)}]</span>
+      <span style="color:#94a3b8; font-size:10px; flex-shrink:0;">${esc(e.modulation)}</span>
+      <span style="color:#64748b; font-size:10px; flex-shrink:0;">${snrStr}</span>
+      <span style="color:#94a3b8; font-size:10px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${detailsStr}</span>
+    </div>`;
+  }).join('');
+  });
+}
+
+const sdrDecodeLogData = [];
+
+function clearSdrDecodeLog() {
+  sdrDecodeOpen.clear();
+  sdrDecodeSelected = null;
+  renderFrameBytes();
+  sdrDecodeLogData.length = 0;
+  renderSdrDecodeLog();
+}
+
+function playSdrCapture(kind) {
+  const audio = $('sdrCaptureAudio');
+  if (!audio) return;
+  audio.src = `/api/sdr/capture.wav?kind=${encodeURIComponent(kind)}&t=${Date.now()}`;
+  audio.play().catch(() => {});
+}
+
+async function replaySdrBlob(blob, label) {
+  const status = $('sdrReplayStatus');
+  if (status) status.textContent = `Replaying ${label}…`;
+  try {
+    const response = await fetch(`/api/sdr/replay?frequency_hz=${encodeURIComponent(sdrInspectHz)}`, {
+      method: 'POST',
+      headers: { 'content-type': 'audio/wav' },
+      body: blob,
+    });
+    if (!response.ok) throw new Error((await response.text()) || `HTTP ${response.status}`);
+    const replay = await response.json();
+    for (const event of replay.events || []) {
+      onSdrDecode({ inspectHz: replay.frequencyHz, event });
+    }
+    if (replay.classification) updateSdrClassification(replay.classification, replay.frequencyHz);
+    if (status) {
+      status.textContent = `Replay: ${Number(replay.durationS || 0).toFixed(1)}s · ${(replay.events || []).length} events · ${replay.classification?.protocol || 'no match'}`;
+    }
+  } catch (error) {
+    if (status) status.textContent = `Replay failed: ${error.message || error}`;
+  }
+}
+
+async function replayCurrentSdrIq() {
+  const status = $('sdrReplayStatus');
+  if (status) status.textContent = 'Fetching rolling I/Q capture…';
+  try {
+    const response = await fetch(`/api/sdr/capture.wav?kind=iq&t=${Date.now()}`);
+    if (!response.ok) throw new Error((await response.text()) || `HTTP ${response.status}`);
+    await replaySdrBlob(await response.blob(), 'current capture');
+  } catch (error) {
+    if (status) status.textContent = `Replay failed: ${error.message || error}`;
+  }
+}
+
+async function replaySdrFile(file) {
+  if (!file) return;
+  await replaySdrBlob(file, file.name);
+  const input = $('sdrReplayFile');
+  if (input) input.value = '';
+}
+
+let sdrDecodeUid = 0;
+
+function onSdrDecode(m) {
+  if (!m || !m.event) return;
+  // A stable id per frame: rows are re-rendered constantly and an expanded
+  // one has to stay open on the frame it was opened on, not on a position.
+  sdrDecodeUid += 1;
+  sdrDecodeLogData.unshift({ uid: sdrDecodeUid, t: Date.now(), freqHz: m.inspectHz, ...m.event });
+  if (sdrDecodeLogData.length > 200) {
+    const dropped = sdrDecodeLogData.pop();
+    if (dropped) {
+      sdrDecodeOpen.delete(dropped.uid);
+      if (sdrDecodeSelected === dropped.uid) {
+        sdrDecodeSelected = null;
+        renderFrameBytes();
+      }
+    }
+  }
+  if (!sdrDecodePaintPending) {
+    sdrDecodePaintPending = true;
+    setTimeout(() => {
+      sdrDecodePaintPending = false;
+      if (opMode === 'sdr') renderSdrDecodeLog();
+    }, 100);
+  }
+}
+
+let sdrDecodePaintPending = false;
+
+// Both logs prepend. Replacing their markup while someone is reading further
+// down would slide the content up under them by however much got added, so
+// hold the scroll offset against the new rows rather than against the top.
+function keepScrollAnchored(el, paint) {
+  const anchored = el.scrollTop > 0;
+  const before = el.scrollHeight;
+  paint();
+  if (anchored) el.scrollTop += el.scrollHeight - before;
+}
+
+// Rows collapse to one line and expand to the frame's detail, the way a
+// packet list does. The summary answers "what just happened"; the detail
+// answers "what exactly was in it", and neither should crowd out the other.
+const sdrDecodeOpen = new Set();
+let sdrDecodeFilter = '';
+let sdrDecodeSelected = null;
+
+function toggleDecodeRow(id) {
+  // Clicking a frame both selects it — which is what the bytes pane follows —
+  // and toggles its detail, the way a packet list does.
+  sdrDecodeSelected = id;
+  if (sdrDecodeOpen.has(id)) sdrDecodeOpen.delete(id);
+  else sdrDecodeOpen.add(id);
+  renderSdrDecodeLog();
+  renderFrameBytes();
+}
+
+/// The selected frame's raw data, in the pane below the list.
+function renderFrameBytes() {
+  const pre = $('decodeBytes');
+  const meta = $('bytesMeta');
+  const title = $('bytesTitle');
+  if (!pre) return;
+  const e = sdrDecodeLogData.find(x => x.uid === sdrDecodeSelected);
+  if (!e) {
+    pre.textContent = 'no frame selected';
+    if (meta) meta.textContent = 'select a frame';
+    if (title) title.textContent = 'Frame bytes';
+    return;
+  }
+  if (title) title.textContent = `${e.protocol} · ${e.kind}`;
+  const payload = payloadOf(e.fields);
+  if (!payload) {
+    pre.textContent = 'This decoder did not hand back the raw frame.\n\n'
+      + 'The fields above are what it recovered; there is no payload to show,\n'
+      + 'and inventing one would be worse than saying so.';
+    if (meta) meta.textContent = 'no raw payload';
+    return;
+  }
+  const [key, value] = payload;
+  if (key === 'rawWords') {
+    const words = value.trim().split(/\s+/);
+    pre.textContent = wordDump(value);
+    if (meta) meta.textContent = `${words.length} codewords · not byte-aligned`;
+  } else {
+    const bytes = Math.floor(value.replace(/[^0-9a-fA-F]/g, '').length / 2);
+    pre.textContent = hexDump(value);
+    if (meta) meta.textContent = `${bytes} bytes`;
+  }
+}
+
+async function copyFrameBytes() {
+  const pre = $('decodeBytes');
+  if (!pre) return;
+  try {
+    await navigator.clipboard.writeText(pre.textContent);
+    const b = $('bytesCopy');
+    if (b) { b.textContent = 'copied'; setTimeout(() => { b.textContent = 'copy'; }, 1200); }
+  } catch (e) { /* clipboard blocked; the text is selectable anyway */ }
+}
+
+function expandAllDecodes(open) {
+  sdrDecodeOpen.clear();
+  if (open) for (const e of sdrDecodeLogData) sdrDecodeOpen.add(e.uid);
+  renderSdrDecodeLog();
+}
+
+function setDecodeFilter(v) {
+  sdrDecodeFilter = (v || '').trim().toLowerCase();
+  renderSdrDecodeLog();
+}
+
+/// Field names whose value is a payload worth showing as raw data.
+function payloadOf(fields) {
+  for (const key of ['payloadHex', 'payload', 'rawWords', 'raw']) {
+    const v = fields && fields[key];
+    if (typeof v === 'string' && v.replace(/\s+/g, '').length >= 4) return [key, v];
+  }
+  return null;
+}
+
+/// Classic offset / hex / ASCII dump for a byte payload.
+function hexDump(hex) {
+  const clean = hex.replace(/[^0-9a-fA-F]/g, '');
+  const bytes = [];
+  for (let i = 0; i + 1 < clean.length; i += 2) bytes.push(parseInt(clean.slice(i, i + 2), 16));
+  const lines = [];
+  for (let off = 0; off < bytes.length; off += 16) {
+    const row = bytes.slice(off, off + 16);
+    const hexPart = row.map(b => b.toString(16).padStart(2, '0')).join(' ').padEnd(47, ' ');
+    const ascii = row.map(b => (b >= 32 && b < 127) ? String.fromCharCode(b) : '.').join('');
+    lines.push(`${off.toString(16).padStart(4, '0')}  ${hexPart}  ${ascii}`);
+  }
+  return lines.join('\n') || '(empty)';
+}
+
+/// Codewords are shown as words, eight to a line, because they are not bytes.
+function wordDump(words) {
+  const list = words.trim().split(/\s+/);
+  const lines = [];
+  for (let i = 0; i < list.length; i += 8) {
+    lines.push(`${i.toString().padStart(4, ' ')}  ${list.slice(i, i + 8).join(' ')}`);
+  }
+  return lines.join('\n') || '(empty)';
+}
+
+function decodeDetail(e) {
+  const rows = [];
+  const add = (k, v, colour) =>
+    rows.push(`<div style="display:flex; gap:8px; padding:1px 0 1px 22px">
+      <span style="color:#64748b; width:130px; flex:none">${esc(k)}</span>
+      <span style="color:${colour || '#cbd5e1'}; overflow-wrap:anywhere">${esc(v)}</span></div>`);
+
+  rows.push('<div style="color:#7f97a6; padding:3px 0 1px 10px">Frame</div>');
+  add('protocol', e.protocol);
+  add('kind', e.kind);
+  add('checksum', e.valid ? 'valid' : 'rejected', e.valid ? '#4ade80' : '#f87171');
+  add('frequency', (Number(e.freqHz) / 1e6).toFixed(4) + ' MHz');
+  add('received', new Date(e.t).toLocaleTimeString());
+
+  const fields = e.fields || {};
+  const payload = payloadOf(fields);
+  const keys = Object.keys(fields).filter(k => !payload || k !== payload[0]);
+  if (keys.length) {
+    rows.push('<div style="color:#7f97a6; padding:5px 0 1px 10px">Fields</div>');
+    for (const k of keys.sort()) add(k, String(fields[k]));
+  }
+
+  if (payload) {
+    // The bytes themselves live in the pane below, so the tree just says what
+    // is there rather than printing the dump twice.
+    const [key, value] = payload;
+    const isWords = key === 'rawWords';
+    const count = isWords ? value.trim().split(/\s+/).length
+                          : Math.floor(value.replace(/[^0-9a-fA-F]/g, '').length / 2);
+    rows.push(`<div style="color:#7f97a6; padding:5px 0 1px 10px">${isWords ? 'Codewords' : 'Payload'} · ${count} ${isWords ? 'words' : 'bytes'} — shown below</div>`);
+  }
+  return `<div style="background:#04080d; border-top:1px solid #101820; padding:4px 0 6px">${rows.join('')}</div>`;
+}
+
+function renderSdrDecodeLog() {
+  const el = $('sdrDecodeLog');
+  if (!el) return;
+  const all = sdrDecodeLogData;
+  const list = sdrDecodeFilter
+    ? all.filter(e => `${e.protocol} ${e.kind} ${e.summary}`.toLowerCase().includes(sdrDecodeFilter))
+    : all;
+  const count = $('decodeCount');
+  if (count) {
+    count.textContent = sdrDecodeFilter
+      ? `${list.length} of ${all.length} frames` : `${all.length} frames`;
+  }
+  if (!list.length) {
+    el.innerHTML = `<div class="data-empty" style="padding:6px; color:#4a5b73;">${
+      all.length ? 'No frames match the filter.'
+                 : 'Waiting for protocol frames and decoder diagnostics…'}</div>`;
+    return;
+  }
+  keepScrollAnchored(el, () => {
+    el.innerHTML = list.map(e => {
+      const colour = e.valid ? '#4ade80' : '#f87171';
+      const open = sdrDecodeOpen.has(e.uid);
+      const fieldCount = Object.keys(e.fields || {}).length;
+      return `<div class="sdr-decode-event${e.uid === sdrDecodeSelected ? ' sel' : ''}">
+        <div onclick="toggleDecodeRow(${e.uid})" style="display:flex; gap:8px; align-items:baseline; min-width:0; cursor:pointer">
+          <span style="color:#64748b; flex:none; width:9px">${open ? '▾' : '▸'}</span>
+          <span style="color:#64748b; flex:none">${new Date(e.t).toLocaleTimeString()}</span>
+          <button type="button" onclick="event.stopPropagation(); inspectSdrHz(${Number(e.freqHz)})" style="padding:0; border:0; background:none; color:#38bdf8; font:inherit; flex:none">${(Number(e.freqHz) / 1e6).toFixed(4)} MHz</button>
+          <span style="color:${colour}; font-weight:700; flex:none">[${esc(e.protocol)} / ${esc(e.kind)}]</span>
+          <span style="color:#cbd5e1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap">${esc(e.summary)}</span>
+          <span style="margin-left:auto; color:#3d4a58; flex:none; font-size:10px">${fieldCount} fields</span>
+        </div>
+        ${open ? decodeDetail(e) : ''}
+      </div>`;
+    }).join('');
+  });
+}
+
+// Peaks arrive 25 times a second and the set is never quite the same twice:
+// a signal a fraction of a dB above the threshold drops out and returns, and
+// re-sorting by SNR reorders the row every frame. Rebuilding that list at
+// frame rate is what made it flicker and jump under the cursor.
+//
+// So peaks are tracked rather than redrawn: each is held by frequency, kept
+// while it is still being seen, and shown in frequency order — which does not
+// change as levels move. The list repaints a few times a second, and only when
+// its membership actually changed.
+const PEAK_HOLD_MS = 2000;     // keep a peak this long after it was last seen
+const PEAK_MIN_HITS = 3;       // seen this often before it is worth showing
+const PEAK_REPAINT_MS = 400;
+
+const sdrPeakTrack = new Map();
+let sdrPeakLastPaint = 0;
+let sdrPeakSig = '';
+
+function renderSdrPeaks(peaks) {
+  const el = $('sdrPeakButtons');
+  if (!el) return;
+  const now = performance.now();
+
+  for (const p of peaks || []) {
+    // Bucket by channel so a peak wandering a few hundred Hz stays one entry.
+    const key = Math.round(p.freqHz / 5000) * 5000;
+    const prev = sdrPeakTrack.get(key);
+    if (prev) {
+      prev.hits += 1;
+      prev.seen = now;
+      // Follow the level gently; a jittering number is as distracting as a
+      // jittering row.
+      prev.snr = prev.snr + (p.snrDb - prev.snr) * 0.3;
+      prev.freqHz = p.freqHz;
+    } else {
+      sdrPeakTrack.set(key, { freqHz: p.freqHz, snr: p.snrDb, hits: 1, seen: now });
+    }
+  }
+  for (const [key, v] of sdrPeakTrack) {
+    if (now - v.seen > PEAK_HOLD_MS) sdrPeakTrack.delete(key);
+  }
+
+  const list = [...sdrPeakTrack.values()]
+    .filter(v => v.hits >= PEAK_MIN_HITS)
+    .sort((a, b) => a.freqHz - b.freqHz);
+
+  // Repaint only when the membership changed, and never faster than the eye
+  // can follow.
+  const sig = list.map(v => Math.round(v.freqHz / 5000)).join(',');
+  if (sig === sdrPeakSig && now - sdrPeakLastPaint < 2000) return;
+  if (now - sdrPeakLastPaint < PEAK_REPAINT_MS) return;
+  sdrPeakLastPaint = now;
+  sdrPeakSig = sig;
+
+  if (!list.length) {
+    el.innerHTML = '<span style="font-size:10px; color:#4a5b73;">none</span>';
+    return;
+  }
+  el.innerHTML = list.map(p => {
+    const mhz = (p.freqHz / 1e6).toFixed(4);
+    const snr = p.snr.toFixed(0);
+    const on = Math.abs(sdrInspectHz - p.freqHz) < 10000;
+    const border = on ? 'border:1px solid #38bdf8;' : 'border:1px solid #1e293b;';
+    const bg = on ? 'background:#0c4a6e; color:#38bdf8;' : 'background:#0f172a; color:#cbd5e1;';
+    return `<button type="button" class="sdr-preset-btn" style="padding:1px 6px; font-size:10px; width:104px; ${bg} ${border}" onclick="inspectSdrHz(${p.freqHz})" title="${mhz} MHz · SNR ${snr} dB">${mhz}<span style="color:#64748b"> +${snr}</span></button>`;
+  }).join('');
+}
+
+// ---------- palettes ----------
+// `ham` first: the black → navy → blue → cyan → white ramp a rig's waterfall
+// uses, and what this display is built around.
+const SDR_PALETTES = {
+  ham: [
+    [0.00, [0, 0, 6]],
+    [0.16, [0, 4, 74]],
+    [0.34, [0, 34, 176]],
+    [0.52, [0, 116, 232]],
+    [0.70, [0, 206, 236]],
+    [0.86, [156, 246, 250]],
+    [1.00, [255, 255, 255]],
+  ],
+  turbo: [
+    [0.0, [0, 0, 0]], [0.15, [20, 20, 90]], [0.35, [30, 100, 210]],
+    [0.55, [20, 200, 160]], [0.72, [140, 220, 30]], [0.86, [250, 150, 0]],
+    [0.96, [230, 40, 20]], [1.0, [255, 255, 255]],
+  ],
+  plasma: [
+    [0.0, [13, 8, 135]], [0.25, [126, 3, 168]], [0.5, [204, 71, 120]],
+    [0.75, [248, 149, 64]], [1.0, [240, 249, 33]],
+  ],
+  viridis: [
+    [0.0, [68, 1, 84]], [0.25, [59, 82, 139]], [0.5, [33, 145, 140]],
+    [0.75, [94, 201, 98]], [1.0, [253, 231, 37]],
+  ],
+  amber: [
+    [0.0, [0, 0, 0]], [0.2, [50, 20, 0]], [0.5, [150, 75, 0]],
+    [0.8, [255, 176, 0]], [1.0, [255, 240, 180]],
+  ],
+  green: [
+    [0.0, [0, 0, 0]], [0.2, [0, 40, 10]], [0.5, [0, 140, 35]],
+    [0.8, [30, 240, 70]], [1.0, [220, 255, 230]],
+  ],
+};
+const PALETTE_NAMES = Object.keys(SDR_PALETTES);
+let sdrPalette = 'ham';
+
+let sdrCenterHz = 155000000;
+let sdrRateHz = 2048000;
+let sdrMinDb = -90;
+let sdrMaxDb = -10;
+let sdrAutoRange = true;
+let sdrPeakHold = true;
+let sdrFillTrace = true;
+let sdrPeakPwr = [];
+let sdrLastPwr = [];
+let sdrStatus = null;
+let sdrColorLut = null;
+let sdrSpecCanvas = null, sdrSpecCtx = null;
+let sdrWfCanvas = null, sdrWfCtx = null;
+let sdrTempCanvas = null, sdrTempCtx = null;
+let scopeSpecCanvas = null, scopeSpecCtx = null;
+let scopeWaveCanvas = null, scopeWaveCtx = null;
+let scopeWfCanvas = null, scopeWfCtx = null;
+let sdrHoverX = null;
+let sdrInitialized = false;
+
+function buildSdrLut(name) {
+  const stops = SDR_PALETTES[name] || SDR_PALETTES.ham;
+  const lut = new Uint8ClampedArray(256 * 4);
+  for (let i = 0; i < 256; i++) {
+    const t = i / 255;
+    let s0 = stops[0], s1 = stops[stops.length - 1];
+    for (let k = 0; k < stops.length - 1; k++) {
+      if (t >= stops[k][0] && t <= stops[k + 1][0]) { s0 = stops[k]; s1 = stops[k + 1]; break; }
+    }
+    const range = (s1[0] - s0[0]) || 1e-6;
+    const f = (t - s0[0]) / range;
+    lut[i * 4] = s0[1][0] + (s1[1][0] - s0[1][0]) * f;
+    lut[i * 4 + 1] = s0[1][1] + (s1[1][1] - s0[1][1]) * f;
+    lut[i * 4 + 2] = s0[1][2] + (s1[1][2] - s0[1][2]) * f;
+    lut[i * 4 + 3] = 255;
+  }
+  return lut;
+}
+
+// ---------- canvas sizing ----------
+//
+// Every canvas is sized from its OWN box, never from a parent. The wrapper has
+// a 1px border, so measuring the parent made the backing store wider than the
+// element and put every drawn x a fraction of a bin off the x the mouse
+// reported — which is why clicking a signal used to land beside it. Backing
+// stores are scaled by devicePixelRatio and the context is scaled to match, so
+// all drawing maths below is in CSS pixels and hit testing is exact.
+function fitCanvas(cv, ctx) {
+  const dpr = window.devicePixelRatio || 1;
+  const rect = cv.getBoundingClientRect();
+  const w = Math.max(1, Math.round(rect.width * dpr));
+  const h = Math.max(1, Math.round(rect.height * dpr));
+  if (cv.width !== w || cv.height !== h) {
+    cv.width = w; cv.height = h;
+    if (ctx) ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    return true;
+  }
+  if (ctx) ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  return false;
+}
+
+/// CSS-pixel size of a canvas, which is the coordinate space everything draws in.
+function cssSize(cv) {
+  const r = cv.getBoundingClientRect();
+  return { w: r.width, h: r.height };
+}
+
+function initSdrCanvas() {
+  if (!sdrColorLut) sdrColorLut = buildSdrLut(sdrPalette);
+  sdrSpecCanvas = $('sdrSpectrumCanvas');
+  sdrWfCanvas = $('sdrWaterfallCanvas');
+  scopeSpecCanvas = $('scopeSpecCanvas');
+  scopeWaveCanvas = $('scopeWaveCanvas');
+  if (!sdrSpecCanvas || !sdrWfCanvas) return;
+  sdrSpecCtx = sdrSpecCanvas.getContext('2d');
+  sdrWfCtx = sdrWfCanvas.getContext('2d', { alpha: false });
+  scopeSpecCtx = scopeSpecCanvas.getContext('2d', { alpha: false });
+  scopeWaveCtx = scopeWaveCanvas.getContext('2d', { alpha: false });
+  if (!sdrTempCanvas) {
+    sdrTempCanvas = document.createElement('canvas');
+    sdrTempCtx = sdrTempCanvas.getContext('2d');
+    scopeWfCanvas = document.createElement('canvas');
+    scopeWfCtx = scopeWfCanvas.getContext('2d');
+  }
+  resizeSdrCanvases();
+  if (!sdrInitialized) {
+    sdrInitialized = true;
+    window.addEventListener('resize', resizeSdrCanvases);
+    setupSdrInteractions();
+    setupFreqReadout();
+    buildMeterScale();
+    updateSnapHint();
+    setupControls();
+    setInterval(tickClock, 1000);
+    tickClock();
+  }
+}
+
+function resizeSdrCanvases() {
+  if (!sdrSpecCanvas || !sdrWfCanvas) return;
+  fitCanvas(sdrSpecCanvas, sdrSpecCtx);
+  if (fitCanvas(sdrWfCanvas, sdrWfCtx)) {
+    const { w, h } = cssSize(sdrWfCanvas);
+    sdrWfCtx.fillStyle = '#000';
+    sdrWfCtx.fillRect(0, 0, w, h);
+  }
+  fitCanvas(scopeSpecCanvas, scopeSpecCtx);
+  fitCanvas(scopeWaveCanvas, scopeWaveCtx);
+  if (sdrLastPwr.length) drawSdrSpectrum(sdrLastPwr);
+  drawSpecScale();
+}
+
+// ---------- frequency readout ----------
+//
+// Nine digits from 1 GHz down to 10 Hz, grouped the way a radio shows them:
+// MHz . kHz . tens of Hz. Each digit carries its own decade, so a scroll over
+// one is a tuning step of exactly that size.
+const FREQ_DIGITS = [1e9, 1e8, 1e7, 1e6, 1e5, 1e4, 1e3, 1e2, 1e1];
+let freqSel = 5; // default to the 10 kHz digit
+
+function setupFreqReadout() {
+  const el = $('freqReadout');
+  if (!el) return;
+  el.innerHTML = FREQ_DIGITS.map((w, i) => {
+    const dot = (i === 4 || i === 7) ? '<span class="fdot">.</span>' : '';
+    return dot + `<span class="fd" data-i="${i}">0</span>`;
+  }).join('') + '<span class="funit">MHz</span>';
+
+  el.addEventListener('wheel', (e) => {
+    const d = e.target.closest('.fd');
+    if (!d) return;
+    e.preventDefault();
+    freqSel = Number(d.dataset.i);
+    renderFreq(sdrInspectHz);
+    stepRxFreq(e.deltaY < 0 ? FREQ_DIGITS[freqSel] : -FREQ_DIGITS[freqSel]);
+  }, { passive: false });
+
+  el.addEventListener('mousedown', (e) => {
+    const d = e.target.closest('.fd');
+    if (!d) return;
+    freqSel = Number(d.dataset.i);
+    renderFreq(sdrInspectHz);
+  });
+
+  el.addEventListener('dblclick', () => openFreqEntry());
+
+  document.addEventListener('keydown', (e) => {
+    if (document.querySelector('.freq-entry')) return;
+    const tag = (document.activeElement && document.activeElement.tagName) || '';
+    if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return;
+    if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+      e.preventDefault();
+      stepRxFreq(e.key === 'ArrowUp' ? FREQ_DIGITS[freqSel] : -FREQ_DIGITS[freqSel]);
+    } else if (e.key === 'ArrowLeft') {
+      e.preventDefault(); freqSel = Math.max(0, freqSel - 1); renderFreq(sdrInspectHz);
+    } else if (e.key === 'ArrowRight') {
+      e.preventDefault(); freqSel = Math.min(FREQ_DIGITS.length - 1, freqSel + 1); renderFreq(sdrInspectHz);
+    }
+  });
+}
+
+function renderFreq(hz) {
+  const el = $('freqReadout');
+  if (!el) return;
+  const units = Math.round(hz / 10); // work in 10 Hz units, the last digit shown
+  const str = String(units).padStart(9, '0');
+  const digits = el.querySelectorAll('.fd');
+  let leading = true;
+  digits.forEach((d, i) => {
+    const ch = str[i];
+    if (ch !== '0' || i >= 3) leading = false;   // never dim below the 1 MHz digit
+    d.textContent = ch;
+    d.classList.toggle('lead', leading);
+    d.classList.toggle('sel', i === freqSel);
+  });
+  el.querySelectorAll('.fdot').forEach((dot, k) => {
+    dot.classList.toggle('lead', k === 0 && leading);
+  });
+}
+
+function openFreqEntry() {
+  const el = $('freqReadout');
+  if (!el || el.querySelector('.freq-entry')) return;
+  const prev = el.innerHTML;
+  el.innerHTML = '';
+  const inp = document.createElement('input');
+  inp.className = 'freq-entry';
+  inp.value = (sdrCenterHz / 1e6).toFixed(4);
+  el.appendChild(inp);
+  inp.focus(); inp.select();
+  const done = (commit) => {
+    const mhz = parseFloat(inp.value);
+    el.innerHTML = prev;
+    renderFreq(sdrInspectHz);
+    if (commit && isFinite(mhz) && mhz > 0) tuneRxHz(mhz * 1e6);
+  };
+  inp.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); done(true); }
+    else if (e.key === 'Escape') { e.preventDefault(); done(false); }
+  });
+  inp.addEventListener('blur', () => done(false));
+}
+
+function tickClock() {
+  const el = $('scrClock');
+  if (el) el.textContent = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
+}
+
+// ---------- span labelling ----------
+
+function fmtMhz(hz, places) { return (hz / 1e6).toFixed(places === undefined ? 4 : places); }
+
+function drawSpecScale() {
+  const lo = sdrCenterHz - sdrRateHz / 2;
+  const hi = sdrCenterHz + sdrRateHz / 2;
+  if ($('edgeLo')) $('edgeLo').textContent = fmtMhz(lo, 3);
+  if ($('edgeHi')) $('edgeHi').textContent = fmtMhz(hi, 3);
+  const el = $('specScale');
+  if (!el) return;
+  // Nine evenly spaced ticks, matching the grid the spectrum draws.
+  const n = 9;
+  let out = '';
+  for (let i = 0; i < n; i++) {
+    const f = lo + (hi - lo) * (i / (n - 1));
+    out += `<span>${fmtMhz(f, 3)}</span>`;
+  }
+  el.innerHTML = out;
+}
+
+// ---------- spectrum ----------
+
+function xForFreq(hz, W) {
+  return ((hz - (sdrCenterHz - sdrRateHz / 2)) / sdrRateHz) * W;
+}
+function freqForX(x, W) {
+  return (sdrCenterHz - sdrRateHz / 2) + (x / W) * sdrRateHz;
+}
+
+function drawSdrSpectrum(pwr) {
+  if (!sdrSpecCtx || !pwr || !pwr.length) return;
+  const { w: W, h: H } = cssSize(sdrSpecCanvas);
+  const ctx = sdrSpecCtx;
+  const minDb = sdrMinDb, maxDb = sdrMaxDb;
+  const range = (maxDb - minDb) || 1;
+  const yForDb = (db) => H - ((db - minDb) / range) * H;
+
+  ctx.fillStyle = '#050d14';
+  ctx.fillRect(0, 0, W, H);
+
+  // grid
+  ctx.strokeStyle = '#112c3a';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  for (let i = 1; i < 9; i++) {
+    const x = Math.round((W * i) / 9) + 0.5;
+    ctx.moveTo(x, 0); ctx.lineTo(x, H);
+  }
+  for (let i = 1; i < 4; i++) {
+    const y = Math.round((H * i) / 4) + 0.5;
+    ctx.moveTo(0, y); ctx.lineTo(W, y);
+  }
+  ctx.stroke();
+
+  const N = pwr.length;
+  const px = (i) => (i / (N - 1)) * W;
+
+  // peak hold, drawn under the live trace
+  if (sdrPeakHold) {
+    if (sdrPeakPwr.length !== N) sdrPeakPwr = Array.from(pwr);
+    else for (let i = 0; i < N; i++) {
+      sdrPeakPwr[i] = Math.max(pwr[i], sdrPeakPwr[i] - 0.35);
+    }
+    ctx.strokeStyle = 'rgba(120,190,225,0.42)';
+    ctx.beginPath();
+    for (let i = 0; i < N; i++) {
+      const x = px(i), y = yForDb(sdrPeakPwr[i]);
+      i ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
+    }
+    ctx.stroke();
+  }
+
+  // live trace, filled the way the rig draws it
+  ctx.beginPath();
+  ctx.moveTo(0, H);
+  for (let i = 0; i < N; i++) ctx.lineTo(px(i), yForDb(pwr[i]));
+  ctx.lineTo(W, H);
+  ctx.closePath();
+  if (sdrFillTrace) {
+    const g = ctx.createLinearGradient(0, 0, 0, H);
+    g.addColorStop(0, 'rgba(196,240,252,0.92)');
+    g.addColorStop(0.45, 'rgba(96,190,232,0.55)');
+    g.addColorStop(1, 'rgba(24,86,140,0.18)');
+    ctx.fillStyle = g;
+    ctx.fill();
+  }
+  ctx.strokeStyle = '#e2f6ff';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  for (let i = 0; i < N; i++) {
+    const x = px(i), y = yForDb(pwr[i]);
+    i ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
+  }
+  ctx.stroke();
+
+  // inspect marker: the rig's green pointer, plus its passband
+  const ix = xForFreq(sdrInspectHz, W);
+  if (ix >= -20 && ix <= W + 20) {
+    // The real channel width, so WFM shows the 200 kHz it is actually
+    // listening through. A channel covering much of the span is drawn as
+    // brackets rather than a filled slab, which would tint half the display.
+    const halfBw = (sdrBandwidthHz / 2 / sdrRateHz) * W;
+    const wide = halfBw * 2 > W * 0.25;
+    ctx.fillStyle = wide ? 'rgba(43,255,106,0.04)' : 'rgba(43,255,106,0.10)';
+    ctx.fillRect(ix - halfBw, 0, halfBw * 2, H);
+    ctx.strokeStyle = 'rgba(43,255,106,0.75)';
+    ctx.beginPath();
+    ctx.moveTo(Math.round(ix) + 0.5, 0);
+    ctx.lineTo(Math.round(ix) + 0.5, H);
+    ctx.stroke();
+    if (halfBw > 3) {
+      ctx.strokeStyle = wide ? 'rgba(43,255,106,0.55)' : 'rgba(43,255,106,0.35)';
+      ctx.beginPath();
+      ctx.moveTo(Math.round(ix - halfBw) + 0.5, 0); ctx.lineTo(Math.round(ix - halfBw) + 0.5, H);
+      ctx.moveTo(Math.round(ix + halfBw) + 0.5, 0); ctx.lineTo(Math.round(ix + halfBw) + 0.5, H);
+      ctx.stroke();
+    }
+    ctx.fillStyle = '#2bff6a';
+    ctx.beginPath();
+    ctx.moveTo(ix, 9); ctx.lineTo(ix - 5, 0); ctx.lineTo(ix + 5, 0);
+    ctx.closePath(); ctx.fill();
+  }
+
+  // anything a spur check proved is internal, marked so it is not mistaken
+  // for a signal
+  for (const off of sdrSpurOffsets) {
+    const sx = xForFreq(sdrCenterHz + off, W);
+    if (sx < -4 || sx > W + 4) continue;
+    ctx.strokeStyle = 'rgba(255,90,74,0.75)';
+    ctx.setLineDash([2, 3]);
+    ctx.beginPath();
+    ctx.moveTo(Math.round(sx) + 0.5, 0);
+    ctx.lineTo(Math.round(sx) + 0.5, H);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = '#ff5a4a';
+    ctx.font = '9px ui-monospace, monospace';
+    ctx.fillText('NOTCH', sx + 3, 10);
+  }
+
+  // hover cursor
+  if (sdrHoverX != null) {
+    ctx.strokeStyle = 'rgba(255,255,255,0.34)';
+    ctx.setLineDash([3, 3]);
+    ctx.beginPath();
+    ctx.moveTo(Math.round(sdrHoverX) + 0.5, 0);
+    ctx.lineTo(Math.round(sdrHoverX) + 0.5, H);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+}
+
+/// Wipe the waterfall.
+///
+/// Its rows are only meaningful against the frequency axis they were drawn
+/// under. After a span change the history below the top row belongs to
+/// different frequencies, and leaving it there draws a picture of signals that
+/// were never at those frequencies.
+function clearWaterfall() {
+  if (!sdrWfCtx || !sdrWfCanvas) return;
+  const { w, h } = cssSize(sdrWfCanvas);
+  sdrWfCtx.fillStyle = '#000';
+  sdrWfCtx.fillRect(0, 0, w, h);
+}
+
+let wfAxisCentre = null, wfAxisSpan = null, wfPanCanvas = null;
+
+/// Slide the waterfall sideways so its history stays under the frequencies it
+/// was recorded at. Tuning with the dial moves the span every step; wiping it
+/// each time would leave it permanently blank while tuning, and leaving it
+/// alone would draw old signals at frequencies they were never on.
+function panWaterfall(dxPx) {
+  if (!sdrWfCtx || !sdrWfCanvas) return;
+  const { w, h } = cssSize(sdrWfCanvas);
+  if (!wfPanCanvas) wfPanCanvas = document.createElement('canvas');
+  const dpr = window.devicePixelRatio || 1;
+  if (wfPanCanvas.width !== sdrWfCanvas.width || wfPanCanvas.height !== sdrWfCanvas.height) {
+    wfPanCanvas.width = sdrWfCanvas.width;
+    wfPanCanvas.height = sdrWfCanvas.height;
+  }
+  const pc = wfPanCanvas.getContext('2d');
+  pc.setTransform(1, 0, 0, 1, 0, 0);
+  pc.clearRect(0, 0, wfPanCanvas.width, wfPanCanvas.height);
+  pc.drawImage(sdrWfCanvas, 0, 0);
+  sdrWfCtx.fillStyle = '#000';
+  sdrWfCtx.fillRect(0, 0, w, h);
+  sdrWfCtx.imageSmoothingEnabled = false;
+  sdrWfCtx.drawImage(
+    wfPanCanvas,
+    0, 0, wfPanCanvas.width, wfPanCanvas.height,
+    dxPx, 0, wfPanCanvas.width / dpr, wfPanCanvas.height / dpr,
+  );
+}
+
+/// Keep the waterfall aligned to the axis it is drawn against.
+function syncWaterfallAxis(centreHz, spanHz) {
+  if (wfAxisCentre === null) { wfAxisCentre = centreHz; wfAxisSpan = spanHz; return; }
+  const spanChanged = Math.abs(spanHz - wfAxisSpan) > 1;
+  const dHz = centreHz - wfAxisCentre;
+  if (!spanChanged && dHz === 0) return;
+  const { w } = cssSize(sdrWfCanvas);
+  // Raising the centre moves a fixed-frequency signal left on screen.
+  const dx = -(dHz / spanHz) * w;
+  if (spanChanged || !isFinite(dx) || Math.abs(dx) >= w) clearWaterfall();
+  else if (dx !== 0) panWaterfall(dx);
+  wfAxisCentre = centreHz;
+  wfAxisSpan = spanHz;
+  sdrPeakPwr = [];
+}
+
+function drawSdrWaterfallRow(pwr) {
+  if (!sdrWfCtx || !sdrWfCanvas) return;
+  const N = pwr.length;
+  if (!N) return;
+  const { w: W, h: H } = cssSize(sdrWfCanvas);
+
+  if (sdrTempCanvas.width !== N || sdrTempCanvas.height !== 1) {
+    sdrTempCanvas.width = N; sdrTempCanvas.height = 1;
+  }
+  const img = sdrTempCtx.createImageData(N, 1);
+  const data = img.data;
+  const lut = sdrColorLut || buildSdrLut(sdrPalette);
+  const range = (sdrMaxDb - sdrMinDb) || 1;
+  for (let i = 0; i < N; i++) {
+    const norm = Math.min(1, Math.max(0, (pwr[i] - sdrMinDb) / range));
+    const li = Math.min(255, Math.floor(norm * 255)) * 4;
+    const pi = i * 4;
+    data[pi] = lut[li]; data[pi + 1] = lut[li + 1]; data[pi + 2] = lut[li + 2]; data[pi + 3] = 255;
+  }
+  sdrTempCtx.putImageData(img, 0, 0);
+
+  sdrWfCtx.drawImage(sdrWfCanvas, 0, 0, W, H - 1, 0, 1, W, H - 1);
+  sdrWfCtx.imageSmoothingEnabled = false;
+  sdrWfCtx.drawImage(sdrTempCanvas, 0, 0, N, 1, 0, 0, W, 1);
+}
+
+// ---------- audio scope ----------
+//
+// The server sends demodulated audio decimated to 8 kHz, so an FFT of it
+// covers exactly the 0–4 kHz the scope's frequency axis is labelled with.
+
+function fftMag(re, im, out) {
+  const n = re.length;
+  for (let i = 1, j = 0; i < n; i++) {
+    let bit = n >> 1;
+    for (; j & bit; bit >>= 1) j ^= bit;
+    j ^= bit;
+    if (i < j) {
+      let t = re[i]; re[i] = re[j]; re[j] = t;
+      t = im[i]; im[i] = im[j]; im[j] = t;
+    }
+  }
+  for (let len = 2; len <= n; len <<= 1) {
+    const ang = -2 * Math.PI / len;
+    const wr = Math.cos(ang), wi = Math.sin(ang);
+    for (let i = 0; i < n; i += len) {
+      let cr = 1, ci = 0;
+      for (let k = 0; k < len / 2; k++) {
+        const ur = re[i + k], ui = im[i + k];
+        const vr = re[i + k + len / 2] * cr - im[i + k + len / 2] * ci;
+        const vi = re[i + k + len / 2] * ci + im[i + k + len / 2] * cr;
+        re[i + k] = ur + vr; im[i + k] = ui + vi;
+        re[i + k + len / 2] = ur - vr; im[i + k + len / 2] = ui - vi;
+        const ncr = cr * wr - ci * wi;
+        ci = cr * wi + ci * wr; cr = ncr;
+      }
+    }
+  }
+  for (let i = 0; i < n / 2; i++) out[i] = Math.hypot(re[i], im[i]);
+}
+
+const SCOPE_N = 256;
+const scopeRe = new Float64Array(SCOPE_N);
+const scopeIm = new Float64Array(SCOPE_N);
+const scopeMag = new Float64Array(SCOPE_N / 2);
+
+let scopeAxisRate = 0;
+let scopeKind = 'audio';
+let scopeSymbolRate = 0;
+let scopeLastKind = null;
+
+/// Titles change with the instrument, so a pane is never labelled as something
+/// it is not showing.
+function setScopeChrome(kind) {
+  const title = $('scopeTitle');
+  if (title) {
+    title.textContent = kind === 'symbols' ? 'SYMBOL SCOPE'
+      : kind === 'mpx' ? 'FM MULTIPLEX'
+      : 'AUDIO SCOPE';
+  }
+}
+
+function drawScope(scope, rateHz, kind, symbolRate) {
+  scopeKind = kind || 'audio';
+  scopeSymbolRate = symbolRate || 0;
+  setScopeChrome(scopeKind);
+  // Each instrument paints a different part of its pane, so switching between
+  // them leaves the other one's pixels behind unless the panes are wiped.
+  if (scopeKind !== scopeLastKind) {
+    scopeLastKind = scopeKind;
+    scopeAxisRate = 0;
+    for (const pair of [[scopeSpecCanvas, scopeSpecCtx], [scopeWaveCanvas, scopeWaveCtx]]) {
+      const cv = pair[0], ctx = pair[1];
+      if (!ctx) continue;
+      const box = cssSize(cv);
+      ctx.fillStyle = '#000';
+      ctx.fillRect(0, 0, box.w, box.h);
+    }
+  }
+  if (scopeKind === 'symbols') drawSymbolScope(scope, rateHz, symbolRate);
+  else drawAudioScope(scope, rateHz);
+}
+
+// A 4-level FSK signal has no meaningful audio spectrum, and its health is not
+// visible in a waveform. What matters is whether the four symbol levels are
+// separated and whether the eye is open at the sampling instant.
+function drawSymbolScope(scope, rateHz, symbolRate) {
+  if (!scopeSpecCtx || !scopeWaveCtx) return;
+  const sps = (rateHz && symbolRate) ? rateHz / symbolRate : 10;
+  const n = scope ? scope.length : 0;
+  const eye = cssSize(scopeSpecCanvas);
+  const EW = eye.w, EH = eye.h;
+  const ec = scopeSpecCtx;
+  ec.fillStyle = '#02070d';
+  ec.fillRect(0, 0, EW, EH);
+  ec.strokeStyle = '#0e2836';
+  ec.beginPath();
+  for (let i = 1; i < 4; i++) { const x = Math.round(EW*i/4)+0.5; ec.moveTo(x,0); ec.lineTo(x,EH); }
+  // the four nominal C4FM levels, at +/-1800 and +/-600 Hz on a +/-3000 scale
+  const levels = [0.6, 0.2, -0.2, -0.6];
+  for (const lv of levels) {
+    const y = Math.round(EH/2 - lv*(EH/2-4))+0.5;
+    ec.moveTo(0,y); ec.lineTo(EW,y);
+  }
+  ec.stroke();
+  if (n > sps * 3) {
+    const span = Math.max(2, Math.round(sps * 2));
+    ec.strokeStyle = 'rgba(43,255,106,0.30)';
+    ec.lineWidth = 1;
+    for (let start = 0; start + span < n; start += span) {
+      ec.beginPath();
+      for (let k = 0; k <= span; k++) {
+        const v = scope[start + k] / 32000;
+        const x = (k / span) * EW;
+        const y = EH/2 - v * (EH/2 - 4);
+        if (k) ec.lineTo(x, y); else ec.moveTo(x, y);
+      }
+      ec.stroke();
+    }
+  }
+  const con = cssSize(scopeWaveCanvas);
+  const CW = con.w, CH = con.h;
+  const cc = scopeWaveCtx;
+  cc.fillStyle = '#000a04';
+  cc.fillRect(0, 0, CW, CH);
+  cc.strokeStyle = '#0d3320';
+  cc.beginPath(); cc.moveTo(0, CH/2+0.5); cc.lineTo(CW, CH/2+0.5); cc.stroke();
+  const hist = [0, 0, 0, 0];
+  let total = 0;
+  if (n > sps) {
+    cc.fillStyle = '#2bff6a';
+    const offset = Math.floor(sps / 2);
+    for (let i = offset; i < n; i += sps) {
+      const v = scope[Math.round(i)] / 32000;
+      // 4-FSK is one-dimensional: spread points along x by time so a cluster
+      // reads as a band rather than one overplotted dot.
+      const x = (total % 200) / 200 * CW;
+      const y = CH/2 - v * (CH/2 - 5);
+      cc.fillRect(x, y - 1, 2, 2);
+      let best = 0, bd = 9;
+      for (let k = 0; k < levels.length; k++) {
+        const d = Math.abs(v - levels[k]);
+        if (d < bd) { bd = d; best = k; }
+      }
+      hist[best]++;
+      total++;
+    }
+  }
+  // level histogram down the right edge, so an unbalanced or collapsed
+  // constellation is obvious at a glance
+  const denom = total || 1;
+  cc.fillStyle = 'rgba(43,255,106,0.55)';
+  for (let k = 0; k < levels.length; k++) {
+    const y = CH/2 - levels[k] * (CH/2 - 5);
+    const wpx = (hist[k] / denom) * (CW * 0.22);
+    cc.fillRect(CW - wpx, y - 3, wpx, 6);
+  }
+  if ($('scopeLevel')) $('scopeLevel').textContent = 'SYM ' + total;
+  if ($('scopeTime')) $('scopeTime').textContent = (symbolRate/1000).toFixed(1) + ' kBd \u00b7 ' + sps.toFixed(1) + ' sps';
+  const ax = $('scopeAxis');
+  if (ax) ax.innerHTML = '<span>eye \u00b7 2 symbols</span><span></span><span></span><span></span><span></span>';
+  scopeAxisRate = 0;
+}
+
+function drawAudioScope(scope, rateHz) {
+  if (!scopeWaveCtx || !scopeSpecCtx) return;
+  const samples = scope && scope.length ? scope : [];
+
+  // The scope's FFT spans half the trace's rate, so the axis has to be
+  // relabelled whenever the mode changes that rate.
+  if (rateHz && rateHz !== scopeAxisRate) {
+    scopeAxisRate = rateHz;
+    const top = rateHz / 2000;
+    const ax = $('scopeAxis');
+    if (ax) {
+      ax.innerHTML = [0, 0.25, 0.5, 0.75, 1].map(function (f, i) {
+        const v = top * f;
+        const t = i === 4 ? v.toFixed(v < 10 ? 1 : 0) + 'kHz'
+                          : (v === 0 ? '0' : v.toFixed(v < 10 ? 1 : 0));
+        return '<span>' + t + '</span>';
+      }).join('');
+    }
+  }
+
+  // --- right pane: the waveform, in the rig's green ---
+  const { w: WW, h: WH } = cssSize(scopeWaveCanvas);
+  const wc = scopeWaveCtx;
+  wc.fillStyle = '#000a04';
+  wc.fillRect(0, 0, WW, WH);
+  wc.strokeStyle = '#0d3320';
+  wc.lineWidth = 1;
+  wc.beginPath();
+  for (let i = 1; i < 8; i++) { const x = Math.round(WW * i / 8) + 0.5; wc.moveTo(x, 0); wc.lineTo(x, WH); }
+  for (let i = 1; i < 4; i++) { const y = Math.round(WH * i / 4) + 0.5; wc.moveTo(0, y); wc.lineTo(WW, y); }
+  wc.stroke();
+  wc.strokeStyle = '#1c5c38';
+  wc.beginPath(); wc.moveTo(0, WH / 2 + 0.5); wc.lineTo(WW, WH / 2 + 0.5); wc.stroke();
+
+  let rms = 0;
+  if (samples.length) {
+    wc.strokeStyle = '#2bff6a';
+    wc.lineWidth = 1.2;
+    wc.beginPath();
+    for (let i = 0; i < samples.length; i++) {
+      const v = samples[i] / 32000;
+      rms += v * v;
+      const x = (i / (samples.length - 1)) * WW;
+      const y = WH / 2 - v * (WH / 2 - 3);
+      i ? wc.lineTo(x, y) : wc.moveTo(x, y);
+    }
+    wc.stroke();
+    rms = Math.sqrt(rms / samples.length);
+  }
+  const lvl = rms > 1e-5 ? (20 * Math.log10(rms)).toFixed(0) : null;
+  if ($('scopeLevel')) $('scopeLevel').textContent = 'LEVEL: ' + (lvl === null ? '—' : lvl + 'dB');
+  if ($('scopeTime') && rateHz) {
+    const perDiv = (samples.length / rateHz) * 1000 / 8;
+    $('scopeTime').textContent = perDiv >= 1
+      ? perDiv.toFixed(perDiv < 10 ? 1 : 0) + 'ms/Div'
+      : (perDiv * 1000).toFixed(0) + '\u00b5s/Div';
+  }
+
+  // --- left pane: audio spectrum over 0–4 kHz, with its own waterfall ---
+  const { w: SW, h: SH } = cssSize(scopeSpecCanvas);
+  const sc = scopeSpecCtx;
+  const specH = Math.round(SH * 0.56);
+  const wfH = SH - specH;
+
+  sc.fillStyle = '#02070d';
+  sc.fillRect(0, 0, SW, specH);
+  sc.strokeStyle = '#0e2836';
+  sc.beginPath();
+  for (let i = 1; i < 4; i++) { const x = Math.round(SW * i / 4) + 0.5; sc.moveTo(x, 0); sc.lineTo(x, specH); }
+  for (let i = 1; i < 3; i++) { const y = Math.round(specH * i / 3) + 0.5; sc.moveTo(0, y); sc.lineTo(SW, y); }
+  sc.stroke();
+
+  if (samples.length >= SCOPE_N) {
+    const off = samples.length - SCOPE_N;
+    for (let i = 0; i < SCOPE_N; i++) {
+      // Hann window, so a steady tone reads as one line rather than a smear.
+      const w = 0.5 - 0.5 * Math.cos((2 * Math.PI * i) / (SCOPE_N - 1));
+      scopeRe[i] = (samples[off + i] / 32000) * w;
+      scopeIm[i] = 0;
+    }
+    fftMag(scopeRe, scopeIm, scopeMag);
+
+    const bins = scopeMag.length;
+    const dbFor = (m) => 20 * Math.log10(Math.max(m / (SCOPE_N / 4), 1e-6));
+    const FLOOR = -80, CEIL = 0;
+    sc.beginPath();
+    sc.moveTo(0, specH);
+    for (let i = 0; i < bins; i++) {
+      const db = Math.max(FLOOR, Math.min(CEIL, dbFor(scopeMag[i])));
+      const x = (i / (bins - 1)) * SW;
+      const y = specH - ((db - FLOOR) / (CEIL - FLOOR)) * specH;
+      sc.lineTo(x, y);
+    }
+    sc.lineTo(SW, specH);
+    sc.closePath();
+    const g = sc.createLinearGradient(0, 0, 0, specH);
+    g.addColorStop(0, 'rgba(180,240,255,0.9)');
+    g.addColorStop(0.5, 'rgba(60,170,235,0.6)');
+    g.addColorStop(1, 'rgba(10,60,120,0.2)');
+    sc.fillStyle = g;
+    sc.fill();
+    sc.strokeStyle = '#cfeeff';
+    sc.lineWidth = 1;
+    sc.beginPath();
+    for (let i = 0; i < bins; i++) {
+      const db = Math.max(FLOOR, Math.min(CEIL, dbFor(scopeMag[i])));
+      const x = (i / (bins - 1)) * SW;
+      const y = specH - ((db - FLOOR) / (CEIL - FLOOR)) * specH;
+      i ? sc.lineTo(x, y) : sc.moveTo(x, y);
+    }
+    sc.stroke();
+
+    // Broadcast FM carries its pilot, stereo subcarrier and RDS at fixed
+    // places in the multiplex, and 1200 baud packet puts its mark and space
+    // tones at fixed audio frequencies. A spectrum without them marked is a
+    // lot harder to read.
+    const top = rateHz / 2;
+    const marks = scopeKind === 'mpx'
+      ? [[19000, 'pilot'], [38000, 'stereo'], [57000, 'RDS']]
+      : (sdrMode === 'packet' ? [[1200, 'mark'], [2200, 'space']]
+      : (sdrMode === 'nfm' ? [[250, 'CTCSS']] : []));
+    sc.font = '8px ui-monospace, monospace';
+    for (const mk of marks) {
+      const hz = mk[0], label = mk[1];
+      if (hz >= top) continue;
+      const x = (hz / top) * SW;
+      sc.strokeStyle = 'rgba(255,180,40,0.5)';
+      sc.setLineDash([2, 3]);
+      sc.beginPath(); sc.moveTo(Math.round(x)+0.5, 0); sc.lineTo(Math.round(x)+0.5, specH); sc.stroke();
+      sc.setLineDash([]);
+      sc.fillStyle = 'rgba(255,180,40,0.85)';
+      sc.fillText(label, Math.min(x + 2, SW - 26), 8);
+    }
+
+    // audio waterfall strip
+    if (scopeWfCanvas.width !== bins || scopeWfCanvas.height !== 1) {
+      scopeWfCanvas.width = bins; scopeWfCanvas.height = 1;
+    }
+    const img = scopeWfCtx.createImageData(bins, 1);
+    const lut = sdrColorLut || buildSdrLut(sdrPalette);
+    for (let i = 0; i < bins; i++) {
+      const db = Math.max(FLOOR, Math.min(CEIL, dbFor(scopeMag[i])));
+      const norm = (db - FLOOR) / (CEIL - FLOOR);
+      const li = Math.min(255, Math.floor(norm * 255)) * 4;
+      const pi = i * 4;
+      img.data[pi] = lut[li]; img.data[pi + 1] = lut[li + 1];
+      img.data[pi + 2] = lut[li + 2]; img.data[pi + 3] = 255;
+    }
+    scopeWfCtx.putImageData(img, 0, 0);
+    sc.drawImage(scopeSpecCanvas, 0, specH, SW, wfH - 1, 0, specH + 1, SW, wfH - 1);
+    sc.imageSmoothingEnabled = false;
+    sc.drawImage(scopeWfCanvas, 0, 0, bins, 1, 0, specH, SW, 1);
+  }
+}
+
+// ---------- interactions ----------
+//
+// All hit testing measures the canvas under the pointer, not the bordered
+// wrapper around it, so the frequency a click reports is the frequency the
+// marker is drawn at.
+
+function pointerFreq(e, cv) {
+  const rect = cv.getBoundingClientRect();
+  const x = Math.max(0, Math.min(rect.width, e.clientX - rect.left));
+  return { x, hz: freqForX(x, rect.width) };
+}
+
+function setupSdrInteractions() {
+  const targets = [sdrSpecCanvas, sdrWfCanvas];
+
+  for (const cv of targets) {
+    cv.addEventListener('mousemove', (e) => {
+      const { x, hz } = pointerFreq(e, cv);
+      sdrHoverX = x;
+      let dbStr = '';
+      if (sdrLastPwr.length) {
+        const bin = Math.min(sdrLastPwr.length - 1,
+          Math.max(0, Math.round((x / cv.getBoundingClientRect().width) * (sdrLastPwr.length - 1))));
+        dbStr = ' · ' + sdrLastPwr[bin].toFixed(1) + ' dBFS';
+      }
+      const r = $('sdrHoverReadout');
+      if (r) {
+        // Show where a click would actually land, not where the cursor is.
+        r.hidden = false;
+        r.textContent = fmtMhz(snapHz(hz, e.altKey)) + ' MHz' + dbStr;
+      }
+      if (sdrLastPwr.length) drawSdrSpectrum(sdrLastPwr);
+    });
+
+    cv.addEventListener('mouseleave', () => {
+      sdrHoverX = null;
+      const r = $('sdrHoverReadout');
+      if (r) r.hidden = true;
+      if (sdrLastPwr.length) drawSdrSpectrum(sdrLastPwr);
+    });
+
+    cv.addEventListener('click', (e) => {
+      const { hz } = pointerFreq(e, cv);
+      const snapped = snapHz(hz, e.altKey);
+      // Shift moves the span without retuning; a plain click tunes.
+      if (e.shiftKey) centreSpanHz(snapped);
+      else tuneRxHz(snapped);
+    });
+
+    cv.addEventListener('dblclick', (e) => {
+      const { hz } = pointerFreq(e, cv);
+      tuneSdrHz(Math.round(hz / 1250) * 1250);
+    });
+
+    // Wheel over the spectrum walks the centre frequency by a tenth of a span,
+    // which is the "spin the dial" gesture people try first.
+    cv.addEventListener('wheel', (e) => {
+      e.preventDefault();
+      // Walk the dial a raster step at a time; Alt gives a coarse sweep. Like
+      // the digit dials, this scrolls the spectrum rather than sliding the
+      // marker toward an edge.
+      const step = e.altKey ? sdrRateHz / 10 : snapStepHz();
+      tuneRxHz(snapHz(sdrInspectHz + (e.deltaY < 0 ? step : -step), e.altKey), true);
+    }, { passive: false });
+  }
+}
+
+function setupControls() {
+  $('sdrRateSel').addEventListener('change', (e) => setSdrRate(Number(e.target.value)));
+  $('sdrRadioSel').addEventListener('change', (e) => switchSdrDevice(e.target.value));
+
+  $('sdrAgc').addEventListener('change', (e) => {
+    const on = e.target.checked;
+    $('sdrGainRange').disabled = on;
+    setSdrGain(on ? null : parseFloat($('sdrGainRange').value));
+  });
+  $('sdrGainRange').addEventListener('input', (e) => {
+    $('sdrGainVal').textContent = e.target.value + ' dB';
+  });
+  $('sdrGainRange').addEventListener('change', (e) => {
+    if (!$('sdrAgc').checked) setSdrGain(parseFloat(e.target.value));
+  });
+
+  const onRange = () => {
+    sdrAutoRange = false;
+    $('keyAuto').classList.remove('on');
+    sdrMinDb = Number($('sdrMinDb').value);
+    sdrMaxDb = Number($('sdrMaxDb').value);
+    if (sdrMaxDb <= sdrMinDb + 10) { sdrMaxDb = sdrMinDb + 10; $('sdrMaxDb').value = sdrMaxDb; }
+    $('sdrRangeVal').textContent = sdrMinDb + '..' + sdrMaxDb;
+    if (sdrLastPwr.length) drawSdrSpectrum(sdrLastPwr);
+  };
+  $('sdrMinDb').addEventListener('input', onRange);
+  $('sdrMaxDb').addEventListener('input', onRange);
+
+  $('keyPeak').addEventListener('click', () => {
+    sdrPeakHold = !sdrPeakHold;
+    sdrPeakPwr = [];
+    $('keyPeak').classList.toggle('on', sdrPeakHold);
+  });
+  $('keyAuto').addEventListener('click', () => {
+    sdrAutoRange = !sdrAutoRange;
+    $('keyAuto').classList.toggle('on', sdrAutoRange);
+  });
+  $('keyFill').addEventListener('click', () => {
+    sdrFillTrace = !sdrFillTrace;
+    $('keyFill').classList.toggle('on', sdrFillTrace);
+    if (sdrLastPwr.length) drawSdrSpectrum(sdrLastPwr);
+  });
+  $('keyFill').classList.toggle('on', sdrFillTrace);
+  $('keyPalette').addEventListener('click', () => {
+    const i = PALETTE_NAMES.indexOf(sdrPalette);
+    sdrPalette = PALETTE_NAMES[(i + 1) % PALETTE_NAMES.length];
+    sdrColorLut = buildSdrLut(sdrPalette);
+    $('keyPalette').textContent = sdrPalette.toUpperCase();
+  });
+  $('keyPalette').textContent = sdrPalette.toUpperCase();
+  // Put the span back around the frequency being received.
+  $('keyCenter').addEventListener('click', () => centreSpanHz(sdrInspectHz));
+
+  $('keyZoomIn').addEventListener('click', () => setZoom(sdrZoom * 2));
+  $('keyZoomOut').addEventListener('click', () => setZoom(sdrZoom / 2));
+
+  $('keySpur').addEventListener('click', async () => {
+    if (sdrSpurOffsets.length) {
+      sdrSpurOffsets = [];
+      await applySpurNotch();
+      $('keySpur').classList.remove('on');
+      $('keySpur').textContent = 'SPUR CHK';
+      if (sdrLastPwr.length) drawSdrSpectrum(sdrLastPwr);
+    } else {
+      runSpurCheck();
+    }
+  });
+
+  document.querySelectorAll('.modebtn').forEach(b =>
+    b.addEventListener('click', () => setSdrMode(b.dataset.mode)));
+
+  $('snapSel').addEventListener('change', (e) => {
+    snapOverrideHz = e.target.value === 'auto' ? 0 : Number(e.target.value);
+    updateSnapHint();
+  });
+
+  $('ppmInput').addEventListener('change', async (e) => {
+    const ppm = Number(e.target.value);
+    if (!isFinite(ppm)) return;
+    try {
+      await fetch('/api/sdr/ppm', { method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ ppm }) });
+    } catch (err) { $('err').textContent = 'ppm: ' + err; }
+  });
+
+  // Calibration needs a carrier whose true frequency the operator vouches for;
+  // the receiver supplies the measured error and the arithmetic.
+  $('btnCalibrate').addEventListener('click', async () => {
+    const b = $('btnCalibrate');
+    b.textContent = 'measuring';
+    try {
+      const r = await fetch('/api/sdr/calibrate', { method:'POST',
+        headers:{'Content-Type':'application/json'}, body:'{}' });
+      const j = await r.json();
+      if (!r.ok) { $('err').textContent = 'calibrate: ' + (j.error || await r.text()); }
+      else {
+        $('ppmInput').value = j.ppm.toFixed(1);
+        $('err').textContent = `calibrated to ${j.ppm.toFixed(1)} ppm from ` +
+          `${(j.referenceHz/1e6).toFixed(5)} MHz (${Math.round(j.measuredErrorHz)} Hz error)`;
+      }
+    } catch (e) {
+      $('err').textContent = 'calibrate: ' + e;
+    } finally { b.textContent = 'calibrate'; }
+  });
+
+  $('chkLoOffset').addEventListener('change', (e) => setFrontend({ lo_offset: e.target.checked }));
+  $('chkClipGuard').addEventListener('change', (e) => setFrontend({ clip_guard: e.target.checked }));
+
+  $('btnListen').addEventListener('click', () => audioOn ? stopAudio() : startAudio());
+  $('volRange').addEventListener('input', (e) => {
+    audioVolume = Number(e.target.value) / 100;
+    $('volVal').textContent = e.target.value + '%';
+    if (audioGain) audioGain.gain.value = audioVolume;
+  });
+}
+
+// ---------- frame handling ----------
+
+let pendingSdrFft = null;
+let sdrFftPaintPending = false;
+
+function onSdrFft(m) {
+  pendingSdrFft = m;
+  if (sdrFftPaintPending) return;
+  sdrFftPaintPending = true;
+  requestAnimationFrame(() => {
+    sdrFftPaintPending = false;
+    const f = pendingSdrFft;
+    if (f) paintSdrFft(f);
+  });
+}
+
+function paintSdrFft(m) {
+  sdrCenterHz = m.centerHz;
+  sdrRateHz = m.rateHz;
+  if (m.inspectHz) sdrInspectHz = m.inspectHz;
+  renderFreq(sdrInspectHz);
+  if (sdrAutoRange) computeAutoRange(m.pwr);
+  sdrLastPwr = m.pwr;
+  syncWaterfallAxis(m.centerHz, m.rateHz);
+  drawSpecScale();
+  drawSdrSpectrum(m.pwr);
+  drawSdrWaterfallRow(m.pwr);
+  drawScope(m.scope, m.scopeRateHz, m.scopeKind, m.symbolRateHz);
+  updateSdrClassification(m.classification, m.inspectHz);
+  renderSdrPeaks(m.peaks);
+  updateMeter(m.classification, m.peakIq, m.channelDbfs, m.noiseDbfs);
+  if (m.classification) {
+    const b = $('badgeProto');
+    if (b) {
+      const active = m.classification.active;
+      b.textContent = active ? (m.classification.protocol || 'SIGNAL') : 'IDLE';
+      b.classList.toggle('live', !!active);
+    }
+  }
+}
+
+// S9 is put at -60 dBFS so that S9+60 lands exactly on 0 dBFS — the top of
+// the ADC. That makes the whole meter span the receiver's real dynamic range,
+// with 6 dB per S-unit below S9 and 20 dB per step above it, which is the law
+// the printed scale describes. It is *relative*: an RTL dongle has no
+// calibrated reference, so this is not S-units in the dBm sense and is not
+// claimed to be.
+const S9_DBFS = -60;
+const METER_MIN_DBFS = S9_DBFS - 48;   // S1
+const METER_MAX_DBFS = S9_DBFS + 60;   // full scale
+const METER_TICKS = [
+  { label: '1', db: S9_DBFS - 48 }, { label: '3', db: S9_DBFS - 36 },
+  { label: '5', db: S9_DBFS - 24 }, { label: '7', db: S9_DBFS - 12 },
+  { label: '9', db: S9_DBFS },
+  { label: '+20', db: S9_DBFS + 20, hi: true },
+  { label: '+40', db: S9_DBFS + 40, hi: true },
+  { label: '+60', db: S9_DBFS + 60, hi: true },
+];
+
+function meterFrac(dbfs) {
+  return Math.max(0, Math.min(1, (dbfs - METER_MIN_DBFS) / (METER_MAX_DBFS - METER_MIN_DBFS)));
+}
+
+function buildMeterScale() {
+  const el = $('meterScale');
+  if (!el) return;
+  el.innerHTML = METER_TICKS.map(t => {
+    const pct = (meterFrac(t.db) * 100).toFixed(1);
+    return `<span class="${t.hi ? 'hi' : ''}" style="left:${pct}%">${t.label}</span>`;
+  }).join('');
+  const bar = document.querySelector('.meter-bar');
+  if (bar && !bar.querySelector('.meter-ticks')) {
+    const ticks = document.createElement('div');
+    ticks.className = 'meter-ticks';
+    ticks.innerHTML = METER_TICKS.map(t =>
+      `<i style="left:${(meterFrac(t.db) * 100).toFixed(1)}%"></i>`).join('');
+    bar.appendChild(ticks);
+  }
+}
+
+// Readings arrive 25 times a second and the last digit never settles. A real
+// meter has mechanical inertia; this is the electrical equivalent — enough to
+// stop the numbers flickering, little enough that the needle still answers
+// immediately when a signal appears. Rises are followed faster than falls, so
+// a burst is not smoothed away.
+let meterRfAvg = null, meterSnrAvg = null, meterPeakPct = 0;
+const METER_ATTACK = 0.5;
+const METER_DECAY = 0.12;
+
+function meterSmooth(prev, next) {
+  if (next === null) return null;
+  if (prev === null || !isFinite(prev)) return next;
+  const k = next > prev ? METER_ATTACK : METER_DECAY;
+  return prev + (next - prev) * k;
+}
+
+function updateMeter(c, peakIq, channelDbfs, noiseDbfs) {
+  // Measured from the spectrum, so it reads the same in every mode. The
+  // classifier only supplies this in the narrowband modes, and reading it
+  // there left WFM, P25 and DMR showing a default.
+  const rfRaw = isFinite(channelDbfs) ? channelDbfs : null;
+  const snrRaw = (isFinite(channelDbfs) && isFinite(noiseDbfs)) ? (channelDbfs - noiseDbfs)
+               : (c && isFinite(c.snrDb) ? c.snrDb : null);
+  meterRfAvg = meterSmooth(meterRfAvg, rfRaw);
+  meterSnrAvg = meterSmooth(meterSnrAvg, snrRaw);
+  const rf = meterRfAvg;
+  const snr = meterSnrAvg;
+  const pct = rf === null ? 0 : meterFrac(rf) * 100;
+  const mask = $('meterMask');
+  if (mask) mask.style.left = pct + '%';
+  // Peak hold: jumps to a new maximum at once, then decays back, which is
+  // what the marker is for — catching a transient the needle smoothed over.
+  const peak = $('meterPeak');
+  if (peak) {
+    const clip = peakIq != null && peakIq > 0.98;
+    meterPeakPct = pct > meterPeakPct ? pct : Math.max(pct, meterPeakPct - 0.6);
+    peak.style.left = meterPeakPct + '%';
+    peak.style.background = clip ? '#ff5a4a' : '#ffdf6a';
+  }
+  const num = $('meterNum');
+  if (num) {
+    num.textContent = 'CH ' + (rf === null ? '—' : rf.toFixed(1) + ' dBFS')
+      + '  ·  SNR ' + (snr === null ? '—' : snr.toFixed(1) + ' dB')
+      + (peakIq != null && peakIq > 0.98 ? '  ·  CLIP' : '');
+    num.style.color = (peakIq != null && peakIq > 0.98) ? '#ff8a7a' : '';
+  }
+}
+
+
+// ---------- audio ----------
+//
+// The server streams PCM as binary frames rather than an encoded format: this
+// is a local monitor, so 96 KB/s of raw i16 costs nothing and saves carrying a
+// codec on both ends. Chunks are scheduled back to back against the context
+// clock, with a small lead so jitter does not produce gaps.
+let audioCtx = null;
+let audioGain = null;
+let audioNext = 0;
+let audioOn = false;
+let audioVolume = 0.6;
+const AUDIO_LEAD = 0.12;     // seconds of scheduling lead
+const AUDIO_MAX_LAG = 0.45;  // resync rather than build a delay
+
+function startAudio() {
+  if (!audioCtx) {
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    audioGain = audioCtx.createGain();
+    audioGain.gain.value = audioVolume;
+    audioGain.connect(audioCtx.destination);
+  }
+  // Browsers only allow this from inside a user gesture, which is why LISTEN
+  // exists rather than the page just playing on load.
+  audioCtx.resume();
+  audioOn = true;
+  audioNext = 0;
+  $('btnListen').classList.add('on');
+  $('btnListen').textContent = 'MUTE';
+}
+
+function stopAudio() {
+  audioOn = false;
+  if (audioCtx) audioCtx.suspend();
+  $('btnListen').classList.remove('on');
+  $('btnListen').textContent = 'LISTEN';
+}
+
+function onAudioFrame(buf) {
+  if (!audioOn || !audioCtx) return;
+  const view = new DataView(buf);
+  if (view.getUint8(0) !== 0x01) return;
+  const rate = view.getUint32(1, true);
+  const n = (buf.byteLength - 5) >> 1;
+  if (!n || !rate) return;
+  const pcm = new Float32Array(n);
+  for (let i = 0; i < n; i++) pcm[i] = view.getInt16(5 + i * 2, true) / 28000;
+
+  const ab = audioCtx.createBuffer(1, n, rate);
+  ab.getChannelData(0).set(pcm);
+  const src = audioCtx.createBufferSource();
+  src.buffer = ab;
+  src.connect(audioGain);
+
+  const now = audioCtx.currentTime;
+  // Fell behind (tab was hidden, radio reopened) — jump to the present rather
+  // than playing an ever-growing backlog late.
+  if (audioNext < now + 0.01 || audioNext > now + AUDIO_MAX_LAG) {
+    audioNext = now + AUDIO_LEAD;
+  }
+  src.start(audioNext);
+  audioNext += ab.duration;
+}
+
+// ---------- mode ----------
+
+let sdrMode = 'nfm';
+let sdrBandwidthHz = 25000;
+// Offsets from the display centre, in Hz, that a spur check found to be
+// internal to the receiver.
+let sdrSpurOffsets = [];
+let spurChecking = false;
+
+// A real signal sits at a fixed frequency, so nudging the local oscillator
+// moves it across the screen. Anything generated inside the receiver is fixed
+// relative to the LO, so it does not move at all. That difference is the only
+// reliable way to tell them apart, and it is what this measures.
+async function runSpurCheck() {
+  if (spurChecking) return;
+  spurChecking = true;
+  const key = $('keySpur');
+  key.textContent = 'CHECKING';
+  const home = sdrCenterHz;
+  const grab = async (ms) => {
+    await new Promise(r => setTimeout(r, ms));
+    return pendingSdrFft ? { pwr: Array.from(pendingSdrFft.pwr), rate: pendingSdrFft.rateHz } : null;
+  };
+  try {
+    const a = await grab(700);
+    const nudge = sdrRateHz / 8;
+    await centreSpanHz(home + nudge);
+    const b = await grab(1400);
+    await centreSpanHz(home);
+    await grab(900);
+    if (!a || !b || a.pwr.length !== b.pwr.length) { sdrSpurOffsets = []; return; }
+
+    const n = a.pwr.length;
+    const relOf = (p) => {
+      const med = [...p].sort((x, y) => x - y)[Math.floor(n / 2)];
+      return p.map(v => v - med);
+    };
+    const ra = relOf(a.pwr), rb = relOf(b.pwr);
+    const found = [];
+    for (let i = 2; i < n - 2; i++) {
+      // Elevated in the same screen position both before and after the nudge.
+      if (ra[i] >= 4 && rb[i] >= 4) {
+        const off = ((i / (n - 1)) - 0.5) * a.rate;
+        if (!found.some(f => Math.abs(f - off) <= a.rate / n * 4)) found.push(off);
+      }
+    }
+    sdrSpurOffsets = found;
+    await applySpurNotch();
+  } finally {
+    spurChecking = false;
+    key.textContent = sdrSpurOffsets.length ? `NOTCH ${sdrSpurOffsets.length}` : 'SPUR CHK';
+    key.classList.toggle('on', sdrSpurOffsets.length > 0);
+    if (sdrLastPwr.length) drawSdrSpectrum(sdrLastPwr);
+  }
+}
+
+/// Hand the offsets to the receiver, which interpolates the display across
+/// them and notches any that fall inside the channel being decoded.
+async function applySpurNotch() {
+  try {
+    await fetch('/api/sdr/spurs', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ offsets_hz: sdrSpurOffsets }),
+    });
+  } catch (e) { $('err').textContent = 'spur notch: ' + e; }
+}
+
+
+function updateSnapHint() {
+  const el = $('freqHint');
+  if (el) el.textContent = 'click to tune · alt = off-raster · scroll a digit · double-click to type';
+  const eff = $('snapEffective');
+  if (eff) {
+    eff.textContent = snapLabel();
+    // Say when the step is following the mode rather than a chosen value.
+    eff.title = snapOverrideHz ? 'manual step' : `${sdrMode.toUpperCase()} channel raster`;
+    eff.style.color = snapOverrideHz ? 'var(--amber)' : 'var(--accent)';
+  }
+}
+
+function applyModeUi(mode) {
+  sdrMode = mode;
+  updateSnapHint();
+  document.querySelectorAll('.modebtn').forEach(b =>
+    b.classList.toggle('on', b.dataset.mode === mode));
+  // WFM has no narrowband protocols in it, so the classifier is not run and
+  // its panels would otherwise sit on stale readings.
+  if (mode === 'wfm' && $('sdrClassProtocol')) {
+    $('sdrClassProtocol').textContent = 'WFM broadcast';
+    $('sdrClassDetails').textContent = 'classifier off in wideband FM';
+    $('sdrClassModulation').textContent = 'Wideband FM';
+    $('sdrClassConfidence').textContent = '—';
+  }
+  // P25 and DMR decode voice with their own receivers; the log fills from
+  // their call events rather than the classifier.
+  if ((mode === 'p25' || mode === 'dmr') && $('sdrClassDetails')) {
+    $('sdrClassDetails').textContent = 'searching for sync…';
+  }
+  if (mode === 'auto' && $('sdrClassDetails')) {
+    $('sdrClassDetails').textContent = 'every decoder running on this channel';
+  }
+}
+
+let sdrZoom = 1;
+
+/// Magnify the display around the tuned frequency. The receiver narrows the
+/// window *and* raises the FFT size with it, so this is real resolution rather
+/// than the same bins drawn further apart.
+async function setZoom(z) {
+  const zoom = Math.max(1, Math.min(32, z));
+  if (Math.abs(zoom - sdrZoom) < 0.01) return;
+  sdrZoom = zoom;
+  const key = $('keyZoomIn');
+  if (key) key.classList.toggle('on', zoom > 1);
+  const out = $('keyZoomOut');
+  if (out) out.textContent = zoom > 1 ? `ZOOM ${zoom}\u00d7` : 'ZOOM \u2212';
+  try {
+    await fetch('/api/sdr/zoom', { method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ zoom }) });
+  } catch (e) { $('err').textContent = 'zoom: ' + e; }
+}
+
+async function setFrontend(body) {
+  try {
+    await fetch('/api/sdr/frontend', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    sdrPeakPwr = [];
+  } catch (e) { $('err').textContent = 'front end: ' + e; }
+}
+
+async function setSdrMode(mode) {
+  applyModeUi(mode);
+  sdrPeakPwr = [];
+  try {
+    await fetch('/api/sdr/mode', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mode }),
+    });
+  } catch (e) { $('err').textContent = 'mode failed: ' + e; }
+}
+
+
+// ---------- receive frequency ----------
+//
+// The big readout is the frequency being *received*, the way a radio's is —
+// not the centre of the span. Clicking the spectrum, scrolling a digit and
+// typing a frequency all set this; the span is scenery that follows along.
+//
+// The span only moves when it has to. Re-centring on every small step would
+// make the waterfall jump under the cursor and throw away its history, so it
+// is left alone while the receive frequency stays in the middle 60% of the
+// window, and re-centred when it would drift out to the edge.
+// Channel raster per mode. Pointing at a signal should land on the frequency
+// it is actually allocated to, and that spacing is a property of the service,
+// not of the display.
+//
+//   wfm     100 kHz — broadcast FM as the dial is marked
+//   nfm     6.25 kHz — the narrowbanded land-mobile raster
+//   p25/dmr 6.25 kHz — the same raster the digital channels sit on
+//   packet  2.5 kHz — divides both the 10 kHz APRS raster (144.390 lands on
+//                     it exactly) and the 12.5 kHz paging channels
+const SNAP_STEPS = { wfm: 100000, nfm: 6250, p25: 6250, dmr: 6250, packet: 2500 };
+
+// `auto` follows the mode's channel raster; anything else is the operator
+// overriding it, which is what a step control is for.
+let snapOverrideHz = 0;
+
+function snapStepHz() {
+  return snapOverrideHz || SNAP_STEPS[sdrMode] || 6250;
+}
+
+/// Round onto the current mode's raster. Hold Alt to tune off-raster.
+function snapHz(hz, bypass) {
+  if (bypass) return Math.round(hz);
+  const step = snapStepHz();
+  return Math.round(hz / step) * step;
+}
+
+function snapLabel() {
+  const st = snapStepHz();
+  if (st < 1000) return `${st} Hz`;
+  // Trim trailing zeros so 2500 reads "2.5 kHz" rather than "2.50 kHz".
+  return `${String(+(st / 1000).toFixed(2))} kHz`;
+}
+
+/// Tune the receiver.
+///
+/// `lockCentre` picks between the two things a radio does with its display.
+/// Turning the dial keeps the tuned frequency in the middle and scrolls the
+/// spectrum underneath it — that is what a VFO knob feels like, and it is what
+/// digit scrolling uses. Clicking a signal instead leaves the span where it is
+/// and moves the marker onto what was clicked, because the operator is looking
+/// at that span and does not want it to jump.
+async function tuneRxHz(hz, lockCentre = false) {
+  const rx = Math.max(1e6, Math.min(2.2e9, hz));
+  sdrInspectHz = rx;
+  renderFreq(rx);
+
+  // Keep the whole passband on screen, not just its centre. A 200 kHz WFM
+  // channel tuned near the edge would otherwise hang half off the display.
+  // The span is nudged by the least it takes rather than re-centred, so the
+  // waterfall keeps as much of its history as it can.
+  const half = sdrRateHz / 2;
+  let centre = sdrCenterHz;
+  if (lockCentre) {
+    centre = rx;
+  } else if (isFinite(half) && half > 0) {
+    const guard = sdrBandwidthHz / 2 + sdrRateHz * 0.02;
+    if (Math.abs(rx - centre) > half) {
+      centre = rx;                                  // a jump: start fresh
+    } else if (rx < centre - half + guard) {
+      centre = rx + half - guard;                   // nudge left
+    } else if (rx > centre + half - guard) {
+      centre = rx - half + guard;                   // nudge right
+    }
+  } else {
+    centre = rx;
+  }
+
+  const moved = Math.abs(centre - sdrCenterHz) > 1;
+  if (moved) {
+    sdrCenterHz = centre;
+    drawSpecScale();
+  }
+  if (sdrLastPwr.length) drawSdrSpectrum(sdrLastPwr);
+  try {
+    if (moved) {
+      await fetch('/api/sdr/tune', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ freq_hz: centre }),
+      });
+    }
+    await fetch('/api/sdr/inspect', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ freq_hz: rx }),
+    });
+  } catch (e) { $('err').textContent = 'tune failed: ' + e; }
+}
+
+/// A dial step: the tuned frequency stays put on screen and the spectrum moves.
+function stepRxFreq(deltaHz) { tuneRxHz(sdrInspectHz + deltaHz, true); }
+
+/// Move the span without changing what is being received.
+async function centreSpanHz(hz) {
+  sdrCenterHz = hz;
+  drawSpecScale();
+  try {
+    await fetch('/api/sdr/tune', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ freq_hz: hz }),
+    });
+  } catch (e) { $('err').textContent = 'tune failed: ' + e; }
+}
+
+// ---------- control API ----------
+
+async function tuneSdrHz(hz) {
+  const clamped = Math.max(1e6, Math.min(2.2e9, hz));
+  sdrCenterHz = clamped;
+  renderFreq(clamped);
+  drawSpecScale();
+  try {
+    await fetch('/api/sdr/tune', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ freq_hz: clamped }),
+    });
+  } catch (e) { $('err').textContent = 'tune failed: ' + e; }
+}
+
+async function setSdrRate(rateHz) {
+  try {
+    await fetch('/api/sdr/rate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ rate_hz: rateHz }),
+    });
+    sdrPeakPwr = [];
+  } catch (e) { $('err').textContent = 'rate failed: ' + e; }
+}
+
+async function setSdrGain(gainDb) {
+  try {
+    await fetch('/api/sdr/gain', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ gain_db: gainDb }),
+    });
+  } catch (e) { $('err').textContent = 'gain failed: ' + e; }
+}
+
+async function switchSdrDevice(serial) {
+  try {
+    await fetch('/api/sdr/device', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ serial }),
+    });
+  } catch (e) { $('err').textContent = 'device switch failed: ' + e; }
+}
+
+async function loadSdrDevices() {
+  try {
+    const r = await fetch('/api/devices');
+    const list = await r.json();
+    const sel = $('sdrRadioSel');
+    if (!sel) return;
+    sel.innerHTML = list.map(d =>
+      `<option value="${esc(d.serial)}">${esc(d.serial)} · ${esc(d.tuner)}${d.role !== 'free' ? ' (' + esc(d.role) + ')' : ''}</option>`
+    ).join('');
+    if (sdrStatus && sdrStatus.serial) sel.value = sdrStatus.serial;
+  } catch (e) { /* the status line already says if the radio is missing */ }
+}
+
+function updateSdrStatus(s) {
+  sdrStatus = s;
+  sdrCenterHz = s.freq_hz;
+  // The displayed span is the edge-to-edge window, which is narrower than the
+  // sampled rate whenever the LO is parked off-centre.
+  const shown = (s.max_freq_hz - s.min_freq_hz) || s.rate_hz;
+  sdrRateHz = shown;
+  if (s.inspect_hz) sdrInspectHz = s.inspect_hz;
+  renderFreq(sdrInspectHz);
+  drawSpecScale();
+  if ($('sdrRateSel')) $('sdrRateSel').value = String(Math.round(s.rate_hz));
+  if ($('badgeSpan')) $('badgeSpan').textContent = (s.rate_hz / 1e6).toFixed(3).replace(/0+$/, '').replace(/\.$/, '') + 'M';
+  if ($('sdrRadioSel') && s.serial) $('sdrRadioSel').value = s.serial;
+  if (s.mode && s.mode !== sdrMode) applyModeUi(s.mode);
+  if (s.bandwidth_hz) sdrBandwidthHz = s.bandwidth_hz;
+  if (s.zoom && Math.abs(s.zoom - sdrZoom) > 0.01) {
+    sdrZoom = s.zoom;
+    if ($('keyZoomIn')) $('keyZoomIn').classList.toggle('on', sdrZoom > 1);
+    if ($('keyZoomOut')) $('keyZoomOut').textContent =
+      sdrZoom > 1 ? `ZOOM ${sdrZoom}\u00d7` : 'ZOOM \u2212';
+  }
+  if (Array.isArray(s.spurs_hz) && !spurChecking) {
+    sdrSpurOffsets = s.spurs_hz;
+    const k = $('keySpur');
+    if (k) {
+      k.textContent = s.spurs_hz.length ? `NOTCH ${s.spurs_hz.length}` : 'SPUR CHK';
+      k.classList.toggle('on', s.spurs_hz.length > 0);
+    }
+  }
+  if ($('chkLoOffset')) $('chkLoOffset').checked = !!s.lo_offset;
+  if ($('ppmInput') && document.activeElement !== $('ppmInput')) {
+    $('ppmInput').value = (s.ppm ?? 0).toFixed(1);
+  }
+  if ($('freqErrVal')) {
+    // How far the tuned carrier sits from where the dial says it is.
+    $('freqErrVal').textContent = s.freq_error_hz == null
+      ? 'err —' : `err ${Math.round(s.freq_error_hz)} Hz`;
+    $('freqErrVal').style.color = s.freq_error_hz == null ? ''
+      : (Math.abs(s.freq_error_hz) > 2000 ? 'var(--amber)' : '');
+  }
+  if ($('chkClipGuard')) $('chkClipGuard').checked = !!s.clip_guard;
+  if ($('sdrAgc')) {
+    $('sdrAgc').checked = s.gain_db == null;
+    $('sdrGainRange').disabled = s.gain_db == null;
+    if (s.gain_db != null) $('sdrGainRange').value = s.gain_db;
+    $('sdrGainVal').textContent = s.gain_db == null ? 'auto' : s.gain_db + ' dB';
+  }
+  $('err').textContent = s.error || '';
+}
+
+// ---------- recorded calls ----------
+//
+// A decoded call and an audible one are not the same thing: the receivers
+// vocode encrypted voice to silence rather than to noise, so a call can be
+// reported in full and still play nothing. The list says which it was, so an
+// empty-sounding call is explained rather than looking like a fault.
+let callsSig = '';
+
+async function loadCalls() {
+  try {
+    const r = await fetch('/api/sdr/calls');
+    const list = await r.json();
+    const sig = list.map(c => c.id).join(',');
+    if (sig === callsSig) return;
+    callsSig = sig;
+    const el = $('callsList');
+    if (!el) return;
+    if (!list.length) {
+      el.innerHTML = '<div class="data-empty">No digital voice calls yet.</div>';
+      return;
+    }
+    el.innerHTML = list.map(c => {
+      const t = new Date(c.startedMs).toLocaleTimeString();
+      const silent = c.peak < 0.002;
+      const who = [
+        c.sourceId != null ? `from ${c.sourceId}` : null,
+        c.targetId != null ? `to ${c.targetId}` : null,
+        c.tone || null,
+      ].filter(Boolean).join(' · ');
+      // Why a call is silent matters more than that it is.
+      const why = c.encrypted && !c.decrypted
+        ? `<span style="color:#f87171">encrypted${c.algorithm ? ' · ALG ' + esc(c.algorithm) : ''} — muted</span>`
+        : silent
+          ? '<span style="color:#facc15">no audio decoded</span>'
+          : `<button type="button" class="sdr-preset-btn" onclick="playCall(${c.id})">▶ play</button>`;
+      return `<div style="display:flex; align-items:baseline; gap:8px; padding:3px 4px; border-bottom:1px solid #101820;">
+        <span style="color:#64748b; font-size:10px; flex:none">${t}</span>
+        <span style="color:#4ade80; font-weight:700; flex:none">${esc(c.protocol)}</span>
+        <span style="color:#38bdf8; flex:none">${(c.freqHz/1e6).toFixed(4)}</span>
+        <span style="color:#94a3b8; font-size:10px; flex:none">${c.durationS.toFixed(1)}s</span>
+        <span style="color:#94a3b8; font-size:10px; overflow:hidden; text-overflow:ellipsis">${esc(who)}</span>
+        <span style="margin-left:auto; flex:none; font-size:10px">${why}</span>
+      </div>`;
+    }).join('');
+  } catch (e) { /* the status line already reports a missing radio */ }
+}
+
+function playCall(id) {
+  const a = $('callAudio');
+  if (!a) return;
+  a.src = `/api/sdr/calls/${id}/audio.wav`;
+  a.play().catch(() => {});
+}
+
+// ---------- socket ----------
+
+function connect() {
+  const ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws');
+
+  ws.onopen = () => { $('conn').textContent = '● connected'; $('conn').style.color = 'var(--green)'; };
+  ws.onclose = () => {
+    $('conn').textContent = '● reconnecting'; $('conn').style.color = 'var(--amber)';
+    setTimeout(connect, 2000);
+  };
+
+  ws.binaryType = 'arraybuffer';
+  ws.onmessage = (ev) => {
+    if (typeof ev.data !== 'string') { onAudioFrame(ev.data); return; }
+    const m = JSON.parse(ev.data);
+    if (m.type === 'hello') {
+      if (m.sdr) { updateSdrStatus(m.sdr); loadSdrDevices(); }
+    } else if (m.type === 'fft') {
+      onSdrFft(m);
+    } else if (m.type === 'decode') {
+      onSdrDecode(m);
+      // A finished voice call has just been filed; pick it up right away.
+      if (m.event && m.event.kind === 'call') setTimeout(loadCalls, 250);
+    } else if (m.type === 'status' && m.freq_hz != null) {
+      updateSdrStatus(m);
+    }
+  };
+}
+
+initSdrCanvas();
+renderFreq(sdrInspectHz);
+loadSdrDevices();
+fetch('/api/sdr/status').then(r => r.json()).then(s => { if (s) updateSdrStatus(s); }).catch(() => {});
+connect();
+loadCalls();
+setInterval(loadCalls, 4000);
+</script>
+</body>
+</html>

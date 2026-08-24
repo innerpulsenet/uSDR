@@ -1,0 +1,309 @@
+//! Audio-frequency FSK: Goertzel mark/space over one baud period.
+//!
+//! The FM discriminator output is a *tone*, not a DC offset. Comparing the
+//! instantaneous deviation to 1200 Hz cannot decode Bell 202 or SAME.
+
+use crate::timing::TimingLoop;
+use std::f32::consts::PI;
+
+pub struct ToneSlicer {
+    coeff_m: f32,
+    coeff_s: f32,
+    spb: f32,
+    /// Samples in the correlation window, and the early/late gate offset.
+    win: usize,
+    gate: usize,
+    clock: TimingLoop,
+    /// Whether the caller believes we are inside a frame. The clock only
+    /// tracks then; otherwise it eases back to nominal so an idle channel
+    /// cannot random-walk it somewhere no burst can be decoded from.
+    tracking: bool,
+    delay: usize,
+    delay0: usize,
+    /// Chronological history, `win + 2 * gate` deep: enough to place the
+    /// on-time window with a full gate of context either side of it.
+    hist: Vec<f32>,
+    filled: usize,
+    pub last_pm: f32,
+    pub last_ps: f32,
+}
+
+/// Samples in bit `k` when the bit clock is `spb` samples long.
+pub fn bit_len(k: usize, spb: f32) -> usize {
+    let a = (k as f32 * spb).round() as usize;
+    let b = ((k as f32 + 1.0) * spb).round() as usize;
+    (b - a).max(1)
+}
+
+impl ToneSlicer {
+    pub fn new(fs: f64, mark_hz: f32, space_hz: f32, baud: f32) -> Self {
+        let fsf = fs as f32;
+        let spb = (fsf / baud).max(4.0);
+        let win = spb.round().max(4.0) as usize;
+        // A quarter of a symbol either side is the usual early/late spacing:
+        // wide enough that the correlation difference is measurable, narrow
+        // enough that both gates stay inside the same pair of symbols.
+        let gate = (win / 4).max(1);
+        Self {
+            coeff_m: 2.0 * (2.0 * PI * mark_hz / fsf).cos(),
+            coeff_s: 2.0 * (2.0 * PI * space_hz / fsf).cos(),
+            spb,
+            win,
+            gate,
+            clock: TimingLoop::new(f64::from(spb)),
+            tracking: false,
+            delay: 0,
+            delay0: 0,
+            hist: vec![0.0; win + 2 * gate],
+            filled: 0,
+            last_pm: 0.0,
+            last_ps: 0.0,
+        }
+    }
+
+    /// Skip the first `delay` samples so a bank of slicers can cover one baud.
+    pub fn with_delay(mut self, delay: usize) -> Self {
+        self.delay = delay;
+        self.delay0 = delay;
+        self
+    }
+
+    pub fn reset(&mut self) {
+        self.clock.reset();
+        self.tracking = false;
+        self.hist.iter_mut().for_each(|x| *x = 0.0);
+        self.filled = 0;
+        self.delay = self.delay0;
+    }
+
+    /// Tell the slicer whether it is inside a frame. See `TimingLoop::relax`.
+    pub fn set_tracking(&mut self, tracking: bool) {
+        self.tracking = tracking;
+    }
+
+    /// Drop the tracked rate and hunt again at nominal, keeping the phase.
+    pub fn reacquire(&mut self) {
+        self.tracking = false;
+        self.clock.reacquire();
+    }
+
+    pub fn samples_per_bit(&self) -> usize {
+        self.spb.round() as usize
+    }
+
+    pub fn samples_per_bit_f(&self) -> f32 {
+        self.spb
+    }
+
+    /// Parts per million the bit clock has been pulled from nominal.
+    pub fn clock_pull_ppm(&self) -> f64 {
+        self.clock.pull_ppm()
+    }
+
+    /// Correlation over `self.win` samples ending `back` samples before the
+    /// newest one. `hist` is kept chronological, newest last.
+    fn gate_at(&self, back: usize) -> (f32, f32) {
+        let end = self.hist.len() - back;
+        let w = &self.hist[end - self.win..end];
+        (goertzel(w, self.coeff_m), goertzel(w, self.coeff_s))
+    }
+
+    /// `true` = mark tone, `false` = space tone.
+    ///
+    /// The decision is deliberately one gate behind the newest sample: the
+    /// late gate needs samples from *after* the symbol it is judging, and a
+    /// gate of delay is cheaper than being unable to measure timing at all.
+    pub fn push(&mut self, x: f32) -> Option<bool> {
+        if self.delay > 0 {
+            self.delay -= 1;
+            return None;
+        }
+        self.hist.rotate_left(1);
+        let last = self.hist.len() - 1;
+        self.hist[last] = x;
+        self.filled = self.filled.saturating_add(1);
+        if !self.clock.tick() {
+            return None;
+        }
+        if self.filled < self.hist.len() {
+            // Not enough history yet to place the window honestly.
+            return None;
+        }
+        // On-time window sits one gate back, so `late` has real samples.
+        let (pm, ps) = self.gate_at(self.gate);
+        let (em, es) = self.gate_at(2 * self.gate);
+        let (lm, ls) = self.gate_at(0);
+        self.last_pm = pm;
+        self.last_ps = ps;
+
+        // The mark/space discriminant is largest when the window covers one
+        // whole symbol; straddling two different symbols splits the energy
+        // between both tones and shrinks it. So comparing the early and late
+        // gates says which side of the true symbol we are sitting on, and a
+        // run of identical symbols correctly reports nothing.
+        //
+        // Only steer on it while the caller says we are in a frame, and only
+        // when this window actually looks like one of the two tones rather
+        // than like noise: a 13-sample correlation on noise reports a
+        // confident-looking error just as readily as a real one.
+        let early = (em - es).abs();
+        let late = (lm - ls).abs();
+        let denom = early + late;
+        let decisive = (pm - ps).abs() > 0.2 * (pm + ps + 1e-9);
+        if self.tracking && decisive && denom > 1e-9 {
+            let error = f64::from((early - late) / denom) * 0.5;
+            self.clock.correct(error);
+        } else {
+            self.clock.relax();
+        }
+        Some(pm > ps)
+    }
+}
+
+fn goertzel(x: &[f32], coeff: f32) -> f32 {
+    let mut s1 = 0.0;
+    let mut s2 = 0.0;
+    let denom = x.len().saturating_sub(1).max(1) as f32;
+    for (i, &sample) in x.iter().enumerate() {
+        // A baud is not an integer number of cycles for either Bell-202 tone.
+        // Windowing keeps the resulting spectral leakage from making the
+        // other tone look stronger near a symbol transition.
+        let w = 0.5 - 0.5 * (2.0 * PI * i as f32 / denom).cos();
+        let v = sample * w;
+        let s0 = v + coeff * s1 - s2;
+        s2 = s1;
+        s1 = s0;
+    }
+    s1 * s1 + s2 * s2 - coeff * s1 * s2
+}
+
+/// Synthesize one baud of a tone at `hz`, amplitude `amp`.
+pub fn tone(out: &mut Vec<f32>, fs: f32, hz: f32, n: usize, amp: f32, phase: &mut f32) {
+    let step = 2.0 * PI * hz / fs;
+    for _ in 0..n {
+        out.push(amp * phase.sin());
+        *phase += step;
+        if *phase > 2.0 * PI {
+            *phase -= 2.0 * PI;
+        }
+    }
+}
+
+/// Mark/space bitstream → audio with a fractional bit clock (`fs/baud`).
+pub fn marks_to_audio(
+    marks: &[bool],
+    fs: f32,
+    baud: f32,
+    mark_hz: f32,
+    space_hz: f32,
+    amp: f32,
+) -> Vec<f32> {
+    let spb = fs / baud;
+    let mut out = Vec::new();
+    let mut ph = 0.0f32;
+    for (k, &m) in marks.iter().enumerate() {
+        tone(
+            &mut out,
+            fs,
+            if m { mark_hz } else { space_hz },
+            bit_len(k, spb),
+            amp,
+            &mut ph,
+        );
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Feed `n` bits of one tone and return the last decision, if any. The
+    /// slicer holds its decision a quarter-symbol back so the late gate has
+    /// real samples, and needs about one and a half symbols of history before
+    /// it will commit to anything at all.
+    fn run_tone(s: &mut ToneSlicer, fs: f32, hz: f32, bits: usize, ph: &mut f32) -> Option<bool> {
+        let spb = s.samples_per_bit_f();
+        let mut out = None;
+        for k in 0..bits {
+            let mut buf = Vec::new();
+            tone(&mut buf, fs, hz, bit_len(k, spb), 1.0, ph);
+            for &x in &buf {
+                if let Some(b) = s.push(x) {
+                    out = Some(b);
+                }
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn goertzel_picks_the_tone() {
+        let fs = 16_000.0;
+        let mut s = ToneSlicer::new(fs as f64, 1200.0, 2200.0, 1200.0);
+        let mut ph = 0.0f32;
+        assert_eq!(run_tone(&mut s, fs, 1200.0, 4, &mut ph), Some(true));
+        assert_eq!(run_tone(&mut s, fs, 2200.0, 4, &mut ph), Some(false));
+        assert_eq!(run_tone(&mut s, fs, 1200.0, 4, &mut ph), Some(true));
+    }
+
+    /// One bit per baud, no more and no less, once the slicer is primed.
+    #[test]
+    fn the_clock_produces_one_bit_per_baud() {
+        let fs = 16_000.0f32;
+        let mut s = ToneSlicer::new(f64::from(fs), 1200.0, 2200.0, 1200.0);
+        let marks: Vec<bool> = (0..1200).map(|i| i % 3 == 0).collect();
+        let audio = marks_to_audio(&marks, fs, 1200.0, 1200.0, 2200.0, 1.0);
+        let bits = audio.iter().filter_map(|&x| s.push(x)).count();
+        // A couple of symbols go to priming the history.
+        assert!(
+            (1195..=1200).contains(&bits),
+            "expected ~1200 bits from one second, got {bits}"
+        );
+    }
+
+    /// The gate must steer toward a transmitter whose baud rate is not ours.
+    /// A slicer that never moves slips out of its lane within a frame.
+    #[test]
+    fn the_gate_steers_toward_a_wrong_baud_rate() {
+        let fs = 16_000.0f32;
+        for ppm in [-3_000i32, 3_000] {
+            let mut s = ToneSlicer::new(f64::from(fs), 1200.0, 2200.0, 1200.0);
+            s.set_tracking(true);
+            // Alternating tones give the gate a transition every symbol.
+            let marks: Vec<bool> = (0..600).map(|i| i % 2 == 0).collect();
+            // A transmitter `ppm` fast has shorter symbols, so the clock has
+            // to shorten its period to match: the pull is the opposite sign.
+            let air_baud = 1200.0 * (1.0 + ppm as f32 * 1e-6);
+            let audio = marks_to_audio(&marks, fs, air_baud, 1200.0, 2200.0, 1.0);
+            for &x in &audio {
+                s.push(x);
+            }
+            let pull = s.clock_pull_ppm();
+            assert!(
+                pull * f64::from(ppm) < 0.0,
+                "at {ppm} ppm the clock pulled {pull:.0} ppm, the wrong way"
+            );
+        }
+    }
+
+    /// And it must not steer at all when nobody has said there is a frame:
+    /// an idle lane has to keep the staggered phase it was given, or the bank
+    /// collapses onto whatever noise last suggested.
+    #[test]
+    fn an_untracked_slicer_holds_its_nominal_clock() {
+        let fs = 16_000.0f32;
+        let mut seed = 0x243F_6A88_85A3_08D3u64;
+        let mut rng = move || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            ((seed >> 11) as f32 / (1u64 << 53) as f32) * 2.0 - 1.0
+        };
+        let mut s = ToneSlicer::new(f64::from(fs), 1200.0, 2200.0, 1200.0);
+        for _ in 0..(fs as usize * 4) {
+            s.push(rng() * 3000.0);
+        }
+        assert_eq!(s.clock_pull_ppm(), 0.0);
+    }
+}

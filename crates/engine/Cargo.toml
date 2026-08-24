@@ -1,0 +1,17 @@
+[package]
+name = "scannerd-engine"
+version.workspace = true
+edition.workspace = true
+description = "Demodulation, squelch, and call segmentation for scannerd"
+
+[dependencies]
+anyhow.workspace = true
+aes.workspace = true
+cipher.workspace = true
+des.workspace = true
+num-complex.workspace = true
+rmbe.workspace = true
+blip25-vocoder.workspace = true
+scannerd-dsp.workspace = true
+serde.workspace = true
+zeroize.workspace = true

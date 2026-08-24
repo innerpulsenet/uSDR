@@ -1,0 +1,9 @@
+[package]
+name = "scannerd-dsp"
+version.workspace = true
+edition.workspace = true
+description = "Signal processing primitives for scannerd (vendored from hfscan)"
+
+[dependencies]
+num-complex.workspace = true
+rustfft.workspace = true
