@@ -82,6 +82,10 @@ pub struct P25ChannelReceiver {
     call_decrypted: bool,
     offset_sum: f64,
     offset_n: usize,
+    /// Baseband blocks since the C4FM path last produced a BCH-valid frame.
+    /// Past a threshold the parallel linear CQPSK receiver is paused, because
+    /// while C4FM is healthy its symbols are never used.
+    cqpsk_idle_blocks: u32,
 }
 
 impl P25ChannelReceiver {
@@ -113,6 +117,7 @@ impl P25ChannelReceiver {
             call_decrypted: false,
             offset_sum: 0.0,
             offset_n: 0,
+            cqpsk_idle_blocks: 0,
             spec,
         };
         out.retune(span_center_hz);
@@ -143,6 +148,7 @@ impl P25ChannelReceiver {
         self.call_decrypted = false;
         self.offset_sum = 0.0;
         self.offset_n = 0;
+        self.cqpsk_idle_blocks = 0;
     }
 
     pub fn audio(&self) -> &[f32] {
@@ -189,15 +195,29 @@ impl P25ChannelReceiver {
         }
         self.front.process(&self.baseband, &mut self.discriminator);
         let mut frames = self.detector.push(&self.discriminator);
-        self.cqpsk.process(&self.baseband, &mut self.cqpsk_symbols);
-        let cqpsk_frames = self.cqpsk_detector.push(&self.cqpsk_symbols);
+        // The linear CQPSK path is a second, parallel receiver. While the
+        // C4FM path is producing BCH-valid frames it can only burn half the
+        // per-block DSP applying symbols nobody reads — so pause it while
+        // C4FM is healthy and re-arm the moment that stops being true.
+        let c4fm_healthy = frames.iter().any(|frame| frame.bch_ok && frame.duid.is_known());
+        if c4fm_healthy {
+            self.cqpsk_idle_blocks = 0;
+        } else {
+            self.cqpsk_idle_blocks = self.cqpsk_idle_blocks.saturating_add(1);
+        }
+        // ~1 s of baseband without a valid C4FM frame: long enough to ride
+        // out damaged frames, short enough that a true CQPSK signal takes
+        // over quickly.
+        const CQPSK_IDLE_LIMIT: u32 = 50;
+        let mut cqpsk_frames = Vec::new();
+        if self.cqpsk_idle_blocks < CQPSK_IDLE_LIMIT {
+            self.cqpsk.process(&self.baseband, &mut self.cqpsk_symbols);
+            cqpsk_frames = self.cqpsk_detector.push(&self.cqpsk_symbols);
+        }
         // A clean C4FM path wins when both happen to correlate. Otherwise the
         // linear CQPSK path supplies the exact same NID/payload contract to
         // the rest of the receiver.
-        if !frames
-            .iter()
-            .any(|frame| frame.bch_ok && frame.duid.is_known())
-        {
+        if !frames.iter().any(|frame| frame.bch_ok && frame.duid.is_known()) {
             frames.extend(cqpsk_frames);
         }
         let mut event = None;

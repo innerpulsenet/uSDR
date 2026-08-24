@@ -119,16 +119,35 @@ struct AppState {
     settings: Mutex<Settings>,
     config_path: PathBuf,
     shutdown: Notify,
+    /// Debounce for settings writes. Dragging a slider or clicking around the
+    /// waterfall fires a REST call per step; serialising the TOML and hitting
+    /// the disk on each one is wasted I/O, since only the last value matters.
+    last_settings_write: std::sync::Mutex<Option<std::time::Instant>>,
 }
 
+/// Minimum spacing between settings-file writes.
+const SETTINGS_WRITE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(2);
+
 impl AppState {
-    /// Record a browser-made change and put it on disk. A failed write is
-    /// worth saying out loud but is never worth failing the tuning request
-    /// the operator actually asked for.
+    /// Record a browser-made change and put it on disk, at most one write per
+    /// [`SETTINGS_WRITE_INTERVAL`], carrying whatever the latest state is. A
+    /// failed write is worth saying out loud but is never worth failing the
+    /// tuning request the operator actually asked for.
     fn update_settings(&self, edit: impl FnOnce(&mut Settings)) {
         let to_save = {
             let mut s = self.settings.lock().expect("settings");
             edit(&mut s);
+            let due = match *self.last_settings_write.lock().expect("settings debounce") {
+                Some(at) => at.elapsed() >= SETTINGS_WRITE_INTERVAL,
+                None => true,
+            };
+            if !due {
+                // A pending change still lands: the next call past the
+                // interval writes the whole current Settings, not a delta.
+                return;
+            }
+            *self.last_settings_write.lock().expect("settings debounce") =
+                Some(std::time::Instant::now());
             s.clone()
         };
         if let Err(e) = save_settings(&self.config_path, &to_save) {
@@ -193,6 +212,7 @@ async fn main() -> Result<()> {
         settings: Mutex::new(settings),
         config_path,
         shutdown: Notify::new(),
+        last_settings_write: std::sync::Mutex::new(None),
     });
 
     let app = Router::new()

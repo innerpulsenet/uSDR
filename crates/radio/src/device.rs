@@ -13,10 +13,11 @@
 //! instead of being derived from an amateur band plan, since a scanner's spans
 //! are set by the system being monitored, not by band edges.
 
-use crate::fanout::Fanout;
+use crate::fanout::{Fanout, IqBlock as IqBlockArc};
 use anyhow::{Context, Result};
 use num_complex::Complex32;
 use soapysdr::Direction::Rx;
+use std::sync::Arc;
 use std::sync::mpsc::{Receiver, Sender, SyncSender, channel, sync_channel};
 
 #[derive(Clone, Debug, PartialEq)]
@@ -489,6 +490,11 @@ fn run(
     let mut stream = dev.rx_stream::<Complex32>(&[0])?;
     stream.activate(None)?;
     let mut buf = vec![Complex32::new(0.0, 0.0); BLOCK];
+    // The block handed to subscribers, recycled once every consumer is done
+    // with the previous one. `prev_block` watches whether the last broadcast
+    // has been fully consumed yet.
+    let mut out: Vec<Complex32> = Vec::with_capacity(BLOCK);
+    let mut prev_block: IqBlockArc = Arc::from(Vec::new());
     let mut dropped: u64 = 0;
     let mut lagged: u64 = 0;
     let mut clipped: u64 = 0;
@@ -646,10 +652,27 @@ fn run(
                     .count() as u64;
                 counted += n as u64;
 
+                // Hand the samples to subscribers by moving a recycled block
+                // into the Arc, not by copying the slice: `Arc::from(&[T])`
+                // clones 128 KB per block (~16-25 MB/s at 2-3.2 MS/s) on the
+                // thread that also has to keep up with USB. A Vec→Arc
+                // conversion is a pointer move. When every consumer is still
+                // holding the previous block, fall back to a fresh Vec rather
+                // than dropping samples.
+                let recyclable = out.capacity() >= n && Arc::strong_count(&prev_block) <= 1;
+                let block = if recyclable {
+                    out.clear();
+                    out.extend_from_slice(&buf[..n]);
+                    Arc::from(std::mem::take(&mut out))
+                } else {
+                    Arc::from(buf[..n].to_vec())
+                };
+                prev_block = Arc::clone(&block);
+
                 if fanout.subscriber_count() == 0 {
                     dropped += 1;
                 } else {
-                    lagged += u64::from(fanout.broadcast(buf[..n].into()));
+                    lagged += u64::from(fanout.broadcast(block));
                 }
 
                 if counted >= rate as u64 {

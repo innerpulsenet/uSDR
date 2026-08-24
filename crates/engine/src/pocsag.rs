@@ -17,7 +17,14 @@ const IDLE: u32 = 0x7A89_C197;
 const GEN: u32 = 0b111_0110_1001;
 const WORDS_PER_BATCH: usize = 16;
 /// Staggered bit-clock phase count.
-const PHASES: usize = 16;
+///
+/// Six phases put the worst static timing error at half a phase — well inside
+/// what the Gardner TED in each lane tracks (it corrects the residual every
+/// bit). Sixteen bought finer alignment the tracking loop could not use, and
+/// each lane pays a DC update, a half-integration and a clock tick on every
+/// sample of every block: at 48 kHz that was 48 lanes × 48k = 2.3 M pushes/s
+/// for this decoder alone.
+const PHASES: usize = 6;
 
 /// A decoded POCSAG message addressed to one capcode.
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -263,6 +270,29 @@ impl PocsagDecoder {
 
     pub fn diagnostics(&self) -> &PocsagDiagnostics {
         &self.diag
+    }
+
+    /// A decoder that owns no lanes and decodes nothing.
+    ///
+    /// Used when the caller runs its own POCSAG bank over the same
+    /// discriminator; sync observations are fed back through
+    /// [`PocsagDecoder::note_sync`] instead.
+    pub fn idle() -> Self {
+        Self {
+            lanes: Vec::new(),
+            diag: PocsagDiagnostics::default(),
+        }
+    }
+
+    /// Record a POCSAG sync seen by an externally-owned decoder, so a caller
+    /// running its own bank can still drive protocol matching here.
+    pub fn note_sync(&mut self, baud: u32) {
+        match baud {
+            512 => self.diag.syncs_512 += 1,
+            1200 => self.diag.syncs_1200 += 1,
+            _ => self.diag.syncs_2400 += 1,
+        }
+        self.diag.last_sync_baud = Some(baud);
     }
 
     pub fn reset(&mut self) {

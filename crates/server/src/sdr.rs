@@ -499,28 +499,33 @@ impl SdrRuntime {
     }
 
     pub fn capture_wav(&self, kind: CaptureKind) -> (f64, usize, Vec<u8>) {
-        let capture = self.capture.lock().expect("SDR capture");
-        let rate = capture.rate();
-        match kind {
-            CaptureKind::Voice => {
-                let samples: Vec<i16> = capture.voice.iter().copied().collect();
-                let count = samples.len();
-                (capture.inspect_hz, count, pcm_wav(&samples, rate, 1))
-            }
-            CaptureKind::Discriminator => {
-                let samples: Vec<i16> = capture.discriminator.iter().copied().collect();
-                let count = samples.len();
-                (capture.inspect_hz, count, pcm_wav(&samples, rate, 1))
-            }
-            CaptureKind::Iq => {
-                let mut samples = Vec::with_capacity(capture.iq.len() * 2);
-                for &(i, q) in &capture.iq {
-                    samples.extend([i, q]);
+        // Snapshot under the lock, encode outside it: the DSP thread appends
+        // to this buffer every block, and holding the mutex through a
+        // multi-MiB WAV serialisation stalled it for the whole download.
+        let (inspect_hz, rate, samples) = {
+            let capture = self.capture.lock().expect("SDR capture");
+            let rate = capture.rate();
+            let samples = match kind {
+                CaptureKind::Voice => capture.voice.iter().copied().collect::<Vec<i16>>(),
+                CaptureKind::Discriminator => {
+                    capture.discriminator.iter().copied().collect::<Vec<i16>>()
                 }
-                let count = capture.iq.len();
-                (capture.inspect_hz, count, pcm_wav(&samples, rate, 2))
-            }
-        }
+                CaptureKind::Iq => {
+                    let mut samples = Vec::with_capacity(capture.iq.len() * 2);
+                    for &(i, q) in &capture.iq {
+                        samples.extend([i, q]);
+                    }
+                    samples
+                }
+            };
+            (capture.inspect_hz, rate, samples)
+        };
+        let count = match kind {
+            CaptureKind::Iq => samples.len() / 2,
+            _ => samples.len(),
+        };
+        let channels = matches!(kind, CaptureKind::Iq).then_some(2).unwrap_or(1);
+        (inspect_hz, count, pcm_wav(&samples, rate, channels))
     }
 }
 
@@ -727,7 +732,12 @@ pub fn spawn(
 fn build_inspect(rate_hz: f64, offset_hz: f64, mode: SdrMode) -> (DecodeChain, SignalClassifier) {
     let mut chain = DecodeChain::new(rate_hz, mode.bandwidth_hz(), mode.target_rate());
     chain.set_offset(offset_hz);
-    let classifier = SignalClassifier::new(chain.fs_out());
+    let mut classifier = SignalClassifier::new(chain.fs_out());
+    // PACKET and AUTO run their own pager banks over the same discriminator;
+    // the classifier's would be a second identical set.
+    if matches!(mode, SdrMode::Packet | SdrMode::Auto) {
+        classifier.use_external_pagers();
+    }
     (chain, classifier)
 }
 
@@ -1058,6 +1068,7 @@ fn channel_level(
     shown_rate: f64,
     channel_offset_hz: f64,
     bandwidth_hz: f64,
+    sorted_scratch: &mut Vec<f32>,
 ) -> (f32, f32) {
     let n = shown.len();
     if n < 8 {
@@ -1075,10 +1086,15 @@ fn channel_level(
     let width = (hi - lo + 1) as f64;
 
     // Median bin as the floor, scaled to the same width, so the difference is
-    // a signal-to-noise ratio rather than a bandwidth ratio.
-    let mut sorted = shown.to_vec();
-    sorted.sort_by(|a, b| a.total_cmp(b));
-    let floor_lin = 10f64.powf(f64::from(sorted[n / 2]) / 10.0) * width;
+    // a signal-to-noise ratio rather than a bandwidth ratio. The caller shares
+    // one sorted copy across every per-frame measurement that needs it; the
+    // first to run this frame pays for the sort.
+    if sorted_scratch.len() != n {
+        sorted_scratch.clear();
+        sorted_scratch.extend_from_slice(shown);
+        sorted_scratch.sort_unstable_by(f32::total_cmp);
+    }
+    let floor_lin = 10f64.powf(f64::from(sorted_scratch[n / 2]) / 10.0) * width;
 
     (
         (10.0 * sum.max(1e-30).log10()) as f32,
@@ -1098,14 +1114,20 @@ fn carrier_offset_hz(
     shown_rate: f64,
     channel_offset_hz: f64,
     bandwidth_hz: f64,
+    sorted_scratch: &mut Vec<f32>,
 ) -> Option<f64> {
     let n = shown.len();
     if n < 16 {
         return None;
     }
-    let mut sorted = shown.to_vec();
-    sorted.sort_by(|a, b| a.total_cmp(b));
-    let floor = sorted[n * 3 / 10];
+    // The caller reuses one sorted copy across the per-frame measurements;
+    // this runs before channel_level, so it fills the scratch first.
+    if sorted_scratch.len() != n {
+        sorted_scratch.clear();
+        sorted_scratch.extend_from_slice(shown);
+        sorted_scratch.sort_unstable_by(f32::total_cmp);
+    }
+    let floor = sorted_scratch[n * 3 / 10];
 
     let half = bandwidth_hz / 2.0;
     let mut num = 0.0f64;
@@ -1216,15 +1238,21 @@ fn find_peaks(
     center_hz: f64,
     rate_hz: f64,
     spur_offsets_hz: &[f64],
+    sorted_scratch: &mut Vec<f32>,
 ) -> Vec<PeakMarker> {
     let mut peaks = Vec::new();
     let n = smoothed.len();
     if n < 16 {
         return peaks;
     }
-    let mut sorted = smoothed.to_vec();
-    sorted.sort_by(|a, b| a.total_cmp(b));
-    let noise_floor = sorted[(n / 5).min(n - 1)];
+    // The caller shares one sorted copy across the per-frame measurements;
+    // channel_level has filled it by the time this runs.
+    if sorted_scratch.len() != n {
+        sorted_scratch.clear();
+        sorted_scratch.extend_from_slice(smoothed);
+        sorted_scratch.sort_unstable_by(f32::total_cmp);
+    }
+    let noise_floor = sorted_scratch[(n / 5).min(n - 1)];
 
     let bin_hz = rate_hz / n as f64;
 
@@ -1373,6 +1401,10 @@ fn run_sdr(
     let mut spectrum = Spectrum::new(fft_size);
     let mut pwr: Vec<f32> = Vec::with_capacity(fft_size);
     let mut smoothed: Vec<f32> = Vec::with_capacity(fft_size);
+    // One sorted copy of the displayed spectrum per frame, shared by
+    // channel_level, carrier_offset_hz and find_peaks. Each used to clone and
+    // sort its own at 25 fps.
+    let mut sorted_scratch: Vec<f32> = Vec::with_capacity(fft_size);
 
     let (mut inspect_chain, mut classifier) =
         build_inspect(
@@ -2134,19 +2166,56 @@ fn run_sdr(
                             event: packet_event(&packet),
                         });
                     }
-                    for dec in pocsag.iter_mut() {
+                    // The demod owns the pager banks here — the classifier's
+                    // own were dropped (use_external_pagers), so these decoders
+                    // are the only ones slicing the discriminator. Syncs are
+                    // fed back so the classifier's protocol matching still sees
+                    // them.
+                    let mut pocsag_sync_baud = None;
+                    let mut flex_sync_baud = None;
+                    for (baud, dec) in [512u32, 1200, 2400].into_iter().zip(pocsag.iter_mut()) {
+                        let syncs_before = {
+                            let d = dec.diagnostics();
+                            d.syncs_512 + d.syncs_1200 + d.syncs_2400
+                        };
                         for msg in dec.process(disc) {
                             let _ = events.send(SdrEvent::Decode {
                                 inspect_hz,
                                 event: pocsag_event(&msg),
                             });
                         }
+                        let d = dec.diagnostics();
+                        let syncs_after = d.syncs_512 + d.syncs_1200 + d.syncs_2400;
+                        if syncs_after > syncs_before {
+                            pocsag_sync_baud =
+                                Some(d.last_sync_baud.unwrap_or(baud));
+                        }
                     }
+                    let flex_syncs_before = {
+                        let d = flex.diagnostics();
+                        (d.syncs_1600, d.syncs_3200, d.syncs_6400)
+                    };
                     for msg in flex.process(disc) {
                         let _ = events.send(SdrEvent::Decode {
                             inspect_hz,
                             event: flex_event(&msg),
                         });
+                    }
+                    {
+                        let d = flex.diagnostics();
+                        if d.syncs_6400 > flex_syncs_before.2 {
+                            flex_sync_baud = Some(6400);
+                        } else if d.syncs_3200 > flex_syncs_before.1 {
+                            flex_sync_baud = Some(3200);
+                        } else if d.syncs_1600 > flex_syncs_before.0 {
+                            flex_sync_baud = Some(1600);
+                        }
+                    }
+                    if let Some(baud) = pocsag_sync_baud {
+                        classifier.note_pocsag_sync(baud);
+                    }
+                    if let Some(baud) = flex_sync_baud {
+                        classifier.note_flex_sync(baud);
                     }
                 }
                 // A receiver that has locked knows more than a heuristic, so
@@ -2331,19 +2400,53 @@ fn run_sdr(
                     event: packet_event(&packet),
                 });
             }
-            for dec in pocsag.iter_mut() {
+            // The demod owns the pager banks here; syncs go back to the
+            // classifier so its protocol matching still sees them.
+            let mut pocsag_sync_baud = None;
+            for (baud, dec) in [512u32, 1200, 2400].into_iter().zip(pocsag.iter_mut()) {
+                let syncs_before = {
+                    let d = dec.diagnostics();
+                    d.syncs_512 + d.syncs_1200 + d.syncs_2400
+                };
                 for msg in dec.process(disc) {
                     let _ = events.send(SdrEvent::Decode {
                         inspect_hz,
                         event: pocsag_event(&msg),
                     });
                 }
+                let d = dec.diagnostics();
+                let syncs_after = d.syncs_512 + d.syncs_1200 + d.syncs_2400;
+                if syncs_after > syncs_before {
+                    pocsag_sync_baud = Some(d.last_sync_baud.unwrap_or(baud));
+                }
             }
+            let flex_syncs_before = {
+                let d = flex.diagnostics();
+                (d.syncs_1600, d.syncs_3200, d.syncs_6400)
+            };
             for msg in flex.process(disc) {
                 let _ = events.send(SdrEvent::Decode {
                     inspect_hz,
                     event: flex_event(&msg),
                 });
+            }
+            if let Some(baud) = pocsag_sync_baud {
+                classifier.note_pocsag_sync(baud);
+            }
+            {
+                let d = flex.diagnostics();
+                let flex_sync_baud = if d.syncs_6400 > flex_syncs_before.2 {
+                    Some(6400)
+                } else if d.syncs_3200 > flex_syncs_before.1 {
+                    Some(3200)
+                } else if d.syncs_1600 > flex_syncs_before.0 {
+                    Some(1600)
+                } else {
+                    None
+                };
+                if let Some(baud) = flex_sync_baud {
+                    classifier.note_flex_sync(baud);
+                }
             }
         }
 
@@ -2478,6 +2581,13 @@ fn run_sdr(
             let guard_hz = (shown_rate / shown_buf.len().max(1) as f64 * 3.0).max(4_000.0);
             notch_display(&mut shown_buf, shown_rate, &spurs, guard_hz);
             let shown: &[f32] = &shown_buf;
+            // The shared sorted copy is invalidated whenever the window moves
+            // or changes size; each measurement below fills it on first use.
+            if sorted_scratch.len() != shown.len() {
+                sorted_scratch.clear();
+                sorted_scratch.extend_from_slice(shown);
+                sorted_scratch.sort_unstable_by(f32::total_cmp);
+            }
 
             let mut min_db = f32::INFINITY;
             let mut max_db = f32::NEG_INFINITY;
@@ -2502,6 +2612,7 @@ fn run_sdr(
                 shown_rate,
                 inspect_hz - shown_centre,
                 f64::from(current_mode.bandwidth_hz()),
+                &mut sorted_scratch,
             );
             last_snr_db = channel_dbfs - noise_dbfs;
             // Only meaningful when something is actually there to measure.
@@ -2511,6 +2622,7 @@ fn run_sdr(
                     shown_rate,
                     inspect_hz - shown_centre,
                     f64::from(current_mode.bandwidth_hz()),
+                    &mut sorted_scratch,
                 )
             {
                 freq_error_hz = Some(match freq_error_hz {
@@ -2520,7 +2632,7 @@ fn run_sdr(
             } else if last_snr_db < 3.0 {
                 freq_error_hz = None;
             }
-            let peaks = find_peaks(shown, tuned_freq, shown_rate, &spurs);
+            let peaks = find_peaks(shown, tuned_freq, shown_rate, &spurs, &mut sorted_scratch);
             let mut classification = classification;
             // WFM, P25 and DMR bypass the classifier, so its own measurements
             // are left at their defaults and the signal readout showed zeros.

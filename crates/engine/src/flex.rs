@@ -703,7 +703,10 @@ impl FlexDecoder {
     pub const DEFAULT_BAUD: u32 = 1600;
 
     pub fn new(fs: f64) -> Self {
-        let phases = ((fs / 1600.0).floor() as usize).clamp(1, 16);
+        // Six static phases, like POCSAG: the per-lane tracking loop absorbs
+        // the residual, and every extra lane costs a full slicer pass on every
+        // sample. At 48 kHz that is 16 lanes × 48k = 0.77 M pushes/s saved.
+        let phases = ((fs / 1600.0).floor() as usize).clamp(1, 6);
         let lanes = (0..phases).map(|delay| Lane::new(fs, delay)).collect();
         Self {
             lanes,
@@ -727,6 +730,32 @@ impl FlexDecoder {
 
     pub fn diagnostics(&self) -> &FlexDiagnostics {
         &self.diag
+    }
+
+    /// A decoder that owns no lanes and decodes nothing.
+    ///
+    /// Used when the caller runs its own FLEX bank over the same
+    /// discriminator; sync observations are fed back through
+    /// [`FlexDecoder::note_sync`] instead.
+    pub fn idle() -> Self {
+        Self {
+            lanes: Vec::new(),
+            diag: FlexDiagnostics::default(),
+            recent_hashes: VecDeque::new(),
+            recent_frames: VecDeque::new(),
+            fragments: HashMap::new(),
+            groups: HashMap::new(),
+        }
+    }
+
+    /// Record a FLEX sync seen by an externally-owned decoder, so a caller
+    /// running its own bank can still drive protocol matching here.
+    pub fn note_sync(&mut self, baud: u32) {
+        match baud {
+            3200 => self.diag.syncs_3200 += 1,
+            6400 => self.diag.syncs_6400 += 1,
+            _ => self.diag.syncs_1600 += 1,
+        }
     }
 
     pub fn process(&mut self, discriminator_hz: &[f32]) -> Vec<FlexMessage> {

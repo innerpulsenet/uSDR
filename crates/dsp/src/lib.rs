@@ -50,9 +50,16 @@ impl Window {
 pub struct Spectrum {
     fft: Arc<dyn Fft<f32>>,
     window: Vec<f32>,
+    /// Sum of the window coefficients. Constant per size, so it is cached
+    /// instead of being re-summed on every call.
+    win_sum: f32,
     size: usize,
     buf: Vec<Complex32>,
     pending: Vec<Complex32>,
+    /// Segment accumulator, reused across calls: this method runs once per
+    /// radio block, and a fresh `vec![0; size]` each time was ~125
+    /// allocations a second at the default span.
+    acc: Vec<f32>,
 }
 
 #[allow(dead_code)]
@@ -65,12 +72,15 @@ impl Spectrum {
         let mut planner = FftPlanner::new();
         let fft = planner.plan_fft_forward(size);
         let window = win.coeffs(size);
+        let win_sum: f32 = window.iter().sum();
         Self {
             fft,
+            win_sum,
             window,
             size,
             buf: vec![Complex32::new(0.0, 0.0); size],
             pending: Vec::with_capacity(size * 2),
+            acc: vec![0.0f32; size],
         }
     }
 
@@ -95,48 +105,37 @@ impl Spectrum {
     /// Segments hop by half an FFT so successive estimates overlap; that
     /// Welch average is what keeps the noise floor from boiling.
     pub fn power_db(&mut self, input: &[Complex32], out: &mut Vec<f32>) {
-        self.pending.extend_from_slice(input);
-        let hop = (self.size / 2).max(1);
-        let nseg = if self.pending.len() >= self.size {
-            1 + (self.pending.len() - self.size) / hop
-        } else {
-            0
-        };
-        if nseg == 0 {
+        let Some(nseg) = self.accumulate(input) else {
             if out.is_empty() {
                 out.resize(self.size, -140.0);
             }
             return;
-        }
-        out.clear();
-        out.resize(self.size, 0.0);
-        let mut acc = vec![0.0f32; self.size];
-        for s in 0..nseg {
-            let start = s * hop;
-            let seg = &self.pending[start..start + self.size];
-            for i in 0..self.size {
-                self.buf[i] = seg[i] * self.window[i];
-            }
-            self.fft.process(&mut self.buf);
-            for i in 0..self.size {
-                acc[i] += self.buf[i].norm_sqr();
-            }
-        }
-        let consumed = nseg * hop;
-        if consumed > 0 {
-            self.pending.drain(..consumed.min(self.pending.len()));
-        }
+        };
         let scale = 1.0 / (nseg as f32 * self.size as f32);
-        let half = self.size / 2;
-        // fftshift while converting to dB
-        for i in 0..self.size {
-            let src = (i + half) % self.size;
-            out[i] = 10.0 * (acc[src] * scale + 1e-20).log10();
-        }
+        self.emit(out, scale);
     }
 
     /// Average periodogram returning calibrated dBFS (0 dBFS = full scale CW tone).
     pub fn power_dbfs(&mut self, input: &[Complex32], out: &mut Vec<f32>) {
+        let Some(nseg) = self.accumulate(input) else {
+            if out.is_empty() {
+                out.resize(self.size, -140.0);
+            }
+            return;
+        };
+        // 0 dBFS is a full-scale complex exponential, whose power after the
+        // window is win_sum²; the two methods differ only in that reference.
+        let scale = 1.0 / (nseg as f32 * (self.win_sum * self.win_sum));
+        self.emit(out, scale);
+    }
+
+    /// Window and FFT every whole segment available. Returns the segment count,
+    /// or `None` when no full segment has arrived yet.
+    ///
+    /// Samples are carried across calls so the FFT can be larger than one IQ
+    /// block; segments hop by half an FFT so successive estimates overlap —
+    /// that Welch average keeps the noise floor from boiling.
+    fn accumulate(&mut self, input: &[Complex32]) -> Option<usize> {
         self.pending.extend_from_slice(input);
         let hop = (self.size / 2).max(1);
         let nseg = if self.pending.len() >= self.size {
@@ -145,14 +144,11 @@ impl Spectrum {
             0
         };
         if nseg == 0 {
-            if out.is_empty() {
-                out.resize(self.size, -140.0);
-            }
-            return;
+            return None;
         }
-        out.clear();
-        out.resize(self.size, 0.0);
-        let mut acc = vec![0.0f32; self.size];
+        for v in self.acc.iter_mut() {
+            *v = 0.0;
+        }
         for s in 0..nseg {
             let start = s * hop;
             let seg = &self.pending[start..start + self.size];
@@ -161,20 +157,24 @@ impl Spectrum {
             }
             self.fft.process(&mut self.buf);
             for i in 0..self.size {
-                acc[i] += self.buf[i].norm_sqr();
+                self.acc[i] += self.buf[i].norm_sqr();
             }
         }
         let consumed = nseg * hop;
         if consumed > 0 {
             self.pending.drain(..consumed.min(self.pending.len()));
         }
-        let win_sum: f32 = self.window.iter().sum();
-        let scale = 1.0 / (nseg as f32 * (win_sum * win_sum));
+        Some(nseg)
+    }
+
+    /// fftshift the accumulated periodogram into dB with `scale`.
+    fn emit(&mut self, out: &mut Vec<f32>, scale: f32) {
+        out.clear();
+        out.resize(self.size, 0.0);
         let half = self.size / 2;
-        // fftshift while converting to dBFS
         for i in 0..self.size {
             let src = (i + half) % self.size;
-            out[i] = 10.0 * (acc[src] * scale + 1e-20).log10();
+            out[i] = 10.0 * (self.acc[src] * scale + 1e-20).log10();
         }
     }
 }
@@ -1038,6 +1038,9 @@ pub struct NoiseBlanker {
     last_rate: usize,
     inhibited: bool,
     trained: usize,
+    /// Sample offset carried between blocks when the blanker is off, so the
+    /// decimated background updates stay evenly spaced.
+    level0_phase: usize,
 }
 
 impl NoiseBlanker {
@@ -1052,6 +1055,7 @@ impl NoiseBlanker {
             last_rate: 0,
             inhibited: false,
             trained: 0,
+            level0_phase: 0,
         }
     }
 
@@ -1075,6 +1079,27 @@ impl NoiseBlanker {
     }
 
     fn process(&mut self, iq: &mut [Complex32]) {
+        // With the blanker off there is nothing to blank, so the only work
+        // left is keeping the background estimate warm for when it is
+        // re-enabled — done from a decimated sample so a 2-3 MS/s stream does
+        // not pay `norm()` on every one of them.
+        if self.level == 0 {
+            let stride = ((iq.len() / 64).max(1)) as usize;
+            let mut i = self.level0_phase % stride;
+            while i < iq.len() {
+                let mag = iq[i].norm();
+                if self.trained == 0 {
+                    self.background = mag.max(1e-6);
+                } else {
+                    let a = 1.0 - (-1.0 / (0.075 * self.fs * stride as f32)).exp();
+                    self.background += (mag - self.background) * a;
+                }
+                self.window_seen += stride;
+                i += stride;
+            }
+            self.level0_phase = (self.level0_phase + iq.len()) % stride;
+            return;
+        }
         let a = 1.0 - (-1.0 / (0.075 * self.fs)).exp();
         let threshold = [f32::INFINITY, 6.0, 5.0, 4.0][self.level as usize];
         for i in 0..iq.len() {
@@ -1132,6 +1157,11 @@ pub struct FrontEnd {
     iq_ifft: Arc<dyn Fft<f32>>,
     iq_buf: Vec<Complex32>,
     iq_orig: Vec<Complex32>,
+    /// Constant index tables for the image estimator: for FFT bin `k + 1`,
+    /// its conjugate-symmetric mirror bin and which of the 12 bands it falls
+    /// in. Recomputing them per block was two modulo chains over 4095 bins.
+    mirror_idx: Vec<usize>,
+    band_idx: Vec<usize>,
     image: [Complex32; 12],
     /// Samples seen, against the number needed before correcting at all.
     warm: u32,
@@ -1178,6 +1208,13 @@ impl FrontEnd {
             iq_ifft: planner.plan_fft_inverse(4096),
             iq_buf: vec![Complex32::new(0.0, 0.0); 4096],
             iq_orig: vec![Complex32::new(0.0, 0.0); 4096],
+            mirror_idx: (0..4095).map(|k| (4096 - (k + 1)) % 4096).collect(),
+            band_idx: (0..4095)
+                .map(|k| {
+                    let shifted = (k + 1 + 2048) % 4096;
+                    (shifted * 12 / 4096).min(11)
+                })
+                .collect(),
             image: [Complex32::new(0.0, 0.0); 12],
             warm: 0,
             // Two time constants of the estimator above.
@@ -1234,15 +1271,24 @@ impl FrontEnd {
         const N: usize = 4096;
         const K: usize = 12;
         for block in iq.chunks_exact_mut(N) {
+            // Nothing worth correcting: skip both transforms. A dongle whose
+            // driver already corrects the image reports ~100 dB of rejection,
+            // and paying two 4096-pt FFTs per 4096 samples to apply a zero
+            // was several percent of a core.
+            if self.warm >= self.settle && self.image.iter().all(|v| v.norm() < 1e-3) {
+                continue;
+            }
             self.iq_buf.copy_from_slice(block);
             self.iq_fft.process(&mut self.iq_buf);
             self.iq_orig.copy_from_slice(&self.iq_buf);
             let mut cross = [Complex32::new(0.0, 0.0); K];
             let mut paired = [0.0f32; K];
-            for k in 1..N {
-                let shifted = (k + N / 2) % N;
-                let band = (shifted * K / N).min(K - 1);
-                let mirror = (N - k) % N;
+            // Index tables are constant: band and mirror are the same every
+            // block, so they are precomputed once instead of being re-derived
+            // from k with a modulo on each pass.
+            for (k, &mirror) in self.mirror_idx.iter().enumerate() {
+                let band = self.band_idx[k];
+                let k = k + 1;
                 cross[band] += self.iq_orig[k] * self.iq_orig[mirror];
                 paired[band] += self.iq_orig[k].norm_sqr() + self.iq_orig[mirror].norm_sqr();
             }
@@ -1275,10 +1321,9 @@ impl FrontEnd {
             }
             if self.warm >= self.settle {
                 for k in 1..N {
-                    let shifted = (k + N / 2) % N;
-                    let band = (shifted * K / N).min(K - 1);
+                    let band = self.band_idx[k - 1];
                     let a = self.image[band];
-                    let mirror = (N - k) % N;
+                    let mirror = self.mirror_idx[k - 1];
                     self.iq_buf[k] = self.iq_orig[k] - a * self.iq_orig[mirror].conj();
                 }
                 self.iq_ifft.process(&mut self.iq_buf);

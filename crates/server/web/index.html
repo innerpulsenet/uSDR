@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>uSDR</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%2304090f'/%3E%3Cpath d='M4 22 L10 10 L14 18 L18 8 L22 20 L28 12' fill='none' stroke='%2335a7e8' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
 <style>
   :root {
     --page: #0a0d11;
@@ -650,6 +651,7 @@
                style="flex:1; min-width:150px; background:#0d1319; color:var(--text);
                       border:1px solid #27323c; border-radius:4px; padding:4px 8px;
                       font:11px var(--mono); outline:none">
+        <button type="button" onclick="expandAllDecodes(true)">Expand all</button>
         <button type="button" onclick="expandAllDecodes(false)">Collapse all</button>
         <button type="button" onclick="clearSdrDecodeLog()">Clear</button>
         <audio id="sdrCaptureAudio" controls preload="none"></audio>
@@ -1436,7 +1438,9 @@ function openFreqEntry() {
   el.innerHTML = '';
   const inp = document.createElement('input');
   inp.className = 'freq-entry';
-  inp.value = (sdrCenterHz / 1e6).toFixed(4);
+  // The readout shows what is being received, so that is what typing edits —
+  // not the middle of the span.
+  inp.value = (sdrInspectHz / 1e6).toFixed(4);
   el.appendChild(inp);
   inp.focus(); inp.select();
   const done = (commit) => {
@@ -1461,6 +1465,10 @@ function tickClock() {
 
 function fmtMhz(hz, places) { return (hz / 1e6).toFixed(places === undefined ? 4 : places); }
 
+// The axis only changes when the window does, but paintSdrFft called this at
+// 25 fps, rebuilding nine DOM spans each time for identical output.
+let specScaleSig = '';
+
 function drawSpecScale() {
   const lo = sdrCenterHz - sdrRateHz / 2;
   const hi = sdrCenterHz + sdrRateHz / 2;
@@ -1475,6 +1483,8 @@ function drawSpecScale() {
     const f = lo + (hi - lo) * (i / (n - 1));
     out += `<span>${fmtMhz(f, 3)}</span>`;
   }
+  if (out === specScaleSig) return;
+  specScaleSig = out;
   el.innerHTML = out;
 }
 
@@ -2021,6 +2031,17 @@ function pointerFreq(e, cv) {
 
 function setupSdrInteractions() {
   const targets = [sdrSpecCanvas, sdrWfCanvas];
+  // The hover cursor repaints the whole spectrum; coalesce mousemove bursts
+  // to one repaint per animation frame rather than one per event.
+  let hoverPaintPending = false;
+  const scheduleHoverPaint = () => {
+    if (hoverPaintPending) return;
+    hoverPaintPending = true;
+    requestAnimationFrame(() => {
+      hoverPaintPending = false;
+      if (sdrLastPwr.length) drawSdrSpectrum(sdrLastPwr);
+    });
+  };
 
   for (const cv of targets) {
     cv.addEventListener('mousemove', (e) => {
@@ -2038,14 +2059,14 @@ function setupSdrInteractions() {
         r.hidden = false;
         r.textContent = fmtMhz(snapHz(hz, e.altKey)) + ' MHz' + dbStr;
       }
-      if (sdrLastPwr.length) drawSdrSpectrum(sdrLastPwr);
+      scheduleHoverPaint();
     });
 
     cv.addEventListener('mouseleave', () => {
       sdrHoverX = null;
       const r = $('sdrHoverReadout');
       if (r) r.hidden = true;
-      if (sdrLastPwr.length) drawSdrSpectrum(sdrLastPwr);
+      scheduleHoverPaint();
     });
 
     cv.addEventListener('click', (e) => {
@@ -2058,7 +2079,9 @@ function setupSdrInteractions() {
 
     cv.addEventListener('dblclick', (e) => {
       const { hz } = pointerFreq(e, cv);
-      tuneSdrHz(Math.round(hz / 1250) * 1250);
+      // Snap to the mode's channel raster like any other click, so pointing
+      // at a signal lands on its allocated frequency.
+      tuneSdrHz(snapHz(hz, e.altKey));
     });
 
     // Wheel over the spectrum walks the centre frequency by a tenth of a span,

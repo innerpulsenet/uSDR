@@ -22,7 +22,12 @@ pub struct ToneSlicer {
     delay0: usize,
     /// Chronological history, `win + 2 * gate` deep: enough to place the
     /// on-time window with a full gate of context either side of it.
+    ///
+    /// Stored as a ring: `hist_head` is the oldest sample. Shifting a ~50-float
+    /// array once per sample per lane (`rotate_left`) was ~150 MB/s of small
+    /// memmoves across a 16-lane bank at 48 kHz; indexing the ring is two adds.
     hist: Vec<f32>,
+    hist_head: usize,
     filled: usize,
     pub last_pm: f32,
     pub last_ps: f32,
@@ -55,6 +60,7 @@ impl ToneSlicer {
             delay: 0,
             delay0: 0,
             hist: vec![0.0; win + 2 * gate],
+            hist_head: 0,
             filled: 0,
             last_pm: 0.0,
             last_ps: 0.0,
@@ -72,6 +78,7 @@ impl ToneSlicer {
         self.clock.reset();
         self.tracking = false;
         self.hist.iter_mut().for_each(|x| *x = 0.0);
+        self.hist_head = 0;
         self.filled = 0;
         self.delay = self.delay0;
     }
@@ -101,11 +108,16 @@ impl ToneSlicer {
     }
 
     /// Correlation over `self.win` samples ending `back` samples before the
-    /// newest one. `hist` is kept chronological, newest last.
+    /// newest one. The ring keeps samples chronological under the head.
     fn gate_at(&self, back: usize) -> (f32, f32) {
-        let end = self.hist.len() - back;
-        let w = &self.hist[end - self.win..end];
-        (goertzel(w, self.coeff_m), goertzel(w, self.coeff_s))
+        let n = self.hist.len();
+        // Index of the newest sample; walk back from there over the window.
+        let newest = (self.hist_head + n - 1) % n;
+        let end = (newest + n - back + n) % n;
+        (
+            goertzel_ring(&self.hist, end, self.win, self.coeff_m),
+            goertzel_ring(&self.hist, end, self.win, self.coeff_s),
+        )
     }
 
     /// `true` = mark tone, `false` = space tone.
@@ -118,9 +130,11 @@ impl ToneSlicer {
             self.delay -= 1;
             return None;
         }
-        self.hist.rotate_left(1);
-        let last = self.hist.len() - 1;
-        self.hist[last] = x;
+        // Ring write: overwrite the oldest slot and advance the head. The old
+        // `rotate_left(1)` moved every element of `hist` on every sample.
+        let n = self.hist.len();
+        self.hist[self.hist_head] = x;
+        self.hist_head = (self.hist_head + 1) % n;
         self.filled = self.filled.saturating_add(1);
         if !self.clock.tick() {
             return None;
@@ -160,6 +174,9 @@ impl ToneSlicer {
     }
 }
 
+/// Goertzel power over a contiguous slice. Kept for CTCSS's analysis path;
+/// the ToneSlicer reads its ring history through [`goertzel_ring`].
+#[allow(dead_code)]
 fn goertzel(x: &[f32], coeff: f32) -> f32 {
     let mut s1 = 0.0;
     let mut s2 = 0.0;
@@ -170,6 +187,25 @@ fn goertzel(x: &[f32], coeff: f32) -> f32 {
         // other tone look stronger near a symbol transition.
         let w = 0.5 - 0.5 * (2.0 * PI * i as f32 / denom).cos();
         let v = sample * w;
+        let s0 = v + coeff * s1 - s2;
+        s2 = s1;
+        s1 = s0;
+    }
+    s1 * s1 + s2 * s2 - coeff * s1 * s2
+}
+
+/// Goertzel power over `n` ring samples ending at (and including) index
+/// `end_idx`, oldest first. Same Hann window and recursion as [`goertzel`],
+/// just reading the history through the ring order.
+fn goertzel_ring(hist: &[f32], end_idx: usize, n: usize, coeff: f32) -> f32 {
+    let len = hist.len();
+    let mut s1 = 0.0f32;
+    let mut s2 = 0.0f32;
+    let denom = n.saturating_sub(1).max(1) as f32;
+    for i in 0..n {
+        let idx = (end_idx + len - (n - 1 - i)) % len;
+        let w = 0.5 - 0.5 * (2.0 * PI * i as f32 / denom).cos();
+        let v = hist[idx] * w;
         let s0 = v + coeff * s1 - s2;
         s2 = s1;
         s1 = s0;

@@ -186,6 +186,17 @@ pub struct SignalClassifier {
     last_same_match: Option<std::time::Instant>,
     last_ctcss_match: Option<(f32, std::time::Instant)>,
     last_dcs_match: Option<(u16, std::time::Instant)>,
+    /// Pager banks (POCSAG + FLEX) are owned and run by the caller in
+    /// PACKET/AUTO mode — the same discriminator would otherwise be sliced by
+    /// two full sets of timing lanes. The classifier still reports protocol
+    /// matches, fed back through [`SignalClassifier::note_pocsag_sync`] /
+    /// [`note_flex_sync`].
+    pagers_external: bool,
+    /// Messages recovered by the internal banks this block, drained by the
+    /// event pass later in `process`. Held as fields to keep the borrow of
+    /// `self.disc_buf` and the decoders inside one method.
+    pending_pocsag_messages: Vec<crate::pocsag::PocsagMessage>,
+    pending_flex_messages: Vec<crate::flex::FlexMessage>,
 }
 
 impl SignalClassifier {
@@ -236,6 +247,26 @@ impl SignalClassifier {
             last_same_match: None,
             last_ctcss_match: None,
             last_dcs_match: None,
+            pagers_external: false,
+            pending_pocsag_messages: Vec::new(),
+            pending_flex_messages: Vec::new(),
+        }
+    }
+
+    /// Hand the POCSAG and FLEX banks to the caller.
+    ///
+    /// In PACKET and AUTO mode the server already runs a full set of pager
+    /// decoders over the same discriminator; letting the classifier run its
+    /// own second set doubled the per-sample cost of the largest always-on
+    /// decoders for no extra frames. The classifier's protocol matching still
+    /// works — the caller feeds sync observations back through
+    /// [`Self::note_pocsag_sync`] / [`Self::note_flex_sync`] — but its internal
+    /// lanes are dropped.
+    pub fn use_external_pagers(&mut self) {
+        if !self.pagers_external {
+            self.pagers_external = true;
+            self.pocsag_decoder = PocsagDecoder::idle();
+            self.flex_decoder = FlexDecoder::idle();
         }
     }
 
@@ -261,8 +292,13 @@ impl SignalClassifier {
         self.nxdn48_receiver = NxdnReceiver::new(NxdnRate::Nxdn48, self.fs);
         self.nxdn96_receiver = NxdnReceiver::new(NxdnRate::Nxdn96, self.fs);
         self.smartnet_decoder.reset();
-        self.pocsag_decoder = PocsagDecoder::auto(self.fs);
-        self.flex_decoder = FlexDecoder::new(self.fs);
+        if !self.pagers_external {
+            self.pocsag_decoder = PocsagDecoder::auto(self.fs);
+            self.flex_decoder = FlexDecoder::new(self.fs);
+        } else {
+            self.pocsag_decoder = PocsagDecoder::idle();
+            self.flex_decoder = FlexDecoder::idle();
+        }
         self.ltr_decoder.reset();
         self.passport_decoder.reset();
         self.legacy_digital.reset();
@@ -302,6 +338,16 @@ impl SignalClassifier {
     /// FM discriminator in hertz from the last processed IQ block.
     pub fn monitor_discriminator_hz(&self) -> &[f32] {
         &self.disc_buf
+    }
+
+    /// Record a POCSAG sync observed in an externally-owned decoder bank.
+    pub fn note_pocsag_sync(&mut self, baud: u32) {
+        self.pocsag_decoder.note_sync(baud);
+    }
+
+    /// Record a FLEX sync observed in an externally-owned decoder bank.
+    pub fn note_flex_sync(&mut self, baud: u32) {
+        self.flex_decoder.note_sync(baud);
     }
 
     fn publish_decode(&mut self, event: DecodeEvent, now: std::time::Instant) {
@@ -367,38 +413,52 @@ impl SignalClassifier {
             self.analysis_buf.drain(..excess);
         }
 
-        let syncs_before = {
-            let d = self.pocsag_decoder.diagnostics();
-            d.syncs_512 + d.syncs_1200 + d.syncs_2400
-        };
-        let pocsag_messages = self.pocsag_decoder.process(&self.disc_buf);
-        let pocsag_hit = {
-            let d = self.pocsag_decoder.diagnostics();
-            let syncs_after = d.syncs_512 + d.syncs_1200 + d.syncs_2400;
-            (syncs_after > syncs_before).then(|| {
-                (
-                    d.last_sync_baud.unwrap_or(0),
-                    pocsag_messages.first().map(|m| m.capcode).unwrap_or(0),
-                )
-            })
-        };
-        let flex_syncs_before = {
-            let d = self.flex_decoder.diagnostics();
-            (d.syncs_1600, d.syncs_3200, d.syncs_6400)
-        };
-        let flex_messages = self.flex_decoder.process(&self.disc_buf);
-        let flex_hit = {
-            let d = self.flex_decoder.diagnostics();
-            let baud = if d.syncs_6400 > flex_syncs_before.2 {
-                Some(6400)
-            } else if d.syncs_3200 > flex_syncs_before.1 {
-                Some(3200)
-            } else if d.syncs_1600 > flex_syncs_before.0 {
-                Some(1600)
-            } else {
-                None
+        let pocsag_hit = if self.pagers_external {
+            // The caller owns the lanes; it reports syncs through
+            // note_pocsag_sync. Nothing to run here.
+            None
+        } else {
+            let syncs_before = {
+                let d = self.pocsag_decoder.diagnostics();
+                d.syncs_512 + d.syncs_1200 + d.syncs_2400
             };
-            baud.map(|baud| (baud, flex_messages.first().map(|m| m.capcode).unwrap_or(0)))
+            let pocsag_messages = self.pocsag_decoder.process(&self.disc_buf);
+            let hit = {
+                let d = self.pocsag_decoder.diagnostics();
+                let syncs_after = d.syncs_512 + d.syncs_1200 + d.syncs_2400;
+                (syncs_after > syncs_before).then(|| {
+                    (
+                        d.last_sync_baud.unwrap_or(0),
+                        pocsag_messages.first().map(|m| m.capcode).unwrap_or(0),
+                    )
+                })
+            };
+            self.pending_pocsag_messages = pocsag_messages;
+            hit
+        };
+        let flex_hit = if self.pagers_external {
+            None
+        } else {
+            let flex_syncs_before = {
+                let d = self.flex_decoder.diagnostics();
+                (d.syncs_1600, d.syncs_3200, d.syncs_6400)
+            };
+            let flex_messages = self.flex_decoder.process(&self.disc_buf);
+            let hit = {
+                let d = self.flex_decoder.diagnostics();
+                let baud = if d.syncs_6400 > flex_syncs_before.2 {
+                    Some(6400)
+                } else if d.syncs_3200 > flex_syncs_before.1 {
+                    Some(3200)
+                } else if d.syncs_1600 > flex_syncs_before.0 {
+                    Some(1600)
+                } else {
+                    None
+                };
+                baud.map(|baud| (baud, flex_messages.first().map(|m| m.capcode).unwrap_or(0)))
+            };
+            self.pending_flex_messages = flex_messages;
+            hit
         };
 
         self.demod.clear();
@@ -434,13 +494,20 @@ impl SignalClassifier {
         self.dev_abs_buf.clear();
         self.dev_abs_buf
             .extend(self.disc_buf.iter().map(|&x| (x - mean_offset_hz).abs()));
-        self.dev_abs_buf.sort_by(f32::total_cmp);
         // A low-amplitude IQ sample has an undefined phase and can create a
         // one-sample Nyquist spike. Report the 99th percentile as peak
         // deviation so one such sample cannot mark a clean carrier as noise.
+        // Only that one order statistic is read, so an O(n) partition
+        // replaces the full O(n log n) sort this used to pay per block.
         let peak_idx = ((self.dev_abs_buf.len() as f32 * 0.99) as usize)
             .min(self.dev_abs_buf.len().saturating_sub(1));
-        let peak_dev_hz = self.dev_abs_buf.get(peak_idx).copied().unwrap_or(0.0);
+        let peak_dev_hz = if self.dev_abs_buf.is_empty() {
+            0.0
+        } else {
+            let (idx, buf) = (peak_idx, &mut self.dev_abs_buf);
+            buf.select_nth_unstable_by(idx, f32::total_cmp);
+            buf[idx]
+        };
         let rms_dev_hz = (self
             .disc_buf
             .iter()
@@ -1047,51 +1114,55 @@ impl SignalClassifier {
         if !p25_locked && let Some((baud, capcode)) = pocsag_hit {
             self.last_pocsag_match = Some((baud, capcode, now));
         }
-        for message in pocsag_messages.into_iter().filter(|_| !p25_locked) {
-            let mut fields = BTreeMap::new();
-            fields.insert("capcode".into(), message.capcode.to_string());
-            fields.insert("function".into(), message.function.to_string());
-            fields.insert("baud".into(), message.baud.to_string());
-            fields.insert("partial".into(), message.partial.to_string());
-            self.publish_decode(
-                DecodeEvent {
-                    protocol: "POCSAG".into(),
-                    kind: "page".into(),
-                    valid: true,
-                    summary: if message.text.is_empty() {
-                        format!("capcode {} (tone only)", message.capcode)
-                    } else {
-                        format!("capcode {} · {}", message.capcode, message.text)
+        if !p25_locked {
+            for message in std::mem::take(&mut self.pending_pocsag_messages) {
+                let mut fields = BTreeMap::new();
+                fields.insert("capcode".into(), message.capcode.to_string());
+                fields.insert("function".into(), message.function.to_string());
+                fields.insert("baud".into(), message.baud.to_string());
+                fields.insert("partial".into(), message.partial.to_string());
+                self.publish_decode(
+                    DecodeEvent {
+                        protocol: "POCSAG".into(),
+                        kind: "page".into(),
+                        valid: true,
+                        summary: if message.text.is_empty() {
+                            format!("capcode {} (tone only)", message.capcode)
+                        } else {
+                            format!("capcode {} · {}", message.capcode, message.text)
+                        },
+                        fields,
                     },
-                    fields,
-                },
-                now,
-            );
+                    now,
+                );
+            }
         }
         if !p25_locked && let Some((baud, capcode)) = flex_hit {
             self.last_flex_match = Some((baud, capcode, now));
         }
-        for message in flex_messages.into_iter().filter(|_| !p25_locked) {
-            let mut fields = BTreeMap::new();
-            fields.insert("capcode".into(), message.capcode.to_string());
-            fields.insert("cycle".into(), message.cycle.to_string());
-            fields.insert("frame".into(), message.frame.to_string());
-            fields.insert("baud".into(), message.baud.to_string());
-            fields.insert("format".into(), format!("{:?}", message.format));
-            self.publish_decode(
-                DecodeEvent {
-                    protocol: "FLEX".into(),
-                    kind: "page".into(),
-                    valid: true,
-                    summary: if message.text.is_empty() {
-                        format!("capcode {}", message.capcode)
-                    } else {
-                        format!("capcode {} · {}", message.capcode, message.text)
+        if !p25_locked {
+            for message in std::mem::take(&mut self.pending_flex_messages) {
+                let mut fields = BTreeMap::new();
+                fields.insert("capcode".into(), message.capcode.to_string());
+                fields.insert("cycle".into(), message.cycle.to_string());
+                fields.insert("frame".into(), message.frame.to_string());
+                fields.insert("baud".into(), message.baud.to_string());
+                fields.insert("format".into(), format!("{:?}", message.format));
+                self.publish_decode(
+                    DecodeEvent {
+                        protocol: "FLEX".into(),
+                        kind: "page".into(),
+                        valid: true,
+                        summary: if message.text.is_empty() {
+                            format!("capcode {}", message.capcode)
+                        } else {
+                            format!("capcode {} · {}", message.capcode, message.text)
+                        },
+                        fields,
                     },
-                    fields,
-                },
-                now,
-            );
+                    now,
+                );
+            }
         }
 
         let analysis_due = self.samples_since_analysis >= (self.fs * 0.05) as usize;
@@ -1675,11 +1746,15 @@ fn fsk_slicer(samples: &[f32], fraction: f32) -> (f32, f32) {
     if sorted.is_empty() {
         return (0.0, 900.0);
     }
-    sorted.sort_by(f32::total_cmp);
-    let center = sorted[sorted.len() / 2];
+    // Two order statistics are read — the median and the 90th percentile of
+    // |x − median| — so partitions replace both sorts.
+    let mid = sorted.len() / 2;
+    sorted.select_nth_unstable_by(mid, f32::total_cmp);
+    let center = sorted[mid];
     let mut deviations: Vec<f32> = sorted.iter().map(|x| (x - center).abs()).collect();
-    deviations.sort_by(f32::total_cmp);
-    let outer = deviations[((deviations.len() as f32 * 0.90) as usize).min(deviations.len() - 1)];
+    let outer_idx = ((deviations.len() as f32 * 0.90) as usize).min(deviations.len() - 1);
+    deviations.select_nth_unstable_by(outer_idx, f32::total_cmp);
+    let outer = deviations[outer_idx];
     (center, (outer * fraction).clamp(250.0, 2600.0))
 }
 
