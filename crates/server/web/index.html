@@ -33,13 +33,73 @@
   }
 
   body {
-    margin: 0; padding: 18px 16px 40px;
+    margin: 0; padding: 14px 16px;
     background: radial-gradient(1200px 600px at 50% -10%, #131a21 0%, var(--page) 70%);
     color: var(--text); font-family: var(--sans); font-size: 14px;
     -webkit-font-smoothing: antialiased;
   }
 
-  .wrap { max-width: 1180px; margin: 0 auto; }
+  /* Console layout: the rig lives on the left and never scrolls away; every
+     data panel is one tab away in the dock on the right. No page scrolling —
+     each column manages its own space. */
+  .wrap {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) clamp(360px, 34vw, 500px);
+    gap: 14px;
+    align-items: start;
+    height: calc(100vh - 28px);
+  }
+  .main-col { min-width: 0; }
+  .side-col {
+    display: flex; flex-direction: column; min-height: 0; height: 100%;
+    border: 1px solid var(--line); border-radius: 8px;
+    background: #10151b; overflow: hidden;
+  }
+  .side-tabs {
+    display: flex; gap: 2px; padding: 6px 8px 0;
+    background: #141b22; border-bottom: 1px solid var(--line);
+  }
+  .side-tab {
+    font: 700 10px/1 var(--sans); letter-spacing: 0.1em;
+    padding: 8px 12px; cursor: pointer; border-radius: 5px 5px 0 0;
+    background: transparent; color: var(--dim); border: 1px solid transparent;
+    border-bottom: none;
+  }
+  .side-tab:hover { color: #c9dbe6; }
+  .side-tab.on {
+    background: #10151b; color: #eaf2f7;
+    border-color: var(--line);
+    position: relative; top: 1px;
+  }
+  .side-panel {
+    display: none; flex-direction: column; min-height: 0; flex: 1;
+    margin: 0; border: none; border-radius: 0; background: transparent;
+  }
+  .side-panel.on { display: flex; }
+  .side-panel > h2 {
+    border-radius: 0; border-bottom: 1px solid var(--line);
+  }
+  /* Inside the dock, panels fill whatever height the tab gives them instead
+     of their old fixed pixel boxes. */
+  .side-panel .panel-body {
+    flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column;
+  }
+  .side-panel .sdr-classifier-log,
+  .side-panel .sdr-decode-log {
+    height: auto; flex: 1; min-height: 140px;
+  }
+
+  /* Narrow windows fall back to the original stacked page. */
+  @media (max-width: 1080px) {
+    body { height: auto; }
+    .wrap { display: block; height: auto; }
+    .side-col { height: auto; margin-top: 12px; }
+    .side-panel { display: block; margin-top: 12px; }
+    .side-panel:first-of-type { margin-top: 0; }
+    .side-panel .sdr-classifier-log { height: 190px; }
+    .side-panel .sdr-decode-log { height: 250px; }
+    .side-tabs { display: none; }
+  }
 
   /* ---------- the rig ---------- */
 
@@ -414,6 +474,7 @@
 </head>
 <body>
 <div class="wrap">
+  <div class="main-col">
 
   <div class="rig">
     <div class="rig-brand">
@@ -583,8 +644,16 @@
   </div>
 
   <div id="err"></div>
+  </div><!-- /main-col -->
 
-  <section class="panel">
+  <aside class="side-col">
+    <div class="side-tabs" role="tablist" aria-label="Data panels">
+      <button type="button" class="side-tab on" id="tabClassifier" role="tab" aria-selected="true">CLASSIFIER</button>
+      <button type="button" class="side-tab" id="tabDecode" role="tab" aria-selected="false">DECODE LOG</button>
+      <button type="button" class="side-tab" id="tabCalls" role="tab" aria-selected="false">LAST HEARD</button>
+    </div>
+
+    <section class="panel side-panel on" id="panelClassifier">
     <h2>Digital Signal Classifier
       <span class="note" id="sdrInspectStatusBadge">IDLE</span>
       <span class="note" id="sdrInspectFreqBadge">—</span>
@@ -619,7 +688,7 @@
     </div>
   </section>
 
-  <section class="panel">
+    <section class="panel side-panel" id="panelCalls">
     <h2>Last heard — digital voice
       <span class="note" id="callsNote">P25 and DMR calls are kept here until the server restarts</span>
     </h2>
@@ -631,7 +700,7 @@
     </div>
   </section>
 
-  <section class="panel">
+    <section class="panel side-panel" id="panelDecode">
     <h2>Protocol Decode / FEC
       <span class="note" id="decodeCount">0 frames</span>
       <span class="note">click a frame to expand · valid green, rejected red</span>
@@ -670,10 +739,29 @@
       </div>
     </div>
   </section>
+  </aside><!-- /side-col -->
 
 </div>
 
 <script>
+// Dock tabs: the three data panels stack in one column, so exactly one is
+// shown at a time. On narrow windows the media query stacks them all.
+function showSideTab(id) {
+  const tabs = [['tabClassifier', 'panelClassifier'], ['tabDecode', 'panelDecode'], ['tabCalls', 'panelCalls']];
+  for (const [tabId, panelId] of tabs) {
+    const on = tabId === id;
+    const t = $(tabId), p = $(panelId);
+    if (t) {
+      t.classList.toggle('on', on);
+      t.setAttribute('aria-selected', on);
+    }
+    if (p) p.classList.toggle('on', on);
+  }
+}
+for (const [tabId, panelId] of [['tabClassifier', 'panelClassifier'], ['tabDecode', 'panelDecode'], ['tabCalls', 'panelCalls']]) {
+  const t = document.getElementById(tabId);
+  if (t) t.addEventListener('click', () => showSideTab(tabId));
+}
 const $ = (id) => document.getElementById(id);
 function esc(s) { return String(s).replace(/[<>&"]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;'}[c])); }
 
