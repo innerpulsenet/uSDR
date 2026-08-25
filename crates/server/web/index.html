@@ -39,19 +39,17 @@
     -webkit-font-smoothing: antialiased;
   }
 
-  /* Console layout: the rig lives on the left and never scrolls away; every
-     data panel is one tab away in the dock on the right. No page scrolling —
-     each column manages its own space. */
+  /* Console layout: the rig owns the top of the page; the data panels live
+     underneath it as tab-separated pages, so the spectrum is always on
+     screen and switching data views costs one click instead of scrolling. */
   .wrap {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) clamp(360px, 34vw, 500px);
-    gap: 14px;
-    align-items: start;
-    height: calc(100vh - 28px);
+    max-width: 1400px;
+    margin: 0 auto;
   }
-  .main-col { min-width: 0; }
   .side-col {
-    display: flex; flex-direction: column; min-height: 0; height: 100%;
+    display: flex; flex-direction: column; min-height: 0;
+    margin-top: 14px;
+    height: 62vh;
     border: 1px solid var(--line); border-radius: 8px;
     background: #10151b; overflow: hidden;
   }
@@ -89,22 +87,15 @@
     height: auto; flex: 1; min-height: 140px;
   }
 
-  /* Narrow windows fall back to the original stacked page. */
+  /* Narrow windows: the dock just follows the page flow. */
   @media (max-width: 1080px) {
-    body { height: auto; }
-    .wrap { display: block; height: auto; }
-    .side-col { height: auto; margin-top: 12px; }
-    .side-panel { display: block; margin-top: 12px; }
-    .side-panel:first-of-type { margin-top: 0; }
-    .side-panel .sdr-classifier-log { height: 190px; }
-    .side-panel .sdr-decode-log { height: 250px; }
-    .side-tabs { display: none; }
+    .side-col { height: 50vh; }
   }
 
   /* The decode log is the densest panel and the one people read longest, so
-     it can take the whole dock (F key or tab) and its rows wrap instead of
+     it can take the whole viewport height and its rows wrap instead of
      truncating — a clipped pager message is an unread pager message. */
-  .side-col.wide { grid-column: 1 / -1; height: 70vh; z-index: 5; }
+  .side-col.tall { height: 90vh; }
   .sdr-decode-event .row2 {
     white-space: normal;
   }
@@ -482,7 +473,6 @@
 </head>
 <body>
 <div class="wrap">
-  <div class="main-col">
 
   <div class="rig">
     <div class="rig-brand">
@@ -652,7 +642,6 @@
   </div>
 
   <div id="err"></div>
-  </div><!-- /main-col -->
 
   <aside class="side-col">
     <div class="side-tabs" role="tablist" aria-label="Data panels">
@@ -660,7 +649,7 @@
       <button type="button" class="side-tab" id="tabDecode" role="tab" aria-selected="false">DECODE LOG</button>
       <button type="button" class="side-tab" id="tabCalls" role="tab" aria-selected="false">LAST HEARD</button>
       <span style="flex:1"></span>
-      <button type="button" class="side-tab" id="dockWideBtn" title="Give the panels the whole window width (F)">⤢ wide</button>
+      <button type="button" class="side-tab" id="dockWideBtn" title="Give the panels nearly the whole viewport (F)">⤢ tall</button>
     </div>
 
     <section class="panel side-panel on" id="panelClassifier">
@@ -773,14 +762,13 @@ for (const [tabId, panelId] of [['tabClassifier', 'panelClassifier'], ['tabDecod
   if (t) t.addEventListener('click', () => showSideTab(tabId));
 }
 
-// Wide mode: the dock takes over the full row so the decode list gets real
-// width. Toggle with the ⤢ button or the F key.
+// Tall mode: give the dock nearly the whole viewport (button or F key).
 function toggleWideDock() {
   const col = document.querySelector('.side-col');
   if (!col) return;
-  const wide = col.classList.toggle('wide');
+  const tall = col.classList.toggle('tall');
   const btn = $('dockWideBtn');
-  if (btn) btn.textContent = wide ? '⤡ narrow' : '⤢ wide';
+  if (btn) btn.textContent = tall ? '⤡ shrink' : '⤢ tall';
 }
 const dwb = document.getElementById('dockWideBtn');
 if (dwb) dwb.addEventListener('click', toggleWideDock);

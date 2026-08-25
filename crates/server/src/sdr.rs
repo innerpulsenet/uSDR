@@ -1580,7 +1580,7 @@ fn run_sdr(
     // the skirt of the channel filter and syncs get missed. The AFC steers
     // the mix NCO so the carrier rides centred. It only integrates while a
     // signal is actually present, so an idle channel cannot walk it away.
-    let mut afc = scannerd_engine::Afc::new(0.0, 5_000.0);
+    let mut afc = scannerd_engine::Afc::new(0.0, 5_000.0).with_alpha(0.10);
     // Last correction actually applied to the chain NCO, so the offset write
     // happens only when the loop has moved meaningfully.
     let mut afc_last_reported = 0.0f32;
@@ -1728,6 +1728,7 @@ fn run_sdr(
                             .expect("SDR capture")
                             .clear(inspect_hz, inspect_chain.fs_out());
                         afc.set_base(0.0);
+                        afc_last_reported = 0.0;
                         // Deliberately not stamping freq_hz here: it reports
                         // where the tuner is, and it is not there yet.
                         let mut s = status.lock().unwrap();
@@ -1761,6 +1762,7 @@ fn run_sdr(
                         .expect("SDR capture")
                         .clear(inspect_hz, inspect_chain.fs_out());
                     afc.set_base(0.0);
+                    afc_last_reported = 0.0;
                     let mut s = status.lock().unwrap();
                     s.inspect_hz = inspect_hz;
                     let _ = events.send(SdrEvent::Status(s.clone()));
@@ -1805,6 +1807,7 @@ fn run_sdr(
                             .expect("SDR capture")
                             .clear(inspect_hz, inspect_chain.fs_out());
                         afc.set_base(0.0);
+                        afc_last_reported = 0.0;
                         let mut s = status.lock().unwrap();
                         s.rate_hz = current_rate;
                         let shown = display_rate_for(current_rate, lo_offset, current_mode);
@@ -1843,6 +1846,7 @@ fn run_sdr(
                             .expect("SDR capture")
                             .clear(inspect_hz, inspect_chain.fs_out());
                         afc.set_base(0.0);
+                        afc_last_reported = 0.0;
                         let mut s = status.lock().unwrap();
                         s.mode = current_mode;
                         s.bandwidth_hz = f64::from(current_mode.bandwidth_hz());
@@ -1970,6 +1974,7 @@ fn run_sdr(
                                     .expect("SDR capture")
                                     .clear(inspect_hz, inspect_chain.fs_out());
                                 afc.set_base(0.0);
+                                afc_last_reported = 0.0;
                                 let mut s = status.lock().unwrap();
                                 s.serial = s_serial;
                                 s.tuner = s_tuner;
@@ -2090,6 +2095,7 @@ fn run_sdr(
                         .expect("SDR capture")
                         .clear(inspect_hz, inspect_chain.fs_out());
                     afc.set_base(0.0);
+                    afc_last_reported = 0.0;
                     if deliberate {
                         eprintln!("SDR {s_serial}: reopened to change the LO offset");
                     } else {
@@ -2295,6 +2301,20 @@ fn run_sdr(
                 // else is residual error, measured on the previous block.
                 // Gating on SNR keeps an empty channel from integrating noise
                 // into an offset.
+                afc.observe(last_center_offset_hz, last_snr_db > 6.0);
+                let corr = afc.correction_hz();
+                if (corr - afc_last_reported).abs() >= 50.0 {
+                    inspect_chain.set_offset(
+                        inspect_hz - current_freq
+                            - lo_offset_for(current_rate, lo_offset, current_mode)
+                            + f64::from(corr),
+                    );
+                    afc_last_reported = corr;
+                }
+                // AUTO needs the same steering: its packet decoders read the
+                // same discriminator, and the voice receivers extract their
+                // own channel from a fixed offset. Fold the correction into
+                // the chain here too.
                 afc.observe(last_center_offset_hz, last_snr_db > 6.0);
                 let corr = afc.correction_hz();
                 if (corr - afc_last_reported).abs() >= 50.0 {
