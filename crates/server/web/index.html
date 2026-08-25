@@ -101,6 +101,14 @@
     .side-tabs { display: none; }
   }
 
+  /* The decode log is the densest panel and the one people read longest, so
+     it can take the whole dock (F key or tab) and its rows wrap instead of
+     truncating — a clipped pager message is an unread pager message. */
+  .side-col.wide { grid-column: 1 / -1; height: 70vh; z-index: 5; }
+  .sdr-decode-event .row2 {
+    white-space: normal;
+  }
+
   /* ---------- the rig ---------- */
 
   .rig {
@@ -651,6 +659,8 @@
       <button type="button" class="side-tab on" id="tabClassifier" role="tab" aria-selected="true">CLASSIFIER</button>
       <button type="button" class="side-tab" id="tabDecode" role="tab" aria-selected="false">DECODE LOG</button>
       <button type="button" class="side-tab" id="tabCalls" role="tab" aria-selected="false">LAST HEARD</button>
+      <span style="flex:1"></span>
+      <button type="button" class="side-tab" id="dockWideBtn" title="Give the panels the whole window width (F)">⤢ wide</button>
     </div>
 
     <section class="panel side-panel on" id="panelClassifier">
@@ -762,6 +772,24 @@ for (const [tabId, panelId] of [['tabClassifier', 'panelClassifier'], ['tabDecod
   const t = document.getElementById(tabId);
   if (t) t.addEventListener('click', () => showSideTab(tabId));
 }
+
+// Wide mode: the dock takes over the full row so the decode list gets real
+// width. Toggle with the ⤢ button or the F key.
+function toggleWideDock() {
+  const col = document.querySelector('.side-col');
+  if (!col) return;
+  const wide = col.classList.toggle('wide');
+  const btn = $('dockWideBtn');
+  if (btn) btn.textContent = wide ? '⤡ narrow' : '⤢ wide';
+}
+const dwb = document.getElementById('dockWideBtn');
+if (dwb) dwb.addEventListener('click', toggleWideDock);
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'f' && e.key !== 'F') return;
+  const tag = (document.activeElement && document.activeElement.tagName) || '';
+  if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return;
+  toggleWideDock();
+});
 const $ = (id) => document.getElementById(id);
 function esc(s) { return String(s).replace(/[<>&"]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;'}[c])); }
 
@@ -1220,13 +1248,15 @@ function renderSdrDecodeLog() {
       const open = sdrDecodeOpen.has(e.uid);
       const fieldCount = Object.keys(e.fields || {}).length;
       return `<div class="sdr-decode-event${e.uid === sdrDecodeSelected ? ' sel' : ''}">
-        <div onclick="toggleDecodeRow(${e.uid})" style="display:flex; gap:8px; align-items:baseline; min-width:0; cursor:pointer">
-          <span style="color:#64748b; flex:none; width:9px">${open ? '▾' : '▸'}</span>
-          <span style="color:#64748b; flex:none">${new Date(e.t).toLocaleTimeString()}</span>
-          <button type="button" onclick="event.stopPropagation(); inspectSdrHz(${Number(e.freqHz)})" style="padding:0; border:0; background:none; color:#38bdf8; font:inherit; flex:none">${(Number(e.freqHz) / 1e6).toFixed(4)} MHz</button>
-          <span style="color:${colour}; font-weight:700; flex:none">[${esc(e.protocol)} / ${esc(e.kind)}]</span>
-          <span style="color:#cbd5e1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap">${esc(e.summary)}</span>
-          <span style="margin-left:auto; color:#3d4a58; flex:none; font-size:10px">${fieldCount} fields</span>
+        <div onclick="toggleDecodeRow(${e.uid})" style="cursor:pointer">
+          <div style="display:flex; gap:8px; align-items:baseline; min-width:0">
+            <span style="color:#64748b; flex:none; width:9px">${open ? '▾' : '▸'}</span>
+            <span style="color:#64748b; flex:none">${new Date(e.t).toLocaleTimeString()}</span>
+            <button type="button" onclick="event.stopPropagation(); inspectSdrHz(${Number(e.freqHz)})" style="padding:0; border:0; background:none; color:#38bdf8; font:inherit; flex:none">${(Number(e.freqHz) / 1e6).toFixed(4)} MHz</button>
+            <span style="color:${colour}; font-weight:700; flex:none">[${esc(e.protocol)}]</span>
+            <span style="margin-left:auto; color:#3d4a58; flex:none; font-size:10px">${fieldCount} fields</span>
+          </div>
+          <div class="row2" style="padding-left:17px; color:#cbd5e1">${esc(e.summary)}</div>
         </div>
         ${open ? decodeDetail(e) : ''}
       </div>`;
