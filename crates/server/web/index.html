@@ -1297,7 +1297,8 @@ function renderSdrPeaks(peaks) {
     const on = Math.abs(sdrInspectHz - p.freqHz) < 10000;
     const border = on ? 'border:1px solid #38bdf8;' : 'border:1px solid #1e293b;';
     const bg = on ? 'background:#0c4a6e; color:#38bdf8;' : 'background:#0f172a; color:#cbd5e1;';
-    return `<button type="button" class="sdr-preset-btn" style="padding:1px 6px; font-size:10px; width:104px; ${bg} ${border}" onclick="inspectSdrHz(${p.freqHz})" title="${mhz} MHz · SNR ${snr} dB">${mhz}<span style="color:#64748b"> +${snr}</span></button>`;
+    const tag = p.label ? `<span style="color:${on ? '#2bff6a' : '#7dd3fc'}">${esc(p.label)}</span> ` : '';
+    return `<button type="button" class="sdr-preset-btn" style="padding:1px 6px; font-size:10px; width:118px; ${bg} ${border}" onclick="inspectSdrHz(${p.freqHz})" title="${mhz} MHz · SNR ${snr} dB${p.label ? ' · ' + p.label : ''}">${tag}${mhz}<span style="color:#64748b"> +${snr}</span></button>`;
   }).join('');
 }
 
@@ -1650,6 +1651,34 @@ function drawSdrSpectrum(pwr) {
     i ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
   }
   ctx.stroke();
+
+  // Peak markers: small triangles at the top of the screen for each signal
+  // found in this frame, labelled with the protocol last decoded there.
+  // This is what AUTO is meant to show — where the signals are and what
+  // they are, without leaving the spectrum.
+  ctx.font = '9px ui-monospace, monospace';
+  for (const p of (sdrLastPeaks || [])) {
+    const x = xForFreq(p.freqHz, W);
+    if (x < -4 || x > W + 4) continue;
+    const on = Math.abs(p.freqHz - sdrInspectHz) < 10000;
+    const colour = on ? '#2bff6a' : '#7fd0ff';
+    // Triangle pointing down at the signal's position.
+    ctx.fillStyle = colour;
+    ctx.beginPath();
+    ctx.moveTo(x, H - 2); ctx.lineTo(x - 3.5, H - 10); ctx.lineTo(x + 3.5, H - 10);
+    ctx.closePath(); ctx.fill();
+    if (p.label) {
+      const text = `${p.label} ${fmtMhz(p.freqHz, 3)}`;
+      const tw = ctx.measureText(text).width;
+      let tx = x + 6;
+      if (tx + tw > W - 2) tx = x - tw - 6;
+      const ty = H - 8;
+      ctx.fillStyle = 'rgba(4,9,15,0.78)';
+      ctx.fillRect(tx - 2, ty - 8, tw + 4, 11);
+      ctx.fillStyle = colour;
+      ctx.fillText(text, tx, ty + 1);
+    }
+  }
 
   // inspect marker: the rig's green pointer, plus its passband
   const ix = xForFreq(sdrInspectHz, W);
@@ -2321,6 +2350,7 @@ function paintSdrFft(m) {
   sdrCenterHz = m.centerHz;
   sdrRateHz = m.rateHz;
   if (m.inspectHz) sdrInspectHz = m.inspectHz;
+  if (Array.isArray(m.peaks)) sdrLastPeaks = m.peaks;
   renderFreq(sdrInspectHz);
   if (sdrAutoRange) computeAutoRange(m.pwr);
   sdrLastPwr = m.pwr;

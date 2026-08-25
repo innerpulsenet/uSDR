@@ -290,6 +290,66 @@ pub struct PeakMarker {
     pub freq_hz: f64,
     pub pwr_db: f32,
     pub snr_db: f32,
+    /// Protocol last decoded at this frequency, if any. Stamped from the
+    /// decode history so the spectrum shows what kind of signal each marker
+    /// is, not just that it is there.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+}
+
+/// Frequencies that have actually produced a decode, newest protocol wins.
+///
+/// Feeds peak labels: a marker labelled "POCSAG" earned that name from a real
+/// frame, not a heuristic fit to a bump in the spectrum. Entries expire so a
+/// signal that left the air does not stay labelled forever.
+struct DecodeHistory {
+    labels: std::collections::HashMap<u64, (String, Instant)>,
+    last: Instant,
+}
+
+const LABEL_TTL: Duration = Duration::from_secs(600);
+/// How far a peak may sit from a labelled frequency and keep the label.
+const LABEL_MATCH_KHZ: u64 = 3;
+
+impl DecodeHistory {
+    fn new() -> Self {
+        Self {
+            labels: std::collections::HashMap::new(),
+            last: Instant::now(),
+        }
+    }
+
+    fn note(&mut self, hz: f64, protocol: &str) {
+        if protocol.is_empty() {
+            return;
+        }
+        self.last = Instant::now();
+        let key = (hz / 1000.0).round() as u64;
+        self.labels.insert(key, (protocol.to_string(), Instant::now()));
+    }
+
+    fn label_for(&self, hz: f64) -> Option<String> {
+        let base = (hz / 1000.0).round() as i64;
+        let mut best_seen: Option<Instant> = None;
+        let mut best_label: Option<String> = None;
+        for d in -(LABEL_MATCH_KHZ as i64)..=(LABEL_MATCH_KHZ as i64) {
+            let key = (base + d).max(0) as u64;
+            if let Some((proto, seen)) = self.labels.get(&key) {
+                if best_seen.is_none_or(|b| *seen > b) {
+                    best_seen = Some(*seen);
+                    best_label = Some(proto.clone());
+                }
+            }
+        }
+        let _ = best_seen;
+        best_label.filter(|_| {
+            best_seen.is_some_and(|seen| seen.elapsed() < LABEL_TTL)
+        })
+    }
+
+    fn prune(&mut self) {
+        self.labels.retain(|_, (_, seen)| seen.elapsed() < LABEL_TTL);
+    }
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -1343,6 +1403,7 @@ fn find_peaks(
     rate_hz: f64,
     spur_offsets_hz: &[f64],
     sorted_scratch: &mut Vec<f32>,
+    history: &DecodeHistory,
 ) -> Vec<PeakMarker> {
     let mut peaks = Vec::new();
     let n = smoothed.len();
@@ -1384,6 +1445,7 @@ fn find_peaks(
                 freq_hz,
                 pwr_db: p,
                 snr_db,
+                label: history.label_for(freq_hz),
             });
         }
     }
@@ -1509,6 +1571,22 @@ fn run_sdr(
     // channel_level, carrier_offset_hz and find_peaks. Each used to clone and
     // sort its own at 25 fps.
     let mut sorted_scratch: Vec<f32> = Vec::with_capacity(fft_size);
+    // Frequencies that have actually decoded something. Peak markers on the
+    // spectrum get their protocol label from here.
+    let mut decode_history = DecodeHistory::new();
+    // Residual carrier tracking for the narrowband inspect channel. The
+    // clicked frequency is only as good as the ppm correction and the click;
+    // a couple of kHz of error leaves a POCSAG/FLEX deviation pushing through
+    // the skirt of the channel filter and syncs get missed. The AFC steers
+    // the mix NCO so the carrier rides centred. It only integrates while a
+    // signal is actually present, so an idle channel cannot walk it away.
+    let mut afc = scannerd_engine::Afc::new(0.0, 5_000.0);
+    // Last correction actually applied to the chain NCO, so the offset write
+    // happens only when the loop has moved meaningfully.
+    let mut afc_last_reported = 0.0f32;
+    // Discriminator DC from the previous classifier pass — the residual
+    // carrier error the AFC folds in.
+    let mut last_center_offset_hz = 0.0f32;
 
     let (mut inspect_chain, mut classifier) =
         build_inspect(
@@ -1649,6 +1727,7 @@ fn run_sdr(
                             .lock()
                             .expect("SDR capture")
                             .clear(inspect_hz, inspect_chain.fs_out());
+                        afc.set_base(0.0);
                         // Deliberately not stamping freq_hz here: it reports
                         // where the tuner is, and it is not there yet.
                         let mut s = status.lock().unwrap();
@@ -1681,6 +1760,7 @@ fn run_sdr(
                         .lock()
                         .expect("SDR capture")
                         .clear(inspect_hz, inspect_chain.fs_out());
+                    afc.set_base(0.0);
                     let mut s = status.lock().unwrap();
                     s.inspect_hz = inspect_hz;
                     let _ = events.send(SdrEvent::Status(s.clone()));
@@ -1724,6 +1804,7 @@ fn run_sdr(
                             .lock()
                             .expect("SDR capture")
                             .clear(inspect_hz, inspect_chain.fs_out());
+                        afc.set_base(0.0);
                         let mut s = status.lock().unwrap();
                         s.rate_hz = current_rate;
                         let shown = display_rate_for(current_rate, lo_offset, current_mode);
@@ -1761,6 +1842,7 @@ fn run_sdr(
                             .lock()
                             .expect("SDR capture")
                             .clear(inspect_hz, inspect_chain.fs_out());
+                        afc.set_base(0.0);
                         let mut s = status.lock().unwrap();
                         s.mode = current_mode;
                         s.bandwidth_hz = f64::from(current_mode.bandwidth_hz());
@@ -1887,6 +1969,7 @@ fn run_sdr(
                                     .lock()
                                     .expect("SDR capture")
                                     .clear(inspect_hz, inspect_chain.fs_out());
+                                afc.set_base(0.0);
                                 let mut s = status.lock().unwrap();
                                 s.serial = s_serial;
                                 s.tuner = s_tuner;
@@ -2006,6 +2089,7 @@ fn run_sdr(
                         .lock()
                         .expect("SDR capture")
                         .clear(inspect_hz, inspect_chain.fs_out());
+                    afc.set_base(0.0);
                     if deliberate {
                         eprintln!("SDR {s_serial}: reopened to change the LO offset");
                     } else {
@@ -2198,9 +2282,31 @@ fn run_sdr(
         // The classifier is the demodulator for every narrowband mode: it
         // already produces the voice and discriminator the decoders need, so
         // running it is not an extra cost. WFM has nothing it can use.
+        //
+        // The AFC runs ahead of it: the classifier's discriminator DC is the
+        // residual carrier error, so fold that into the mix NCO before the
+        // next block. Without this a signal 2 kHz off the clicked frequency
+        // — ppm drift plus click imprecision — rides one skirt of the channel
+        // filter and POCSAG/FLEX syncs get missed.
         let classification = match current_mode {
             SdrMode::Nfm | SdrMode::Packet => {
+                // Steer the mix toward the carrier while one is present. The
+                // discriminator DC of a centred FM carrier is zero; anything
+                // else is residual error, measured on the previous block.
+                // Gating on SNR keeps an empty channel from integrating noise
+                // into an offset.
+                afc.observe(last_center_offset_hz, last_snr_db > 6.0);
+                let corr = afc.correction_hz();
+                if (corr - afc_last_reported).abs() >= 50.0 {
+                    inspect_chain.set_offset(
+                        inspect_hz - current_freq
+                            - lo_offset_for(current_rate, lo_offset, current_mode)
+                            + f64::from(corr),
+                    );
+                    afc_last_reported = corr;
+                }
                 let c = classifier.process(&inspect_iq, inspect_hz);
+                last_center_offset_hz = c.center_offset_hz;
                 audio_buf.extend_from_slice(classifier.monitor_voice());
                 {
                     let mut capture = capture.lock().expect("SDR capture");
@@ -2220,6 +2326,7 @@ fn run_sdr(
                 // receivers work the same channel in parallel, and whichever
                 // one locks is what gets believed and heard.
                 let c = classifier.process(&inspect_iq, inspect_hz);
+                last_center_offset_hz = c.center_offset_hz;
                 {
                     let mut capture = capture.lock().expect("SDR capture");
                     capture.append(
@@ -2265,6 +2372,7 @@ fn run_sdr(
                 {
                     let disc = classifier.monitor_discriminator_hz();
                     for packet in aprs.process(disc) {
+                        decode_history.note(inspect_hz, "APRS");
                         let _ = events.send(SdrEvent::Decode {
                             inspect_hz,
                             event: packet_event(&packet),
@@ -2283,6 +2391,7 @@ fn run_sdr(
                             d.syncs_512 + d.syncs_1200 + d.syncs_2400
                         };
                         for msg in dec.process(disc) {
+                            decode_history.note(inspect_hz, "POCSAG");
                             let _ = events.send(SdrEvent::Decode {
                                 inspect_hz,
                                 event: pocsag_event(&msg),
@@ -2300,6 +2409,7 @@ fn run_sdr(
                         (d.syncs_1600, d.syncs_3200, d.syncs_6400)
                     };
                     for msg in flex.process(disc) {
+                        decode_history.note(inspect_hz, "FLEX");
                         let _ = events.send(SdrEvent::Decode {
                             inspect_hz,
                             event: flex_event(&msg),
@@ -2736,7 +2846,15 @@ fn run_sdr(
             } else if last_snr_db < 3.0 {
                 freq_error_hz = None;
             }
-            let peaks = find_peaks(shown, tuned_freq, shown_rate, &spurs, &mut sorted_scratch);
+            let peaks = find_peaks(
+                shown,
+                tuned_freq,
+                shown_rate,
+                &spurs,
+                &mut sorted_scratch,
+                &decode_history,
+            );
+            decode_history.prune();
             let mut classification = classification;
             // WFM, P25 and DMR bypass the classifier, so its own measurements
             // are left at their defaults and the signal readout showed zeros.
