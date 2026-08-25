@@ -317,19 +317,19 @@
   .softkey:active { transform: translateY(1px); }
   .softkey.on { background: linear-gradient(#1f6fb8, #17537f); color: #fff; border-color: #0d2c45; }
 
-  /* control panel under the rig */
-  /* Grouped rather than one long run of controls: the bank reads as
-     "radio", "display", "audio" instead of nine unrelated widgets in a row,
-     and related things stay together when it wraps on a narrow window. */
+  /* Control strip integrated into the rig's lower chrome — settings live on
+     the radio itself rather than in a detached panel further down the page.
+     One compact row; groups separated by hairlines like bezel sections. */
   .panelrow {
-    display: flex; flex-wrap: wrap; align-items: stretch; gap: 0;
-    background: var(--body); border: 1px solid #0d1115; border-radius: 8px;
-    padding: 4px 6px; margin-top: 12px;
-    box-shadow: inset 0 1px 0 rgba(255,255,255,0.04);
+    display: flex; flex-wrap: wrap; align-items: center; gap: 0;
+    background: linear-gradient(#232930, #1a1f25);
+    border: 1px solid #10151a; border-radius: 6px;
+    padding: 2px 4px; margin-top: 10px;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.05), 0 2px 5px rgba(0,0,0,0.35);
   }
   .ctlgroup {
-    display: flex; flex-wrap: wrap; align-items: center; gap: 14px;
-    padding: 8px 14px;
+    display: flex; flex-wrap: wrap; align-items: center; gap: 10px;
+    padding: 5px 12px;
     border-right: 1px solid #232a31;
   }
   .ctlgroup:last-child { border-right: none; }
@@ -576,9 +576,8 @@
       <button type="button" class="softkey" id="keyZoomIn" title="Zoom in on the tuned frequency">ZOOM +</button>
       <button type="button" class="softkey" id="keySpur" title="Nudge the LO and mark anything that does not move — those are internal, not on the air">SPUR CHK</button>
     </div>
-  </div>
 
-  <div class="panelrow">
+    <div class="panelrow">
     <div class="ctlgroup">
       <span class="grouplabel">Radio</span>
       <div class="ctl">
@@ -639,6 +638,7 @@
         <span class="val" id="volVal">60%</span>
       </div>
     </div>
+    </div><!-- /panelrow, inside the rig -->
   </div>
 
   <div id="err"></div>
