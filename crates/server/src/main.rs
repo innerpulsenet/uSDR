@@ -9,6 +9,8 @@
 mod devices;
 mod sdr;
 
+use sdr::SdrEvent;
+
 use anyhow::{Context, Result};
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{DefaultBodyLimit, Query, State};
@@ -734,10 +736,25 @@ async fn ws_client(mut socket: WebSocket, st: Arc<AppState>) {
     loop {
         tokio::select! {
             ev = sdr_ev.recv() => match ev {
-                Ok(ev) => {
-                    let Ok(text) = serde_json::to_string(&ev) else { continue };
-                    if socket.send(Message::Text(text.into())).await.is_err() {
-                        return;
+                Ok(ev) => match &ev {
+                    SdrEvent::Fft { .. } => {
+                        // The FFT frame is the 25 fps bulk of the stream; a
+                        // JSON float array costs ~10 bytes/bin for values the
+                        // client only ever compares and scales. Ship it as
+                        // binary instead — layout documented in
+                        // sdr::encode_fft_frame. Everything else (status,
+                        // decode events) stays JSON.
+                        if let Some(buf) = sdr::encode_fft_frame(&ev)
+                            && socket.send(Message::Binary(buf.into())).await.is_err()
+                        {
+                            return;
+                        }
+                    }
+                    _ => {
+                        let Ok(text) = serde_json::to_string(&ev) else { continue };
+                        if socket.send(Message::Text(text.into())).await.is_err() {
+                            return;
+                        }
                     }
                 }
                 // A client that fell behind has missed frames it no longer

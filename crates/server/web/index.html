@@ -835,6 +835,7 @@ function clearSdrClassLog() {
 
 let sdrClassLastSig = '';
 function updateSdrClassification(c, inspectHz) {
+  if (!c) return;
   // Same-value DOM writes still dirty style, and this runs at 25 fps — most
   // frames are byte-identical to the last. A cheap signature over everything
   // this function renders skips the whole block when nothing moved (the
@@ -3057,7 +3058,15 @@ function connect() {
 
   ws.binaryType = 'arraybuffer';
   ws.onmessage = (ev) => {
-    if (typeof ev.data !== 'string') { onAudioFrame(ev.data); return; }
+    if (typeof ev.data !== 'string') {
+      // Binary frames carry a version byte: 0x01 audio PCM, 0x02 FFT frame.
+      const view = new DataView(ev.data);
+      if (view.byteLength < 1) return;
+      const kind = view.getUint8(0);
+      if (kind === 0x01) { onAudioFrame(ev.data); return; }
+      if (kind === 0x02) { onSdrFftBinary(ev.data, view); return; }
+      return;
+    }
     const m = JSON.parse(ev.data);
     if (m.type === 'hello') {
       if (m.sdr) { updateSdrStatus(m.sdr); loadSdrDevices(); }
@@ -3071,6 +3080,69 @@ function connect() {
       updateSdrStatus(m);
     }
   };
+}
+
+// Decode a 0x02 binary FFT frame into the same shape the JSON path produced.
+// Layout mirrors sdr::encode_fft_frame exactly; see that function's docs.
+function onSdrFftBinary(buf, view) {
+  let off = 1;
+  const f64 = () => { const v = view.getFloat64(off, true); off += 8; return v; };
+  const f32 = () => { const v = view.getFloat32(off, true); off += 4; return v; };
+  const u32 = () => { const v = view.getUint32(off, true); off += 4; return v; };
+
+  const centerHz = f64();
+  const rateHz = f64();
+  const peakIq = f32();
+  const inspectHz = f64();
+  const scopeRateHz = view.getInt16(off, true) / 100; off += 2;
+  const scopeKindByte = view.getUint8(off); off += 1;
+  const symbolRateHz = view.getUint16(off, true) / 100; off += 2;
+  const channelDbfs = f32();
+  const noiseDbfs = f32();
+
+  const scopeLen = u32();
+  const scope = new Int16Array(scopeLen);
+  for (let i = 0; i < scopeLen; i++) { scope[i] = view.getInt16(off, true); off += 2; }
+
+  const pwrLen = u32();
+  const maxHoldLen = u32();
+  const peaksLen = u32();
+  // pwr and max_hold are copied out: the paint path holds them across frames
+  // while the WebSocket reuses nothing — the ArrayBuffer would be fine to
+  // slice, but downstream code mutates sdrLastPwr in place.
+  const pwr = new Float32Array(pwrLen);
+  for (let i = 0; i < pwrLen; i++) { pwr[i] = view.getFloat32(off, true); off += 4; }
+  const maxHold = new Float32Array(maxHoldLen);
+  for (let i = 0; i < maxHoldLen; i++) { maxHold[i] = view.getFloat32(off, true); off += 4; }
+  const peaks = [];
+  for (let i = 0; i < peaksLen; i++) {
+    const freqHz = f64();
+    const snrDb = f32();
+    const labelLen = view.getUint8(off); off += 1;
+    let label = null;
+    if (labelLen > 0) {
+      try { label = new TextDecoder().decode(new Uint8Array(buf, off, labelLen)); } catch (_) {}
+      off += labelLen;
+    }
+    peaks.push({ freqHz, snrDb, pwrDb: 0, label });
+  }
+
+  onSdrFft({
+    centerHz,
+    rateHz,
+    peakIq,
+    inspectHz,
+    classification: null,
+    peaks,
+    scope,
+    scopeRateHz,
+    scopeKind: scopeKindByte === 1 ? 'symbols' : scopeKindByte === 2 ? 'mpx' : 'audio',
+    symbolRateHz,
+    channelDbfs,
+    noiseDbfs,
+    pwr,
+    maxHold,
+  });
 }
 
 initSdrCanvas();

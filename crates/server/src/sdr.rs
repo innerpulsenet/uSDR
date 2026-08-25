@@ -393,6 +393,84 @@ pub enum SdrEvent {
     Decode { inspect_hz: f64, event: DecodeEvent },
 }
 
+/// Wire format for binary FFT frames, shared by `encode_fft_frame` and the
+/// browser's decoder. Version byte first so a future layout change can bump
+/// it instead of breaking every client on reload.
+pub const FFT_FRAME_MAGIC: u8 = 0x02;
+
+fn scope_kind_byte(kind: &str) -> u8 {
+    match kind {
+        "symbols" => 1,
+        "mpx" => 2,
+        _ => 0,
+    }
+}
+
+/// Serialise an FFT event to the compact binary frame `ws_client` ships and
+/// the browser decodes with DataView + typed arrays. Returns `None` for
+/// non-FFT events (the caller routes those through JSON).
+///
+/// A JSON float array costs ~10 bytes per bin; this costs exactly four, so at
+/// fft_size 8192 the frame drops from ~80 KB of text to ~40 KB of binary —
+// and the client stops tokenising all of it on the main thread.
+pub fn encode_fft_frame(ev: &SdrEvent) -> Option<Vec<u8>> {
+    let SdrEvent::Fft {
+        center_hz,
+        rate_hz,
+        pwr,
+        max_hold,
+        peak_iq,
+        inspect_hz,
+        peaks,
+        scope,
+        scope_rate_hz,
+        scope_kind,
+        symbol_rate_hz,
+        channel_dbfs,
+        noise_dbfs,
+        ..
+    } = ev
+    else {
+        return None;
+    };
+    let mut buf = Vec::with_capacity(
+        48 + (pwr.len() + max_hold.len()) * 4 + scope.len() * 2 + peaks.len() * 16,
+    );
+    buf.push(FFT_FRAME_MAGIC);
+    buf.extend_from_slice(&center_hz.to_le_bytes());
+    buf.extend_from_slice(&rate_hz.to_le_bytes());
+    buf.extend_from_slice(&peak_iq.to_le_bytes());
+    buf.extend_from_slice(&inspect_hz.to_le_bytes());
+    // Rates x100 as i16: kHz-scale rates fit and the client divides back.
+    buf.extend_from_slice(&((scope_rate_hz * 100.0) as i16).to_le_bytes());
+    buf.push(scope_kind_byte(scope_kind));
+    buf.extend_from_slice(&((symbol_rate_hz * 100.0) as u16).to_le_bytes());
+    buf.extend_from_slice(&channel_dbfs.to_le_bytes());
+    buf.extend_from_slice(&noise_dbfs.to_le_bytes());
+    // Scope rides along: same i16 samples the JSON path shipped.
+    buf.extend_from_slice(&(scope.len() as u32).to_le_bytes());
+    for s in scope {
+        buf.extend_from_slice(&s.to_le_bytes());
+    }
+    buf.extend_from_slice(&(pwr.len() as u32).to_le_bytes());
+    buf.extend_from_slice(&(max_hold.len() as u32).to_le_bytes());
+    buf.extend_from_slice(&(peaks.len() as u32).to_le_bytes());
+    for &v in pwr {
+        buf.extend_from_slice(&v.to_le_bytes());
+    }
+    for &v in max_hold {
+        buf.extend_from_slice(&v.to_le_bytes());
+    }
+    for p in peaks {
+        buf.extend_from_slice(&p.freq_hz.to_le_bytes());
+        buf.extend_from_slice(&p.snr_db.to_le_bytes());
+        let label = p.label.as_deref().unwrap_or("");
+        buf.push(label.len() as u8);
+        buf.extend_from_slice(label.as_bytes());
+    }
+    Some(buf)
+}
+
 #[derive(Default)]
 struct CaptureBuffer {
     inspect_hz: f64,
