@@ -972,6 +972,31 @@ fn pocsag_event(msg: &scannerd_engine::PocsagMessage) -> DecodeEvent {
     fields.insert("capcode".into(), msg.capcode.to_string());
     fields.insert("function".into(), msg.function.to_string());
     fields.insert("baud".into(), msg.baud.to_string());
+    fields.insert(
+        "format".into(),
+        match msg.format {
+            scannerd_engine::PocsagFormat::ToneOnly => "tone only".into(),
+            scannerd_engine::PocsagFormat::Alphanumeric => "alphanumeric".into(),
+            scannerd_engine::PocsagFormat::Numeric => "numeric".into(),
+        },
+    );
+    // The decoder's own presentation, plus both raw interpretations —
+    // alphanumeric and BCD-numeric readings of the same words can disagree,
+    // and the log is where an operator tells them apart.
+    if !msg.text.is_empty() {
+        fields.insert("message".into(), msg.text.clone());
+    }
+    if !msg.alpha_text.is_empty() && msg.alpha_text != msg.text {
+        fields.insert("alphaText".into(), msg.alpha_text.clone());
+    }
+    if !msg.numeric_text.is_empty() && msg.numeric_text != msg.text {
+        fields.insert("numericText".into(), msg.numeric_text.clone());
+    }
+    // Structured parse (weather alerts, Skyper IDs, and the like) when the
+    // decoder recognised a pattern.
+    if let Some(parsed) = &msg.parsed {
+        fields.insert("parsed".into(), parsed.clone());
+    }
     fields.insert("correctedBits".into(), msg.corrected_bits.to_string());
     fields.insert("partial".into(), msg.partial.to_string());
     // The native codewords, so the frame can be read rather than just its
@@ -983,20 +1008,92 @@ fn pocsag_event(msg: &scannerd_engine::PocsagMessage) -> DecodeEvent {
     DecodeEvent {
         protocol: "POCSAG".into(),
         kind: format!("{} baud page", msg.baud),
-        summary: format!("{} · {}", msg.capcode, msg.text),
+        summary: match (&msg.parsed, msg.text.is_empty()) {
+            (Some(p), _) => format!("{} · {}", msg.capcode, p),
+            (_, true) => format!("{} · tone only", msg.capcode),
+            (_, false) => format!("{} · {}", msg.capcode, msg.text),
+        },
         valid: true,
         fields,
     }
 }
 
 fn flex_event(msg: &scannerd_engine::FlexMessage) -> DecodeEvent {
+    use scannerd_engine::{FlexFormat, FlexFragment};
     let mut fields = std::collections::BTreeMap::new();
     fields.insert("capcode".into(), msg.capcode.to_string());
     fields.insert("cycle".into(), msg.cycle.to_string());
     fields.insert("frame".into(), msg.frame.to_string());
     fields.insert("phase".into(), msg.phase.to_string());
+    fields.insert(
+        "format".into(),
+        match msg.format {
+            FlexFormat::Secure => "secure".into(),
+            FlexFormat::ShortInstruction => "short instruction".into(),
+            FlexFormat::ToneOnly => "tone only".into(),
+            FlexFormat::StandardNumeric => "standard numeric".into(),
+            FlexFormat::SpecialNumeric => "special numeric".into(),
+            FlexFormat::Alphanumeric => "alphanumeric".into(),
+            FlexFormat::Binary => "binary".into(),
+            FlexFormat::NumberedNumeric => "numbered numeric".into(),
+        },
+    );
     fields.insert("baud".into(), msg.baud.to_string());
-    fields.insert("addressType".into(), msg.address_type.clone());
+    fields.insert("symbolRate".into(), msg.symbol_rate.to_string());
+    fields.insert("levels".into(), msg.levels.to_string());
+    fields.insert(
+        "addressType".into(),
+        if msg.long_address {
+            format!("{} (long)", msg.address_type)
+        } else {
+            msg.address_type.clone()
+        },
+    );
+    // Fragmented messages arrive in pieces across frames; without this a
+    // truncated-looking page looks like a decode fault.
+    let frag = match msg.fragment {
+        FlexFragment::Complete => None,
+        FlexFragment::First => Some(format!(
+            "part 1 · {}{}",
+            msg.fragment_number.map(|n| n.to_string()).unwrap_or_else(|| "?".into()),
+            if msg.complete { "" } else { ", more to come" }
+        )),
+        _ => Some(format!(
+            "{} part{} of {}",
+            match msg.fragment {
+                FlexFragment::Middle => "middle",
+                FlexFragment::Continuation => "continuation",
+                _ => "later",
+            },
+            msg.fragment_number.map(|n| format!(" {}", n)).unwrap_or_default(),
+            msg.message_number.map(|n| n.to_string()).unwrap_or_else(|| "?".into()),
+        )),
+    };
+    if let Some(frag) = frag {
+        fields.insert("fragment".into(), frag);
+    }
+    if msg.reassembled {
+        fields.insert("reassembled".into(), "true".into());
+    }
+    if msg.priority {
+        fields.insert("priority".into(), "true".into());
+    }
+    if msg.maildrop == Some(true) {
+        fields.insert("maildrop".into(), "true".into());
+    }
+    if let Some(retrieval) = msg.retrieval {
+        fields.insert("messageRetrieval".into(), retrieval.to_string());
+    }
+    if let Some(sub) = &msg.secure_subtype {
+        fields.insert("secureSubtype".into(), sub.clone());
+    }
+    if !msg.text.is_empty() {
+        fields.insert("message".into(), msg.text.clone());
+    }
+    // Structured parse when the decoder recognised a pattern in the text.
+    if let Some(parsed) = &msg.parsed {
+        fields.insert("parsed".into(), parsed.clone());
+    }
     fields.insert("fecCorrected".into(), msg.fec_corrected.to_string());
     fields.insert("fecUncorrectable".into(), msg.fec_uncorrectable.to_string());
     if let Some(ok) = msg.payload_checksum_ok {
@@ -1009,7 +1106,14 @@ fn flex_event(msg: &scannerd_engine::FlexMessage) -> DecodeEvent {
     DecodeEvent {
         protocol: "FLEX".into(),
         kind: "page".into(),
-        summary: format!("{} · {}", msg.capcode, msg.text),
+        summary: match (&msg.parsed, msg.text.is_empty()) {
+            (Some(p), _) => format!("{} · {}", msg.capcode, p),
+            (_, true) if msg.format == FlexFormat::ToneOnly => {
+                format!("{} · tone", msg.capcode)
+            }
+            (_, true) => format!("{} · no text", msg.capcode),
+            (_, false) => format!("{} · {}", msg.capcode, msg.text),
+        },
         valid: true,
         fields,
     }
