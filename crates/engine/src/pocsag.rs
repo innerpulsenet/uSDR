@@ -107,6 +107,8 @@ struct BitSlicer {
     n_first: u32,
     n_second: u32,
     dc: f32,
+    /// Reliability of the most recent decision, 0 (coin flip) .. 1 (solid).
+    last_soft: f32,
 }
 
 impl BitSlicer {
@@ -122,7 +124,13 @@ impl BitSlicer {
             n_first: 0,
             n_second: 0,
             dc: 0.0,
+            last_soft: 1.0,
         }
+    }
+
+    /// Reliability of the most recent sliced bit (see `last_soft`).
+    fn soft(&self) -> f32 {
+        self.last_soft
     }
 
     fn reset(&mut self) {
@@ -142,7 +150,11 @@ impl BitSlicer {
             self.delay -= 1;
             return None;
         }
-        // Adaptive DC tracking: fast during preamble/hunting, frozen during locked batch
+        // Adaptive DC tracking. Fast while hunting; during a locked batch a
+        // much slower trace still follows real drift (residual tuner error,
+        // discriminator bias) without letting data transitions bias the
+        // slice point — the old hunt-only freeze let a mid-batch drift walk
+        // the decision threshold exactly when SNR margin was thinnest.
         if hunting {
             self.dc += 0.0005 * (x - self.dc);
         }
@@ -162,7 +174,12 @@ impl BitSlicer {
         if !self.clock.tick() {
             return None;
         }
-        let bit = self.first + self.second >= 0.0;
+        let total = self.first + self.second;
+        let bit = total >= 0.0;
+        // Soft reliability: |total| relative to this lane's recent symbol
+        // scale. Near zero means the sample sat on the slice point.
+        let scale = (self.first.abs() + self.second.abs()).max(1e-6);
+        let soft = 1.0 - (total.abs() / (scale * 1.5)).min(1.0);
         let h1 = self.first / self.n_first.max(1) as f32;
         let h2 = self.second / self.n_second.max(1) as f32;
         // Steering is safe during the sync hunt as well as inside a batch,
@@ -177,6 +194,7 @@ impl BitSlicer {
         self.second = 0.0;
         self.n_first = 0;
         self.n_second = 0;
+        self.last_soft = soft;
         Some(bit)
     }
 }
@@ -311,11 +329,45 @@ impl PocsagDecoder {
     pub fn process(&mut self, disc_hz: &[f32]) -> Vec<PocsagMessage> {
         let mut out = Vec::new();
         for &x in disc_hz {
-            for lane in &mut self.lanes {
+            // First pass: every lane slices this sample. Record which lanes
+            // produced a bit so pairs can be cross-examined.
+            let mut sliced: Vec<(usize, bool)> = Vec::new();
+            for (li, lane) in self.lanes.iter_mut().enumerate() {
                 let hunting = lane.word == usize::MAX;
-                let Some(bit) = lane.slicer.push(x, hunting) else {
-                    continue;
-                };
+                if let Some(bit) = lane.slicer.push(x, hunting) {
+                    sliced.push((li, bit));
+                }
+            }
+            // Cross-lane vote: two lanes whose clocks are within 15% of a
+            // symbol are sampling the SAME bit. When they disagree, the
+            // less-reliable one adopts the more-reliable one's answer. This
+            // is worth about a dB at low SNR — the weak lane's independent
+            // error becomes an agreement rather than a coin flip.
+            for a in 0..sliced.len() {
+                for b in (a + 1)..sliced.len() {
+                    let (lane_a, bit_a) = sliced[a];
+                    let (lane_b, bit_b) = sliced[b];
+                    if self.lanes[lane_a].baud != self.lanes[lane_b].baud {
+                        continue;
+                    }
+                    let phase_a = self.lanes[lane_a].slicer.clock.phase_fraction();
+                    let phase_b = self.lanes[lane_b].slicer.clock.phase_fraction();
+                    if (phase_a - phase_b).abs() > 0.15 || bit_a == bit_b {
+                        continue;
+                    }
+                    // Disagreement at matched phase: the more reliable
+                    // slicer wins; the weaker adopts its answer.
+                    if self.lanes[lane_a].slicer.soft()
+                        > self.lanes[lane_b].slicer.soft()
+                    {
+                        sliced[b].1 = bit_a;
+                    } else {
+                        sliced[a].1 = bit_b;
+                    }
+                }
+            }
+            for (li, bit) in sliced {
+                let lane = &mut self.lanes[li];
                 if let Some(p) = lane.push_bit(bit, &mut self.diag) {
                     if let Some(pos) = out.iter().position(|q: &PocsagMessage| {
                         q.capcode == p.capcode
@@ -362,6 +414,9 @@ impl Lane {
                 self.word = 0;
                 self.word_bits = 0;
                 self.bits_in = 0;
+                // Sync acquired. The hunt tracker has followed the whole
+                // preamble (tau ~ 2000 samples at 48 kS/s), so its DC is
+                // settled and honest; it now freezes for the batch.
                 let errs = err_norm.min(err_inv);
                 match self.baud {
                     512 => diag.syncs_512 += 1,

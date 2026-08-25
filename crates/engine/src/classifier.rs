@@ -160,6 +160,11 @@ pub struct SignalClassifier {
     last_clocked: Option<ClockedFeatures>,
     noise_floor_dbfs: f32,
     noise_floor_initialized: bool,
+    /// Startup collection: running minimum and block count, so the floor is
+    /// seeded from the quietest of the first second rather than whatever was
+    /// on the air when the receiver opened.
+    init_min: f32,
+    init_blocks: u8,
     quiet_blocks: u8,
     last_p25_match: Option<(u16, u8, f32, usize, std::time::Instant)>,
     /// Strong P25 frame syncs whose NID was too damaged to BCH-correct. Two
@@ -232,6 +237,8 @@ impl SignalClassifier {
             last_clocked: None,
             noise_floor_dbfs: -95.0,
             noise_floor_initialized: false,
+            init_min: f32::INFINITY,
+            init_blocks: 0,
             quiet_blocks: 0,
             last_p25_match: None,
             last_p25_candidate: None,
@@ -308,6 +315,8 @@ impl SignalClassifier {
         self.samples_since_analysis = 0;
         self.last_clocked = None;
         self.noise_floor_initialized = false;
+        self.init_min = f32::INFINITY;
+        self.init_blocks = 0;
         self.quiet_blocks = 0;
         self.last_p25_match = None;
         self.last_p25_candidate = None;
@@ -333,6 +342,12 @@ impl SignalClassifier {
     /// De-emphasized, voice-band NBFM from the last processed IQ block.
     pub fn monitor_voice(&self) -> &[f32] {
         &self.demod.voice
+    }
+
+    /// High-passed discriminator envelope from the last processed IQ block:
+    /// the noise reference the audio gate keys on.
+    pub fn monitor_noise(&self) -> &[f32] {
+        &self.demod.noise
     }
 
     /// FM discriminator in hertz from the last processed IQ block.
@@ -381,16 +396,31 @@ impl SignalClassifier {
         let pwr_mean = pwr_sum / iq.len() as f32;
         let rf_dbfs = 10.0 * (pwr_mean + 1e-12).log10();
 
-        // Establish the reference from the actual receiver instead of spending
-        // minutes climbing from an arbitrary -95 dBFS. The discriminator
-        // quieting check below still permits a carrier present at startup.
+        // Track the noise reference with minimum-statistics semantics: fall
+        // onto lower readings promptly, rise under higher ones very slowly.
+        // The old single-rate EMA let a persistent carrier drag the floor up
+        // to within 3 dB of itself in ~10 minutes, collapsing its own SNR
+        // until every downstream gate treated it as noise. Startup takes the
+        // running MINIMUM of the first second so a burst at boot cannot pin
+        // the floor high.
         if !self.noise_floor_initialized {
-            self.noise_floor_dbfs = rf_dbfs;
-            self.noise_floor_initialized = true;
-        } else if rf_dbfs < self.noise_floor_dbfs + 3.0 {
-            self.noise_floor_dbfs += 0.05 * (rf_dbfs - self.noise_floor_dbfs);
+            self.init_min = self.init_min.min(rf_dbfs);
+            self.init_blocks += 1;
+            if self.init_blocks >= 25 {
+                self.noise_floor_dbfs = self.init_min - 3.0;
+                self.noise_floor_initialized = true;
+            } else {
+                // Provisional: well below anything seen, so real traffic is
+                // not suppressed while the reference is still collecting.
+                self.noise_floor_dbfs = self.init_min - 6.0;
+            }
         } else {
-            self.noise_floor_dbfs += 0.00005 * (rf_dbfs - self.noise_floor_dbfs);
+            let a = if rf_dbfs < self.noise_floor_dbfs {
+                0.25
+            } else {
+                0.002
+            };
+            self.noise_floor_dbfs += a * (rf_dbfs - self.noise_floor_dbfs);
         }
         let snr_db = (rf_dbfs - self.noise_floor_dbfs).max(0.0);
 
@@ -487,7 +517,11 @@ impl SignalClassifier {
         // Three decibels is below anything that could actually sync, so this
         // only skips channels with nothing on them — where the sweep used to
         // spend a quarter of the classifier's time finding patterns in noise.
-        let legacy_frames = self.legacy_digital.process(&self.disc_buf, snr_db > 3.0);
+        // Zero dB is the honest floor of a min-statistics reference: below it
+        // there is provably nothing above noise, so skipping saves the sweep
+        // from fitting names to noise. Above it, weak-but-real traffic gets
+        // its chance — the cadence qualification inside rejects false syncs.
+        let legacy_frames = self.legacy_digital.process(&self.disc_buf, snr_db > 0.0);
 
         let mean_offset_hz: f32 =
             self.disc_buf.iter().sum::<f32>() / self.disc_buf.len().max(1) as f32;
@@ -519,13 +553,26 @@ impl SignalClassifier {
         // An FM carrier quiets the discriminator. Filtered receiver noise can
         // have plenty of RF power but spans most of the 48 kHz channel and must
         // never be offered to protocol matchers as traffic.
-        let discriminator_quiet = peak_dev_hz < 14_000.0 && rms_dev_hz < 5_000.0;
-        if discriminator_quiet && rf_dbfs > -85.0 {
+        //
+        // Both gates are RELATIVE, not absolute. The fixed 5 kHz rms bound
+        // marked genuinely weak carriers inactive — at low SNR the
+        // discriminator is noise-dominated and routinely exceeds it — and
+        // -85 dBFS depends entirely on where the operator set the RF gain.
+        // What identifies a carrier at any level is quieting: its deviation
+        // spread collapses toward its tone amplitude while pure noise stays
+        // wide. `snr_db` against a min-statistics floor measures exactly that.
+        let discriminator_quiet = peak_dev_hz < 14_000.0
+            && (rms_dev_hz < 5_000.0 || (snr_db >= 3.0 && rms_dev_hz < 8_000.0));
+        // Absolute backstop for digital silence (ADC zero): no relative floor
+        // can reject true nothing.
+        let signal_present =
+            rf_dbfs > self.noise_floor_dbfs + 2.0 && rf_dbfs > -110.0;
+        if discriminator_quiet && signal_present {
             self.quiet_blocks = self.quiet_blocks.saturating_add(1).min(8);
         } else {
             self.quiet_blocks = 0;
         }
-        let active = rf_dbfs > -85.0
+        let active = signal_present
             && discriminator_quiet
             && (self.quiet_blocks >= 2 || rf_dbfs > -25.0 || snr_db >= 5.0);
 
@@ -1771,7 +1818,11 @@ fn signal_rms(samples: &[f32]) -> f32 {
 /// reason short APRS/SAME bursts were frequently missed.
 fn two_tone_fsk(samples: &[f32], f1: f32, f2: f32, baud: f32, fs: f32) -> bool {
     let symbol_len = (fs / baud).round().max(16.0) as usize;
-    if samples.len() < symbol_len * 8 || signal_rms(samples) < 300.0 {
+    // 300 Hz used to be the sole weak-signal gate; with the tonal-dominance
+    // test below already requiring sustained mark/space separation, a lower
+    // absolute floor lets marginal-but-real packets through while noise
+    // still fails the consistency check.
+    if samples.len() < symbol_len * 8 || signal_rms(samples) < 200.0 {
         return false;
     }
     for offset in [0, symbol_len / 2] {

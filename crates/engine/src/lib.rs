@@ -16,6 +16,7 @@ pub mod dmr;
 pub mod flex;
 pub mod legacy_digital;
 pub mod leveler;
+pub mod autonotch;
 pub mod ltr;
 pub mod mdc;
 pub mod nbfm;

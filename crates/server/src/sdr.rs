@@ -12,6 +12,9 @@ use scannerd_engine::p25::C4FM_BANDWIDTH_HZ;
 use scannerd_engine::p25::conventional::{P25ChannelReceiver, P25Spec};
 use scannerd_engine::pocsag::PocsagDecoder;
 use scannerd_engine::{CallEvent, ToneCode};
+use scannerd_engine::leveler::Leveler;
+use scannerd_engine::noisegate::NoiseGate;
+use scannerd_engine::autonotch::AutoNotch;
 use scannerd_engine::nbfm::NbfmDemod;
 use scannerd_engine::{ClassificationResult, DecodeEvent, SignalClassifier};
 use scannerd_radio::{Cmd, Device, DeviceConfig, Role, device};
@@ -363,6 +366,9 @@ pub enum SdrEvent {
         max_db: f32,
         /// Power in dB for each FFT bin (size = fft_size).
         pwr: Vec<f32>,
+        /// Slowly-decaying max-hold trace, for a "what has been there" line.
+        #[serde(default)]
+        max_hold: Vec<f32>,
         peak_iq: f32,
         inspect_hz: f64,
         classification: Option<ClassificationResult>,
@@ -479,6 +485,18 @@ enum SdrCmd {
     Spurs(Vec<f64>),
     Ppm(f64),
     Zoom(f64),
+    /// Display averaging mode for the spectrum (weak-signal aid).
+    Avg(AvgMode),
+}
+
+/// Frame-to-frame integration of the displayed spectrum.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AvgMode {
+    Off,
+    /// ~0.5 s time constant: steady carriers emerge from the flicker.
+    Slow,
+    /// ~2 s: for beacons and marginal carriers.
+    Deeper,
 }
 
 impl Drop for SdrRuntime {
@@ -531,6 +549,13 @@ impl SdrRuntime {
         self.cmd_tx
             .send(SdrCmd::Zoom(zoom))
             .map_err(|e| anyhow::anyhow!("send zoom: {e}"))
+    }
+
+    /// Display averaging mode (weak-signal spectrum aid).
+    pub fn set_avg(&self, mode: AvgMode) -> Result<()> {
+        self.cmd_tx
+            .send(SdrCmd::Avg(mode))
+            .map_err(|e| anyhow::anyhow!("send avg: {e}"))
     }
 
     /// Crystal correction, in parts per million.
@@ -1402,22 +1427,35 @@ fn find_peaks(
     center_hz: f64,
     rate_hz: f64,
     spur_offsets_hz: &[f64],
-    sorted_scratch: &mut Vec<f32>,
+    floor: &[f32],
     history: &DecodeHistory,
 ) -> Vec<PeakMarker> {
     let mut peaks = Vec::new();
     let n = smoothed.len();
-    if n < 16 {
+    if n < 16 || floor.len() != n {
         return peaks;
     }
-    // The caller shares one sorted copy across the per-frame measurements;
-    // channel_level has filled it by the time this runs.
-    if sorted_scratch.len() != n {
-        sorted_scratch.clear();
-        sorted_scratch.extend_from_slice(smoothed);
-        sorted_scratch.sort_unstable_by(f32::total_cmp);
-    }
-    let noise_floor = sorted_scratch[(n / 5).min(n - 1)];
+    // The per-bin floor is temporally smoothed, so both the reference and the
+    // bin-to-bin spread measured against it are stable. The threshold adapts
+    // to how noisy the band actually is instead of a fixed +8 dB that either
+    // chases noise spikes on a quiet band or misses marginal carriers on a
+    // busy one.
+    let diffs: Vec<f32> = smoothed
+        .iter()
+        .zip(floor)
+        .map(|(&s, &f)| (s - f).max(0.0))
+        .collect();
+    let mean_diff = diffs.iter().sum::<f32>() / n as f32;
+    let sigma = (diffs
+        .iter()
+        .map(|d| {
+            let e = *d - mean_diff;
+            e * e
+        })
+        .sum::<f32>()
+        / n as f32)
+        .sqrt();
+    let threshold_db = (mean_diff + 3.0 * sigma).clamp(6.0, 20.0);
 
     let bin_hz = rate_hz / n as f64;
 
@@ -1433,14 +1471,14 @@ fn find_peaks(
             continue;
         }
         let p = smoothed[i];
-        if p > noise_floor + 8.0
+        if p > floor[i] + threshold_db
             && p > smoothed[i - 1]
             && p >= smoothed[i - 2]
             && p > smoothed[i + 1]
             && p >= smoothed[i + 2]
         {
             let freq_hz = center_hz - rate_hz * 0.5 + (i as f64 + 0.5) * bin_hz;
-            let snr_db = p - noise_floor;
+            let snr_db = p - floor[i];
             peaks.push(PeakMarker {
                 freq_hz,
                 pwr_db: p,
@@ -1449,15 +1487,19 @@ fn find_peaks(
             });
         }
     }
+    // Strongest first, but the dedupe window only suppresses a peak when a
+    // STRONGER neighbour is genuinely adjacent — weak signals in the same
+    // window used to be culled outright by strongest-wins.
     peaks.sort_by(|a, b| b.pwr_db.total_cmp(&a.pwr_db));
     let mut filtered: Vec<PeakMarker> = Vec::new();
     for p in peaks {
-        if !filtered
-            .iter()
-            .any(|q| (q.freq_hz - p.freq_hz).abs() < 18_000.0)
-        {
+        let dup = filtered.iter().any(|q| {
+            (q.freq_hz - p.freq_hz).abs() < 18_000.0
+                && q.snr_db > p.snr_db + 10.0
+        });
+        if !dup {
             filtered.push(p);
-            if filtered.len() >= 6 {
+            if filtered.len() >= 12 {
                 break;
             }
         }
@@ -1571,6 +1613,24 @@ fn run_sdr(
     // channel_level, carrier_offset_hz and find_peaks. Each used to clone and
     // sort its own at 25 fps.
     let mut sorted_scratch: Vec<f32> = Vec::with_capacity(fft_size);
+    // Per-bin minimum-statistics noise floor. Falls onto noise promptly and
+    // rises only slowly under traffic, so a persistent carrier never becomes
+    // its own reference. This is the canonical floor: peak detection reads it
+    // rather than the jittery single-frame percentile.
+    let mut bin_floor = scannerd_dsp::NoiseFloor::new();
+    // Display integration state (weak-signal aid): exponentially averaged
+    // trace and a slowly-decaying max-hold.
+    let mut avg_mode = AvgMode::Off;
+    let mut averaged: Vec<f32> = Vec::with_capacity(fft_size);
+    let mut max_hold: Vec<f32> = Vec::with_capacity(fft_size);
+    // Weak-signal audio conditioning on the monitor path: spectral noise
+    // gate (opens when the high-passed discriminator energy drops, i.e. the
+    // channel is quieting) plus hang leveler, so static between words stops
+    // burying a marginal carrier. Always on for NFM/PACKET/AUTO — it is the
+    // listening equivalent of the decoders' noise gates.
+    let mut mon_gate = NoiseGate::new(8_000.0);
+    let mut mon_leveler = Leveler::new(8_000.0);
+    let mut mon_notch = AutoNotch::new(8_000.0);
     // Frequencies that have actually decoded something. Peak markers on the
     // spectrum get their protocol label from here.
     let mut decode_history = DecodeHistory::new();
@@ -1885,6 +1945,9 @@ fn run_sdr(
                         s.max_freq_hz = inspect_hz + shown / 2.0;
                         let _ = events.send(SdrEvent::Status(s.clone()));
                     }
+                }
+                SdrCmd::Avg(mode) => {
+                    avg_mode = mode;
                 }
                 SdrCmd::Ppm(ppm) => {
                     if let Some(ref dev) = dev_opt {
@@ -2301,7 +2364,7 @@ fn run_sdr(
                 // else is residual error, measured on the previous block.
                 // Gating on SNR keeps an empty channel from integrating noise
                 // into an offset.
-                afc.observe(last_center_offset_hz, last_snr_db > 6.0);
+                afc.observe(last_center_offset_hz, last_snr_db > 2.5);
                 let corr = afc.correction_hz();
                 if (corr - afc_last_reported).abs() >= 50.0 {
                     inspect_chain.set_offset(
@@ -2315,7 +2378,7 @@ fn run_sdr(
                 // same discriminator, and the voice receivers extract their
                 // own channel from a fixed offset. Fold the correction into
                 // the chain here too.
-                afc.observe(last_center_offset_hz, last_snr_db > 6.0);
+                afc.observe(last_center_offset_hz, last_snr_db > 2.5);
                 let corr = afc.correction_hz();
                 if (corr - afc_last_reported).abs() >= 50.0 {
                     inspect_chain.set_offset(
@@ -2327,7 +2390,15 @@ fn run_sdr(
                 }
                 let c = classifier.process(&inspect_iq, inspect_hz);
                 last_center_offset_hz = c.center_offset_hz;
-                audio_buf.extend_from_slice(classifier.monitor_voice());
+                // Weak-signal listening: gate static, level what survives.
+                {
+                    let mut voice: Vec<f32> =
+                        classifier.monitor_voice().to_vec();
+                    mon_notch.process(&mut voice);
+                    mon_gate.process(&mut voice, classifier.monitor_noise());
+                    mon_leveler.process(&mut voice);
+                    audio_buf.extend_from_slice(&voice);
+                }
                 {
                     let mut capture = capture.lock().expect("SDR capture");
                     capture.append(
@@ -2380,7 +2451,12 @@ fn run_sdr(
                     } else if dmr.in_call() {
                         audio_buf.extend_from_slice(dmr.audio());
                     } else {
-                        audio_buf.extend_from_slice(classifier.monitor_voice());
+                        let mut voice: Vec<f32> =
+                            classifier.monitor_voice().to_vec();
+                        mon_notch.process(&mut voice);
+                        mon_gate.process(&mut voice, classifier.monitor_noise());
+                        mon_leveler.process(&mut voice);
+                        audio_buf.extend_from_slice(&voice);
                     }
                 }
                 if let Demod::Auto {
@@ -2815,13 +2891,16 @@ fn run_sdr(
             let guard_hz = (shown_rate / shown_buf.len().max(1) as f64 * 3.0).max(4_000.0);
             notch_display(&mut shown_buf, shown_rate, &spurs, guard_hz);
             let shown: &[f32] = &shown_buf;
-            // The shared sorted copy is invalidated whenever the window moves
-            // or changes size; each measurement below fills it on first use.
-            if sorted_scratch.len() != shown.len() {
-                sorted_scratch.clear();
-                sorted_scratch.extend_from_slice(shown);
-                sorted_scratch.sort_unstable_by(f32::total_cmp);
-            }
+            // Update the per-bin floor from this frame before anything reads it.
+            let floor = bin_floor.update(shown);
+            // The shared sorted copy backs every per-frame measurement below.
+            // It must reflect THIS frame: a stale copy made the noise floor —
+            // and with it every SNR, peak threshold and AFC decision — a
+            // snapshot from whenever the window last changed. The floor
+            // itself is smoothed over time by `bin_floor` instead.
+            sorted_scratch.clear();
+            sorted_scratch.extend_from_slice(shown);
+            sorted_scratch.sort_unstable_by(f32::total_cmp);
 
             let mut min_db = f32::INFINITY;
             let mut max_db = f32::NEG_INFINITY;
@@ -2850,7 +2929,7 @@ fn run_sdr(
             );
             last_snr_db = channel_dbfs - noise_dbfs;
             // Only meaningful when something is actually there to measure.
-            if channel_dbfs - noise_dbfs > 6.0
+            if channel_dbfs - noise_dbfs > 3.0
                 && let Some(err) = carrier_offset_hz(
                     shown,
                     shown_rate,
@@ -2863,7 +2942,7 @@ fn run_sdr(
                     Some(prev) => prev + (err - prev) * 0.15,
                     None => err,
                 });
-            } else if last_snr_db < 3.0 {
+            } else if last_snr_db < 1.5 {
                 freq_error_hz = None;
             }
             let peaks = find_peaks(
@@ -2871,10 +2950,41 @@ fn run_sdr(
                 tuned_freq,
                 shown_rate,
                 &spurs,
-                &mut sorted_scratch,
+                floor,
                 &decode_history,
             );
             decode_history.prune();
+            // Frame-to-frame integration for the display: exponential per-bin
+            // averaging pulls steady weak carriers out of the flicker, and
+            // the max-hold trace keeps a fleeting signal visible. Driven by
+            // the AVERAGE softkey (off / 1 s / 4 s); max-hold always runs and
+            // decays slowly so it never lies about the present.
+            {
+                let k = match avg_mode {
+                    AvgMode::Off => None,
+                    AvgMode::Slow => Some(0.08),   // ~0.5 s at 25 fps
+                    AvgMode::Deeper => Some(0.02), // ~2 s
+                };
+                if averaged.len() != shown.len() {
+                    averaged.clear();
+                    averaged.extend_from_slice(shown);
+                } else if let Some(k) = k {
+                    for (a, &s) in averaged.iter_mut().zip(shown) {
+                        *a += (s - *a) * k;
+                    }
+                } else {
+                    averaged.copy_from_slice(shown);
+                }
+                if max_hold.len() != shown.len() {
+                    max_hold.clear();
+                    max_hold.extend_from_slice(shown);
+                } else {
+                    for (m, &s) in max_hold.iter_mut().zip(shown) {
+                        let decayed = *m - 0.15;
+                        *m = if s > decayed { s } else { decayed };
+                    }
+                }
+            }
             let mut classification = classification;
             // WFM, P25 and DMR bypass the classifier, so its own measurements
             // are left at their defaults and the signal readout showed zeros.
@@ -2919,7 +3029,12 @@ fn run_sdr(
                 rate_hz: shown_rate,
                 min_db,
                 max_db,
-                pwr: shown.to_vec(),
+                pwr: if matches!(avg_mode, AvgMode::Off) {
+                    shown.to_vec()
+                } else {
+                    averaged.clone()
+                },
+                max_hold: max_hold.clone(),
                 peak_iq,
                 inspect_hz,
                 classification: Some(classification),

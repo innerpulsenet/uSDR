@@ -228,6 +228,7 @@ async fn main() -> Result<()> {
         .route("/api/sdr/spurs", post(post_sdr_spurs))
         .route("/api/sdr/ppm", post(post_sdr_ppm))
         .route("/api/sdr/zoom", post(post_sdr_zoom))
+        .route("/api/sdr/avg", post(post_sdr_avg))
         .route("/api/sdr/calibrate", post(post_sdr_calibrate))
         .route("/api/sdr/status", get(get_sdr_status))
         .route("/api/sdr/calls", get(get_sdr_calls))
@@ -472,6 +473,32 @@ async fn post_sdr_spurs(
 #[derive(Deserialize)]
 struct SdrZoomReq {
     zoom: f64,
+}
+
+#[derive(Deserialize)]
+struct SdrAvgReq {
+    /// "off", "slow" (~0.5 s), or "deep" (~2 s).
+    mode: String,
+}
+
+async fn post_sdr_avg(
+    State(st): State<Arc<AppState>>,
+    Json(req): Json<SdrAvgReq>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let mode = match req.mode.as_str() {
+        "off" => sdr::AvgMode::Off,
+        "slow" => sdr::AvgMode::Slow,
+        "deep" => sdr::AvgMode::Deeper,
+        other => {
+            return Err(ApiError::BadRequest(format!(
+                "avg mode must be off, slow, or deep — got {other}"
+            )))
+        }
+    };
+    if let Some(sdr) = st.sdr.lock().expect("sdr").as_ref() {
+        sdr.set_avg(mode)?;
+    }
+    Ok(Json(serde_json::json!({ "ok": true, "mode": req.mode })))
 }
 
 async fn post_sdr_zoom(

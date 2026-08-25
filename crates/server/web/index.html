@@ -570,6 +570,7 @@
       <button type="button" class="softkey on" id="keyPeak">PEAK</button>
       <button type="button" class="softkey on" id="keyAuto">AUTO RNG</button>
       <button type="button" class="softkey" id="keyPalette">PALETTE</button>
+      <button type="button" class="softkey" id="keyAvg" title="Frame-to-frame integration: steady weak carriers emerge from the flicker">AVG OFF</button>
       <button type="button" class="softkey" id="keyFill">FILL</button>
       <button type="button" class="softkey" id="keyCenter">CENTER</button>
       <button type="button" class="softkey" id="keyZoomOut" title="Zoom out">ZOOM −</button>
@@ -1367,6 +1368,7 @@ let sdrPeakHold = true;
 let sdrFillTrace = true;
 let sdrPeakPwr = [];
 let sdrLastPwr = [];
+let sdrLastMaxHold = [];
 let sdrStatus = null;
 let sdrColorLut = null;
 let sdrSpecCanvas = null, sdrSpecCtx = null;
@@ -1631,6 +1633,19 @@ function drawSdrSpectrum(pwr) {
 
   const N = pwr.length;
   const px = (i) => (i / (N - 1)) * W;
+
+  // Max-hold: what has been there recently, drawn faintly under everything.
+  // Decays server-side, so it never claims a signal that is long gone.
+  if (sdrLastMaxHold && sdrLastMaxHold.length === N) {
+    ctx.strokeStyle = 'rgba(255,223,106,0.35)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (let i = 0; i < N; i++) {
+      const x = px(i), y = yForDb(sdrLastMaxHold[i]);
+      i ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
+    }
+    ctx.stroke();
+  }
 
   // peak hold, drawn under the live trace
   if (sdrPeakHold) {
@@ -2282,6 +2297,24 @@ function setupControls() {
     $('keyPalette').textContent = sdrPalette.toUpperCase();
   });
   $('keyPalette').textContent = sdrPalette.toUpperCase();
+  // AVERAGE: cycle off → slow → deep. Integration is server-side; the trace
+  // arrives pre-averaged in the fft frame.
+  let avgIdx = 0;
+  const AVG_MODES = [
+    ['off', 'AVG OFF'],
+    ['slow', 'AVG 0.5s'],
+    ['deep', 'AVG 2s'],
+  ];
+  $('keyAvg').addEventListener('click', () => {
+    avgIdx = (avgIdx + 1) % AVG_MODES.length;
+    const [mode, label] = AVG_MODES[avgIdx];
+    $('keyAvg').textContent = label;
+    $('keyAvg').classList.toggle('on', mode !== 'off');
+    fetch('/api/sdr/avg', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mode }),
+    }).catch(e => { $('err').textContent = 'avg: ' + e; });
+  });
   // Put the span back around the frequency being received.
   $('keyCenter').addEventListener('click', () => centreSpanHz(sdrInspectHz));
 
@@ -2372,6 +2405,7 @@ function paintSdrFft(m) {
   renderFreq(sdrInspectHz);
   if (sdrAutoRange) computeAutoRange(m.pwr);
   sdrLastPwr = m.pwr;
+  sdrLastMaxHold = m.maxHold || [];
   syncWaterfallAxis(m.centerHz, m.rateHz);
   drawSpecScale();
   drawSdrSpectrum(m.pwr);

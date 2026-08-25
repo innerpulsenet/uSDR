@@ -125,6 +125,13 @@ impl TimingLoop {
         self.elapsed >= self.period * 0.5
     }
 
+    /// Position within the current symbol, 0..1. Exposed so sibling lanes in
+    /// a decoder bank can combine their evidence at matched phases: two lanes
+    /// whose clocks agree within ~15% are seeing the same bits and may vote.
+    pub fn phase_fraction(&self) -> f64 {
+        (self.elapsed / self.period).clamp(0.0, 1.0)
+    }
+
     /// Advance one input sample. `true` means a symbol boundary was reached
     /// and the caller should slice now.
     pub fn tick(&mut self) -> bool {

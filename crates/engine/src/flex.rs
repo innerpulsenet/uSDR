@@ -359,6 +359,12 @@ impl SymbolClock {
             let magnitude = average.abs();
             if magnitude > self.outer * 0.5 {
                 self.outer += 0.03 * (magnitude - self.outer);
+            } else if magnitude < self.outer * 0.25 {
+                // Decay the reference back down when the band goes quiet.
+                // Without this one noisy peak during a previous hunt ratchets
+                // `outer` up forever, and the 2/3 threshold then swallows the
+                // outer levels of every later weak frame.
+                self.outer *= 0.995;
             }
         }
         let threshold = (self.outer * 0.667).max(1.0);
