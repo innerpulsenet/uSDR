@@ -202,11 +202,13 @@
   .meter-mask {
     position: absolute; top: 0; bottom: 0; right: 0; left: 0;
     background: #071016;
-    transition: left 90ms linear;
+    /* transform, not left: keeps the animation compositor-side instead of
+       triggering layout every frame. */
+    transition: transform 90ms linear;
   }
   .meter-peak {
     position: absolute; top: 0; bottom: 0; width: 2px; background: #ffdf6a; opacity: 0.9;
-    transition: left 140ms linear;
+    transition: transform 140ms linear;
   }
   .meter-num {
     font-size: 10px; color: var(--dim); margin-top: 2px;
@@ -831,7 +833,15 @@ function clearSdrClassLog() {
   if (el) el.innerHTML = '<div class="data-empty" style="padding:6px; color:#4a5b73; font-size:10px;">Log cleared. Waiting for new transmissions...</div>';
 }
 
+let sdrClassLastSig = '';
 function updateSdrClassification(c, inspectHz) {
+  // Same-value DOM writes still dirty style, and this runs at 25 fps — most
+  // frames are byte-identical to the last. A cheap signature over everything
+  // this function renders skips the whole block when nothing moved (the
+  // idiom drawSpecScale uses).
+  const sig = JSON.stringify([c, inspectHz]);
+  if (sig === sdrClassLastSig) return;
+  sdrClassLastSig = sig;
   const now = Date.now();
   const isRealProtocol = c.protocol && c.protocol !== 'Idle / Noise' && c.protocol !== 'Noise';
 
@@ -1041,7 +1051,9 @@ function onSdrDecode(m) {
   // A stable id per frame: rows are re-rendered constantly and an expanded
   // one has to stay open on the frame it was opened on, not on a position.
   sdrDecodeUid += 1;
-  sdrDecodeLogData.unshift({ uid: sdrDecodeUid, t: Date.now(), freqHz: m.inspectHz, ...m.event });
+  // Format the timestamp once at insertion: `t` never changes, and the render
+  // path used to re-run toLocaleTimeString for all 200 rows ten times a second.
+  sdrDecodeLogData.unshift({ uid: sdrDecodeUid, t: Date.now(), timeStr: new Date().toLocaleTimeString(), freqHz: m.inspectHz, ...m.event });
   if (sdrDecodeLogData.length > 200) {
     const dropped = sdrDecodeLogData.pop();
     if (dropped) {
@@ -1240,7 +1252,7 @@ function renderSdrDecodeLog() {
         <div onclick="toggleDecodeRow(${e.uid})" style="cursor:pointer">
           <div style="display:flex; gap:8px; align-items:baseline; min-width:0">
             <span style="color:#64748b; flex:none; width:9px">${open ? '▾' : '▸'}</span>
-            <span style="color:#64748b; flex:none">${new Date(e.t).toLocaleTimeString()}</span>
+            <span style="color:#64748b; flex:none">${e.timeStr || new Date(e.t).toLocaleTimeString()}</span>
             <button type="button" onclick="event.stopPropagation(); inspectSdrHz(${Number(e.freqHz)})" style="padding:0; border:0; background:none; color:#38bdf8; font:inherit; flex:none">${(Number(e.freqHz) / 1e6).toFixed(4)} MHz</button>
             <span style="color:${colour}; font-weight:700; flex:none">[${esc(e.protocol)}]</span>
             <span style="margin-left:auto; color:#3d4a58; flex:none; font-size:10px">${fieldCount} fields</span>
@@ -1366,6 +1378,32 @@ let sdrMaxDb = -10;
 let sdrAutoRange = true;
 let sdrPeakHold = true;
 let sdrFillTrace = true;
+// Cached canvas gradients — they depend only on canvas height, which changes
+// only on resize, yet both were rebuilt (and hover repaints re-created them)
+// every frame.
+let specFillGradient = null;
+let specGradHeight = 0;
+function spectrumGradient(ctx, h) {
+  if (!specFillGradient || specGradHeight !== h) {
+    const g = ctx.createLinearGradient(0, 0, 0, h);
+    g.addColorStop(0, 'rgba(196,240,252,0.92)');
+    g.addColorStop(0.45, 'rgba(96,190,232,0.55)');
+    g.addColorStop(1, 'rgba(24,86,140,0.18)');
+    specFillGradient = g;
+    specGradHeight = h;
+  }
+  return specFillGradient;
+}
+// measureText memo for the stable per-peak label strings.
+const textWidthMemo = new Map();
+function labelWidth(ctx, text) {
+  let w = textWidthMemo.get(text);
+  if (w === undefined) {
+    w = ctx.measureText(text).width;
+    textWidthMemo.set(text, w);
+  }
+  return w;
+}
 let sdrPeakPwr = [];
 let sdrLastPwr = [];
 let sdrLastMaxHold = [];
@@ -1669,11 +1707,7 @@ function drawSdrSpectrum(pwr) {
   ctx.lineTo(W, H);
   ctx.closePath();
   if (sdrFillTrace) {
-    const g = ctx.createLinearGradient(0, 0, 0, H);
-    g.addColorStop(0, 'rgba(196,240,252,0.92)');
-    g.addColorStop(0.45, 'rgba(96,190,232,0.55)');
-    g.addColorStop(1, 'rgba(24,86,140,0.18)');
-    ctx.fillStyle = g;
+    ctx.fillStyle = spectrumGradient(ctx, H);
     ctx.fill();
   }
   ctx.strokeStyle = '#e2f6ff';
@@ -1702,7 +1736,7 @@ function drawSdrSpectrum(pwr) {
     ctx.closePath(); ctx.fill();
     if (p.label) {
       const text = `${p.label} ${fmtMhz(p.freqHz, 3)}`;
-      const tw = ctx.measureText(text).width;
+      const tw = labelWidth(ctx, text);
       let tx = x + 6;
       if (tx + tw > W - 2) tx = x - tw - 6;
       const ty = H - 8;
@@ -1903,7 +1937,9 @@ let scopeLastKind = null;
 /// it is not showing.
 function setScopeChrome(kind) {
   const title = $('scopeTitle');
-  if (title) {
+  if (title && title.textContent !== (kind === 'symbols' ? 'SYMBOL SCOPE'
+      : kind === 'mpx' ? 'FM MULTIPLEX'
+      : 'AUDIO SCOPE')) {
     title.textContent = kind === 'symbols' ? 'SYMBOL SCOPE'
       : kind === 'mpx' ? 'FM MULTIPLEX'
       : 'AUDIO SCOPE';
@@ -2007,9 +2043,13 @@ function drawSymbolScope(scope, rateHz, symbolRate) {
   }
   if ($('scopeLevel')) $('scopeLevel').textContent = 'SYM ' + total;
   if ($('scopeTime')) $('scopeTime').textContent = (symbolRate/1000).toFixed(1) + ' kBd \u00b7 ' + sps.toFixed(1) + ' sps';
+  // The symbol axis is static; only rebuild it when the instrument changed
+  // away from symbols (drawAudioScope owns the axis while in audio mode).
   const ax = $('scopeAxis');
-  if (ax) ax.innerHTML = '<span>eye \u00b7 2 symbols</span><span></span><span></span><span></span><span></span>';
-  scopeAxisRate = 0;
+  if (ax && scopeAxisRate !== 'symbols') {
+    ax.innerHTML = '<span>eye \u00b7 2 symbols</span><span></span><span></span><span></span><span></span>';
+    scopeAxisRate = 'symbols';
+  }
 }
 
 function drawAudioScope(scope, rateHz) {
@@ -2107,11 +2147,16 @@ function drawAudioScope(scope, rateHz) {
     }
     sc.lineTo(SW, specH);
     sc.closePath();
-    const g = sc.createLinearGradient(0, 0, 0, specH);
-    g.addColorStop(0, 'rgba(180,240,255,0.9)');
-    g.addColorStop(0.5, 'rgba(60,170,235,0.6)');
-    g.addColorStop(1, 'rgba(10,60,120,0.2)');
-    sc.fillStyle = g;
+    // Same height-only dependence as the spectrum fill: cache per canvas.
+    if (!window.scopeSpecGradient || window.scopeSpecGradH !== specH) {
+      const g = sc.createLinearGradient(0, 0, 0, specH);
+      g.addColorStop(0, 'rgba(180,240,255,0.9)');
+      g.addColorStop(0.5, 'rgba(60,170,235,0.6)');
+      g.addColorStop(1, 'rgba(10,60,120,0.2)');
+      window.scopeSpecGradient = g;
+      window.scopeSpecGradH = specH;
+    }
+    sc.fillStyle = window.scopeSpecGradient;
     sc.fill();
     sc.strokeStyle = '#cfeeff';
     sc.lineWidth = 1;
@@ -2492,14 +2537,14 @@ function updateMeter(c, peakIq, channelDbfs, noiseDbfs) {
   const snr = meterSnrAvg;
   const pct = rf === null ? 0 : meterFrac(rf) * 100;
   const mask = $('meterMask');
-  if (mask) mask.style.left = pct + '%';
+  if (mask) mask.style.transform = `translateX(${pct}%)`;
   // Peak hold: jumps to a new maximum at once, then decays back, which is
   // what the marker is for — catching a transient the needle smoothed over.
   const peak = $('meterPeak');
   if (peak) {
     const clip = peakIq != null && peakIq > 0.98;
     meterPeakPct = pct > meterPeakPct ? pct : Math.max(pct, meterPeakPct - 0.6);
-    peak.style.left = meterPeakPct + '%';
+    peak.style.transform = `translateX(${meterPeakPct}%)`;
     peak.style.background = clip ? '#ff5a4a' : '#ffdf6a';
   }
   const num = $('meterNum');
