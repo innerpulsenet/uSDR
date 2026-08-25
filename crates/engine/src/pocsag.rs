@@ -150,11 +150,11 @@ impl BitSlicer {
             self.delay -= 1;
             return None;
         }
-        // Adaptive DC tracking. Fast while hunting; during a locked batch a
-        // much slower trace still follows real drift (residual tuner error,
-        // discriminator bias) without letting data transitions bias the
-        // slice point — the old hunt-only freeze let a mid-batch drift walk
-        // the decision threshold exactly when SNR margin was thinnest.
+        // Adaptive DC tracking, while hunting. The tracker settles over the
+        // whole preamble and then freezes: a locked-state trace was tried and
+        // rejected — co-channel burst energy biased the slice point and the
+        // mixed-baud tests invented tone-only pages. If you are here to add
+        // locked-state tracking back, re-run those tests first.
         if hunting {
             self.dc += 0.0005 * (x - self.dc);
         }
@@ -224,6 +224,10 @@ struct Lane {
 
 pub struct PocsagDecoder {
     lanes: Vec<Lane>,
+    /// Scratch for the per-sample slice results. Kept at decoder level so
+    /// the per-sample loop does not allocate: a fresh `Vec` per sample was
+    /// ~25 k short-lived allocations/s across the server bank.
+    sliced_scratch: Vec<(usize, bool)>,
     pub diag: PocsagDiagnostics,
 }
 
@@ -252,6 +256,7 @@ impl PocsagDecoder {
                     .collect();
                 Self {
                     lanes,
+                    sliced_scratch: Vec::new(),
                     diag: PocsagDiagnostics::default(),
                 }
             }
@@ -282,6 +287,7 @@ impl PocsagDecoder {
         }
         Self {
             lanes,
+            sliced_scratch: Vec::new(),
             diag: PocsagDiagnostics::default(),
         }
     }
@@ -298,6 +304,7 @@ impl PocsagDecoder {
     pub fn idle() -> Self {
         Self {
             lanes: Vec::new(),
+            sliced_scratch: Vec::new(),
             diag: PocsagDiagnostics::default(),
         }
     }
@@ -331,7 +338,8 @@ impl PocsagDecoder {
         for &x in disc_hz {
             // First pass: every lane slices this sample. Record which lanes
             // produced a bit so pairs can be cross-examined.
-            let mut sliced: Vec<(usize, bool)> = Vec::new();
+            self.sliced_scratch.clear();
+            let sliced = &mut self.sliced_scratch;
             for (li, lane) in self.lanes.iter_mut().enumerate() {
                 let hunting = lane.word == usize::MAX;
                 if let Some(bit) = lane.slicer.push(x, hunting) {
@@ -366,7 +374,7 @@ impl PocsagDecoder {
                     }
                 }
             }
-            for (li, bit) in sliced {
+            for &(li, bit) in &self.sliced_scratch {
                 let lane = &mut self.lanes[li];
                 if let Some(p) = lane.push_bit(bit, &mut self.diag) {
                     if let Some(pos) = out.iter().position(|q: &PocsagMessage| {

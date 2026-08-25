@@ -291,6 +291,8 @@ pub struct SdrStatus {
 #[serde(rename_all = "camelCase")]
 pub struct PeakMarker {
     pub freq_hz: f64,
+    /// Internal only (sort + dedupe); the client never renders it.
+    #[serde(skip_serializing)]
     pub pwr_db: f32,
     pub snr_db: f32,
     /// Protocol last decoded at this frequency, if any. Stamped from the
@@ -362,8 +364,8 @@ pub enum SdrEvent {
     Fft {
         center_hz: f64,
         rate_hz: f64,
-        min_db: f32,
-        max_db: f32,
+        // min/max dB are deliberately not shipped: the client computes its own
+        // auto range, so they were pure dead weight at 25 fps.
         /// Power in dB for each FFT bin (size = fft_size).
         pwr: Vec<f32>,
         /// Slowly-decaying max-hold trace, for a "what has been there" line.
@@ -1675,6 +1677,9 @@ fn run_sdr(
     let _ = events.send(SdrEvent::Status(status.lock().unwrap().clone()));
     let mut inspect_iq = Vec::new();
     let mut notch_scratch: Vec<num_complex::Complex32> = Vec::new();
+    // Cached channel notches: (spur offsets the notches were built for, NCOs).
+    // Rebuilt only when the spur geometry or sample rate changes.
+    let mut notch_cache: Option<(Vec<f64>, Vec<ChannelNotch>)> = None;
     // Instantaneous frequency of the inspected channel, for the eye and
     // constellation displays. The protocol receivers keep their own symbol
     // recovery private, and this only has to be good enough to look at.
@@ -2334,13 +2339,30 @@ fn run_sdr(
         // A spur inside the channel corrupts the decode, not just the picture.
         // The inspect chain has already mixed the channel to DC, so a spur at
         // display offset `s` lands at `s - channel_offset` here.
+        //
+        // Notches are cached per (offset, rate): retuning rebuilds them anyway,
+        // and steady-state operation would otherwise redesign the NCOs and
+        // one-pole coefficient every block for an unchanged spur geometry.
         if !spurs.is_empty() && !inspect_iq.is_empty() {
             let channel_off = inspect_hz - current_freq;
             let half_bw = f64::from(current_mode.bandwidth_hz()) / 2.0;
-            for &spur in &spurs {
-                let rel = spur - channel_off;
-                if rel.abs() < half_bw && rel.abs() > 100.0 {
-                    let mut notch = ChannelNotch::new(rel, fs_chain, 4_000.0);
+            let mut wanted: Vec<f64> = spurs
+                .iter()
+                .map(|&spur| spur - channel_off)
+                .filter(|rel| rel.abs() < half_bw && rel.abs() > 100.0)
+                .collect();
+            wanted.sort_by(f64::total_cmp);
+            if notch_cache.as_ref().map(|(key, _)| key != &wanted).unwrap_or(true) {
+                notch_cache = Some((
+                    wanted.clone(),
+                    wanted
+                        .iter()
+                        .map(|&rel| ChannelNotch::new(rel, fs_chain, 4_000.0))
+                        .collect::<Vec<_>>(),
+                ));
+            }
+            if let Some((_, notches)) = &mut notch_cache {
+                for notch in notches.iter_mut() {
                     notch.process(&mut inspect_iq, &mut notch_scratch);
                 }
             }
@@ -2364,20 +2386,6 @@ fn run_sdr(
                 // else is residual error, measured on the previous block.
                 // Gating on SNR keeps an empty channel from integrating noise
                 // into an offset.
-                afc.observe(last_center_offset_hz, last_snr_db > 2.5);
-                let corr = afc.correction_hz();
-                if (corr - afc_last_reported).abs() >= 50.0 {
-                    inspect_chain.set_offset(
-                        inspect_hz - current_freq
-                            - lo_offset_for(current_rate, lo_offset, current_mode)
-                            + f64::from(corr),
-                    );
-                    afc_last_reported = corr;
-                }
-                // AUTO needs the same steering: its packet decoders read the
-                // same discriminator, and the voice receivers extract their
-                // own channel from a fixed offset. Fold the correction into
-                // the chain here too.
                 afc.observe(last_center_offset_hz, last_snr_db > 2.5);
                 let corr = afc.correction_hz();
                 if (corr - afc_last_reported).abs() >= 50.0 {
@@ -2412,6 +2420,20 @@ fn run_sdr(
                 c
             }
             SdrMode::Auto => {
+                // AUTO steers the same discriminator the packet decoders read:
+                // its voice receivers extract their own channel from a fixed
+                // offset, so an unsteered carrier costs it POCSAG/FLEX syncs
+                // exactly as it does PACKET.
+                afc.observe(last_center_offset_hz, last_snr_db > 2.5);
+                let corr = afc.correction_hz();
+                if (corr - afc_last_reported).abs() >= 50.0 {
+                    inspect_chain.set_offset(
+                        inspect_hz - current_freq
+                            - lo_offset_for(current_rate, lo_offset, current_mode)
+                            + f64::from(corr),
+                    );
+                    afc_last_reported = corr;
+                }
                 // Run everything. The classifier identifies and supplies the
                 // discriminator the packet decoders read; the two voice
                 // receivers work the same channel in parallel, and whichever
@@ -2902,17 +2924,6 @@ fn run_sdr(
             sorted_scratch.extend_from_slice(shown);
             sorted_scratch.sort_unstable_by(f32::total_cmp);
 
-            let mut min_db = f32::INFINITY;
-            let mut max_db = f32::NEG_INFINITY;
-            for &x in shown {
-                if x < min_db {
-                    min_db = x;
-                }
-                if x > max_db {
-                    max_db = x;
-                }
-            }
-
             // Where the hardware's own artefacts land in display coordinates:
             // its DC/LO leakage, and the ±fs/4 images either side of it.
             let spurs = [
@@ -3027,8 +3038,6 @@ fn run_sdr(
             let _ = events.send(SdrEvent::Fft {
                 center_hz: shown_centre,
                 rate_hz: shown_rate,
-                min_db,
-                max_db,
                 pwr: if matches!(avg_mode, AvgMode::Off) {
                     shown.to_vec()
                 } else {

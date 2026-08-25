@@ -384,8 +384,14 @@ pub struct DecimFir {
     work: Vec<Complex32>,
     overlap: Vec<Complex32>,
     fft_len: usize,
-    fft_phase: usize,
-    fft_warm: usize,
+    /// Running phase of the kept-sample grid: increments once per filtered
+    /// sample, kept outputs land where it wraps. (Was `fft_phase`.)
+    phase: usize,
+    /// Absolute filtered-sample count since startup, against `warmup`.
+    g: u64,
+    /// Samples of startup transient the FIR swallows before emitting:
+    /// taps - 1, re-armed on every tap redesign. (Was the `fft_warm` counter.)
+    warmup: u64,
 }
 
 #[allow(dead_code)]
@@ -402,8 +408,9 @@ impl DecimFir {
             work: Vec::new(),
             overlap: Vec::new(),
             fft_len: 0,
-            fft_phase: 0,
-            fft_warm: 0,
+            phase: 0,
+            g: 0,
+            warmup: 0,
         };
         this.rebuild_fft();
         this
@@ -473,8 +480,9 @@ impl DecimFir {
         self.fft = Some(fft);
         self.ifft = Some(ifft);
         self.buf.clear();
-        self.fft_phase = 0;
-        self.fft_warm = self.taps.len() - 1;
+        self.phase = 0;
+        self.g = 0;
+        self.warmup = (self.taps.len() - 1) as u64;
     }
 
     fn process_fft(&mut self, input: &[Complex32], out: &mut Vec<Complex32>) {
@@ -483,28 +491,7 @@ impl DecimFir {
         let discard = self.taps.len() - 1;
         let hop = self.fft_len - discard;
         while self.buf.len() >= hop {
-            self.work.fill(Complex32::new(0.0, 0.0));
-            self.work[..discard].copy_from_slice(&self.overlap);
-            self.work[discard..discard + hop].copy_from_slice(&self.buf[..hop]);
-            self.fft.as_ref().unwrap().process(&mut self.work);
-            for (x, h) in self.work.iter_mut().zip(&self.response) {
-                *x *= *h;
-            }
-            self.ifft.as_ref().unwrap().process(&mut self.work);
-            let scale = 1.0 / self.fft_len as f32;
-            for x in &self.work[discard..discard + hop] {
-                if self.fft_warm > 0 {
-                    self.fft_warm -= 1;
-                    continue;
-                }
-                if self.fft_phase == 0 {
-                    out.push(*x * scale);
-                }
-                self.fft_phase += 1;
-                if self.fft_phase == self.decim {
-                    self.fft_phase = 0;
-                }
-            }
+            self.emit_frame(hop, out);
             if discard <= hop {
                 self.overlap.copy_from_slice(&self.buf[hop - discard..hop]);
             } else {
@@ -522,28 +509,7 @@ impl DecimFir {
         // those outputs arrives on later calls with the real samples.
         if !self.buf.is_empty() {
             let consumed = self.buf.len();
-            self.work.fill(Complex32::new(0.0, 0.0));
-            self.work[..discard].copy_from_slice(&self.overlap);
-            self.work[discard..discard + consumed].copy_from_slice(&self.buf);
-            self.fft.as_ref().unwrap().process(&mut self.work);
-            for (x, h) in self.work.iter_mut().zip(&self.response) {
-                *x *= *h;
-            }
-            self.ifft.as_ref().unwrap().process(&mut self.work);
-            let scale = 1.0 / self.fft_len as f32;
-            for x in &self.work[discard..discard + consumed] {
-                if self.fft_warm > 0 {
-                    self.fft_warm -= 1;
-                    continue;
-                }
-                if self.fft_phase == 0 {
-                    out.push(*x * scale);
-                }
-                self.fft_phase += 1;
-                if self.fft_phase == self.decim {
-                    self.fft_phase = 0;
-                }
-            }
+            self.emit_frame(consumed, out);
             // advance overlap over everything consumed
             if consumed >= discard {
                 self.overlap
@@ -555,6 +521,48 @@ impl DecimFir {
             }
             self.buf.clear();
         }
+    }
+
+    /// Filter one overlap-save frame and push its decimated outputs.
+    ///
+    /// Only every `decim`-th filtered sample is ever read, so the time-domain
+    /// walk visits only those positions: computing all `hop` outputs of the
+    /// inverse FFT and throwing most away cost the radio-stage filter
+    /// (decim 24–66) most of its multiplies for nothing. The FFT work per
+    /// frame is unchanged — the saving is in what is read back out.
+    ///
+    /// Kept-sample identity matches the original walk exactly: a sample is
+    /// emitted when its absolute index `g` (counting every filtered sample
+    /// since startup) satisfies `g % decim == 0` and `g >= taps - 1` (the
+    /// warm-up that swallows the FIR's transient).
+    fn emit_frame(&mut self, valid: usize, out: &mut Vec<Complex32>) {
+        let discard = self.taps.len() - 1;
+        self.work.fill(Complex32::new(0.0, 0.0));
+        self.work[..discard].copy_from_slice(&self.overlap);
+        self.work[discard..discard + valid].copy_from_slice(&self.buf[..valid]);
+        self.fft.as_ref().unwrap().process(&mut self.work);
+        for (x, h) in self.work.iter_mut().zip(&self.response) {
+            *x *= *h;
+        }
+        self.ifft.as_ref().unwrap().process(&mut self.work);
+        // Kept-sample identity: emit when `(g - warmup) % decim == 0` past the
+        // startup transient. The original walk's `continue` skipped warm
+        // samples without advancing its phase counter, so its phase==0 grid
+        // is anchored at g == taps - 1 — and in chunked operation each padded
+        // frame's walked index maps to output time g - warmup, putting every
+        // push on the t % decim == 0 grid this condition reproduces directly.
+        // Modular-safe: pos ≡ (warmup - g) mod decim, so every push satisfies
+        // (g + pos - warmup) % decim == 0 without any underflowing subtraction.
+        let d = self.decim as u64;
+        let first = ((self.warmup % d + d - self.g % d) % d) as usize;
+        let mut pos = first;
+        while pos < valid {
+            if self.g + pos as u64 >= self.warmup {
+                out.push(self.work[discard + pos] / self.fft_len as f32);
+            }
+            pos += self.decim;
+        }
+        self.g += valid as u64;
     }
 }
 
@@ -1868,3 +1876,4 @@ mod frontend_audit {
         );
     }
 }
+

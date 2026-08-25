@@ -48,6 +48,16 @@ pub fn dibits(word: u64) -> [u8; SYNC_DIBITS] {
     out
 }
 
+/// The sync word packed two bits per dibit, matching [`classify`]'s packed
+/// observation. First dibit in the high bits.
+fn pack_pattern(word: u64) -> u64 {
+    let mut out = 0u64;
+    for d in dibits(word) {
+        out = (out << 2) | u64::from(d);
+    }
+    out
+}
+
 /// Ideal symbol levels for a sync word, for correlation and fitting.
 #[allow(dead_code)]
 pub fn levels(word: u64) -> [f32; SYNC_DIBITS] {
@@ -61,20 +71,26 @@ pub fn levels(word: u64) -> [f32; SYNC_DIBITS] {
 /// Which sync, if any, a burst's 24 centre dibits carry, and with how many
 /// dibit errors. Exact matches preferred; the caller sets the error budget.
 pub fn classify(centre: &[u8; SYNC_DIBITS], inverted: bool) -> Option<(SyncKind, u8)> {
+    // Pack the observed dibits once; each pattern test is then an XOR +
+    // popcount over one word instead of a 24-step dibit loop. `acquire`
+    // runs this at every sample position while hunting, so the constant
+    // factor matters.
+    let mut got = 0u64;
+    for &d in centre.iter() {
+        got = (got << 2) | u64::from(d);
+    }
     let mut best: Option<(SyncKind, u8)> = None;
     for &(word, kind) in &PATTERNS {
-        let want = dibits(word);
-        let mut errors = 0u8;
-        for k in 0..SYNC_DIBITS {
-            let got = if inverted {
-                centre[k] ^ 0b10
-            } else {
-                centre[k]
-            };
-            if got != want[k] {
-                errors += 1;
-            }
-        }
+        let want = pack_pattern(word);
+        let diff = got ^ want;
+        // Inversion flips the high bit of each dibit: a repeating 0b10 mask,
+        // clipped to the 48 bits the packed word actually occupies.
+        let inv_mask = 0xAAAA_AAAA_AAAAu64;
+        let diff = if inverted { diff ^ inv_mask } else { diff };
+        // Count mismatching DIBITS, not bits: fold each pair's two diff bits
+        // into its low bit, then popcount the low-bit mask.
+        let swar = (diff | (diff >> 1)) & 0x5555_5555_5555_5555u64;
+        let errors = swar.count_ones() as u8;
         if best.map_or(true, |(_, e)| errors < e) {
             best = Some((kind, errors));
         }

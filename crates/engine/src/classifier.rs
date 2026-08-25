@@ -523,8 +523,16 @@ impl SignalClassifier {
         // its chance — the cadence qualification inside rejects false syncs.
         let legacy_frames = self.legacy_digital.process(&self.disc_buf, snr_db > 0.0);
 
-        let mean_offset_hz: f32 =
-            self.disc_buf.iter().sum::<f32>() / self.disc_buf.len().max(1) as f32;
+        // One walk accumulates Σx and Σx²; mean and rms both follow, and the
+        // |x − mean| fill reuses nothing extra. (This used to be three
+        // separate passes plus the abs-fill.)
+        let (mut sum, mut sumsq) = (0.0f64, 0.0f64);
+        for &x in &self.disc_buf {
+            sum += f64::from(x);
+            sumsq += f64::from(x) * f64::from(x);
+        }
+        let n = self.disc_buf.len().max(1) as f64;
+        let mean_offset_hz = (sum / n) as f32;
         self.dev_abs_buf.clear();
         self.dev_abs_buf
             .extend(self.disc_buf.iter().map(|&x| (x - mean_offset_hz).abs()));
@@ -542,13 +550,7 @@ impl SignalClassifier {
             buf.select_nth_unstable_by(idx, f32::total_cmp);
             buf[idx]
         };
-        let rms_dev_hz = (self
-            .disc_buf
-            .iter()
-            .map(|&x| (x - mean_offset_hz).powi(2))
-            .sum::<f32>()
-            / self.disc_buf.len().max(1) as f32)
-            .sqrt();
+        let rms_dev_hz = ((sumsq - sum * sum / n).max(0.0) / n).sqrt() as f32;
 
         // An FM carrier quiets the discriminator. Filtered receiver noise can
         // have plenty of RF power but spans most of the 48 kHz channel and must

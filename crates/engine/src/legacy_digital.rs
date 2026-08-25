@@ -256,18 +256,53 @@ fn slice_signs(samples: &[f32], sps: f64, phase: f64, dc: f32) -> Vec<bool> {
     out
 }
 
+/// Longest sync pattern in `SPECS`, in bits — bounds the packed-pattern array.
+const MAX_PATTERN_BITS: usize = 48;
+
 fn find_spec(signs: &[bool], spec: &SyncSpec) -> Option<(bool, usize, usize)> {
     let expected: Vec<bool> = spec.pattern.bytes().map(|b| b == b'1').collect();
     if signs.len() < expected.len() {
         return None;
     }
+    // Pack the pattern once; each alignment is then an XOR + popcount over a
+    // few words instead of a per-bit zip. The sweep over every start position
+    // was the dominant cost of the classifier's 10 Hz window scan.
+    let mut packed = [0u64; (MAX_PATTERN_BITS + 63) / 64];
+    for (i, &bit) in expected.iter().enumerate() {
+        if bit {
+            packed[i / 64] |= 1 << (i % 64);
+        }
+    }
+    let n_words = expected.len().div_ceil(64);
     let mut matches = Vec::<(usize, bool, usize)>::new();
-    for start in 0..=signs.len() - expected.len() {
-        let errors = signs[start..start + expected.len()]
-            .iter()
-            .zip(&expected)
-            .filter(|(got, want)| got != want)
-            .count();
+    'scan: for start in 0..=signs.len() - expected.len() {
+        let mut errors = 0usize;
+        // One word at a time, but never past the window: the tail of the
+        // last word belongs to whatever follows the candidate alignment.
+        for w in 0..n_words {
+            let base = start + w * 64;
+            let width = (expected.len() - w * 64).min(64);
+            let mut chunk = 0u64;
+            for b in 0..width {
+                if signs[base + b] {
+                    chunk |= 1 << b;
+                }
+            }
+            let mut want = packed[w];
+            // Zero the pattern bits above the window's last word so the
+            // XOR counts only the alignment's own bits.
+            if w == n_words - 1 && width < 64 {
+                want &= (1u64 << width) - 1;
+            }
+            errors += (chunk ^ want).count_ones() as usize;
+            // Early abort only when the alignment cannot pass even with
+            // every remaining bit flipping to agree (inverted polarity
+            // gives `L - errors`); max_errors*2 covers both polarities'
+            // budgets plus the parity flip the caller may still accept.
+            if errors > expected.len() && errors > 2 * spec.max_errors + expected.len() / 2 {
+                continue 'scan;
+            }
+        }
         let (errors, inverted) = if errors <= expected.len() - errors {
             (errors, false)
         } else {

@@ -31,6 +31,9 @@ pub struct ToneSlicer {
     filled: usize,
     pub last_pm: f32,
     pub last_ps: f32,
+    /// Last data decision, for hysteresis. Seeded to `false` (space) so a
+    /// clean first mark claim wins immediately.
+    last_bit: bool,
 }
 
 /// Samples in bit `k` when the bit clock is `spb` samples long.
@@ -64,6 +67,7 @@ impl ToneSlicer {
             filled: 0,
             last_pm: 0.0,
             last_ps: 0.0,
+            last_bit: false,
         }
     }
 
@@ -170,7 +174,20 @@ impl ToneSlicer {
         } else {
             self.clock.relax();
         }
-        Some(pm > ps)
+        // Hysteresis on the data decision, with a deliberately narrow band:
+        // a bare `pm > ps` flips twice per symbol that wanders across the
+        // threshold, and each flip becomes two NRZI bit errors downstream —
+        // but a wide sticky band holds one tone through flag patterns and
+        // kills sync entirely. 4% of tone power is enough to stop dithering
+        // without ever outranking a real opposite-tone claim.
+        let band = 0.04 * (pm + ps + 1e-9);
+        let bit = if self.last_bit {
+            !(ps - pm > band)
+        } else {
+            pm - ps > band
+        };
+        self.last_bit = bit;
+        Some(bit)
     }
 }
 
@@ -197,20 +214,60 @@ fn goertzel(x: &[f32], coeff: f32) -> f32 {
 /// Goertzel power over `n` ring samples ending at (and including) index
 /// `end_idx`, oldest first. Same Hann window and recursion as [`goertzel`],
 /// just reading the history through the ring order.
+///
+/// The Hann coefficient depends only on `(i, n)`, so it comes from a cached
+/// table: recomputing a cosine per sample per gate was ~4.6 M cos()/s across
+/// a 16-lane bank at 48 kHz. The window is contiguous in the ring except for
+/// one wrap, so the walk is two linear runs — no per-sample modulo.
 fn goertzel_ring(hist: &[f32], end_idx: usize, n: usize, coeff: f32) -> f32 {
     let len = hist.len();
+    let win = hann_window(n);
     let mut s1 = 0.0f32;
     let mut s2 = 0.0f32;
-    let denom = n.saturating_sub(1).max(1) as f32;
-    for i in 0..n {
-        let idx = (end_idx + len - (n - 1 - i)) % len;
-        let w = 0.5 - 0.5 * (2.0 * PI * i as f32 / denom).cos();
-        let v = hist[idx] * w;
+    // Oldest sample first: start `n - 1` back from the end index.
+    let start = end_idx + len - (n - 1);
+    let (first_len, wrapped) = if start / len == (start + n - 1) / len || start % len + n <= len {
+        (n, false)
+    } else {
+        (len - start % len, true)
+    };
+    let lo = start % len;
+    for i in 0..first_len {
+        let v = hist[lo + i] * win[i];
         let s0 = v + coeff * s1 - s2;
         s2 = s1;
         s1 = s0;
     }
+    if wrapped {
+        for i in first_len..n {
+            let v = hist[i - first_len] * win[i];
+            let s0 = v + coeff * s1 - s2;
+            s2 = s1;
+            s1 = s0;
+        }
+    }
     s1 * s1 + s2 * s2 - coeff * s1 * s2
+}
+
+/// Cached Hann windows by length, shared by every lane's gate evaluations.
+///
+/// Window lengths are fixed per decoder (one symbol), so the table fills
+/// once and every later call is a lookup.
+fn hann_window(n: usize) -> &'static [f32] {
+    use std::collections::HashMap;
+    use std::sync::{Mutex, OnceLock};
+    static TABLES: OnceLock<Mutex<HashMap<usize, &'static [f32]>>> = OnceLock::new();
+    let tables = TABLES.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut tables = tables.lock().expect("hann window table");
+    *tables.entry(n).or_insert_with(|| {
+        let denom = n.saturating_sub(1).max(1) as f32;
+        Box::leak(
+            (0..n)
+                .map(|i| 0.5 - 0.5 * (2.0 * PI * i as f32 / denom).cos())
+                .collect::<Vec<f32>>()
+                .into_boxed_slice(),
+        )
+    })
 }
 
 /// Synthesize one baud of a tone at `hz`, amplitude `amp`.

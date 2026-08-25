@@ -200,6 +200,41 @@ fn valid_word(word: u32) -> bool {
     syndrome(word) == 0 && word.count_ones() & 1 == 0
 }
 
+const VALID: u32 = 1 << 31;
+
+/// syndrome → error mask over the reflected 31-bit word, for 0/1/2-bit errors
+/// — the same structure POCSAG uses (pocsag.rs). Building it once turns the
+/// old brute-force search (~497 syndrome evaluations, each with a `reflect31`
+/// inside) into one table lookup per word, which is what every garbage word
+/// on a noisy channel was paying.
+///
+/// A collision between two different ≤2-error patterns mapping to the same
+/// syndrome would poison both entries; BCH(31,21) corrects any 2-bit pattern,
+/// so within this code's distance no two such patterns share a syndrome.
+fn error_table() -> &'static [u32; 1024] {
+    use std::sync::OnceLock;
+    static TABLE: OnceLock<[u32; 1024]> = OnceLock::new();
+    TABLE.get_or_init(|| {
+        let mut t = [0u32; 1024];
+        for i in 0..31 {
+            let single = syndrome(1u32 << i);
+            if t[single as usize] & VALID != 0 {
+                continue;
+            }
+            t[single as usize] = (1 << i) | VALID;
+            for j in (i + 1)..31 {
+                let double = syndrome((1 << i) | (1 << j));
+                if t[double as usize] & VALID != 0 {
+                    continue;
+                }
+                t[double as usize] = (1 << i) | (1 << j) | VALID;
+            }
+        }
+        t[0] |= VALID;
+        t
+    })
+}
+
 /// Correct every pattern of up to two errors, including the parity bit.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FlexBchError;
@@ -213,29 +248,20 @@ pub fn bch_correct(raw: u32) -> Result<(u32, usize), FlexBchError> {
         let fixed = base | (parity_bit(base) << 31);
         return Ok((fixed, (fixed ^ raw).count_ones() as usize));
     }
-    for first in 0..31 {
-        let candidate = base ^ (1 << first);
-        if syndrome(candidate) == 0 {
-            let fixed = candidate | (parity_bit(candidate) << 31);
-            let errors = (fixed ^ raw).count_ones();
-            if errors <= 2 {
-                return Ok((fixed, errors as usize));
-            }
-        }
+    let entry = error_table()[syndrome(base) as usize];
+    if entry & VALID == 0 {
+        return Err(FlexBchError);
     }
-    for first in 0..31 {
-        for second in (first + 1)..31 {
-            let candidate = base ^ (1 << first) ^ (1 << second);
-            if syndrome(candidate) == 0 {
-                let fixed = candidate | (parity_bit(candidate) << 31);
-                let errors = (fixed ^ raw).count_ones();
-                if errors <= 2 {
-                    return Ok((fixed, errors as usize));
-                }
-            }
-        }
+    let mask = entry & !VALID;
+    let fixed = base ^ mask | (parity_bit(base ^ mask) << 31);
+    let errors = (fixed ^ raw).count_ones() as usize;
+    // The table guarantees ≤2 errors among the 31 protected bits; a third
+    // can only be the parity bit itself.
+    if errors <= 2 || (errors == 3 && mask.count_ones() == 2) {
+        Ok((fixed, errors))
+    } else {
+        Err(FlexBchError)
     }
-    Err(FlexBchError)
 }
 
 #[cfg(test)]
@@ -421,6 +447,15 @@ struct RawFrame {
     symbols: Vec<u8>,
 }
 
+impl RawFrame {
+    /// Coarse fingerprint of the symbol stream: every 8th symbol. Lane-level
+    /// slicer noise changes a few of these; a different transmission on the
+    /// same cycle/frame changes most of them.
+    fn anchor(&self) -> std::iter::StepBy<std::slice::Iter<'_, u8>> {
+        self.symbols.iter().step_by(8)
+    }
+}
+
 impl Lane {
     fn new(fs: f64, delay: usize) -> Self {
         Self {
@@ -585,9 +620,11 @@ fn sync_mode(raw: u64) -> Option<(Mode, bool)> {
         let marker = ((word >> 16) & 0xFFFF_FFFF) as u32;
         let high = (word >> 48) as u16;
         let low = !(word as u16);
-        let errors = (marker ^ SYNC_MARKER).count_ones() + (high ^ low).count_ones();
-        if (marker ^ SYNC_MARKER).count_ones() <= MAX_SYNC_ERRORS
-            && (high ^ low).count_ones() <= MAX_SYNC_ERRORS
+        let marker_errors = (marker ^ SYNC_MARKER).count_ones();
+        let code_errors = (high ^ low).count_ones();
+        let errors = marker_errors + code_errors;
+        if marker_errors <= MAX_SYNC_ERRORS
+            && code_errors <= MAX_SYNC_ERRORS
             && let Some(mode) = Mode::from_a_code(high)
             && best.is_none_or(|(old, _, _)| errors < old)
         {
@@ -1508,11 +1545,24 @@ fn decode_numeric_stream(words: &[u32], numbered: bool) -> String {
 
 /// Identity of one recovered air frame, so several lanes reporting it are
 /// recognised as one transmission.
+///
+/// Hashes the FIW and a few anchor words, not the whole symbol vector: two
+/// lanes recovering the same air frame routinely disagree on a handful of
+/// near-threshold symbols, and hashing all of them defeated the dedup —
+/// every lane then paid full deinterleave + BCH for a frame another lane
+/// had already decoded. The FIW (cycle/frame, BCH-protected) plus the first
+/// vector word pins which transmission this is; symbol-level differences
+/// between lanes of the same transmission are exactly what should be ignored.
 fn frame_hash(frame: &RawFrame) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut state = std::collections::hash_map::DefaultHasher::new();
     frame.fiw.hash(&mut state);
-    frame.symbols.hash(&mut state);
+    frame.mode.symbol_rate.hash(&mut state);
+    frame.mode.levels.hash(&mut state);
+    frame.symbols.len().hash(&mut state);
+    for sym in frame.anchor() {
+        sym.hash(&mut state);
+    }
     state.finish()
 }
 

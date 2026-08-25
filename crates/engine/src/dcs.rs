@@ -90,10 +90,9 @@ pub fn analyse(samples: &[f32]) -> Option<Detection> {
         return None;
     }
 
-    let words: Vec<(u16, u32)> = CODES
+    let words: Vec<(u16, u32)> = code_table()
         .iter()
         .copied()
-        .map(|code| (code, transmitted_word(code)))
         .collect();
     let mut best: Option<(usize, u32, Detection)> = None;
 
@@ -155,6 +154,14 @@ pub fn analyse(samples: &[f32]) -> Option<Detection> {
 pub(crate) fn transmitted_word(code: u16) -> u32 {
     let data = u32::from(code) | (0b100 << 9);
     golay23_encode(reverse(data, 12))
+}
+
+/// code → transmitted word, computed once. The encode is a per-code Golay
+/// pass that used to rerun on every analyse window (~30×/s while active).
+fn code_table() -> &'static [(u16, u32)] {
+    use std::sync::OnceLock;
+    static TABLE: OnceLock<Vec<(u16, u32)>> = OnceLock::new();
+    TABLE.get_or_init(|| CODES.iter().map(|&c| (c, transmitted_word(c))).collect())
 }
 
 fn reverse(mut value: u32, bits: usize) -> u32 {

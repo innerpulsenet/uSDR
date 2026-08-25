@@ -183,20 +183,25 @@ pub fn qr1676_decode(word: &mut [u8; 16]) -> bool {
 }
 
 /// Correct one error in an embedded-LC row, returning the correction count.
+///
+/// Table-backed like the other codes here: the old probe loop re-ran a
+/// 16×4 syndrome multiply up to 16 times per call, once per BPTC row per
+/// data burst. The Hamming code is single-error-correcting, so the table
+/// only registers zero- and one-bit patterns.
 pub fn hamming16114_decode(word: &mut [u8; 16]) -> Option<u32> {
-    let syn = syndrome(word, &HAMMING_16_11_4_H);
-    if syn == 0 {
-        return Some(0);
-    }
-    for position in 0..16 {
-        let mut probe = [0u8; 16];
-        probe[position] = 1;
-        if syndrome(&probe, &HAMMING_16_11_4_H) == syn {
-            word[position] ^= 1;
-            return Some(1);
+    use std::sync::OnceLock;
+    static TABLE: OnceLock<Vec<u64>> = OnceLock::new();
+    let table = TABLE.get_or_init(|| {
+        let mut t = vec![u64::MAX; 1 << HAMMING_16_11_4_H.len()];
+        t[syndrome(&[0u8; 16], &HAMMING_16_11_4_H) as usize] = 0;
+        for i in 0..16 {
+            let mut word = [0u8; 16];
+            word[i] = 1;
+            t[syndrome(&word, &HAMMING_16_11_4_H) as usize] = 1u64 << i;
         }
-    }
-    None
+        t
+    });
+    decode_with_table(word, &HAMMING_16_11_4_H, table)
 }
 
 #[allow(dead_code)]

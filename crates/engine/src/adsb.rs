@@ -99,9 +99,34 @@ impl AdsBMsg {
     }
 }
 
+/// CRC-24 over `bits` bits (MSB-first) of `data`, byte-table driven.
+///
+/// Mode S frames are a whole number of bytes in practice, so the table path
+/// covers everything; the trailing partial byte is finished bit-at-a-time.
+/// The old loop walked all 112 bits individually per candidate — and the
+/// demodulator tries up to 10 slice phases per preamble on a busy channel.
 pub fn crc(data: &[u8], bits: usize) -> u32 {
+    use std::sync::OnceLock;
+    static TABLE: OnceLock<[u32; 256]> = OnceLock::new();
+    let table = TABLE.get_or_init(|| {
+        let mut t = [0u32; 256];
+        for byte in 0..256u32 {
+            let mut rem = byte << 16;
+            for _ in 0..8 {
+                rem = (rem << 1) & 0xFF_FFFF ^ if rem & 0x80_0000 != 0 { CRC_POLY } else { 0 };
+            }
+            t[byte as usize] = rem;
+        }
+        t
+    });
+    let full = bits / 8;
     let mut rem = 0u32;
-    for i in 0..bits {
+    for &byte in &data[..full] {
+        // Standard table CRC: top byte of the remainder selects the entry.
+        rem = ((rem << 8) & 0xFF_FFFF)
+            ^ table[((rem >> 16) as usize ^ byte as usize) & 0xFF];
+    }
+    for i in (full * 8)..bits {
         let bit = (data[i / 8] >> (7 - (i % 8))) & 1;
         let mix = ((rem >> 23) as u8 & 1) ^ bit;
         rem = (rem << 1) & 0xFF_FFFF;
