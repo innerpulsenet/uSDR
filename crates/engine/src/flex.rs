@@ -302,19 +302,36 @@ pub fn bch_correct_soft(raw: u32, reliabilities: &[f32; 32]) -> Result<(u32, usi
             .unwrap_or(std::cmp::Ordering::Equal)
     });
     const D: usize = 4;
-    for pattern in 1u32..(1 << D) {
-        let mut candidate = raw;
-        for slot in 0..D {
-            if pattern & (1 << slot) != 0 {
-                candidate ^= 1 << order[slot as usize];
+    // Try patterns from fewest flips upward: a 1-flip pattern landing on a
+    // valid codeword is far more likely to be the true correction than a
+    // 4-flip one, which is more likely to be a MISCORRECTION onto some other
+    // codeword entirely — plausible garbage that then flows downstream as a
+    // page with a wrong format field or wrong characters.
+    for flip_count in 1..=D {
+        for pattern in 0u32..(1 << D) {
+            if pattern.count_ones() != flip_count as u32 {
+                continue;
             }
-        }
-        if let Ok((fixed, _)) = bch_correct(candidate) {
-            // Accept only genuine corrections, not wild masks that happen to
-            // validate after our own flipping.
-            let total = (fixed ^ raw).count_ones() as usize;
-            if total <= D + 2 {
-                return Ok((fixed, total));
+            let mut candidate = raw;
+            for slot in 0..D {
+                if pattern & (1 << slot) != 0 {
+                    candidate ^= 1 << order[slot as usize];
+                }
+            }
+            if let Ok((fixed, _)) = bch_correct(candidate) {
+                // The result must differ from raw only where we flipped.
+                let allowed = {
+                    let mut m = 0u32;
+                    for slot in 0..D {
+                        if pattern & (1 << slot) != 0 {
+                            m ^= 1 << order[slot as usize];
+                        }
+                    }
+                    m
+                };
+                if (fixed ^ raw) & !allowed == 0 {
+                    return Ok((fixed, flip_count));
+                }
             }
         }
     }
@@ -1202,10 +1219,11 @@ impl FlexDecoder {
                     message.complete = true;
                     message.reassembled = true;
                     self.diag.fragments_completed += 1;
-                } else {
+                } else if message.payload_checksum_ok != Some(false) {
                     // No pending first fragment: publish the tail as an
-                    // explicitly partial page. Losing fragment 1 of 4 on a
-                    // noisy channel should not cost the other three.
+                    // explicitly partial page, but only when its own payload
+                    // checksum validated — otherwise "tail" is indistinguish-
+                    // able from noise-shaped garbage wearing a capcode.
                     message.complete = false;
                 }
             }
@@ -1656,8 +1674,18 @@ fn decode_vector(
             if !long && !words.is_empty() {
                 words.remove(0);
             }
+            // An erased header decodes to a placeholder whose fragment bits
+            // read as "continuation" — publishing that emits garbage under a
+            // real-looking capcode. Treat any erasure in the message as
+            // suspect: the page may still be shown, but it must never claim
+            // completeness or drive reassembly.
+            let header_erased = bad > 0 && !long && words.first().is_none_or(|w| *w == 0);
             let fragment_number = ((header >> 11) & 3) as u8;
-            let fragment = fragment_from_alpha_header(header);
+            let fragment = if header_erased {
+                FlexFragment::Continuation
+            } else {
+                fragment_from_alpha_header(header)
+            };
             let secure_type = (header >> 19) & 3;
             let decode_as_alpha = format == FlexFormat::Alphanumeric || secure_type == 0;
             let (text, signature_ok) = if decode_as_alpha {
@@ -2406,6 +2434,9 @@ mod tests {
 
     /// One decode attempt of a noisy frame. Returns whether the page came
     /// through with its text intact, plus the decoder's own accounting.
+    /// `false_positives` counts pages emitted that were NOT the injected one —
+    /// miscorrected vectors, orphan fragments, checksum failures published as
+    /// text. A change is only a win if good pages rise while this stays flat.
     fn noisy_trial(
         fs: usize,
         mode_code: u16,
@@ -2413,7 +2444,7 @@ mod tests {
         esn0_db: i32,
         seed: u64,
         serial: u32,
-    ) -> (bool, FlexDiagnostics) {
+    ) -> (bool, u32, FlexDiagnostics) {
         let mut audio = discriminator_frame_at(
             fs,
             mode_code,
@@ -2426,10 +2457,12 @@ mod tests {
         add_awgn(&mut audio, esn0_db, seed);
         let mut decoder = FlexDecoder::new(fs as f64);
         let pages = decoder.process(&audio);
+        let capcode = 456_000 + u64::from(serial);
         let hit = pages
             .iter()
-            .any(|page| page.capcode == 456_000 + u64::from(serial) && page.text == "AWGN SWEEP");
-        (hit, decoder.diagnostics().clone())
+            .any(|page| page.capcode == capcode && page.text == "AWGN SWEEP");
+        let false_positives = pages.iter().filter(|p| p.text != "AWGN SWEEP").count() as u32;
+        (hit, false_positives, decoder.diagnostics().clone())
     }
 
     /// One-shot probe: prints the diagnostic event trail for a single noisy
@@ -2437,7 +2470,7 @@ mod tests {
     #[test]
     #[ignore = "debug probe"]
     fn awgn_probe() {
-        let (hit, diag) = noisy_trial(32_000, A_3200_4, 3, 24, 0xC0FFEE, 0);
+        let (hit, _junk, diag) = noisy_trial(32_000, A_3200_4, 3, 24, 0xC0FFEE, 0);
         println!("hit={hit}");
         for event in &diag.events {
             println!("  {event}");
@@ -2465,7 +2498,7 @@ mod tests {
         let trials: u64 = 10;
         for (name, code, phase) in modes {
             println!("\n=== mode {name} ===");
-            println!(" Es/N0  pages  syncs  fiw_rej  bch_ok  fix  err | notes");
+            println!(" Es/N0  pages  syncs  fiw_rej  bch_ok  fix  err  junk | notes");
             for &db in &SWEEP_DB {
                 let mut hits = 0;
                 let mut syncs = 0;
@@ -2473,16 +2506,17 @@ mod tests {
                 let mut bch_ok = 0;
                 let mut bch_fixed = 0;
                 let mut bch_err = 0;
+                let mut false_pages = 0;
                 for trial in 0..trials {
-                    let (hit, diag) =
-                        noisy_trial(
-                            32_000,
-                            code,
-                            phase,
-                            db,
-                            0xBEEF + trial * 7919,
-                            trial as u32,
-                        );
+                    let (hit, false_pos, diag) = noisy_trial(
+                        32_000,
+                        code,
+                        phase,
+                        db,
+                        0xBEEF + trial * 7919,
+                        trial as u32,
+                    );
+                    false_pages += false_pos;
                     if hit {
                         hits += 1;
                     }
@@ -2506,7 +2540,7 @@ mod tests {
                     "dead"
                 };
                 println!(
-                    "{db:>5}  {hits:>4}/{trials}  {syncs:>5}  {fiw_rejects:>7}  {bch_ok:>6}  {bch_fixed:>3}  {bch_err:>3} | {note}"
+                    "{db:>5}  {hits:>4}/{trials}  {syncs:>5}  {fiw_rejects:>7}  {bch_ok:>6}  {bch_fixed:>3}  {bch_err:>3}  {false_pages:>4} | {note}"
                 );
             }
         }
@@ -2531,7 +2565,7 @@ mod tests {
                 .map(|trial| {
                     noisy_trial(32_000, code, phase, esn0, 0xC0FFEE + u64::from(trial) * 31, trial)
                 })
-                .filter(|(hit, _)| *hit)
+                .filter(|(hit, _, _)| *hit)
                 .count();
             // At least one of three must get through: these levels sit near
             // the knee of each mode's curve, so require the mode to be alive,
