@@ -2180,12 +2180,16 @@ function drawAudioScope(scope, rateHz) {
     const marks = scopeKind === 'mpx'
       ? [[19000, 'pilot'], [38000, 'stereo'], [57000, 'RDS']]
       : (sdrMode === 'packet' ? [[1200, 'mark'], [2200, 'space']]
-      : (sdrMode === 'nfm' ? [[250, 'CTCSS']] : []));
+      : (sdrMode === 'pager' ? [[1600, '+1'], [4800, '+3'], [-4800, '-3'], [-1600, '-1']]
+      : (sdrMode === 'nfm' ? [[250, 'CTCSS']] : [])));
     sc.font = '8px ui-monospace, monospace';
     for (const mk of marks) {
       const hz = mk[0], label = mk[1];
-      if (hz >= top) continue;
-      const x = (hz / top) * SW;
+      if (Math.abs(hz) >= top) continue;
+      // Signed frequencies (FLEX 4FSK levels) map from a centred axis.
+      const x = sdrMode === 'pager'
+        ? ((hz + rateHz / 2) / rateHz) * SW
+        : (hz / top) * SW;
       sc.strokeStyle = 'rgba(255,180,40,0.5)';
       sc.setLineDash([2, 3]);
       sc.beginPath(); sc.moveTo(Math.round(x)+0.5, 0); sc.lineTo(Math.round(x)+0.5, specH); sc.stroke();

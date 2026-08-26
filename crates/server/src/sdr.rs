@@ -81,6 +81,11 @@ pub const WFM_DEEMPHASIS_TAU: f32 = 75e-6;
 /// inside the same 12.5/25 kHz slot voice does.
 pub const PACKET_BANDWIDTH_HZ: f32 = 15_000.0;
 
+/// Half-width the PAGER sweep covers either side of the tuned frequency.
+/// The 929/931 MHz paging plans span about a megahertz; ±480 kHz at a 25 kHz
+/// raster is 39 channels, all inside a 2.048 MHz span's usable half (~920 kHz).
+pub const PAGER_HALF_BAND_HZ: f64 = 480_000.0;
+
 /// AM channel width. Aviation voice is allocated 8.5 kHz (25 kHz spacing in
 /// the airband); 10 kHz covers broadcast shortwave without pulling in the
 /// neighbours on crowded bands.
@@ -148,7 +153,10 @@ impl SdrMode {
         match self {
             SdrMode::Nfm => INSPECT_BANDWIDTH_HZ,
             SdrMode::Am => AM_BANDWIDTH_HZ,
-            SdrMode::Pager => PACKET_BANDWIDTH_HZ,
+            // What the mode actually DECODES: the walking bank covers this
+            // whole span, so the display should shade it — not the 15 kHz of
+            // the (idle) per-channel demod chain.
+            SdrMode::Pager => (2.0 * PAGER_HALF_BAND_HZ) as f32,
             SdrMode::Wfm => WFM_BANDWIDTH_HZ,
             SdrMode::Packet => PACKET_BANDWIDTH_HZ,
             SdrMode::P25 => C4FM_BANDWIDTH_HZ,
@@ -2462,12 +2470,12 @@ fn run_sdr(
                 // Half-band covers +/-480 kHz: the 929-930 MHz paging plan.
                 pager_bank = Some(scannerd_engine::pager_bank::PagerBank::new(
                     span_rate,
-                    480_000.0,
+                    PAGER_HALF_BAND_HZ,
                 ));
                 pager_rate_cache = span_rate;
             }
             if let Some(bank) = pager_bank.as_mut()
-                && bank.since_step_exceeds_ms(2_000)
+                && bank.since_step_exceeds_ms(scannerd_engine::pager_bank::DWELL_MS)
             {
                 bank.step();
             }
