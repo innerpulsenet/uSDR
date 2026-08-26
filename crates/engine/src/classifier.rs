@@ -355,6 +355,12 @@ impl SignalClassifier {
         &self.disc_buf
     }
 
+    /// Deviation the monitored discriminator is scaled to, so a caller can
+    /// normalise it against full deviation.
+    pub fn deviation_scale_hz(&self) -> f32 {
+        crate::nbfm::NARROW_DEVIATION_HZ
+    }
+
     /// Record a POCSAG sync observed in an externally-owned decoder bank.
     pub fn note_pocsag_sync(&mut self, baud: u32) {
         self.pocsag_decoder.note_sync(baud);
@@ -415,10 +421,29 @@ impl SignalClassifier {
                 self.noise_floor_dbfs = self.init_min - 6.0;
             }
         } else {
+            // Fall onto lower readings fast. Rising is conditional: a rise
+            // toward the current reading is only integrated when that reading
+            // looks like NOISE (wide deviation spread, not quieted). Without
+            // this gate the floor chased a continuous carrier — FLEX transmits
+            // essentially nonstop — and closed the SNR gap within a couple of
+            // minutes: pages decoded beautifully on tune-in, then degraded as
+            // AFC froze and every SNR-gated path went deaf.
+            // Noise spreads the discriminator across tens of kHz; a carrier
+            // quiets it toward its tone amplitude.
+            let mean = self.disc_buf.iter().sum::<f32>() / self.disc_buf.len().max(1) as f32;
+            let var = self
+                .disc_buf
+                .iter()
+                .map(|&x| (x - mean) * (x - mean))
+                .sum::<f32>()
+                / self.disc_buf.len().max(1) as f32;
+            let looks_like_noise = var.sqrt() > 4_000.0;
             let a = if rf_dbfs < self.noise_floor_dbfs {
                 0.25
-            } else {
+            } else if looks_like_noise {
                 0.002
+            } else {
+                0.0
             };
             self.noise_floor_dbfs += a * (rf_dbfs - self.noise_floor_dbfs);
         }

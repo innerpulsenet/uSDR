@@ -26,6 +26,7 @@ pub mod nxdn;
 pub mod p25;
 pub mod pager_parser;
 pub mod passport;
+pub mod pager_bank;
 pub mod pocsag;
 pub mod rs;
 pub mod same;

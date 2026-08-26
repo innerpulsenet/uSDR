@@ -137,6 +137,10 @@ pub enum SdrMode {
     /// every packet and paging decoder, all on the same channel. Costs more
     /// CPU than picking one, and answers "what is this?" without being told.
     Auto,
+    /// Whole-band paging sweep: one POCSAG+FLEX bank walked across the 25 kHz
+    /// channels of the paging band around the tuned frequency. The classifier
+    /// and voice receivers do not run — a pager channel has no voice in it.
+    Pager,
 }
 
 impl SdrMode {
@@ -144,6 +148,7 @@ impl SdrMode {
         match self {
             SdrMode::Nfm => INSPECT_BANDWIDTH_HZ,
             SdrMode::Am => AM_BANDWIDTH_HZ,
+            SdrMode::Pager => PACKET_BANDWIDTH_HZ,
             SdrMode::Wfm => WFM_BANDWIDTH_HZ,
             SdrMode::Packet => PACKET_BANDWIDTH_HZ,
             SdrMode::P25 => C4FM_BANDWIDTH_HZ,
@@ -1048,6 +1053,13 @@ impl Demod {
                     .collect(),
                 flex: FlexDecoder::new(fs_out),
             },
+            SdrMode::Pager => Demod::Packet {
+                // The per-channel decoders are idle here: PAGER decodes from
+                // the wide span through the walking bank instead.
+                aprs: AprsDecoder::new(fs_out),
+                pocsag: Vec::new(),
+                flex: FlexDecoder::idle(),
+            },
         }
     }
 
@@ -1726,6 +1738,11 @@ fn run_sdr(
     // burying a marginal carrier. Always on for NFM/PACKET/AUTO — it is the
     // listening equivalent of the decoders' noise gates.
     let mut mon_gate = NoiseGate::new(8_000.0);
+    // PAGER: walking POCSAG+FLEX bank over the recorded span. Built lazily on
+    // first Pager frame, rebuilt when the span rate changes.
+    let mut pager_bank: Option<scannerd_engine::pager_bank::PagerBank> = None;
+    let mut pager_rate_cache = 0.0f64;
+    let mut block_ms: u64;
     let mut mon_leveler = Leveler::new(8_000.0);
     let mut mon_notch = AutoNotch::new(8_000.0);
     // Frequencies that have actually decoded something. Peak markers on the
@@ -2409,6 +2426,8 @@ fn run_sdr(
             let _ = events.send(SdrEvent::Status(s.clone()));
         }
         last_block = Instant::now();
+        // Real-time milliseconds this block represents, for dwell timers.
+        block_ms = (block.len() as f64 / current_rate * 1000.0).round().max(1.0) as u64;
 
         for c in block.iter() {
             let mag = c.re.abs().max(c.im.abs());
@@ -2430,6 +2449,26 @@ fn run_sdr(
         inspect_iq.clear();
         inspect_chain.process(&clean, &mut inspect_iq);
         let fs_chain = inspect_chain.fs_out();
+
+        // PAGER bank lifecycle: (re)build on rate change, step on dwell expiry.
+        if current_mode == SdrMode::Pager {
+            let span_rate = current_rate;
+            if pager_rate_cache != span_rate {
+                // Half-band covers +/-480 kHz: the 929-930 MHz paging plan.
+                pager_bank = Some(scannerd_engine::pager_bank::PagerBank::new(
+                    span_rate,
+                    480_000.0,
+                ));
+                pager_rate_cache = span_rate;
+            }
+            if let Some(bank) = pager_bank.as_mut()
+                && bank.since_step_exceeds_ms(2_000)
+            {
+                bank.step();
+            }
+        } else {
+            pager_bank = None;
+        }
 
         // A spur inside the channel corrupts the decode, not just the picture.
         // The inspect chain has already mixed the channel to DC, so a spur at
@@ -2475,6 +2514,28 @@ fn run_sdr(
         // — ppm drift plus click imprecision — rides one skirt of the channel
         // filter and POCSAG/FLEX syncs get missed.
         let classification = match current_mode {
+            SdrMode::Pager => {
+                // Feed the span into the walking bank; emit decoded pages.
+                if let Some(bank) = pager_bank.as_mut() {
+                    let ms = block_ms;
+                    let (flex_msgs, pocsag_msgs) = bank.process(&clean, ms);
+                    for msg in flex_msgs {
+                        decode_history.note(inspect_hz, "FLEX");
+                        let _ = events.send(SdrEvent::Decode {
+                            inspect_hz: inspect_hz + bank.live_offset_hz(),
+                            event: flex_event(&msg),
+                        });
+                    }
+                    for msg in pocsag_msgs {
+                        decode_history.note(inspect_hz, "POCSAG");
+                        let _ = events.send(SdrEvent::Decode {
+                            inspect_hz: inspect_hz + bank.live_offset_hz(),
+                            event: pocsag_event(&msg),
+                        });
+                    }
+                }
+                ClassificationResult::default()
+            }
             SdrMode::Am => {
                 // No classifier: its measurements are FM-specific (deviation,
                 // quieting, protocol syncs) and would read nonsense against an
@@ -2515,10 +2576,13 @@ fn run_sdr(
                 last_center_offset_hz = c.center_offset_hz;
                 // Weak-signal listening: gate static, level what survives.
                 {
+                    // No noise gate in NFM/Packet: these are monitoring modes,
+                    // where dead-air hiss is information (it tells you the
+                    // channel is empty and the receiver is alive) and a latched
+                    // gate is how audio silently died once already.
                     let mut voice: Vec<f32> =
                         classifier.monitor_voice().to_vec();
                     mon_notch.process(&mut voice);
-                    mon_gate.process(&mut voice, classifier.monitor_noise());
                     mon_leveler.process(&mut voice);
                     audio_buf.extend_from_slice(&voice);
                 }
@@ -2917,6 +2981,17 @@ fn run_sdr(
                     scope_src_rate = WFM_IF_RATE;
                     scope_dev_scale = WFM_DEVIATION_HZ;
                 }
+            }
+            SdrMode::Nfm | SdrMode::Packet | SdrMode::Auto => {
+                // The RAW discriminator, not the gated monitor audio: dead air
+                // is exactly when the scope matters most, and the noise gate
+                // flattens that to zero by design. Discriminator noise IS the
+                // activity — its collapse is what shows a carrier arrived.
+                let disc = classifier.monitor_discriminator_hz();
+                let scale = f64::from(classifier.deviation_scale_hz());
+                scope_src.extend(disc.iter().map(|&hz| (hz as f64 / scale).clamp(-1.0, 1.0) as f32));
+                scope_src_rate = fs_chain;
+                scope_dev_scale = scale as f32;
             }
             _ => {
                 scope_src.extend_from_slice(&audio_buf);

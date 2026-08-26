@@ -492,6 +492,7 @@
           <button type="button" class="modebtn" data-mode="p25">P25</button>
           <button type="button" class="modebtn" data-mode="dmr">DMR</button>
           <button type="button" class="modebtn" data-mode="packet">PACKET</button>
+          <button type="button" class="modebtn" data-mode="pager" title="Sweep POCSAG/FLEX across the 25 kHz paging channels around the tuned frequency">PAGER</button>
           <button type="button" class="modebtn" data-mode="auto" title="Run every decoder on the tuned channel at once">AUTO</button>
         </span>
         <svg class="filt-glyph" width="34" height="12" viewBox="0 0 34 12" aria-hidden="true">
@@ -2728,6 +2729,10 @@ function applyModeUi(mode) {
   if (mode === 'auto' && $('sdrClassDetails')) {
     $('sdrClassDetails').textContent = 'every decoder running on this channel';
   }
+  if (mode === 'pager' && $('sdrClassDetails')) {
+    $('sdrClassDetails').textContent = 'sweeping POCSAG/FLEX across ±480 kHz';
+    $('sdrClassModulation').textContent = 'Paging scan';
+  }
 }
 
 let sdrZoom = 1;
@@ -2793,7 +2798,7 @@ async function setSdrMode(mode) {
 //   p25/dmr 6.25 kHz — the same raster the digital channels sit on
 //   packet  2.5 kHz — divides both the 10 kHz APRS raster (144.390 lands on
 //                     it exactly) and the 12.5 kHz paging channels
-const SNAP_STEPS = { wfm: 100000, nfm: 6250, am: 9000, p25: 6250, dmr: 6250, packet: 2500 };
+const SNAP_STEPS = { wfm: 100000, nfm: 6250, am: 9000, p25: 6250, dmr: 6250, packet: 2500, pager: 25000 };
 
 // `auto` follows the mode's channel raster; anything else is the operator
 // overriding it, which is what a step control is for.
