@@ -487,6 +487,7 @@
       <div class="scr-top">
         <span class="modesw" role="group" aria-label="Demodulator mode">
           <button type="button" class="modebtn on" data-mode="nfm">NFM</button>
+          <button type="button" class="modebtn" data-mode="am">AM</button>
           <button type="button" class="modebtn" data-mode="wfm">WFM</button>
           <button type="button" class="modebtn" data-mode="p25">P25</button>
           <button type="button" class="modebtn" data-mode="dmr">DMR</button>
@@ -2715,6 +2716,10 @@ function applyModeUi(mode) {
     $('sdrClassModulation').textContent = 'Wideband FM';
     $('sdrClassConfidence').textContent = '—';
   }
+  if (mode === 'am' && $('sdrClassDetails')) {
+    $('sdrClassDetails').textContent = 'envelope detection · no classifier';
+    $('sdrClassModulation').textContent = 'AM';
+  }
   // P25 and DMR decode voice with their own receivers; the log fills from
   // their call events rather than the classifier.
   if ((mode === 'p25' || mode === 'dmr') && $('sdrClassDetails')) {
@@ -2788,7 +2793,7 @@ async function setSdrMode(mode) {
 //   p25/dmr 6.25 kHz — the same raster the digital channels sit on
 //   packet  2.5 kHz — divides both the 10 kHz APRS raster (144.390 lands on
 //                     it exactly) and the 12.5 kHz paging channels
-const SNAP_STEPS = { wfm: 100000, nfm: 6250, p25: 6250, dmr: 6250, packet: 2500 };
+const SNAP_STEPS = { wfm: 100000, nfm: 6250, am: 9000, p25: 6250, dmr: 6250, packet: 2500 };
 
 // `auto` follows the mode's channel raster; anything else is the operator
 // overriding it, which is what a step control is for.

@@ -81,6 +81,11 @@ pub const WFM_DEEMPHASIS_TAU: f32 = 75e-6;
 /// inside the same 12.5/25 kHz slot voice does.
 pub const PACKET_BANDWIDTH_HZ: f32 = 15_000.0;
 
+/// AM channel width. Aviation voice is allocated 8.5 kHz (25 kHz spacing in
+/// the airband); 10 kHz covers broadcast shortwave without pulling in the
+/// neighbours on crowded bands.
+pub const AM_BANDWIDTH_HZ: f32 = 10_000.0;
+
 /// How far the hardware LO is placed above the frequency being displayed when
 /// the LO offset is on, as a fraction of the sampled rate.
 ///
@@ -114,6 +119,9 @@ pub enum SdrMode {
     /// Narrowband FM plus the full digital classifier. The default.
     #[default]
     Nfm,
+    /// Amplitude modulation: HF airband and broadcast. The classifier's FM
+    /// discriminators have nothing to say about an envelope-modulated carrier.
+    Am,
     /// Broadcast FM, for listening. The classifier is not run: none of what it
     /// looks for exists in a 200 kHz music channel.
     Wfm,
@@ -135,6 +143,7 @@ impl SdrMode {
     fn bandwidth_hz(self) -> f32 {
         match self {
             SdrMode::Nfm => INSPECT_BANDWIDTH_HZ,
+            SdrMode::Am => AM_BANDWIDTH_HZ,
             SdrMode::Wfm => WFM_BANDWIDTH_HZ,
             SdrMode::Packet => PACKET_BANDWIDTH_HZ,
             SdrMode::P25 => C4FM_BANDWIDTH_HZ,
@@ -930,6 +939,10 @@ enum Demod {
         pocsag: Vec<PocsagDecoder>,
         flex: FlexDecoder,
     },
+    Am {
+        demod: scannerd_engine::am::AmDemod,
+        audio: Vec<f32>,
+    },
     P25 {
         rx: Box<P25ChannelReceiver>,
     },
@@ -1010,6 +1023,10 @@ impl Demod {
                 flex: FlexDecoder::new(fs_out),
             },
             SdrMode::Nfm => Demod::Nfm,
+            SdrMode::Am => Demod::Am {
+                demod: scannerd_engine::am::AmDemod::new(fs_out),
+                audio: Vec::new(),
+            },
             SdrMode::Wfm => {
                 let decim = (fs_out / 48_000.0).round().max(1.0) as usize;
                 Demod::Wfm {
@@ -2458,6 +2475,26 @@ fn run_sdr(
         // — ppm drift plus click imprecision — rides one skirt of the channel
         // filter and POCSAG/FLEX syncs get missed.
         let classification = match current_mode {
+            SdrMode::Am => {
+                // No classifier: its measurements are FM-specific (deviation,
+                // quieting, protocol syncs) and would read nonsense against an
+                // envelope-modulated carrier. Demodulate straight to audio.
+                if let Demod::Am {
+                    demod: am,
+                    audio,
+                } = &mut demod
+                {
+                    am.process(&inspect_iq, audio);
+                    audio_buf.extend_from_slice(audio);
+                    scope_src.clear();
+                    scope_src.extend_from_slice(audio);
+                }
+                ClassificationResult {
+                    active: true,
+                    modulation: "AM".into(),
+                    ..Default::default()
+                }
+            }
             SdrMode::Nfm | SdrMode::Packet => {
                 // Steer the mix toward the carrier while one is present. The
                 // discriminator DC of a centred FM carrier is zero; anything

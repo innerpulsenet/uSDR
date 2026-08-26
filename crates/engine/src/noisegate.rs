@@ -34,6 +34,12 @@ const OPEN_S: f32 = 0.004;
 /// Seconds to ramp fully closed. Slightly longer, so ordinary speech dynamics
 /// do not make the gain chatter audibly.
 const CLOSE_S: f32 = 0.015;
+/// How long the envelope may sit inside the hysteresis gap while the gate is
+/// closed before ambiguity resolves as "probably a weak carrier" and the gate
+/// opens. Long enough that pure noise — which rides *above* `close_level`,
+/// not in the gap — never trips it; short enough that a carrier arriving mid-
+/// sentence is heard within a couple of seconds.
+const AMBIGUOUS_S: f32 = 1.5;
 
 pub struct NoiseGate {
     open_level: f32,
@@ -45,6 +51,17 @@ pub struct NoiseGate {
     smooth: OnePole,
     /// Fraction of the last block that was passed, for reporting.
     last_duty: f32,
+    fs: f32,
+    /// Samples the smoothed envelope has continuously sat in the hysteresis
+    /// gap between `open_level` and `close_level` while closed. That gap is
+    /// where a WEAK carrier's partial quieting lands: strong enough to pull
+    /// the band below the close threshold, too weak to reach the open one.
+    /// Left unbounded it latches the gate shut over real traffic — which is
+    /// also what a scope fed from the gated audio would show as a dead
+    /// flatline. Past [`AMBIGUOUS_S`] seconds of ambiguity the gate opens
+    /// anyway; if it truly is noise, the band climbs and the gate re-closes
+    /// on its own within milliseconds.
+    ambiguous_for: usize,
 }
 
 impl NoiseGate {
@@ -66,6 +83,8 @@ impl NoiseGate {
             // a single noisy sample cannot slam the gate shut mid-word.
             smooth: OnePole::new(0.008 * fs),
             last_duty: 0.0,
+            fs,
+            ambiguous_for: 0,
         }
     }
 
@@ -89,9 +108,21 @@ impl NoiseGate {
             if self.open {
                 if level > self.close_level {
                     self.open = false;
+                    self.ambiguous_for = 0;
                 }
             } else if level < self.open_level {
                 self.open = true;
+                self.ambiguous_for = 0;
+            } else {
+                // In the gap: either hysteresis doing its job on a real
+                // carrier, or a weak one that will never cross either edge.
+                // Count how long, and resolve stalemates toward open so a
+                // marginal signal is heard (and shown on any gated scope).
+                self.ambiguous_for += 1;
+                if self.ambiguous_for >= (AMBIGUOUS_S * self.fs).max(1.0) as usize {
+                    self.open = true;
+                    self.ambiguous_for = 0;
+                }
             }
             let target = if self.open { 1.0 } else { 0.0 };
             let step = if self.open {
@@ -113,6 +144,7 @@ impl NoiseGate {
         self.gain = 0.0;
         self.open = false;
         self.last_duty = 0.0;
+        self.ambiguous_for = 0;
     }
 }
 
@@ -253,6 +285,33 @@ mod tests {
                 pair[1]
             );
         }
+    }
+
+    /// The weak-carrier latch: a carrier whose partial quieting parks the
+    /// noise band inside the hysteresis gap must not hold the gate shut
+    /// forever. Before the ambiguity timer this exact case silenced NFM
+    /// audio and flatlined any scope fed from the gated path.
+    #[test]
+    fn a_weak_carrier_in_the_hysteresis_gap_reopens() {
+        let mut gate = NoiseGate::new(FS as f64);
+        // A steady mid-gap envelope: below close_level (0.045), above
+        // open_level (0.020). Voice content is irrelevant; what is under
+        // test is the gate's own state machine.
+        let voice = vec![1.0f32; 3 * FS as usize]; // 3 s
+        let noise = vec![0.03f32; voice.len()];
+        let mut gated = voice.clone();
+        gate.process(&mut gated, &noise);
+        assert!(
+            gate.duty() > 0.9,
+            "gate stayed latched shut on a mid-gap band (duty {})",
+            gate.duty()
+        );
+        // And pure noise — which rides above close_level — still holds it shut.
+        let mut gate2 = NoiseGate::new(FS as f64);
+        let loud_noise = vec![0.20f32; FS as usize];
+        let mut quiet_voice = vec![1.0f32; FS as usize];
+        gate2.process(&mut quiet_voice, &loud_noise);
+        assert!(gate2.duty() < 0.05, "gate opened on full-scale noise");
     }
 
     #[test]

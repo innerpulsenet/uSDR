@@ -556,17 +556,6 @@ impl RawFrame {
 }
 
 impl Lane {
-    /// Whether this block will end with the lane holding a finished capture.
-    /// Checked at the top of a block: if the lane is mid-frame and that frame
-    /// completes within it, it parks instead of returning immediately.
-    fn state_completes_this_block(&self) -> bool {
-        matches!(self.state, LaneState::Slicing { .. })
-            || matches!(
-                &self.state,
-                LaneState::Data { symbols, needed, .. } if symbols.len() >= needed.saturating_sub(1)
-            )
-    }
-
     /// Take the parked capture out of Slicing and return to hunting.
     fn release_lane(lane: &mut Lane) -> Option<(RawFrame, f32)> {
         if let LaneState::Slicing {
@@ -940,6 +929,10 @@ type BitReliabilities = [f32; 32];
 struct CorrectedPhase {
     words: [Option<u32>; WORDS_PER_PHASE],
     errors: [u8; WORDS_PER_PHASE],
+    /// Retained with the corrected words so later passes (checksum-guided
+    /// recovery over an erased word) can weight candidates by bit confidence
+    /// without re-slicing.
+    #[allow(dead_code)]
     reliabilities: [BitReliabilities; WORDS_PER_PHASE],
 }
 

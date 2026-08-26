@@ -2,6 +2,7 @@
 
 pub mod adsb;
 pub mod afc;
+pub mod am;
 pub mod afsk;
 pub mod aprs;
 pub mod biquad;
