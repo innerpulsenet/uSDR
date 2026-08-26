@@ -16,7 +16,7 @@ use std::collections::{HashMap, VecDeque};
 use std::time::{Duration, Instant};
 
 const SYNC_MARKER: u32 = 0xA6C6_AAAA;
-const A_1600_2: u16 = 0x870C;
+pub(crate) const A_1600_2: u16 = 0x870C;
 const A_1600_4: u16 = 0xB068;
 const A_3200_2: u16 = 0x7B18;
 const A_3200_4: u16 = 0xDEA0;
@@ -2024,7 +2024,7 @@ impl std::hash::Hash for FlexFormat {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     fn fiw(cycle: u8, frame: u8) -> u32 {
@@ -2071,7 +2071,7 @@ mod tests {
 
     /// Same frame rendered at an arbitrary audio rate, so tests can ask what
     /// samples per symbol the fast FLEX modes actually need.
-    fn discriminator_frame_at(
+    pub(crate) fn discriminator_frame_at(
         fs: usize,
         mode_code: u16,
         page_phase: usize,
@@ -2437,7 +2437,7 @@ mod tests {
     /// `false_positives` counts pages emitted that were NOT the injected one —
     /// miscorrected vectors, orphan fragments, checksum failures published as
     /// text. A change is only a win if good pages rise while this stays flat.
-    fn noisy_trial(
+    pub(crate) fn noisy_trial(
         fs: usize,
         mode_code: u16,
         page_phase: usize,
