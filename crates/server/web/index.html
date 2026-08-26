@@ -731,7 +731,7 @@
         <span id="sdrReplayStatus" class="sdr-replay-status">I/Q replay uses the same native decoders as live inspection.</span>
       </div>
       <div id="sdrDecodeLog" class="sdr-decode-log">
-        <div class="data-empty">Waiting for P25, DMR, NXDN, ProVoice, EDACS/ESK, X2-TDMA, dPMR, M17, YSF, D-STAR, trunking, pager, and decoder diagnostics…</div>
+        <div class="data-empty">Waiting for P25, DMR, NXDN, ProVoice, EDACS/ESK, X2-TDMA, dPMR, YSF, D-STAR, trunking, pager, and decoder diagnostics…</div>
       </div>
       <div class="bytes-pane">
         <div class="bytes-head">
@@ -1940,12 +1940,12 @@ let scopeLastKind = null;
 /// it is not showing.
 function setScopeChrome(kind) {
   const title = $('scopeTitle');
-  if (title && title.textContent !== (kind === 'symbols' ? 'SYMBOL SCOPE'
-      : kind === 'mpx' ? 'FM MULTIPLEX'
-      : 'AUDIO SCOPE')) {
-    title.textContent = kind === 'symbols' ? 'SYMBOL SCOPE'
-      : kind === 'mpx' ? 'FM MULTIPLEX'
-      : 'AUDIO SCOPE';
+  const want = kind === 'symbols' ? 'SYMBOL SCOPE'
+    : kind === 'mpx' ? 'FM MULTIPLEX'
+    : sdrMode === 'pager' ? 'PAGER CHANNEL'
+    : 'AUDIO SCOPE';
+  if (title && title.textContent !== want) {
+    title.textContent = want;
   }
 }
 
@@ -2090,6 +2090,7 @@ function drawAudioScope(scope, rateHz) {
   wc.beginPath(); wc.moveTo(0, WH / 2 + 0.5); wc.lineTo(WW, WH / 2 + 0.5); wc.stroke();
 
   let rms = 0;
+  let mean = 0;
   if (samples.length) {
     wc.strokeStyle = '#2bff6a';
     wc.lineWidth = 1.2;
@@ -2097,15 +2098,66 @@ function drawAudioScope(scope, rateHz) {
     for (let i = 0; i < samples.length; i++) {
       const v = samples[i] / 32000;
       rms += v * v;
+      mean += v;
       const x = (i / (samples.length - 1)) * WW;
       const y = WH / 2 - v * (WH / 2 - 3);
       i ? wc.lineTo(x, y) : wc.moveTo(x, y);
     }
     wc.stroke();
     rms = Math.sqrt(rms / samples.length);
+    mean /= samples.length;
+  }
+  // PAGER: the trace is the live sweep channel's discriminator, scaled to
+  // ±8 kHz. What matters on a paging channel is whether the FLEX symbol
+  // levels (±1.6 and ±4.8 kHz = 0.2/0.6 of full scale) separate cleanly,
+  // and how far the carrier sits from centre — the drift the receiver is
+  // riding. Draw the nominal levels, a histogram of where the samples
+  // actually landed, and the mean as the offset readout.
+  if (sdrMode === 'pager') {
+    const levels = [0.6, 0.2, -0.2, -0.6];
+    wc.strokeStyle = 'rgba(255,180,40,0.35)';
+    wc.setLineDash([4, 4]);
+    wc.beginPath();
+    for (const lv of levels) {
+      const y = Math.round(WH / 2 - lv * (WH / 2 - 3)) + 0.5;
+      wc.moveTo(0, y); wc.lineTo(WW * 0.76, y);
+    }
+    wc.stroke();
+    wc.setLineDash([]);
+    wc.font = '9px ui-monospace, monospace';
+    wc.fillStyle = 'rgba(255,180,40,0.7)';
+    wc.fillText('+3', 2, Math.round(WH / 2 - 0.6 * (WH / 2 - 3)) - 2);
+    wc.fillText('−3', 2, Math.round(WH / 2 + 0.6 * (WH / 2 - 3)) + 10);
+    const hist = [0, 0, 0, 0];
+    let total = 0;
+    wc.fillStyle = 'rgba(43,255,106,0.55)';
+    for (let i = 0; i < samples.length; i += 4) {
+      const v = samples[i] / 32000;
+      let best = 0, bd = 9;
+      for (let k = 0; k < levels.length; k++) {
+        const d = Math.abs(v - levels[k]);
+        if (d < bd) { bd = d; best = k; }
+      }
+      hist[best]++;
+      total++;
+    }
+    const denom = total || 1;
+    for (let k = 0; k < levels.length; k++) {
+      const y = WH / 2 - levels[k] * (WH / 2 - 3);
+      const wpx = (hist[k] / denom) * (WW * 0.20);
+      wc.fillRect(WW - wpx, y - 2, wpx, 4);
+    }
   }
   const lvl = rms > 1e-5 ? (20 * Math.log10(rms)).toFixed(0) : null;
-  if ($('scopeLevel')) $('scopeLevel').textContent = 'LEVEL: ' + (lvl === null ? '—' : lvl + 'dB');
+  if ($('scopeLevel')) {
+    // On the pager channel the useful level figure is where the carrier
+    // sits, not how loud it is: the discriminator's mean × the 8 kHz
+    // full-scale reference is the offset the decoders are riding.
+    $('scopeLevel').textContent = sdrMode === 'pager'
+      ? 'OFFSET: ' + (Math.abs(mean) > 1e-4
+          ? ((mean * 8000 >= 0 ? '+' : '') + (mean * 8000 / 1000).toFixed(2) + 'kHz') : '—')
+      : 'LEVEL: ' + (lvl === null ? '—' : lvl + 'dB');
+  }
   if ($('scopeTime') && rateHz) {
     const perDiv = (samples.length / rateHz) * 1000 / 8;
     $('scopeTime').textContent = perDiv >= 1
@@ -2996,6 +3048,14 @@ function updateSdrStatus(s) {
       : (Math.abs(s.freq_error_hz) > 2000 ? 'var(--amber)' : '');
   }
   if ($('chkClipGuard')) $('chkClipGuard').checked = !!s.clip_guard;
+  // The pager sweep announces itself in the classifier details line: which
+  // channel the dwell is on beats a static "sweeping…" string when pages
+  // seem to come from the wrong frequency.
+  if (sdrMode === 'pager' && $('sdrClassDetails')) {
+    $('sdrClassDetails').textContent = s.pager_sweep
+      ? `sweeping POCSAG/FLEX · ${s.pager_sweep}`
+      : 'sweeping POCSAG/FLEX across ±480 kHz';
+  }
   if ($('sdrAgc')) {
     $('sdrAgc').checked = s.gain_db == null;
     $('sdrGainRange').disabled = s.gain_db == null;
@@ -3108,9 +3168,11 @@ function onSdrFftBinary(buf, view) {
   const rateHz = f64();
   const peakIq = f32();
   const inspectHz = f64();
-  const scopeRateHz = view.getInt16(off, true) / 100; off += 2;
+  // Rates travel x10 in a u16; the old x100 fields saturated (a 96 kHz pager
+  // scope read as 327.67 kHz, 4800 Bd as 65535).
+  const scopeRateHz = view.getUint16(off, true) / 10; off += 2;
   const scopeKindByte = view.getUint8(off); off += 1;
-  const symbolRateHz = view.getUint16(off, true) / 100; off += 2;
+  const symbolRateHz = view.getUint16(off, true) / 10; off += 2;
   const channelDbfs = f32();
   const noiseDbfs = f32();
 

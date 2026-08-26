@@ -77,9 +77,13 @@ pub const WFM_DEVIATION_HZ: f32 = 75_000.0;
 /// Broadcast FM in the Americas and Korea is 75 µs de-emphasis; 50 µs
 /// elsewhere. Fixed at 75 µs here rather than pretending to detect it.
 pub const WFM_DEEMPHASIS_TAU: f32 = 75e-6;
-/// Packet listens through a normal narrow channel — 1200 baud AFSK lives
-/// inside the same 12.5/25 kHz slot voice does.
-pub const PACKET_BANDWIDTH_HZ: f32 = 15_000.0;
+/// Pager FSK needs more acquisition width than voice: FLEX's outer level is
+/// about ±4.8 kHz and the AFC can inherit ±6.5 kHz of RTL crystal error. A
+/// 15 kHz filter clipped that signal before the AFC or decoder could measure
+/// it. multimon-ng is normally fed a 22.05 kHz discriminator stream; passing
+/// 25 kHz here gives equivalent acquisition room while still rejecting the
+/// adjacent 25 kHz channel centre.
+pub const PACKET_BANDWIDTH_HZ: f32 = 25_000.0;
 
 /// Half-width the PAGER sweep covers either side of the tuned frequency.
 /// The 929/931 MHz paging plans span about a megahertz; ±480 kHz at a 25 kHz
@@ -199,10 +203,13 @@ impl SdrMode {
             // Symbols are sent at the channel rate — decimating an eye
             // diagram destroys the thing it is meant to show.
             SdrMode::P25 | SdrMode::Dmr | SdrMode::Auto => 48_000.0,
-            // The live pager channel at its decoded rate: 96 kS/s shows the
-            // 1600/3200 sym/s FLEX patterns and POCSAG baud changes as they
-            // are, which is the alignment aid.
-            SdrMode::Pager => 96_000.0,
+            // The live pager channel, box-decimated from the bank's channel
+            // rate down to 48 kS/s: a ±24 kHz axis brackets the ±4.8 kHz
+            // FLEX deviation levels with room for several kHz of drift, and
+            // the longer window shows whole symbol runs instead of a 5 ms
+            // slice. (The channel itself runs at span/round(span/96 kHz),
+            // which is why this is a decimation and not a passthrough.)
+            SdrMode::Pager => 48_000.0,
             _ => 8_000.0,
         }
     }
@@ -311,6 +318,12 @@ pub struct SdrStatus {
     /// from, and what tells the operator the dial is lying.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub freq_error_hz: Option<f64>,
+    /// PAGER sweep position, when the mode is walking the paging band: which
+    /// channel is live and where it sits. Emitted on every dwell step.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pager_sweep: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pager_live_hz: Option<f64>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -467,10 +480,14 @@ pub fn encode_fft_frame(ev: &SdrEvent) -> Option<Vec<u8>> {
     buf.extend_from_slice(&rate_hz.to_le_bytes());
     buf.extend_from_slice(&peak_iq.to_le_bytes());
     buf.extend_from_slice(&inspect_hz.to_le_bytes());
-    // Rates x100 as i16: kHz-scale rates fit and the client divides back.
-    buf.extend_from_slice(&((scope_rate_hz * 100.0) as i16).to_le_bytes());
+    // Rates x10 as u16. The old x100 fields saturated their integers: a
+    // 96 kHz pager scope rate pinned an i16 at 32 767 (the browser read
+    // 327.67 kHz) and 4800/6400 Bd symbol rates pinned a u16 at 65 535,
+    // which drew P25/DMR eye diagrams against 655 Bd. x10 keeps 100 Hz
+    // resolution out to 6.5 MHz, which covers every rate either field holds.
+    buf.extend_from_slice(&((scope_rate_hz * 10.0) as u16).to_le_bytes());
     buf.push(scope_kind_byte(scope_kind));
-    buf.extend_from_slice(&((symbol_rate_hz * 100.0) as u16).to_le_bytes());
+    buf.extend_from_slice(&((symbol_rate_hz * 10.0) as u16).to_le_bytes());
     buf.extend_from_slice(&channel_dbfs.to_le_bytes());
     buf.extend_from_slice(&noise_dbfs.to_le_bytes());
     // Scope rides along: same i16 samples the JSON path shipped.
@@ -1236,7 +1253,7 @@ fn flex_event(msg: &scannerd_engine::FlexMessage) -> DecodeEvent {
         match msg.format {
             FlexFormat::Secure => "secure".into(),
             FlexFormat::ShortInstruction => "short instruction".into(),
-            FlexFormat::ToneOnly => "tone only".into(),
+            FlexFormat::ShortMessage => "short message / tone".into(),
             FlexFormat::StandardNumeric => "standard numeric".into(),
             FlexFormat::SpecialNumeric => "special numeric".into(),
             FlexFormat::Alphanumeric => "alphanumeric".into(),
@@ -1309,18 +1326,25 @@ fn flex_event(msg: &scannerd_engine::FlexMessage) -> DecodeEvent {
     if !msg.raw_words.is_empty() {
         fields.insert("rawWords".into(), hex_words(&msg.raw_words));
     }
+    let checksum_failed = msg.payload_checksum_ok == Some(false);
     DecodeEvent {
         protocol: "FLEX".into(),
         kind: "page".into(),
         summary: match (&msg.parsed, msg.text.is_empty()) {
+            (Some(p), _) if checksum_failed => {
+                format!("{} · {} · checksum failed", msg.capcode, p)
+            }
             (Some(p), _) => format!("{} · {}", msg.capcode, p),
-            (_, true) if msg.format == FlexFormat::ToneOnly => {
+            (_, true) if msg.format == FlexFormat::ShortMessage => {
                 format!("{} · tone", msg.capcode)
             }
             (_, true) => format!("{} · no text", msg.capcode),
+            (_, false) if checksum_failed => {
+                format!("{} · {} · checksum failed", msg.capcode, msg.text)
+            }
             (_, false) => format!("{} · {}", msg.capcode, msg.text),
         },
-        valid: true,
+        valid: !checksum_failed && msg.fec_uncorrectable == 0,
         fields,
     }
 }
@@ -1718,6 +1742,8 @@ fn run_sdr(
             bandwidth_hz: f64::from(current_mode.bandwidth_hz()),
             spurs_hz: Vec::new(),
             freq_error_hz: None,
+            pager_sweep: None,
+            pager_live_hz: None,
         };
     }
 
@@ -1755,6 +1781,9 @@ fn run_sdr(
     let mut pager_bank: Option<scannerd_engine::pager_bank::PagerBank> = None;
     let mut pager_rate_cache = 0.0f64;
     let mut pager_live_audio: Vec<f32> = Vec::new();
+    // Whether the pager sweep readout needs republishing (dwell stepped or
+    // bank rebuilt).
+    let mut pager_sweep_dirty = true;
     let mut block_ms: u64;
     let mut mon_leveler = Leveler::new(8_000.0);
     let mut mon_notch = AutoNotch::new(8_000.0);
@@ -1767,7 +1796,11 @@ fn run_sdr(
     // the skirt of the channel filter and syncs get missed. The AFC steers
     // the mix NCO so the carrier rides centred. It only integrates while a
     // signal is actually present, so an idle channel cannot walk it away.
-    let mut afc = scannerd_engine::Afc::new(0.0, 5_000.0).with_alpha(0.10);
+    // The ±6.5 kHz range fits comfortably inside the 25 kHz packet channel:
+    // at 900 MHz an RTL crystal drifts several ppm between calibrations, and
+    // the old narrow acquisition path left the outer deviation sliced by the
+    // filter skirt — POCSAG text decoded, but garbled.
+    let mut afc = scannerd_engine::Afc::new(0.0, 6_500.0).with_alpha(0.10);
     // Last correction actually applied to the chain NCO, so the offset write
     // happens only when the loop has moved meaningfully.
     let mut afc_last_reported = 0.0f32;
@@ -2046,6 +2079,11 @@ fn run_sdr(
                         s.max_freq_hz = current_freq + shown / 2.0;
                         s.audio_rate_hz = demod.audio_rate(inspect_chain.fs_out());
                         s.inspect_rate_hz = inspect_chain.fs_out();
+                        if current_mode != SdrMode::Pager {
+                            s.pager_sweep = None;
+                            s.pager_live_hz = None;
+                        }
+                        pager_sweep_dirty = true;
                         let _ = events.send(SdrEvent::Status(s.clone()));
                     }
                 }
@@ -2473,11 +2511,33 @@ fn run_sdr(
                     PAGER_HALF_BAND_HZ,
                 ));
                 pager_rate_cache = span_rate;
+                pager_sweep_dirty = true;
             }
             if let Some(bank) = pager_bank.as_mut()
                 && bank.since_step_exceeds_ms(scannerd_engine::pager_bank::DWELL_MS)
             {
                 bank.step();
+                pager_sweep_dirty = true;
+            }
+            // Publish the sweep position whenever it moves: the operator
+            // watching for pages wants to know which channel is live without
+            // reading the marker off the waterfall.
+            if pager_sweep_dirty {
+                pager_sweep_dirty = false;
+                if let Some(bank) = pager_bank.as_ref() {
+                    let off = bank.live_offset_hz();
+                    let live_hz = inspect_hz + off;
+                    let mut s = status.lock().unwrap();
+                    s.pager_sweep = Some(format!(
+                        "channel {}/{} · {}{:.0} kHz",
+                        bank.live_index() + 1,
+                        bank.len(),
+                        if off < 0.0 { "−" } else { "+" },
+                        off.abs() / 1000.0
+                    ));
+                    s.pager_live_hz = Some(live_hz);
+                    let _ = events.send(SdrEvent::Status(s.clone()));
+                }
             }
         } else {
             pager_bank = None;
@@ -2540,17 +2600,21 @@ fn run_sdr(
                     audio_buf.extend_from_slice(&live_audio);
                     pager_live_audio.clear();
                     pager_live_audio.extend_from_slice(&live_audio);
+                    // Labels belong on the channel that decoded, not on the
+                    // tune frequency: a marker at the centre of the band
+                    // claiming "FLEX" points the operator at empty air.
+                    let live_hz = inspect_hz + bank.live_offset_hz();
                     for msg in flex_msgs {
-                        decode_history.note(inspect_hz, "FLEX");
+                        decode_history.note(live_hz, "FLEX");
                         let _ = events.send(SdrEvent::Decode {
-                            inspect_hz: inspect_hz + bank.live_offset_hz(),
+                            inspect_hz: live_hz,
                             event: flex_event(&msg),
                         });
                     }
                     for msg in pocsag_msgs {
-                        decode_history.note(inspect_hz, "POCSAG");
+                        decode_history.note(live_hz, "POCSAG");
                         let _ = events.send(SdrEvent::Decode {
-                            inspect_hz: inspect_hz + bank.live_offset_hz(),
+                            inspect_hz: live_hz,
                             event: pocsag_event(&msg),
                         });
                     }
@@ -2586,8 +2650,13 @@ fn run_sdr(
                 afc.observe(last_center_offset_hz, last_snr_db > 2.5);
                 let corr = afc.correction_hz();
                 if (corr - afc_last_reported).abs() >= 50.0 {
+                    // Based on the CONFIRMED tuning: a tune this dongle
+                    // refused leaves current_freq ahead of the hardware, and
+                    // steering against the request would re-mix the chain off
+                    // the frequency the State event had already corrected it
+                    // to.
                     inspect_chain.set_offset(
-                        inspect_hz - current_freq
+                        inspect_hz - tuned_freq
                             - lo_offset_for(current_rate, lo_offset, current_mode)
                             + f64::from(corr),
                     );
@@ -2627,8 +2696,13 @@ fn run_sdr(
                 afc.observe(last_center_offset_hz, last_snr_db > 2.5);
                 let corr = afc.correction_hz();
                 if (corr - afc_last_reported).abs() >= 50.0 {
+                    // Based on the CONFIRMED tuning: a tune this dongle
+                    // refused leaves current_freq ahead of the hardware, and
+                    // steering against the request would re-mix the chain off
+                    // the frequency the State event had already corrected it
+                    // to.
                     inspect_chain.set_offset(
-                        inspect_hz - current_freq
+                        inspect_hz - tuned_freq
                             - lo_offset_for(current_rate, lo_offset, current_mode)
                             + f64::from(corr),
                     );
@@ -3004,9 +3078,25 @@ fn run_sdr(
                 }
             }
             SdrMode::Pager => {
-                scope_src.extend_from_slice(&pager_live_audio);
-                scope_src_rate = scannerd_engine::pager_bank::PAGER_CHANNEL_RATE;
-                scope_dev_scale = 8_000.0;
+                // Normalised against the channel discriminator's full-scale
+                // reference, like every other mode's trace. The raw hertz used
+                // to go through the ±1 clamp meant for pre-normalised traces,
+                // which squared the waveform off at full scale — a scope that
+                // showed noise as a blizzard of rail-to-rail edges.
+                scope_src.extend(
+                    pager_live_audio
+                        .iter()
+                        .map(|&hz| hz / scannerd_engine::pager_bank::PAGER_DEVIATION_HZ),
+                );
+                // The source rate is what the bank really delivers
+                // (span/every — 97 523.8 Hz at a 2.048 MS/s span); the
+                // decimation below box-averages it down to the mode's
+                // 48 kHz scope rate, which is what the axis is labelled with.
+                scope_src_rate = pager_bank
+                    .as_ref()
+                    .map(|b| b.channel_rate())
+                    .unwrap_or(scannerd_engine::pager_bank::PAGER_CHANNEL_RATE);
+                scope_dev_scale = scannerd_engine::pager_bank::PAGER_DEVIATION_HZ;
             }
             SdrMode::Nfm | SdrMode::Packet | SdrMode::Auto => {
                 // The RAW discriminator, not the gated monitor audio: dead air
@@ -3026,7 +3116,17 @@ fn run_sdr(
             }
         }
 
-        let audio_rate = demod.audio_rate(fs_chain);
+        // PAGER's monitor audio is the live channel's discriminator, which
+        // runs at the bank's channel rate — labelling it with the inspect
+        // chain's rate played every page back roughly an octave slow.
+        let audio_rate = if current_mode == SdrMode::Pager {
+            pager_bank
+                .as_ref()
+                .map(|b| b.channel_rate())
+                .unwrap_or(fs_chain)
+        } else {
+            demod.audio_rate(fs_chain)
+        };
         if !audio_buf.is_empty() && audio_rate > 0.0 {
             let _ = audio_tx.send(AudioFrame {
                 rate_hz: audio_rate.round() as u32,
@@ -3156,7 +3256,22 @@ fn run_sdr(
             );
             last_snr_db = channel_dbfs - noise_dbfs;
             // Only meaningful when something is actually there to measure.
-            if channel_dbfs - noise_dbfs > 3.0
+            // PAGER measures differently: there is no clicked carrier to
+            // centroid (the mode's "bandwidth" is the whole sweep span), so
+            // the live channel's decoders report the offset their sync-time
+            // DC reference settled on — which is exactly the figure a ppm
+            // calibration needs, and the only honest one on a channel whose
+            // idle content biases any raw discriminator mean.
+            if current_mode == SdrMode::Pager {
+                if let Some(err) =
+                    pager_bank.as_ref().and_then(|b| b.carrier_offset_hz())
+                {
+                    freq_error_hz = Some(match freq_error_hz {
+                        Some(prev) => prev + (err - prev) * 0.15,
+                        None => err,
+                    });
+                }
+            } else if channel_dbfs - noise_dbfs > 3.0
                 && let Some(err) = carrier_offset_hz(
                     shown,
                     shown_rate,
@@ -3265,7 +3380,7 @@ fn run_sdr(
                 classification: Some(classification),
                 peaks,
                 scope: scope.iter().copied().collect(),
-                scope_rate_hz: current_mode.scope_rate_hz(),
+                scope_rate_hz: current_mode.scope_rate_hz().min(scope_src_rate as f32),
                 scope_kind: current_mode.scope_kind(),
                 symbol_rate_hz: current_mode.symbol_rate_hz(),
                 channel_dbfs,

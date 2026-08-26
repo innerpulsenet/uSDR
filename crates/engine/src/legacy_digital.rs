@@ -3,8 +3,13 @@
 //!
 //! This is deliberately more than a baud-rate guess and deliberately less
 //! than a full decoder. Long sync words can qualify one frame directly. The
-//! short M17, YSF, and X2-TDMA words must recur at their specified frame
-//! cadence so random 2/4-FSK cannot claim protocol ownership.
+//! short YSF and X2-TDMA words must recur at their specified frame cadence
+//! so random 2/4-FSK cannot claim protocol ownership.
+//!
+//! M17 was removed: its 8-symbol sync words fired as phantom decodes on
+//! 4-level paging traffic (the sign slicer maps FLEX's four levels onto two,
+//! and an 8-bit pattern recurs at the required cadence far too easily), and
+//! no M17 signal was ever present to decode.
 
 use std::collections::BTreeMap;
 
@@ -120,24 +125,6 @@ const SPECS: &[SyncSpec] = &[
         pattern: "31111311313113131131",
         max_errors: 0,
         cadence: Some((480, 2)),
-    },
-    SyncSpec {
-        protocol: "M17",
-        kind: "link setup frame",
-        baud: 4800,
-        modulation: "4-FSK",
-        pattern: "11113313",
-        max_errors: 0,
-        cadence: Some((192, 3)),
-    },
-    SyncSpec {
-        protocol: "M17",
-        kind: "stream frame",
-        baud: 4800,
-        modulation: "4-FSK",
-        pattern: "33331131",
-        max_errors: 0,
-        cadence: Some((192, 3)),
     },
     SyncSpec {
         protocol: "dPMR",
@@ -364,24 +351,17 @@ mod tests {
         assert!(got.iter().any(|frame| frame.protocol == "EDACS / ESK"));
     }
 
+    /// The ghost that got M17 removed: a 4-level paging-shaped waveform must
+    /// not qualify ANY family, let alone one that is not on the air. The
+    /// pattern/cadence pair below is what FLEX traffic happily produced.
     #[test]
-    fn one_short_m17_sync_is_not_enough() {
-        let one = waveform("33331131", 4800, 1, 192);
+    fn four_level_paging_shaped_noise_claims_no_family() {
+        let cadence_stream = waveform("33331131", 4800, 3, 192);
+        let got = decode_window(&cadence_stream, 48_000.0);
         assert!(
-            !decode_window(&one, 48_000.0)
-                .iter()
-                .any(|frame| frame.protocol == "M17")
+            got.iter().all(|frame| frame.protocol != "M17"),
+            "M17 must stay removed: {got:?}"
         );
-    }
-
-    #[test]
-    fn three_cadenced_m17_syncs_qualify_streaming() {
-        let got = decode_window(&waveform("33331131", 4800, 3, 192), 48_000.0);
-        let frame = got
-            .iter()
-            .find(|frame| frame.protocol == "M17")
-            .expect("cadenced M17 frames");
-        assert_eq!(frame.cadence_hits, 3);
     }
 
     #[test]

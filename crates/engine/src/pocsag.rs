@@ -78,6 +78,11 @@ pub struct PocsagDiagnostics {
     pub msg_words: u64,
     pub idle_words: u64,
     pub last_sync_baud: Option<u32>,
+    /// Carrier offset measured by the lane's DC reference when sync was
+    /// acquired, in Hz. POCSAG's alternating preamble is DC-free, so the
+    /// settled reference at the sync word is an honest frequency-error
+    /// measurement, unlike a raw discriminator mean.
+    pub last_carrier_offset_hz: Option<f32>,
     pub events: Vec<String>,
 }
 
@@ -109,6 +114,63 @@ struct BitSlicer {
     dc: f32,
     /// Reliability of the most recent decision, 0 (coin flip) .. 1 (solid).
     last_soft: f32,
+    multimon: Option<MultimonPocsagClock>,
+}
+
+/// Transition-driven POCSAG clock used by multimon-ng. It samples the held
+/// discriminator sign and nudges its phase by one eighth of an increment at
+/// every transition. One of these runs beside the integrate/Gardner lanes so
+/// uSDR accepts the same shaped audio that the reference decoder does.
+struct MultimonPocsagClock {
+    fs: f64,
+    baud: u32,
+    phase: f64,
+    previous_bit: bool,
+    dc: f32,
+    dc_alpha: f32,
+    level: f32,
+}
+
+impl MultimonPocsagClock {
+    fn new(fs: f64, baud: u32) -> Self {
+        Self {
+            fs,
+            baud,
+            phase: 0.0,
+            previous_bit: false,
+            dc: 0.0,
+            dc_alpha: (1.0 / (fs * 0.010 + 1.0)) as f32,
+            level: 1.0,
+        }
+    }
+
+    fn reset(&mut self) {
+        *self = Self::new(self.fs, self.baud);
+    }
+
+    fn push(&mut self, sample: f32, hunting: bool) -> Option<(bool, f32)> {
+        if hunting {
+            self.dc += self.dc_alpha * (sample - self.dc);
+        }
+        let centered = sample - self.dc;
+        let bit = centered > 0.0;
+        self.level += 0.01 * (centered.abs() - self.level);
+        let increment = f64::from(self.baud) / self.fs;
+        if bit != self.previous_bit {
+            if self.phase < 0.5 - increment * 0.5 {
+                self.phase += increment / 8.0;
+            } else {
+                self.phase -= increment / 8.0;
+            }
+        }
+        self.previous_bit = bit;
+        self.phase += increment;
+        if self.phase < 1.0 {
+            return None;
+        }
+        self.phase -= 1.0;
+        Some((bit, (centered.abs() / self.level.max(1.0)).min(1.0)))
+    }
 }
 
 impl BitSlicer {
@@ -125,7 +187,14 @@ impl BitSlicer {
             n_second: 0,
             dc: 0.0,
             last_soft: 1.0,
+            multimon: None,
         }
+    }
+
+    fn new_multimon(fs: f64, baud: u32) -> Self {
+        let mut slicer = Self::new(fs, baud, 0);
+        slicer.multimon = Some(MultimonPocsagClock::new(fs, baud));
+        slicer
     }
 
     /// Reliability of the most recent sliced bit (see `last_soft`).
@@ -134,6 +203,9 @@ impl BitSlicer {
     }
 
     fn reset(&mut self) {
+        if let Some(multimon) = &mut self.multimon {
+            multimon.reset();
+        }
         self.clock.reset();
         self.ted.reset();
         self.delay = self.delay0;
@@ -146,6 +218,12 @@ impl BitSlicer {
 
     /// `true` = positive discriminator deviation over the bit period.
     fn push(&mut self, x: f32, hunting: bool) -> Option<bool> {
+        if let Some(multimon) = &mut self.multimon {
+            let (bit, soft) = multimon.push(x, hunting)?;
+            self.dc = multimon.dc;
+            self.last_soft = soft;
+            return Some(bit);
+        }
         if self.delay > 0 {
             self.delay -= 1;
             return None;
@@ -179,7 +257,12 @@ impl BitSlicer {
         // Soft reliability: |total| relative to this lane's recent symbol
         // scale. Near zero means the sample sat on the slice point.
         let scale = (self.first.abs() + self.second.abs()).max(1e-6);
-        let soft = 1.0 - (total.abs() / (scale * 1.5)).min(1.0);
+        // Confidence grows with distance from the zero crossing. This used
+        // to be inverted (`1 - ...`), so the cross-lane voter treated the
+        // weakest, near-zero decision as authoritative and overwrote a clean
+        // bit with it. multimon-ng's transition PLL always samples the held
+        // state; the lane bank's equivalent must prefer the strongest sign.
+        let soft = (total.abs() / (scale * 1.5)).min(1.0);
         let h1 = self.first / self.n_first.max(1) as f32;
         let h2 = self.second / self.n_second.max(1) as f32;
         // Steering is safe during the sync hunt as well as inside a batch,
@@ -220,6 +303,10 @@ struct Lane {
     word_bits: u32,
     bits_in: u8,
     cur: Option<Msg>,
+    /// True for the single transition-PLL lane that mirrors multimon-ng.
+    /// Its phase representation differs from the Gardner lanes, so it does
+    /// not participate in their same-phase reliability vote.
+    multimon: bool,
 }
 
 pub struct PocsagDecoder {
@@ -238,7 +325,19 @@ impl PocsagDecoder {
             512 | 1200 | 2400 => {
                 let spb = fs as f32 / baud as f32;
                 let n = PHASES.min(spb.floor().max(1.0) as usize);
-                let lanes = (0..n)
+                let mut lanes = vec![Lane {
+                    baud,
+                    phase: n,
+                    slicer: BitSlicer::new_multimon(fs, baud),
+                    shift: 0,
+                    word: usize::MAX,
+                    inverted: false,
+                    word_bits: 0,
+                    bits_in: 0,
+                    cur: None,
+                    multimon: true,
+                }];
+                lanes.extend((0..n)
                     .map(|d| {
                         let delay = ((d as f32 / n as f32) * spb).round() as usize;
                         Lane {
@@ -251,9 +350,10 @@ impl PocsagDecoder {
                             word_bits: 0,
                             bits_in: 0,
                             cur: None,
+                            multimon: false,
                         }
                     })
-                    .collect();
+                );
                 Self {
                     lanes,
                     sliced_scratch: Vec::new(),
@@ -264,12 +364,44 @@ impl PocsagDecoder {
         }
     }
 
+    #[cfg(test)]
+    fn multimon_only(fs: f64, baud: u32) -> Self {
+        Self {
+            lanes: vec![Lane {
+                baud,
+                phase: 0,
+                slicer: BitSlicer::new_multimon(fs, baud),
+                shift: 0,
+                word: usize::MAX,
+                inverted: false,
+                word_bits: 0,
+                bits_in: 0,
+                cur: None,
+                multimon: true,
+            }],
+            sliced_scratch: Vec::new(),
+            diag: PocsagDiagnostics::default(),
+        }
+    }
+
     /// Auto-decoding POCSAG decoder that runs 512, 1200, and 2400 baud lanes concurrently.
     pub fn auto(fs: f64) -> Self {
         let mut lanes = Vec::new();
         for &baud in &[512, 1200, 2400] {
             let spb = fs as f32 / baud as f32;
             let n = PHASES.min(spb.floor().max(1.0) as usize);
+            lanes.push(Lane {
+                baud,
+                phase: n,
+                slicer: BitSlicer::new_multimon(fs, baud),
+                shift: 0,
+                word: usize::MAX,
+                inverted: false,
+                word_bits: 0,
+                bits_in: 0,
+                cur: None,
+                multimon: true,
+            });
             for d in 0..n {
                 let delay = ((d as f32 / n as f32) * spb).round() as usize;
                 lanes.push(Lane {
@@ -282,6 +414,7 @@ impl PocsagDecoder {
                     word_bits: 0,
                     bits_in: 0,
                     cur: None,
+                    multimon: false,
                 });
             }
         }
@@ -356,6 +489,9 @@ impl PocsagDecoder {
                     let (lane_a, bit_a) = sliced[a];
                     let (lane_b, bit_b) = sliced[b];
                     if self.lanes[lane_a].baud != self.lanes[lane_b].baud {
+                        continue;
+                    }
+                    if self.lanes[lane_a].multimon || self.lanes[lane_b].multimon {
                         continue;
                     }
                     let phase_a = self.lanes[lane_a].slicer.clock.phase_fraction();
@@ -433,6 +569,7 @@ impl Lane {
                     _ => {}
                 }
                 diag.last_sync_baud = Some(self.baud);
+                diag.last_carrier_offset_hz = Some(self.slicer.dc);
                 add_event(
                     diag,
                     format!(
@@ -938,6 +1075,30 @@ mod tests {
             got.iter()
                 .any(|m| m.capcode == (1000 << 3) | 2 && m.text == "CHUNKED DELIVERY"),
             "got {got:?}"
+        );
+    }
+
+    /// Only the transition PLL is enabled here. Shaping and carrier DC make
+    /// this representative of the raw 22.05 kHz audio multimon-ng accepts,
+    /// rather than the ideal square waves used by the lane-bank tests.
+    #[test]
+    fn multimon_frontend_decodes_shaped_offset_audio() {
+        let msg = alpha_words("MULTIMON POCSAG");
+        let audio = burst_audio(FS, 1200, 1000, 3, 2, &msg);
+        let mut filtered = Vec::with_capacity(audio.len());
+        let mut state = 0.0f32;
+        for sample in audio {
+            state += 0.32 * ((sample + 1_500.0) - state);
+            filtered.push(state);
+        }
+        let mut decoder = PocsagDecoder::multimon_only(f64::from(FS), 1200);
+        let got = decoder.process(&filtered);
+        assert!(
+            got.iter().any(|page| {
+                page.capcode == (1000 << 3) | 2 && page.text == "MULTIMON POCSAG"
+            }),
+            "transition PLL decoded nothing: {got:?}; diag={:?}",
+            decoder.diagnostics()
         );
     }
 

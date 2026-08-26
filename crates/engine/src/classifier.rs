@@ -2266,7 +2266,7 @@ fn classify_clocked_signal(
     let (protocol, details) = match (f.baud, f.levels) {
         (4800, 4) => (
             "4-FSK Digital Voice / Data",
-            "Candidates: P25, DMR, NXDN96, YSF, M17; awaiting frame sync".to_string(),
+            "Candidates: P25, DMR, NXDN96, YSF; awaiting frame sync".to_string(),
         ),
         (4800, 2) => (
             "GMSK Digital Voice / Data",

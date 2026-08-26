@@ -17,10 +17,10 @@ use std::time::{Duration, Instant};
 
 const SYNC_MARKER: u32 = 0xA6C6_AAAA;
 pub(crate) const A_1600_2: u16 = 0x870C;
-const A_1600_4: u16 = 0xB068;
-const A_3200_2: u16 = 0x7B18;
-const A_3200_4: u16 = 0xDEA0;
-const A_3200_4_ALT: u16 = 0x4C7C;
+pub(crate) const A_1600_4: u16 = 0xB068;
+pub(crate) const A_3200_2: u16 = 0x7B18;
+pub(crate) const A_3200_4: u16 = 0xDEA0;
+pub(crate) const A_3200_4_ALT: u16 = 0x4C7C;
 const WORDS_PER_PHASE: usize = 88;
 const DATA_MS: usize = 1760;
 const SYNC2_MS: usize = 25;
@@ -50,7 +50,7 @@ const NUMERIC: [char; 16] = [
 pub enum FlexFormat {
     Secure,
     ShortInstruction,
-    ToneOnly,
+    ShortMessage,
     StandardNumeric,
     SpecialNumeric,
     Alphanumeric,
@@ -63,7 +63,7 @@ impl FlexFormat {
         match (word >> 4) & 7 {
             0 => Self::Secure,
             1 => Self::ShortInstruction,
-            2 => Self::ToneOnly,
+            2 => Self::ShortMessage,
             3 => Self::StandardNumeric,
             4 => Self::SpecialNumeric,
             5 => Self::Alphanumeric,
@@ -135,6 +135,12 @@ pub struct FlexDiagnostics {
     pub last_cycle_no: Option<u8>,
     pub last_symbol_rate: Option<u32>,
     pub last_levels: Option<u8>,
+    /// Carrier offset measured by the winning lane's DC reference at the
+    /// moment sync locked, in Hz. The reference runs during the alternating
+    /// sync word — DC-free by construction — so unlike a discriminator mean
+    /// this is an honest frequency-error measurement even on channels whose
+    /// idle frames are all one deviation polarity.
+    pub last_carrier_offset_hz: Option<f32>,
     pub events: Vec<String>,
 }
 
@@ -386,15 +392,184 @@ struct SymbolClock {
     second: f32,
     n_first: u32,
     n_second: u32,
+    /// Slicing reference while hunting and the reported carrier offset at
+    /// sync lock. FLEX idle frames can sit at one deviation polarity for a
+    /// long time, so an ordinary running mean is content-biased. Instead the
+    /// reference is the midpoint of the recent modulation extrema. A steady
+    /// idle symbol does not move it; the first alternating sync transitions
+    /// expose both outer levels and place it on the carrier centre.
     dc: f32,
+    dc_low: f32,
+    dc_high: f32,
+    dc_extrema_valid: bool,
+    dc_release: f32,
     outer: f32,
     /// |average| relative to the current level reference, 0 (on the slice
     /// point) .. >1 (solid). Emitted with every symbol for cross-lane voting.
     quality: f32,
+    /// multimon-ng-compatible preamble/zero-crossing clock. The existing
+    /// Gardner lane bank remains as a diversity fallback, while one lane uses
+    /// the reference receiver's acquisition behavior so shaped, weak signals
+    /// get the same long-alternating-preamble lock that multimon-ng relies on.
+    multimon: Option<MultimonClock>,
+}
+
+/// Symbol recovery modeled on multimon-ng's FLEX/FLEX_NEXT front end:
+/// 24 alternating outer symbols acquire lock, zero crossings pull the symbol
+/// boundary, and the modal level over the middle 80% wins. This is deliberately
+/// independent of the Gardner bank; the two paths fail differently and their
+/// completed frames are combined by the decoder's existing lane arbiter.
+struct MultimonClock {
+    fs: f64,
+    baud: u32,
+    phase: f64,
+    previous: f32,
+    zero: f32,
+    zero_alpha: f32,
+    envelope: f32,
+    envelope_sum: f64,
+    envelope_count: usize,
+    bins: [u16; 4],
+    lock_buf: u64,
+    lock_symbols: usize,
+    locked: bool,
+    symbols_since_crossing: usize,
+}
+
+impl MultimonClock {
+    const LOCK_LEN: usize = 24;
+
+    fn new(fs: f64) -> Self {
+        Self {
+            fs,
+            baud: 1600,
+            phase: 0.0,
+            previous: 0.0,
+            zero: 0.0,
+            zero_alpha: (1.0 / (fs * 0.010 + 1.0)) as f32,
+            envelope: 0.0,
+            envelope_sum: 0.0,
+            envelope_count: 0,
+            bins: [0; 4],
+            lock_buf: 0,
+            lock_symbols: 0,
+            locked: false,
+            symbols_since_crossing: 0,
+        }
+    }
+
+    fn reset(&mut self) {
+        *self = Self::new(self.fs);
+    }
+
+    fn set_rate(&mut self, baud: u32) {
+        self.baud = baud;
+    }
+
+    fn push(&mut self, sample: f32, hunting: bool) -> Option<(u8, f32)> {
+        if hunting {
+            self.zero += self.zero_alpha * (sample - self.zero);
+        }
+        let centered = sample - self.zero;
+
+        if self.locked && hunting {
+            self.envelope_sum += f64::from(centered.abs());
+            self.envelope_count += 1;
+            // Same bounded running average used by FLEX_NEXT: old samples
+            // decay without a discontinuity in the four-level thresholds.
+            if self.envelope_count > (self.fs * 2.0) as usize {
+                self.envelope_sum *= 0.5;
+                self.envelope_count /= 2;
+            }
+            self.envelope = (self.envelope_sum / self.envelope_count as f64) as f32;
+        } else if !self.locked {
+            self.envelope = 0.0;
+            self.envelope_sum = 0.0;
+            self.envelope_count = 0;
+            self.baud = 1600;
+        }
+
+        if (0.10..0.90).contains(&self.phase) {
+            let threshold = self.envelope * 0.667;
+            let symbol = if centered > threshold {
+                3
+            } else if centered > 0.0 {
+                2
+            } else if centered < -threshold {
+                0
+            } else {
+                1
+            };
+            self.bins[symbol] = self.bins[symbol].saturating_add(1);
+        }
+
+        let crossing = (self.previous < 0.0 && centered >= 0.0)
+            || (self.previous >= 0.0 && centered < 0.0);
+        if crossing {
+            let error = if self.phase < 0.5 {
+                self.phase
+            } else {
+                self.phase - 1.0
+            };
+            self.phase -= error * if self.locked { 0.045 } else { 0.050 };
+            self.symbols_since_crossing = 0;
+        }
+        self.previous = centered;
+
+        self.phase += f64::from(self.baud) / self.fs;
+        if self.phase < 1.0 {
+            return None;
+        }
+        self.phase -= 1.0;
+        self.symbols_since_crossing += 1;
+
+        let total = self.bins.iter().map(|&n| u32::from(n)).sum::<u32>();
+        let (symbol, votes) = self
+            .bins
+            .iter()
+            .copied()
+            .enumerate()
+            .max_by_key(|&(_, count)| count)
+            .unwrap_or((0, 0));
+        self.bins = [0; 4];
+        let quality = if total == 0 {
+            0.0
+        } else {
+            f32::from(votes) / total as f32
+        };
+
+        if !self.locked {
+            // multimon-ng maps outer symbols 0/3 to the alternating 01/10
+            // dibits and demands 24 consecutive symbols of either polarity.
+            self.lock_buf = (self.lock_buf << 2) | u64::from((symbol as u8) ^ 1);
+            self.lock_symbols = (self.lock_symbols + 1).min(Self::LOCK_LEN);
+            let mask = (1u64 << (2 * Self::LOCK_LEN)) - 1;
+            let pattern = self.lock_buf ^ 0x6666_6666_6666_6666;
+            if self.lock_symbols == Self::LOCK_LEN
+                && ((pattern & mask) == 0 || ((!pattern) & mask) == 0)
+            {
+                self.locked = true;
+                self.lock_buf = 0;
+                self.envelope_sum = 0.0;
+                self.envelope_count = 0;
+            }
+            return None;
+        }
+
+        // Do not abandon a frame on a long same-symbol run. multimon-ng uses
+        // a 100-symbol timeout, but FLEX_NEXT force-decodes partial DATA; the
+        // lane arbiter here gets a better result by holding timing until the
+        // known frame length and then returning to the preamble hunt.
+        Some((symbol as u8, quality))
+    }
 }
 
 impl SymbolClock {
     fn new(fs: f64, delay: usize) -> Self {
+        // Retain an observed outer level for roughly 50 ms. That spans a
+        // complete 64-symbol sync at 1600 sym/s without letting an old burst
+        // pin the reference indefinitely.
+        let release_samples = 0.050 * fs;
         Self {
             fs,
             clock: TimingLoop::new(fs / 1600.0),
@@ -408,17 +583,34 @@ impl SymbolClock {
             n_first: 0,
             n_second: 0,
             dc: 0.0,
+            dc_low: 0.0,
+            dc_high: 0.0,
+            dc_extrema_valid: false,
+            dc_release: (1.0 - (-1.0 / release_samples).exp()) as f32,
             outer: 1.0,
             quality: 0.0,
+            multimon: None,
         }
     }
 
+    fn new_multimon(fs: f64) -> Self {
+        let mut clock = Self::new(fs, 0);
+        clock.multimon = Some(MultimonClock::new(fs));
+        clock
+    }
+
     fn reset(&mut self) {
+        if let Some(multimon) = &mut self.multimon {
+            multimon.reset();
+        }
         self.clock = TimingLoop::new(self.fs / 1600.0);
         self.ted.reset();
         self.delay = self.initial_delay;
         self.clear_integration();
         self.dc = 0.0;
+        self.dc_low = 0.0;
+        self.dc_high = 0.0;
+        self.dc_extrema_valid = false;
         self.outer = 1.0;
     }
 
@@ -432,18 +624,44 @@ impl SymbolClock {
     }
 
     fn set_rate(&mut self, rate: u32) {
+        if let Some(multimon) = &mut self.multimon {
+            multimon.set_rate(rate);
+            return;
+        }
         self.clock.retarget(self.fs / f64::from(rate));
         self.ted.reset();
         self.clear_integration();
     }
 
     fn push(&mut self, sample: f32, hunting: bool) -> Option<(u8, f32)> {
+        if let Some(multimon) = &mut self.multimon {
+            let result = multimon.push(sample, hunting);
+            self.dc = multimon.zero;
+            return result;
+        }
         if self.delay > 0 {
             self.delay -= 1;
             return None;
         }
         if hunting {
-            self.dc += 0.0005 * (sample - self.dc);
+            if !self.dc_extrema_valid {
+                self.dc_low = sample;
+                self.dc_high = sample;
+                self.dc_extrema_valid = true;
+            } else {
+                // Peak followers with slow release toward the current
+                // sample. Opposite sync levels attack immediately.
+                self.dc_low += self.dc_release * (sample - self.dc_low);
+                self.dc_high += self.dc_release * (sample - self.dc_high);
+                self.dc_low = self.dc_low.min(sample);
+                self.dc_high = self.dc_high.max(sample);
+                // Ignore mere receiver-noise spread. FLEX sync uses the
+                // outer levels (about 9.6 kHz apart), while even the nearest
+                // legitimate level spacing is about 3.2 kHz.
+                if self.dc_high - self.dc_low >= 2_000.0 {
+                    self.dc = (self.dc_high + self.dc_low) * 0.5;
+                }
+            }
         }
         let centered = sample - self.dc;
         self.sum += centered;
@@ -662,6 +880,18 @@ impl Lane {
         lane
     }
 
+    fn new_multimon(fs: f64) -> Self {
+        Self {
+            clock: SymbolClock::new_multimon(fs),
+            state: LaneState::Hunting {
+                shift: 0,
+                symbols: 0,
+            },
+            parked: false,
+            cooldown: 0,
+        }
+    }
+
     fn reset(&mut self) {
         self.clock.reset();
         self.state = LaneState::Hunting {
@@ -711,6 +941,7 @@ impl Lane {
                     }
                     diag.last_symbol_rate = Some(mode.symbol_rate);
                     diag.last_levels = Some(mode.levels);
+                    diag.last_carrier_offset_hz = Some(self.clock.dc);
                     add_event(
                         diag,
                         format!(
@@ -913,8 +1144,14 @@ fn deinterleave_with_quality(
         phases[pair][idx] = (phases[pair][idx] >> 1) | (bit_a << 31);
         shift_rel(&mut rels[pair][idx], q);
         if mode.levels == 4 {
-            phases[pair + 1][idx] = (phases[pair + 1][idx] >> 1) | (bit_b << 31);
-            shift_rel(&mut rels[pair + 1][idx], q);
+            let second_phase = if mode.symbol_rate == 1600 {
+                2
+            } else {
+                pair + 1
+            };
+            phases[second_phase][idx] =
+                (phases[second_phase][idx] >> 1) | (bit_b << 31);
+            shift_rel(&mut rels[second_phase][idx], q);
         }
         if mode.symbol_rate == 3200 {
             toggle = !toggle;
@@ -927,7 +1164,13 @@ fn deinterleave_with_quality(
     }
     match (mode.symbol_rate, mode.levels) {
         (1600, 2) => vec![('A', phases[0], rels[0])],
-        (1600, 4) => vec![('A', phases[0], rels[0]), ('B', phases[1], rels[1])],
+        // A3 (1600 symbols/s, 4FSK) carries phases A and C. Older
+        // multimon-ng releases called the second stream B and uSDR copied
+        // that assignment into both its decoder and test generator, making
+        // the tests self-consistent but incompatible with real FLEX. Current
+        // multimon-ng/FLEX_NEXT follows ARIB STD-43A section 3.3: the low
+        // Gray-code bit is phase C at 1600 symbols/s.
+        (1600, 4) => vec![('A', phases[0], rels[0]), ('C', phases[2], rels[2])],
         (3200, 2) => vec![('A', phases[0], rels[0]), ('C', phases[2], rels[2])],
         (3200, 4) => vec![
             ('A', phases[0], rels[0]),
@@ -1028,9 +1271,23 @@ impl FlexDecoder {
         // a lane is within roughly a third of a slot, so coverage width beats
         // fine spacing. At 48 kHz that is 8 lanes × 48k = 0.38 M pushes/s.
         let phases = ((fs / 1600.0).floor() as usize).clamp(1, 8);
-        let lanes = (0..phases).map(|index| Lane::new(fs, index, phases)).collect();
+        let mut lanes = Vec::with_capacity(phases + 1);
+        lanes.push(Lane::new_multimon(fs));
+        lanes.extend((0..phases).map(|index| Lane::new(fs, index, phases)));
         Self {
             lanes,
+            diag: FlexDiagnostics::default(),
+            recent_hashes: VecDeque::new(),
+            recent_frames: VecDeque::new(),
+            fragments: HashMap::new(),
+            groups: HashMap::new(),
+        }
+    }
+
+    #[cfg(test)]
+    fn multimon_only(fs: f64) -> Self {
+        Self {
+            lanes: vec![Lane::new_multimon(fs)],
             diag: FlexDiagnostics::default(),
             recent_hashes: VecDeque::new(),
             recent_frames: VecDeque::new(),
@@ -1163,15 +1420,6 @@ impl FlexDecoder {
                     &corrected,
                 );
                 for mut message in messages.drain(..) {
-                    // A failed payload checksum means the words did not survive
-                    // intact — the "text" is a plausible-looking corruption.
-                    // Publishing it trains the operator to distrust the log;
-                    // drop and let a repeat (paging traffic repeats) arrive
-                    // clean. Complete pages only: fragment parts are gated by
-                    // reassembly instead.
-                    if message.complete && message.payload_checksum_ok == Some(false) {
-                        continue;
-                    }
                     self.reassemble(&mut message, now);
                     let hash = message_hash(&message);
                     // Best-of dedup: lanes whose clocks settled a fraction of
@@ -1350,13 +1598,12 @@ impl FlexDecoder {
                         Vec::new(),
                     )
                 } else {
-                    (
-                        format!(
-                            "[Reserved instruction type {instruction_type}: 0x{:03X}]",
-                            (viw >> 9) & 0x7ff
-                        ),
-                        Vec::new(),
-                    )
+                    // Types 2-7 are reserved; no real system sends them, and a
+                    // vector that reads as one is a corrupted format field.
+                    // Publishing it put rows like "[Reserved instruction
+                    // type 3: 0x28E]" in the log for every marginal frame.
+                    address_index += consumed;
+                    continue;
                 };
                 messages.push(FlexMessage {
                     capcode,
@@ -1395,6 +1642,32 @@ impl FlexDecoder {
             }
 
             let mut decoded = decode_vector(viw, vector_index, long_address, phase);
+            // FLEX_NEXT/multimon-ng reports a BCH-clean complete page even
+            // when its payload K checksum fails, explicitly marked K-. That
+            // matters on weak channels: hiding it makes a working receiver
+            // look totally silent. Keep rejecting checksum-failed fragments
+            // (they can poison reassembly), but expose complete-vector K-
+            // pages as invalid/partial diagnostics in the event log.
+            //
+            // Formats with no payload checksum are held to what can be
+            // verified: short/tone pages carry no text body to corrupt, and binary
+            // pages are published only when every word survived FEC and the
+            // header said the fragment was whole. An *empty* unverifiable
+            // page is a vector whose window did not even parse — garbage by
+            // definition, since every real short/tone page renders text.
+            let publishable = match decoded.payload_checksum_ok {
+                Some(true) => true,
+                Some(false) => {
+                    decoded.fragment == FlexFragment::Complete
+                        && decoded.fec_uncorrectable == 0
+                        && !decoded.text.is_empty()
+                }
+                None => decoded.complete && !decoded.text.is_empty(),
+            };
+            if !publishable {
+                address_index += consumed;
+                continue;
+            }
             let group_recipients = if (GROUP_MIN..=GROUP_MAX).contains(&capcode) {
                 let group = (capcode - GROUP_MIN) as u8;
                 self.groups
@@ -1542,8 +1815,11 @@ fn decode_address(
 fn message_window(viw: u32) -> Option<(usize, usize)> {
     let start = ((viw >> 7) & 0x7F) as usize;
     let len = ((viw >> 14) & 0x7F) as usize;
-    (start > 0 && len > 0 && start < WORDS_PER_PHASE)
-        .then_some((start, len.min(WORDS_PER_PHASE - start)))
+    if start > 0 && len > 0 && start < WORDS_PER_PHASE {
+        Some((start, len.min(WORDS_PER_PHASE - start)))
+    } else {
+        None
+    }
 }
 
 fn collect_words(phase: &CorrectedPhase, start: usize, len: usize) -> (Vec<u32>, u32, u32) {
@@ -1593,27 +1869,57 @@ fn decode_vector(
         raw_words: Vec::new(),
     };
     match format {
-        FlexFormat::ToneOnly => {
+        FlexFormat::ShortMessage => {
             let subtype = (viw >> 7) & 3;
-            let mut text = if subtype == 0 {
-                let mut value = String::new();
-                for shift in [9, 13, 17] {
-                    value.push(NUMERIC[((viw >> shift) & 0xF) as usize]);
-                }
-                if long && let Some(extra) = phase.words.get(vector_index + 1).copied().flatten() {
-                    for shift in [0, 4, 8, 12, 16] {
-                        value.push(NUMERIC[((extra >> shift) & 0xF) as usize]);
+            let (text, message_number, retrieval) = match subtype {
+                0 => {
+                    let mut value = String::new();
+                    for shift in [9, 13, 17] {
+                        value.push(NUMERIC[((viw >> shift) & 0xF) as usize]);
                     }
+                    if long
+                        && let Some(extra) =
+                            phase.words.get(vector_index + 1).copied().flatten()
+                    {
+                        for shift in [0, 4, 8, 12, 16] {
+                            value.push(NUMERIC[((extra >> shift) & 0xF) as usize]);
+                        }
+                    }
+                    let value = value.trim_end();
+                    (
+                        if value.is_empty() {
+                            "[Tone Only]".into()
+                        } else {
+                            format!("[Short Numeric] {value}")
+                        },
+                        None,
+                        None,
+                    )
                 }
-                format!("[Short Numeric] {}", value.trim_end())
-            } else {
-                "[Tone Only]".to_string()
+                1 => (format!("[Source Code] {}", (viw >> 9) & 7), None, None),
+                2 => {
+                    let source = (viw >> 9) & 7;
+                    let number = ((viw >> 12) & 0x3f) as u8;
+                    let retrieval = viw >> 18 & 1 != 0;
+                    (
+                        format!(
+                            "[Numbered Short] source={source} N={number} R={}",
+                            u8::from(retrieval)
+                        ),
+                        Some(number),
+                        Some(retrieval),
+                    )
+                }
+                _ => (
+                    format!("[Reserved Short Message: 0x{:03X}]", (viw >> 9) & 0xfff),
+                    None,
+                    None,
+                ),
             };
-            if text == "[Short Numeric]" {
-                text = "[Tone Only]".into();
-            }
             VectorDecode {
                 text,
+                message_number,
+                retrieval,
                 raw_words: vec![viw],
                 ..default()
             }
@@ -2141,7 +2447,11 @@ pub(crate) mod tests {
                     }
                 }
             };
-            data_symbols.push(symbol_for(0, 1));
+            data_symbols.push(if mode.symbol_rate == 1600 && mode.levels == 4 {
+                symbol_for(0, 2)
+            } else {
+                symbol_for(0, 1)
+            });
             if mode.symbol_rate == 3200 {
                 data_symbols.push(symbol_for(2, 3));
             }
@@ -2283,6 +2593,95 @@ pub(crate) mod tests {
         assert_eq!(pages[0].payload_checksum_ok, Some(true));
     }
 
+    /// A checksum-failed page shaped as a *fragment* used to be published
+    /// anyway — the drop rule only covered "complete" pages, and a garbled
+    /// header's fragment bits say anything but complete. That is the exact
+    /// path marginal-channel mojibake took into the decode log.
+    #[test]
+    fn a_checksum_failed_fragment_is_not_published() {
+        let mode = Mode {
+            symbol_rate: 1600,
+            levels: 2,
+        };
+        let mut phase = CorrectedPhase {
+            words: [Some(0); WORDS_PER_PHASE],
+            errors: [0; WORDS_PER_PHASE],
+            reliabilities: [[1.0; 32]; WORDS_PER_PHASE],
+        };
+        // Fragment 0 with the "continued" bit set reads as a First fragment.
+        let mut body = alpha_words("GARBAGE FRAGMENT", 0, true);
+        // Corrupt one content word so the payload checksum cannot pass.
+        body[1] ^= 0x55;
+        let start = 3usize;
+        phase.words[0] = Some((0u32 << 8) | (2u32 << 10));
+        phase.words[1] = Some(0x8000 + 42);
+        phase.words[2] = Some((5 << 4) | ((start as u32) << 7) | ((body.len() as u32) << 14));
+        for (index, word) in body.into_iter().enumerate() {
+            phase.words[start + index] = Some(word);
+        }
+        let mut decoder = FlexDecoder::new(16_000.0);
+        let pages = decoder.decode_phase(fiw(2, 77), 0, mode, 'A', &phase);
+        assert!(
+            pages.iter().all(|p| p.payload_checksum_ok != Some(false)),
+            "checksum-failed fragment reached the log: {pages:?}"
+        );
+    }
+
+    /// Reserved short-instruction types (2-7) are what a corrupted vector
+    /// format field reads as; no real system sends them.
+    #[test]
+    fn reserved_short_instruction_types_are_not_published() {
+        let mode = Mode {
+            symbol_rate: 1600,
+            levels: 2,
+        };
+        let mut phase = CorrectedPhase {
+            words: [Some(0); WORDS_PER_PHASE],
+            errors: [0; WORDS_PER_PHASE],
+            reliabilities: [[1.0; 32]; WORDS_PER_PHASE],
+        };
+        phase.words[0] = Some((0u32 << 8) | (2u32 << 10));
+        phase.words[1] = Some(0x8000 + 4242);
+        // Format 1 (short instruction), type 3 (reserved), plus payload bits.
+        phase.words[2] = Some((1 << 4) | (3 << 7) | (0x28E << 9) | (7 << 17));
+        let mut decoder = FlexDecoder::new(16_000.0);
+        let pages = decoder.decode_phase(fiw(2, 77), 0, mode, 'A', &phase);
+        assert!(
+            pages.is_empty(),
+            "reserved instruction type published: {pages:?}"
+        );
+    }
+
+    /// Binary pages carry no payload checksum; a fragment-shaped or
+    /// erasure-carrying one is unverifiable and must not be published.
+    #[test]
+    fn an_incomplete_binary_page_is_not_published() {
+        let mode = Mode {
+            symbol_rate: 1600,
+            levels: 2,
+        };
+        let mut phase = CorrectedPhase {
+            words: [None; WORDS_PER_PHASE],
+            errors: [0; WORDS_PER_PHASE],
+            reliabilities: [[1.0; 32]; WORDS_PER_PHASE],
+        };
+        let start = 3usize;
+        phase.words[0] = Some((0u32 << 8) | (2u32 << 10));
+        phase.words[1] = Some(0x8000 + 900);
+        // Format 6 (binary); header fragment bits say "middle" (number 1,
+        // continued), and a word in the window is an erasure.
+        phase.words[2] = Some((6 << 4) | ((start as u32) << 7) | (4u32 << 14));
+        phase.words[start] = Some((1u32 << 13) | (1u32 << 12));
+        phase.words[start + 1] = Some(0x12345);
+        phase.words[start + 3] = Some(0x6789A);
+        let mut decoder = FlexDecoder::new(16_000.0);
+        let pages = decoder.decode_phase(fiw(2, 77), 0, mode, 'A', &phase);
+        assert!(
+            pages.iter().all(|p| p.format != FlexFormat::Binary),
+            "incomplete binary page published: {pages:?}"
+        );
+    }
+
     #[test]
     fn every_long_address_set_and_special_short_range_is_classified() {
         let mut phase = CorrectedPhase {
@@ -2339,6 +2738,66 @@ pub(crate) mod tests {
         assert_eq!(decoder.diagnostics().frames_decoded, 1);
     }
 
+    /// Exercise only the multimon-ng-compatible acquisition lane. The long
+    /// alternating preamble, shaped transitions and DC offset model the audio
+    /// stream normally piped from rtl_fm into multimon-ng; the payload uses
+    /// the standards-correct A/C assignment for 1600/4FSK.
+    #[test]
+    fn multimon_frontend_decodes_shaped_offset_1600_4fsk() {
+        const FS: usize = 32_000;
+        let mut audio = Vec::new();
+        for symbol in 0..64 {
+            let level = if symbol & 1 == 0 { -4_500.0 } else { 4_500.0 };
+            audio.extend(std::iter::repeat_n(level, FS / 1600));
+        }
+        audio.extend(discriminator_frame_at(
+            FS,
+            A_1600_4,
+            2,
+            3,
+            27,
+            456_789,
+            "MULTIMON PATH",
+        ));
+        // Continuous FLEX supplies the next idle/frame immediately. Leave a
+        // little tail so a phase pull near the final boundary can still dump
+        // the last data symbol.
+        audio.extend(std::iter::repeat_n(-4_500.0, FS / 20));
+        let mut filtered = Vec::with_capacity(audio.len());
+        let mut state = 0.0f32;
+        for sample in audio {
+            state += 0.38 * ((sample + 2_200.0) - state);
+            filtered.push(state);
+        }
+        let mut decoder = FlexDecoder::multimon_only(FS as f64);
+        let pages = decoder.process(&filtered);
+        assert!(
+            pages.iter().any(|page| {
+                page.capcode == 456_789
+                    && page.phase == 'C'
+                    && page.text == "MULTIMON PATH"
+            }),
+            "multimon-compatible lane decoded nothing: {pages:?}; diag={:?}",
+            decoder.diagnostics()
+        );
+    }
+
+    #[test]
+    fn deinterleave_routes_a_c_for_1600_four_level() {
+        let mode = Mode {
+            symbol_rate: 1600,
+            levels: 4,
+        };
+        // Symbol 1 carries bit_a=0 and bit_b=1. In A3 that second bit is
+        // phase C, never phase B.
+        let symbols = vec![1; WORDS_PER_PHASE * 32];
+        let qualities = vec![1.0; symbols.len()];
+        let phases = deinterleave_with_quality(&symbols, &qualities, mode);
+        assert_eq!(phases.iter().map(|(name, _, _)| *name).collect::<Vec<_>>(), ['A', 'C']);
+        assert!(phases[0].1.iter().all(|&word| word == 0));
+        assert!(phases[1].1.iter().all(|&word| word == u32::MAX));
+    }
+
     /// FLEX runs 1600-6400 sym/s in one stream, so the faster the mode the
     /// less absolute timing error a frame survives. A fixed-phase bank alone
     /// held only while the accumulated error stayed inside a fraction of a
@@ -2353,7 +2812,7 @@ pub(crate) mod tests {
     /// first, while at 32 kHz every mode holds across the range.
     #[test]
     fn a_clock_offset_still_decodes_in_every_air_mode() {
-        for (mode, phase) in [(A_1600_2, 0), (A_1600_4, 1), (A_3200_2, 2), (A_3200_4, 3)] {
+        for (mode, phase) in [(A_1600_2, 0), (A_1600_4, 2), (A_3200_2, 2), (A_3200_4, 3)] {
             for ppm in [-200i32, -100, 100, 200] {
                 let audio =
                     discriminator_frame_at(32_000, mode, phase, 3, 27, 456_789, "CLOCK PULL");
@@ -2405,7 +2864,7 @@ pub(crate) mod tests {
     fn every_flex_air_mode_and_phase_decodes_end_to_end() {
         for (mode, phase, phase_name) in [
             (A_1600_2, 0, 'A'),
-            (A_1600_4, 1, 'B'),
+            (A_1600_4, 2, 'C'),
             (A_3200_2, 2, 'C'),
             (A_3200_4, 3, 'D'),
         ] {
@@ -2510,7 +2969,7 @@ pub(crate) mod tests {
     fn awgn_threshold_sweep() {
         let modes = [
             ("1600/2", A_1600_2, 0),
-            ("1600/4", A_1600_4, 1),
+            ("1600/4", A_1600_4, 2),
             ("3200/2", A_3200_2, 2),
             ("3200/4", A_3200_4, 3),
         ];
@@ -2574,7 +3033,7 @@ pub(crate) mod tests {
     fn twelve_db_esn0_decodes_in_every_mode() {
         for (code, phase, esn0) in [
             (A_1600_2, 0, 14),
-            (A_1600_4, 1, 20),
+            (A_1600_4, 2, 20),
             (A_3200_2, 2, 16),
             (A_3200_4, 3, 24),
         ] {
