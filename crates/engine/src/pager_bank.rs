@@ -18,10 +18,15 @@ pub const PAGER_CHANNEL_HZ: f64 = 25_000.0;
 /// Decoded sample rate per channel. FLEX 6400 sym/s needs >4 samples/symbol
 /// for the timing loop to bite; 96 kS/s gives 15.
 pub const PAGER_CHANNEL_RATE: f64 = 96_000.0;
-/// How long the bank sits on one channel before stepping. One FLEX frame
-/// (1.88 s) plus margin — long enough to catch a sync word, short enough to
-/// cover 40 channels inside a typical page-repeat interval.
-pub const DWELL_MS: u64 = 2_000;
+/// How long the bank sits on one channel before stepping.
+///
+/// Arriving mid-frame, the decoder must first wait out the remainder (up to
+/// 1.9 s) before the next sync word, then needs 1.76 s of data after it: a
+/// full sync-to-pages pass can take ~3.7 s from an unlucky arrival. A 4 s
+/// dwell therefore guarantees at least one complete sequence per visit; 2 s
+/// caught a sync on only about one visit in eight, which looked exactly like
+/// "decodes nothing at all".
+pub const DWELL_MS: u64 = 4_000;
 
 pub struct PagerChannel {
     /// Offset from the span centre, hertz.
@@ -42,6 +47,18 @@ pub struct PagerChannel {
 }
 
 impl PagerChannel {
+    /// Fresh decode state: timing loops, slicer references and any
+    /// partially-captured frame are stale after minutes away.
+    fn reset_decoders(&mut self) {
+        self.flex = FlexDecoder::new(PAGER_CHANNEL_RATE);
+        self.pocsag = [
+            PocsagDecoder::new(PAGER_CHANNEL_RATE, 512),
+            PocsagDecoder::new(PAGER_CHANNEL_RATE, 1200),
+            PocsagDecoder::new(PAGER_CHANNEL_RATE, 2400),
+        ];
+        self.disc.reset();
+    }
+
     fn new(offset_hz: f64, span_rate: f64) -> Self {
         let every = (span_rate / PAGER_CHANNEL_RATE).round().max(1.0) as usize;
         Self {
@@ -148,6 +165,12 @@ impl PagerBank {
 
     /// Step to the next channel. Call on dwell expiry.
     pub fn step(&mut self) {
+        // Reset the channel we are leaving: its decoder holds half a frame of
+        // stale symbol timing that would otherwise greet the next visit (over
+        // a minute away) as if no time had passed.
+        if let Some(ch) = self.channels.get_mut(self.live) {
+            ch.reset_decoders();
+        }
         if !self.channels.is_empty() {
             self.live = (self.live + 1) % self.channels.len();
         }
