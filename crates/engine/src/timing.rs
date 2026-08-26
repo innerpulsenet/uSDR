@@ -117,6 +117,31 @@ impl TimingLoop {
         self.elapsed = 0.0;
     }
 
+    /// Re-target the loop onto a new symbol rate, keeping the learned rate
+    /// error and the sampling phase.
+    ///
+    /// FLEX changes symbol rate mid-frame once the sync word says which mode
+    /// the frame uses, and returns to the 1600 sym/s hunt afterwards. A plain
+    /// [`Self::set_period`] throws away both pieces of information: the
+    /// transmitter's ppm error has not changed just because its bit rate did,
+    /// and the sampling instant sits where it sat — expressed as fractions,
+    /// not as raw sample counts.
+    pub fn retarget(&mut self, samples_per_symbol: f64) {
+        // Keep the learned rate error; start a fresh symbol boundary. The
+        // caller retargets at an air-interface boundary (FLEX's SYNC2 ends on
+        // an exact symbol edge), so carrying a phase fraction measured on the
+        // old rate would land the first new symbol mid-edge and smear every
+        // integration that follows.
+        let ratio = if self.nominal > 0.0 {
+            self.period / self.nominal
+        } else {
+            1.0
+        };
+        self.nominal = samples_per_symbol.max(2.0);
+        self.period = self.nominal * ratio;
+        self.elapsed = 0.0;
+    }
+
     /// Whether the *next* sample falls in the back half of the current
     /// symbol. Lets an integrate-and-dump slicer split its accumulation by
     /// the clock's real position rather than by a sample count that goes

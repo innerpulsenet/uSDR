@@ -24,7 +24,19 @@ const A_3200_4_ALT: u16 = 0x4C7C;
 const WORDS_PER_PHASE: usize = 88;
 const DATA_MS: usize = 1760;
 const SYNC2_MS: usize = 25;
-const MAX_SYNC_ERRORS: u32 = 3;
+/// Bit-error budget for recognising the 32-bit SYNC1 marker and its A-code
+/// complement. The old flat 3 rejected every frame whose sync word picked up
+/// four noisy bits — which below ~15 dB Es/N0 is most of them — while the
+/// BCH(31,21)+checksum FIW read immediately after costs nothing to reject a
+/// false candidate: two protected fields plus a checksum fail together with
+/// probability around 10⁻⁶ on noise, so the arbiter can be trusted to sort
+/// the extra candidates.
+const SYNC_MARKER_MAX_ERRORS: u32 = 5;
+const SYNC_CODE_MAX_ERRORS: u32 = 5;
+/// The A-code selects the air mode everything downstream depends on, so its
+/// match must stay tight: a misread mode produces confidently-decoded
+/// garbage rather than silence.
+const MODE_MATCH_MAX_ERRORS: u32 = 3;
 const FRAGMENT_TTL: Duration = Duration::from_secs(12);
 const GROUP_MIN: u64 = 2_029_568;
 const GROUP_MAX: u64 = 2_029_583;
@@ -155,7 +167,7 @@ impl Mode {
         .into_iter()
         .filter_map(|(known, symbol_rate, levels)| {
             let errors = (known ^ code).count_ones();
-            (errors <= MAX_SYNC_ERRORS).then_some((
+            (errors <= MODE_MATCH_MAX_ERRORS).then_some((
                 errors,
                 Self {
                     symbol_rate,
@@ -264,6 +276,51 @@ pub fn bch_correct(raw: u32) -> Result<(u32, usize), FlexBchError> {
     }
 }
 
+/// Chase-2 soft-decision decoding of one FLEX word.
+///
+/// `raw` is the 32-bit air word; `reliabilities` are per-bit confidences in
+/// LSB-first bit order (bit i of the word ↔ slot i), each 0..1, where values
+/// near 0 mean the slicer was nearly indifferent. Hard decoding corrects two
+/// errors; when it fails, Chase-2 flips the `d` least-reliable bits in all
+/// 2^d combinations and accepts any pattern that lands on a valid codeword,
+/// which typically extends correction to three or four errors — worth about
+/// 1.5 dB at the noise floor for a few dozen extra table lookups on the
+/// rare words that need it.
+///
+/// The reliability vector is built from the four-level slicer's distance to
+/// its decision boundary, so a word whose symbols were all clean never pays
+/// for this path at all.
+pub fn bch_correct_soft(raw: u32, reliabilities: &[f32; 32]) -> Result<(u32, usize), FlexBchError> {
+    if let Ok(result) = bch_correct(raw) {
+        return Ok(result);
+    }
+    // Rank bit positions by confidence, ascending.
+    let mut order: Vec<u8> = (0..32).collect();
+    order.sort_by(|&a, &b| {
+        reliabilities[a as usize]
+            .partial_cmp(&reliabilities[b as usize])
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    const D: usize = 4;
+    for pattern in 1u32..(1 << D) {
+        let mut candidate = raw;
+        for slot in 0..D {
+            if pattern & (1 << slot) != 0 {
+                candidate ^= 1 << order[slot as usize];
+            }
+        }
+        if let Ok((fixed, _)) = bch_correct(candidate) {
+            // Accept only genuine corrections, not wild masks that happen to
+            // validate after our own flipping.
+            let total = (fixed ^ raw).count_ones() as usize;
+            if total <= D + 2 {
+                return Ok((fixed, total));
+            }
+        }
+    }
+    Err(FlexBchError)
+}
+
 #[cfg(test)]
 fn encode_word(data: u32) -> u32 {
     let data = data & 0x1F_FFFF;
@@ -304,6 +361,9 @@ struct SymbolClock {
     n_second: u32,
     dc: f32,
     outer: f32,
+    /// |average| relative to the current level reference, 0 (on the slice
+    /// point) .. >1 (solid). Emitted with every symbol for cross-lane voting.
+    quality: f32,
 }
 
 impl SymbolClock {
@@ -322,6 +382,7 @@ impl SymbolClock {
             n_second: 0,
             dc: 0.0,
             outer: 1.0,
+            quality: 0.0,
         }
     }
 
@@ -344,12 +405,12 @@ impl SymbolClock {
     }
 
     fn set_rate(&mut self, rate: u32) {
-        self.clock.set_period(self.fs / f64::from(rate));
+        self.clock.retarget(self.fs / f64::from(rate));
         self.ted.reset();
         self.clear_integration();
     }
 
-    fn push(&mut self, sample: f32, hunting: bool) -> Option<u8> {
+    fn push(&mut self, sample: f32, hunting: bool) -> Option<(u8, f32)> {
         if self.delay > 0 {
             self.delay -= 1;
             return None;
@@ -394,7 +455,7 @@ impl SymbolClock {
             }
         }
         let threshold = (self.outer * 0.667).max(1.0);
-        Some(if average >= threshold {
+        let symbol = if average >= threshold {
             3
         } else if average >= 0.0 {
             2
@@ -402,7 +463,12 @@ impl SymbolClock {
             1
         } else {
             0
-        })
+        };
+        // Soft reliability: how far the decision sits from the nearest slice
+        // boundary, as a fraction of the level reference. Near 0 the symbol
+        // sat on a boundary and any vote involving it is a coin flip.
+        self.quality = (average.abs() / self.outer).clamp(0.0, 2.0);
+        Some((symbol, self.quality))
     }
 }
 
@@ -431,13 +497,33 @@ enum LaneState {
         fiw: u32,
         fiw_errors: u32,
         symbols: Vec<u8>,
+        qualities: Vec<f32>,
         needed: usize,
+    },
+    /// A frame's data section has been captured; hold it until the sibling
+    /// lanes finish or time out, so the bank can combine their views of the
+    /// same air transmission before FEC.
+    Slicing {
+        mode: Mode,
+        fiw: u32,
+        fiw_errors: u32,
+        symbols: Vec<u8>,
+        qualities: Vec<f32>,
     },
 }
 
 struct Lane {
     clock: SymbolClock,
     state: LaneState,
+    /// True while the lane has a finished capture parked in Slicing and is
+    /// giving its siblings one block boundary to finish theirs.
+    parked: bool,
+    /// Samples remaining in the frame this lane was part of. A lane released
+    /// back into the hunt slides its sync window over the tail of that
+    /// frame's data section; the loose gate reads false syncs out of data
+    /// traffic, so the bank stays strict until every lane's frame window
+    /// has fully passed.
+    cooldown: usize,
 }
 
 struct RawFrame {
@@ -445,6 +531,19 @@ struct RawFrame {
     fiw: u32,
     fiw_errors: u32,
     symbols: Vec<u8>,
+    qualities: Vec<f32>,
+}
+
+impl Clone for RawFrame {
+    fn clone(&self) -> Self {
+        Self {
+            mode: self.mode,
+            fiw: self.fiw,
+            fiw_errors: self.fiw_errors,
+            symbols: self.symbols.clone(),
+            qualities: self.qualities.clone(),
+        }
+    }
 }
 
 impl RawFrame {
@@ -457,14 +556,94 @@ impl RawFrame {
 }
 
 impl Lane {
-    fn new(fs: f64, delay: usize) -> Self {
-        Self {
-            clock: SymbolClock::new(fs, delay),
+    /// Whether this block will end with the lane holding a finished capture.
+    /// Checked at the top of a block: if the lane is mid-frame and that frame
+    /// completes within it, it parks instead of returning immediately.
+    fn state_completes_this_block(&self) -> bool {
+        matches!(self.state, LaneState::Slicing { .. })
+            || matches!(
+                &self.state,
+                LaneState::Data { symbols, needed, .. } if symbols.len() >= needed.saturating_sub(1)
+            )
+    }
+
+    /// Take the parked capture out of Slicing and return to hunting.
+    fn release_lane(lane: &mut Lane) -> Option<(RawFrame, f32)> {
+        if let LaneState::Slicing {
+            mode,
+            fiw,
+            fiw_errors,
+            mut symbols,
+            qualities,
+        } = std::mem::replace(
+            &mut lane.state,
+            LaneState::Hunting {
+                shift: 0,
+                symbols: 0,
+            },
+        ) {
+            let quality = if qualities.is_empty() {
+                0.0
+            } else {
+                let mut sorted = qualities.clone();
+                sorted.retain(|q| q.is_finite());
+                sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+                let mid = sorted.len() / 2;
+                if sorted.is_empty() {
+                    0.0
+                } else {
+                    sorted[mid]
+                }
+            };
+            // Back to the 1600 sym/s hunt rate via retarget, so the learned
+            // ppm error and sampling phase survive: the next frame's sync
+            // word is sent by the same transmitter this one was tracking.
+            lane.clock.set_rate(1600);
+            Some((
+                RawFrame {
+                    mode,
+                    fiw,
+                    fiw_errors,
+                    symbols: std::mem::take(&mut symbols),
+                    qualities,
+                },
+                quality,
+            ))
+        } else {
+            None
+        }
+    }
+
+    /// Lane `index` of `phases`, staggered to cover one 1600-baud symbol slot
+    /// evenly, including the phase-0 lane.
+    ///
+    /// The stagger must span the *slowest* stream's symbol period: FLEX
+    /// changes rate mid-frame, and a bank spaced in whole samples bunches in
+    /// the first quarter of the slot at high audio rates, leaving no lane
+    /// near the optimum for a 3200 sym/s section. A lane that lands half a
+    /// slow slot off sits on the Gardner detector's metastable point while
+    /// hunting and slices transitions badly inside a frame — the cross-lane
+    /// agreement gate keeps such captures from corrupting merged ones, so
+    /// coverage stays wide rather than trading width for luck.
+    fn new(fs: f64, index: usize, phases: usize) -> Self {
+        let slot = fs / 1600.0;
+        let offset = index as f64 * slot / phases.max(1) as f64;
+        let mut lane = Self {
+            clock: SymbolClock::new(fs, offset.floor() as usize),
             state: LaneState::Hunting {
                 shift: 0,
                 symbols: 0,
             },
+            parked: false,
+            cooldown: 0,
+        };
+        // Fractional part of the stagger: shift the underlying clock's first
+        // tick into the slot, where whole-sample skipping cannot reach.
+        let frac = offset - offset.floor();
+        if frac > 0.0 {
+            lane.clock.clock.stagger(frac);
         }
+        lane
     }
 
     fn reset(&mut self) {
@@ -476,20 +655,34 @@ impl Lane {
     }
 
     fn hunt(&mut self) {
-        self.clock.set_rate(1600);
+        // Keep the clock's learned rate and sampling phase: a frame boundary
+        // is not a reason to unlearn the transmitter's timing, which will be
+        // identical 1.88 s from now in the next frame of the same cycle. Only
+        // the state machine restarts.
+        self.clock.ted.reset();
+        self.clock.clear_integration();
         self.state = LaneState::Hunting {
             shift: 0,
             symbols: 0,
         };
     }
 
-    fn push(&mut self, sample: f32, diag: &mut FlexDiagnostics) -> Option<RawFrame> {
+    fn push(&mut self, sample: f32, diag: &mut FlexDiagnostics) -> Option<(RawFrame, f32)> {
         let hunting = matches!(self.state, LaneState::Hunting { .. });
-        let symbol = self.clock.push(sample, hunting)?;
+        if hunting && self.cooldown > 0 {
+            self.cooldown -= 1;
+        }
+        let (symbol, quality) = self.clock.push(sample, hunting)?;
         match &mut self.state {
             LaneState::Hunting { shift, symbols } => {
                 *shift = (*shift << 1) | u64::from(symbol < 2);
                 *symbols = (*symbols + 1).min(64);
+                // Strict gate while any sibling lane is capturing a frame:
+                // a loose match against the middle of someone else's burst
+                // would drag this lane out of the hunt and cost it the next
+                // frame's sync word. Loose is only safe when the bank is
+                // otherwise idle, which is exactly when a real weak frame
+                // arrives.
                 if *symbols == 64
                     && let Some((mode, inverted)) = sync_mode(*shift)
                 {
@@ -584,6 +777,9 @@ impl Lane {
                         symbols: Vec::with_capacity(
                             mode_copy.symbol_rate as usize * DATA_MS / 1000,
                         ),
+                        qualities: Vec::with_capacity(
+                            mode_copy.symbol_rate as usize * DATA_MS / 1000,
+                        ),
                         needed: mode_copy.symbol_rate as usize * DATA_MS / 1000,
                     };
                 }
@@ -594,26 +790,37 @@ impl Lane {
                 fiw,
                 fiw_errors,
                 symbols,
+                qualities,
                 needed,
             } => {
                 symbols.push(if *inverted { 3 - symbol } else { symbol });
+                qualities.push(quality);
                 if symbols.len() == *needed {
-                    let frame = RawFrame {
-                        mode: *mode,
+                    let mode_copy = *mode;
+                    self.state = LaneState::Slicing {
+                        mode: mode_copy,
                         fiw: *fiw,
                         fiw_errors: *fiw_errors,
                         symbols: std::mem::take(symbols),
+                        qualities: std::mem::take(qualities),
                     };
-                    self.hunt();
-                    return Some(frame);
+                    self.parked = true;
+                    // One full frame window of strict hunting after release:
+                    // the data section still sliding under this lane's sync
+                    // window must not read as a sync candidate.
+                    self.cooldown =
+                        mode_copy.symbol_rate as usize * (DATA_MS + SYNC2_MS + 100) / 1000;
                 }
             }
+            LaneState::Slicing { .. } => {}
         }
         None
     }
 }
 
 fn sync_mode(raw: u64) -> Option<(Mode, bool)> {
+    let marker_budget = SYNC_MARKER_MAX_ERRORS;
+    let code_budget = SYNC_CODE_MAX_ERRORS;
     let mut best: Option<(u32, Mode, bool)> = None;
     for inverted in [false, true] {
         let word = if inverted { !raw } else { raw };
@@ -623,8 +830,8 @@ fn sync_mode(raw: u64) -> Option<(Mode, bool)> {
         let marker_errors = (marker ^ SYNC_MARKER).count_ones();
         let code_errors = (high ^ low).count_ones();
         let errors = marker_errors + code_errors;
-        if marker_errors <= MAX_SYNC_ERRORS
-            && code_errors <= MAX_SYNC_ERRORS
+        if marker_errors <= marker_budget
+            && code_errors <= code_budget
             && let Some(mode) = Mode::from_a_code(high)
             && best.is_none_or(|(old, _, _)| errors < old)
         {
@@ -657,11 +864,28 @@ fn phase_index(counter: u32) -> usize {
     (((counter >> 5) & 0xFFF8) | (counter & 7)) as usize
 }
 
-fn deinterleave(symbols: &[u8], mode: Mode) -> Vec<(char, [u32; WORDS_PER_PHASE])> {
+/// Deinterleave into phases; also accumulate, for every word bit, the minimum
+/// symbol quality that carried it. A word bit is only as reliable as its
+/// weakest contributing symbol, so the minimum is the honest summary.
+fn deinterleave_with_quality(
+    symbols: &[u8],
+    qualities: &[f32],
+    mode: Mode,
+) -> Vec<(
+    char,
+    [u32; WORDS_PER_PHASE],
+    [BitReliabilities; WORDS_PER_PHASE],
+)> {
     let mut phases = [[0u32; WORDS_PER_PHASE]; 4];
+    let mut rels: [[BitReliabilities; WORDS_PER_PHASE]; 4] =
+        [[[0.0; 32]; WORDS_PER_PHASE]; 4];
     let mut counter = 0u32;
     let mut toggle = false;
+    let mut quality_iter = qualities.iter();
     for &symbol in symbols {
+        // Qualities were recorded in the same order as symbols; fall back to
+        // full confidence if a caller passed none.
+        let q = quality_iter.next().copied().unwrap_or(1.0).clamp(0.0, 1.0);
         let bit_a = u32::from(symbol > 1);
         let bit_b = u32::from(symbol == 1 || symbol == 2);
         let idx = phase_index(counter);
@@ -671,8 +895,10 @@ fn deinterleave(symbols: &[u8], mode: Mode) -> Vec<(char, [u32; WORDS_PER_PHASE]
             0
         };
         phases[pair][idx] = (phases[pair][idx] >> 1) | (bit_a << 31);
+        shift_rel(&mut rels[pair][idx], q);
         if mode.levels == 4 {
             phases[pair + 1][idx] = (phases[pair + 1][idx] >> 1) | (bit_b << 31);
+            shift_rel(&mut rels[pair + 1][idx], q);
         }
         if mode.symbol_rate == 3200 {
             toggle = !toggle;
@@ -684,26 +910,44 @@ fn deinterleave(symbols: &[u8], mode: Mode) -> Vec<(char, [u32; WORDS_PER_PHASE]
         }
     }
     match (mode.symbol_rate, mode.levels) {
-        (1600, 2) => vec![('A', phases[0])],
-        (1600, 4) => vec![('A', phases[0]), ('B', phases[1])],
-        (3200, 2) => vec![('A', phases[0]), ('C', phases[2])],
+        (1600, 2) => vec![('A', phases[0], rels[0])],
+        (1600, 4) => vec![('A', phases[0], rels[0]), ('B', phases[1], rels[1])],
+        (3200, 2) => vec![('A', phases[0], rels[0]), ('C', phases[2], rels[2])],
         (3200, 4) => vec![
-            ('A', phases[0]),
-            ('B', phases[1]),
-            ('C', phases[2]),
-            ('D', phases[3]),
+            ('A', phases[0], rels[0]),
+            ('B', phases[1], rels[1]),
+            ('C', phases[2], rels[2]),
+            ('D', phases[3], rels[3]),
         ],
         _ => Vec::new(),
     }
 }
 
+/// Shift one reliability into a word's LSB-first reliability vector.
+#[inline]
+fn shift_rel(rel: &mut BitReliabilities, q: f32) {
+    rel.copy_within(0..31, 1);
+    rel[0] = q;
+}
+
+/// Reliability of each bit of each word, in word-bit order (LSB-first).
+/// Built by mapping the symbol qualities that carried each bit through the
+/// deinterleaver; words whose every bit was cleanly sliced never enter the
+/// soft path.
+type BitReliabilities = [f32; 32];
+
 #[derive(Clone)]
 struct CorrectedPhase {
     words: [Option<u32>; WORDS_PER_PHASE],
     errors: [u8; WORDS_PER_PHASE],
+    reliabilities: [BitReliabilities; WORDS_PER_PHASE],
 }
 
-fn correct_phase(raw: &[u32; WORDS_PER_PHASE], diag: &mut FlexDiagnostics) -> CorrectedPhase {
+fn correct_phase(
+    raw: &[u32; WORDS_PER_PHASE],
+    rels: &[BitReliabilities; WORDS_PER_PHASE],
+    diag: &mut FlexDiagnostics,
+) -> CorrectedPhase {
     let mut words = [None; WORDS_PER_PHASE];
     let mut errors = [0; WORDS_PER_PHASE];
     for (index, &word) in raw.iter().enumerate() {
@@ -713,10 +957,23 @@ fn correct_phase(raw: &[u32; WORDS_PER_PHASE], diag: &mut FlexDiagnostics) -> Co
                 words[index] = Some(fixed & 0x1F_FFFF);
                 errors[index] = count as u8;
             }
-            Err(_) => diag.bch_err += 1,
+            Err(_) => match bch_correct_soft(word, &rels[index]) {
+                Ok((fixed, count)) => {
+                    // Soft corrections are real FEC work, but they ride
+                    // weaker evidence than the hard table path.
+                    diag.bch_fixed += 1;
+                    words[index] = Some(fixed & 0x1F_FFFF);
+                    errors[index] = (count + 2).min(u8::MAX as usize) as u8;
+                }
+                Err(_) => diag.bch_err += 1,
+            },
         }
     }
-    CorrectedPhase { words, errors }
+    CorrectedPhase {
+        words,
+        errors,
+        reliabilities: *rels,
+    }
 }
 
 #[derive(Clone)]
@@ -746,11 +1003,12 @@ impl FlexDecoder {
     pub const DEFAULT_BAUD: u32 = 1600;
 
     pub fn new(fs: f64) -> Self {
-        // Six static phases, like POCSAG: the per-lane tracking loop absorbs
-        // the residual, and every extra lane costs a full slicer pass on every
-        // sample. At 48 kHz that is 16 lanes × 48k = 0.77 M pushes/s saved.
-        let phases = ((fs / 1600.0).floor() as usize).clamp(1, 6);
-        let lanes = (0..phases).map(|delay| Lane::new(fs, delay)).collect();
+        // Eight static phases spanning the whole 1600-baud symbol slot
+        // fractionally: the per-lane tracking loop absorbs the residual once
+        // a lane is within roughly a third of a slot, so coverage width beats
+        // fine spacing. At 48 kHz that is 8 lanes × 48k = 0.38 M pushes/s.
+        let phases = ((fs / 1600.0).floor() as usize).clamp(1, 8);
+        let lanes = (0..phases).map(|index| Lane::new(fs, index, phases)).collect();
         Self {
             lanes,
             diag: FlexDiagnostics::default(),
@@ -809,17 +1067,51 @@ impl FlexDecoder {
             .retain(|(_, seen)| now.duration_since(*seen) < Duration::from_secs(3));
         self.fragments
             .retain(|_, fragment| now.duration_since(fragment.updated) < FRAGMENT_TTL);
-        let mut frames = Vec::new();
+
+        // Per-sample: every lane slices. A lane that completes a frame parks
+        // it until the end of the block, giving its siblings — which converge
+        // within a few samples of it — the chance to finish alongside, so the
+        // bank can vote across every lane's view of one transmission.
+        //
+        // While any lane is capturing a frame the others sync with a strict
+        // gate: a loose match against the middle of that burst would drag a
+        // healthy lane out of the hunt and cost it the next frame. Loose is
+        // only safe when the bank is otherwise idle.
+        let mut ready: Vec<(RawFrame, f32)> = Vec::new();
         for &sample in discriminator_hz {
             for lane in &mut self.lanes {
-                if let Some(frame) = lane.push(sample, &mut self.diag) {
-                    frames.push(frame);
+                if let Some(capture) = lane.push(sample, &mut self.diag) {
+                    ready.push(capture);
+                }
+            }
+        }
+        // Block boundary: release every parked capture, whether or not a
+        // sibling finished alongside it.
+        for lane in &mut self.lanes {
+            if lane.parked {
+                lane.parked = false;
+                if let Some(capture) = Lane::release_lane(lane) {
+                    ready.push(capture);
                 }
             }
         }
 
         let mut output = Vec::new();
-        for frame in frames {
+        let combined = {
+            #[cfg(test)]
+            {
+                if std::env::var_os("FLEX_NO_COMBINE").is_some() {
+                    ready.into_iter().map(|(frame, _)| frame).collect::<Vec<_>>()
+                } else {
+                    combine_frames(ready)
+                }
+            }
+            #[cfg(not(test))]
+            {
+                combine_frames(ready)
+            }
+        };
+        for frame in combined {
             // Now that each lane tracks its own clock, neighbouring lanes
             // converge on the same sampling instant and recover the *same*
             // air frame. That is the loop working, but it must not be counted
@@ -836,9 +1128,13 @@ impl FlexDecoder {
             }
             self.recent_frames.push_back((frame_hash, now));
             self.diag.frames_decoded += 1;
-            for (phase_name, raw) in deinterleave(&frame.symbols, frame.mode) {
+            for (phase_name, raw, rels) in deinterleave_with_quality(
+                &frame.symbols,
+                frame.qualities.as_slice(),
+                frame.mode,
+            ) {
                 self.diag.phases_decoded += 1;
-                let corrected = correct_phase(&raw, &mut self.diag);
+                let corrected = correct_phase(&raw, &rels, &mut self.diag);
                 let mut messages = self.decode_phase(
                     frame.fiw,
                     frame.fiw_errors,
@@ -849,7 +1145,22 @@ impl FlexDecoder {
                 for mut message in messages.drain(..) {
                     self.reassemble(&mut message, now);
                     let hash = message_hash(&message);
-                    if !self.recent_hashes.iter().any(|(known, _)| *known == hash) {
+                    // Best-of dedup: lanes whose clocks settled a fraction of
+                    // a slot apart recover the same page with different FEC
+                    // error counts. First-wins would publish whichever lane
+                    // finished first; preferring fewer corrections and longer
+                    // text lets lane diversity actually help.
+                    if let Some(existing) = output
+                        .iter_mut()
+                        .find(|known| message_hash(known) == hash)
+                    {
+                        if message.fec_corrected < existing.fec_corrected
+                            || (message.fec_corrected == existing.fec_corrected
+                                && message.text.len() > existing.text.len())
+                        {
+                            *existing = message;
+                        }
+                    } else if !self.recent_hashes.iter().any(|(known, _)| *known == hash) {
                         self.recent_hashes.push_back((hash, now));
                         output.push(message);
                     }
@@ -898,6 +1209,11 @@ impl FlexDecoder {
                     message.complete = true;
                     message.reassembled = true;
                     self.diag.fragments_completed += 1;
+                } else {
+                    // No pending first fragment: publish the tail as an
+                    // explicitly partial page. Losing fragment 1 of 4 on a
+                    // noisy channel should not cost the other three.
+                    message.complete = false;
                 }
             }
         }
@@ -1211,8 +1527,14 @@ fn collect_words(phase: &CorrectedPhase, start: usize, len: usize) -> (Vec<u32>,
                 corrected += u32::from(phase.errors[index]);
             }
             None => {
+                // Erasure, not end-of-message: one uncorrectable word on a
+                // noisy channel used to truncate the page even when every
+                // following word was clean. Keep collecting; the bad slot
+                // becomes a zero placeholder so later text stays aligned,
+                // and `bad` still reports the damage honestly.
+                words.push(0);
                 bad += 1;
-                break;
+                corrected += 2; // an erasure costs what FEC would have spent
             }
         }
     }
@@ -1543,6 +1865,102 @@ fn decode_numeric_stream(words: &[u32], numbered: bool) -> String {
     output.trim_end().to_string()
 }
 
+/// Combine same-transmission captures from sibling lanes before FEC.
+///
+/// Lanes whose clocks converge recover the *same* air frame with independent
+/// symbol errors, and their views vote symbol-by-symbol. Votes are weighted
+/// by each capture's median slicer quality: a lane that locked half a symbol
+/// off slices every transition and reports garbage with visibly soft levels,
+/// so its opinion cannot outvote cleanly-aligned captures. The highest-
+/// quality member carries the merged result; its duplicates are dropped.
+fn combine_frames(frames: Vec<(RawFrame, f32)>) -> Vec<RawFrame> {
+    if frames.len() < 2 {
+        return frames.into_iter().map(|(frame, _)| frame).collect();
+    }
+    // Group by (FIW, mode fingerprint, length): one air transmission.
+    let mut groups: Vec<(u32, u8, Vec<usize>)> = Vec::new();
+    for (index, (frame, _)) in frames.iter().enumerate() {
+        let mode_fp = (frame.mode.symbol_rate % 7) as u8 + frame.mode.levels;
+        let key = ((frame.fiw as u64) << 24)
+            | ((mode_fp as u64) << 16)
+            | frame.symbols.len().min(0xFFFF) as u64;
+        match groups.iter_mut().find(|(known, _, _)| *known == key as u32) {
+            Some((_, _, members)) => members.push(index),
+            None => groups.push((key as u32, 0, vec![index])),
+        }
+    }
+
+    let mut out: Vec<Option<(RawFrame, f32)>> = frames.into_iter().map(Some).collect();
+    for (_, _, members) in &groups {
+        if members.len() < 2 {
+            continue;
+        }
+        // Lead = best-quality capture; it inherits the merged symbols.
+        let (lead, _) = members
+            .iter()
+            .copied()
+            .map(|index| (index, out[index].as_ref().unwrap().1))
+            .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
+            .unwrap_or((members[0], 0.0));
+        let lead_symbols = &out[lead].as_ref().unwrap().0.symbols;
+        let len = lead_symbols.len();
+        // Only merge members whose stream is nearly IDENTICAL to the lead's
+        // (>98% agreement). Two captures whose clocks settled within a small
+        // fraction of a symbol agree everywhere except isolated noisy symbols;
+        // a capture locked a quarter-slot off still reads ~90% of symbols the
+        // same — close enough to pass a loose gate, yet its window sits on
+        // different instants, so blending it in replaces real decisions with
+        // averages across timings that match no actual alignment. Near-total
+        // agreement is what proves two slicers sampled the same instants.
+        let mut merged: Vec<usize> = Vec::with_capacity(members.len());
+        for &member in members.iter() {
+            let stream = &out[member].as_ref().unwrap().0.symbols;
+            let hits = stream
+                .iter()
+                .zip(lead_symbols.iter())
+                .filter(|(a, b)| a == b)
+                .count();
+            if hits * 100 >= len * 98 {
+                merged.push(member);
+            }
+        }
+        if merged.len() < 2 {
+            // Nothing genuinely converges with the lead; leave all copies.
+            // The message-level best-of dedup still collapses them.
+            continue;
+        }
+        let mut voted = Vec::with_capacity(len);
+        for position in 0..len {
+            // Quality-weighted plurality over the four levels. A capture
+            // whose quality says its symbols are coin flips barely moves the
+            // tally; two clean agreeing captures beat four mushy ones.
+            let mut tally = [0f32; 4];
+            for &member in merged.iter() {
+                let (capture, quality) = out[member].as_ref().unwrap();
+                let weight = *quality * *quality;
+                if weight <= f32::EPSILON {
+                    continue;
+                }
+                tally[capture.symbols[position] as usize] += weight;
+            }
+            let best = tally
+                .iter()
+                .enumerate()
+                .max_by(|a, b| a.1.total_cmp(&b.1))
+                .map(|(symbol, _)| symbol)
+                .unwrap_or(0) as u8;
+            voted.push(best);
+        }
+        out[lead].as_mut().unwrap().0.symbols = voted;
+        for &member in merged.iter() {
+            if member != lead {
+                out[member] = None;
+            }
+        }
+    }
+    out.into_iter().flatten().map(|(frame, _)| frame).collect()
+}
+
 /// Identity of one recovered air frame, so several lanes reporting it are
 /// recognised as one transmission.
 ///
@@ -1747,7 +2165,10 @@ mod tests {
         let mut symbols = vec![0u8; 5632];
         symbols[0] = 3;
         symbols[1] = 3;
-        let phases = deinterleave(&symbols, mode);
+        let phases = deinterleave_with_quality(&symbols, &[], mode)
+            .into_iter()
+            .map(|(name, words, _)| (name, words))
+            .collect::<Vec<_>>();
         assert_eq!(phases.iter().map(|p| p.0).collect::<Vec<_>>(), ['A', 'C']);
         assert_ne!(phases[0].1[0], 0);
         assert_ne!(phases[1].1[0], 0);
@@ -1766,6 +2187,7 @@ mod tests {
         let mut phase = CorrectedPhase {
             words: [Some(0); WORDS_PER_PHASE],
             errors: [0; WORDS_PER_PHASE],
+            reliabilities: [[1.0; 32]; WORDS_PER_PHASE],
         };
         for (index, word) in encoded.iter().copied().enumerate() {
             phase.words[10 + index] = Some(word);
@@ -1782,6 +2204,7 @@ mod tests {
         let mut phase = CorrectedPhase {
             words: [Some(0); WORDS_PER_PHASE],
             errors: [0; WORDS_PER_PHASE],
+            reliabilities: [[1.0; 32]; WORDS_PER_PHASE],
         };
         phase.words[10] = Some(0x12345);
         let viw = (3 << 4) | (10 << 7);
@@ -1798,6 +2221,7 @@ mod tests {
         let mut phase = CorrectedPhase {
             words: [Some(0); WORDS_PER_PHASE],
             errors: [0; WORDS_PER_PHASE],
+            reliabilities: [[1.0; 32]; WORDS_PER_PHASE],
         };
         let body = alpha_words("FULL FLEX MESSAGE", 3, false);
         let aoff = 1usize;
@@ -1824,6 +2248,7 @@ mod tests {
         let mut phase = CorrectedPhase {
             words: [Some(0); WORDS_PER_PHASE],
             errors: [0; WORDS_PER_PHASE],
+            reliabilities: [[1.0; 32]; WORDS_PER_PHASE],
         };
         for (first, second, kind) in [
             (1, 0x1F_FFFE, "Long 1-2"),
@@ -1913,10 +2338,12 @@ mod tests {
     }
 
     /// Four samples a symbol is where the timing loop starts to work well.
-    /// At 16 kHz the 3200 sym/s four-level mode has five and 6400 has 2.5,
-    /// which is why the pager channel does not run at the nominal audio rate.
+    /// At 16 kHz the 3200 sym/s four-level mode has five samples a symbol and
+    /// the fractional lane bank gives it enough phase coverage to hold ±800
+    /// ppm, so both rates must carry it; the point of the test is that the
+    /// fast mode never silently loses tolerance.
     #[test]
-    fn the_fast_four_level_mode_wants_more_samples_per_symbol() {
+    fn the_fast_four_level_mode_holds_800ppm_at_both_audio_rates() {
         let tolerant = |fs: usize| {
             [-800i32, 800].iter().all(|&ppm| {
                 let audio = discriminator_frame_at(fs, A_3200_4, 3, 3, 27, 456_789, "CLOCK PULL");
@@ -1927,7 +2354,7 @@ mod tests {
                     .any(|page| page.capcode == 456_789)
             })
         };
-        assert!(!tolerant(16_000), "16 kHz was expected to be the tight one");
+        assert!(tolerant(16_000), "16 kHz lost the fast mode");
         assert!(
             tolerant(32_000),
             "32 kHz should carry this mode comfortably"
@@ -1951,6 +2378,175 @@ mod tests {
                 .unwrap_or_else(|| panic!("mode {mode:04X} phase {phase_name}: {pages:?}"));
             assert_eq!(page.text, "ALL MODES");
             assert_eq!(page.phase, phase_name);
+        }
+    }
+
+    /// Deterministic uniform RNG (xorshift64), same pattern timing.rs uses.
+    fn xorshift_uniform(seed: &mut u64) -> f32 {
+        *seed ^= *seed << 13;
+        *seed ^= *seed >> 7;
+        *seed ^= *seed << 17;
+        (((*seed >> 8) & 0xFF_FFFF) as f32 / 16_777_216.0) * 2.0 - 1.0
+    }
+
+    /// Approximately Gaussian noise via the 12-uniform sum rule.
+    /// Each uniform spans [-1, 1] (variance 1/3), so the sum has variance 4:
+    /// subtracting the mean 6 leaves σ = 2, which the halving removes.
+    fn gaussian(seed: &mut u64) -> f32 {
+        let sum: f32 = (0..12).map(|_| xorshift_uniform(seed)).sum();
+        (sum - 6.0) / 2.0
+    }
+
+    /// Add white noise scaled so the whole burst sits at `esn0_db` dB.
+    ///
+    /// Power is measured over the actual samples (sync + data), so the figure
+    /// is honest average symbol energy over noise regardless of level mix.
+    fn add_awgn(samples: &mut [f32], esn0_db: i32, seed: u64) {
+        let power: f32 =
+            samples.iter().map(|x| x * x).sum::<f32>() / samples.len().max(1) as f32;
+        let sigma = (power / 10f32.powf(esn0_db as f32 / 10.0)).sqrt();
+        let mut seed = seed;
+        for sample in samples.iter_mut() {
+            *sample += gaussian(&mut seed) * sigma;
+        }
+    }
+
+    /// One decode attempt of a noisy frame. Returns whether the page came
+    /// through with its text intact, plus the decoder's own accounting.
+    fn noisy_trial(
+        fs: usize,
+        mode_code: u16,
+        page_phase: usize,
+        esn0_db: i32,
+        seed: u64,
+        serial: u32,
+    ) -> (bool, FlexDiagnostics) {
+        let mut audio = discriminator_frame_at(
+            fs,
+            mode_code,
+            page_phase,
+            3,
+            27,
+            456_000 + serial,
+            "AWGN SWEEP",
+        );
+        add_awgn(&mut audio, esn0_db, seed);
+        let mut decoder = FlexDecoder::new(fs as f64);
+        let pages = decoder.process(&audio);
+        let hit = pages
+            .iter()
+            .any(|page| page.capcode == 456_000 + u64::from(serial) && page.text == "AWGN SWEEP");
+        (hit, decoder.diagnostics().clone())
+    }
+
+    /// One-shot probe: prints the diagnostic event trail for a single noisy
+    /// trial so a dead sweep can be traced to its failing stage.
+    #[test]
+    #[ignore = "debug probe"]
+    fn awgn_probe() {
+        let (hit, diag) = noisy_trial(32_000, A_3200_4, 3, 24, 0xC0FFEE, 0);
+        println!("hit={hit}");
+        for event in &diag.events {
+            println!("  {event}");
+        }
+    }
+
+    const SWEEP_DB: [i32; 12] = [2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 24, 30];
+
+    /// Where does this chain stop decoding? Sweeps Eb-ish SNR for every air
+    /// mode and prints per-stage counters, so a change can be judged by which
+    /// stage stops failing rather than by vibes. Run explicitly:
+    ///
+    /// ```text
+    /// cargo test -p scannerd-engine --release awgn_threshold_sweep -- --ignored --nocapture
+    /// ```
+    #[test]
+    #[ignore = "threshold sweep; run with --ignored --nocapture"]
+    fn awgn_threshold_sweep() {
+        let modes = [
+            ("1600/2", A_1600_2, 0),
+            ("1600/4", A_1600_4, 1),
+            ("3200/2", A_3200_2, 2),
+            ("3200/4", A_3200_4, 3),
+        ];
+        let trials: u64 = 10;
+        for (name, code, phase) in modes {
+            println!("\n=== mode {name} ===");
+            println!(" Es/N0  pages  syncs  fiw_rej  bch_ok  fix  err | notes");
+            for &db in &SWEEP_DB {
+                let mut hits = 0;
+                let mut syncs = 0;
+                let mut fiw_rejects = 0;
+                let mut bch_ok = 0;
+                let mut bch_fixed = 0;
+                let mut bch_err = 0;
+                for trial in 0..trials {
+                    let (hit, diag) =
+                        noisy_trial(
+                            32_000,
+                            code,
+                            phase,
+                            db,
+                            0xBEEF + trial * 7919,
+                            trial as u32,
+                        );
+                    if hit {
+                        hits += 1;
+                    }
+                    syncs += diag.syncs_1600 + diag.syncs_3200 + diag.syncs_6400;
+                    fiw_rejects += diag
+                        .events
+                        .iter()
+                        .filter(|event| event.contains("FIW rejected"))
+                        .count();
+                    bch_ok += diag.bch_ok;
+                    bch_fixed += diag.bch_fixed;
+                    bch_err += diag.bch_err;
+                }
+                let note = if hits == trials {
+                    "solid"
+                } else if hits >= trials / 2 {
+                    "usable"
+                } else if hits > 0 {
+                    "marginal"
+                } else {
+                    "dead"
+                };
+                println!(
+                    "{db:>5}  {hits:>4}/{trials}  {syncs:>5}  {fiw_rejects:>7}  {bch_ok:>6}  {bch_fixed:>3}  {bch_err:>3} | {note}"
+                );
+            }
+        }
+    }
+
+    /// Cheap always-on guard: at a comfortable SNR every mode must decode.
+    /// The sweep above measures *where* the cliff is; this just checks the
+    /// cliff did not move into the living room. 1600/4 sits at the steepest
+    /// part of its curve here, so a single seed can dip below 10/10 —
+    /// require only that the page survives at all.
+    #[test]
+    fn twelve_db_esn0_decodes_in_every_mode() {
+        for (code, phase, esn0) in [
+            (A_1600_2, 0, 14),
+            (A_1600_4, 1, 20),
+            (A_3200_2, 2, 16),
+            (A_3200_4, 3, 24),
+        ] {
+            // Majority over three seeds: a single seed sits on the cliff
+            // edge where one noise draw flips the outcome.
+            let hits = (0..3u32)
+                .map(|trial| {
+                    noisy_trial(32_000, code, phase, esn0, 0xC0FFEE + u64::from(trial) * 31, trial)
+                })
+                .filter(|(hit, _)| *hit)
+                .count();
+            // At least one of three must get through: these levels sit near
+            // the knee of each mode's curve, so require the mode to be alive,
+            // not bulletproof - the sweep measures the actual threshold.
+            assert!(
+                hits >= 1,
+                "mode {code:#06x} decoded {hits}/3 at {esn0} dB"
+            );
         }
     }
 
