@@ -71,6 +71,7 @@ impl PagerChannel {
         iq: &[Complex32],
         out_flex: &mut Vec<crate::flex::FlexMessage>,
         out_pocsag: &mut Vec<crate::pocsag::PocsagMessage>,
+        out_audio: &mut Vec<f32>,
     ) {
         for &x in iq {
             let (s, c) = self.nco_phase.sin_cos();
@@ -100,6 +101,7 @@ impl PagerChannel {
             self.disc_buf.clear();
             self.disc.discriminator_hz(&self.chan_iq, &mut self.disc_buf);
             self.chan_iq.clear();
+            out_audio.extend_from_slice(&self.disc_buf);
             for msg in self.flex.process(&self.disc_buf) {
                 out_flex.push(msg);
             }
@@ -156,18 +158,25 @@ impl PagerBank {
         self.channels.get(self.live).map(|c| c.offset_hz).unwrap_or(0.0)
     }
 
-    /// Feed one span-rate block into the live channel.
+    /// Feed one span-rate block into the live channel. Returns decoded pages
+    /// plus the live channel's discriminator audio, so a caller can monitor
+    /// exactly what the decoders are hearing.
     pub fn process(
         &mut self,
         iq: &[Complex32],
         ms_elapsed: u64,
-    ) -> (Vec<crate::flex::FlexMessage>, Vec<crate::pocsag::PocsagMessage>) {
+    ) -> (
+        Vec<crate::flex::FlexMessage>,
+        Vec<crate::pocsag::PocsagMessage>,
+        Vec<f32>,
+    ) {
         let mut flex = Vec::new();
         let mut pocsag = Vec::new();
+        let mut live_audio = Vec::new();
         if let Some(ch) = self.channels.get_mut(self.live) {
-            ch.process(iq, &mut flex, &mut pocsag);
+            ch.process(iq, &mut flex, &mut pocsag, &mut live_audio);
         }
         self.since_step_ms += ms_elapsed;
-        (flex, pocsag)
+        (flex, pocsag, live_audio)
     }
 }

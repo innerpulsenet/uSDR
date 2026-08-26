@@ -191,6 +191,10 @@ impl SdrMode {
             // Symbols are sent at the channel rate — decimating an eye
             // diagram destroys the thing it is meant to show.
             SdrMode::P25 | SdrMode::Dmr | SdrMode::Auto => 48_000.0,
+            // The live pager channel at its decoded rate: 96 kS/s shows the
+            // 1600/3200 sym/s FLEX patterns and POCSAG baud changes as they
+            // are, which is the alignment aid.
+            SdrMode::Pager => 96_000.0,
             _ => 8_000.0,
         }
     }
@@ -1742,6 +1746,7 @@ fn run_sdr(
     // first Pager frame, rebuilt when the span rate changes.
     let mut pager_bank: Option<scannerd_engine::pager_bank::PagerBank> = None;
     let mut pager_rate_cache = 0.0f64;
+    let mut pager_live_audio: Vec<f32> = Vec::new();
     let mut block_ms: u64;
     let mut mon_leveler = Leveler::new(8_000.0);
     let mut mon_notch = AutoNotch::new(8_000.0);
@@ -2518,7 +2523,15 @@ fn run_sdr(
                 // Feed the span into the walking bank; emit decoded pages.
                 if let Some(bank) = pager_bank.as_mut() {
                     let ms = block_ms;
-                    let (flex_msgs, pocsag_msgs) = bank.process(&clean, ms);
+                    let (flex_msgs, pocsag_msgs, live_audio) = bank.process(&clean, ms);
+                    // Scope and audio monitor the LIVE channel (wired into the
+                    // scope match below via pager_live_audio): FLEX's
+                    // alternating 4-level pattern fills the trace on an active
+                    // channel; dead channels show a noise floor. The level is
+                    // what tells you where to centre.
+                    audio_buf.extend_from_slice(&live_audio);
+                    pager_live_audio.clear();
+                    pager_live_audio.extend_from_slice(&live_audio);
                     for msg in flex_msgs {
                         decode_history.note(inspect_hz, "FLEX");
                         let _ = events.send(SdrEvent::Decode {
@@ -2981,6 +2994,11 @@ fn run_sdr(
                     scope_src_rate = WFM_IF_RATE;
                     scope_dev_scale = WFM_DEVIATION_HZ;
                 }
+            }
+            SdrMode::Pager => {
+                scope_src.extend_from_slice(&pager_live_audio);
+                scope_src_rate = scannerd_engine::pager_bank::PAGER_CHANNEL_RATE;
+                scope_dev_scale = 8_000.0;
             }
             SdrMode::Nfm | SdrMode::Packet | SdrMode::Auto => {
                 // The RAW discriminator, not the gated monitor audio: dead air
