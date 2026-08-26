@@ -313,24 +313,34 @@ pub fn bch_correct_soft(raw: u32, reliabilities: &[f32; 32]) -> Result<(u32, usi
                 continue;
             }
             let mut candidate = raw;
+            let mut pattern_mask = 0u32;
             for slot in 0..D {
                 if pattern & (1 << slot) != 0 {
                     candidate ^= 1 << order[slot as usize];
+                    pattern_mask ^= 1 << order[slot as usize];
                 }
             }
             if let Ok((fixed, _)) = bch_correct(candidate) {
-                // The result must differ from raw only where we flipped.
-                let allowed = {
-                    let mut m = 0u32;
-                    for slot in 0..D {
-                        if pattern & (1 << slot) != 0 {
-                            m ^= 1 << order[slot as usize];
-                        }
-                    }
-                    m
+                // BCH may fix up to two more errors beyond our flips — that
+                // is a genuine deep-error recovery, not a miscorrection,
+                // PROVIDED the extra flipped positions are also unreliable.
+                // A true 5–6 error word has its residual errors in weak bit
+                // positions; a miscorrection's spurious changes scatter onto
+                // arbitrary, often high-confidence bits.
+                let extra = (fixed ^ raw) & !pattern_mask;
+                let extra_ok = if extra == 0 {
+                    true
+                } else {
+                    extra.count_ones() <= 2
+                        && (0..32)
+                            .filter(|&b| extra >> b & 1 != 0)
+                            .all(|b| order[D..].contains(&(b as u8)))
                 };
-                if (fixed ^ raw) & !allowed == 0 {
-                    return Ok((fixed, flip_count));
+                if extra_ok {
+                    return Ok((
+                        fixed,
+                        flip_count + extra.count_ones() as usize,
+                    ));
                 }
             }
         }
@@ -1153,6 +1163,15 @@ impl FlexDecoder {
                     &corrected,
                 );
                 for mut message in messages.drain(..) {
+                    // A failed payload checksum means the words did not survive
+                    // intact — the "text" is a plausible-looking corruption.
+                    // Publishing it trains the operator to distrust the log;
+                    // drop and let a repeat (paging traffic repeats) arrive
+                    // clean. Complete pages only: fragment parts are gated by
+                    // reassembly instead.
+                    if message.complete && message.payload_checksum_ok == Some(false) {
+                        continue;
+                    }
                     self.reassemble(&mut message, now);
                     let hash = message_hash(&message);
                     // Best-of dedup: lanes whose clocks settled a fraction of
