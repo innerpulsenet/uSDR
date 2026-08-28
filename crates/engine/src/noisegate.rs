@@ -41,6 +41,12 @@ const CLOSE_S: f32 = 0.015;
 /// sentence is heard within a couple of seconds.
 const AMBIGUOUS_S: f32 = 1.5;
 
+/// Longest extra time a MARGINAL noise-band level (just over the close line)
+/// can persist before an open gate closes. Deep static bypasses this entirely.
+/// Rationale: a weak carrier's quieting leaves its band hovering at 1–2× the
+/// line; one speech transient there used to cost a multi-second dropout.
+const CLOSE_DELAY_S: f32 = 0.40;
+
 pub struct NoiseGate {
     open_level: f32,
     close_level: f32,
@@ -62,6 +68,9 @@ pub struct NoiseGate {
     /// anyway; if it truly is noise, the band climbs and the gate re-closes
     /// on its own within milliseconds.
     ambiguous_for: usize,
+    /// Samples the smoothed envelope has continuously exceeded `close_level`
+    /// while open, feeding the depth-scaled close delay.
+    over_close_for: usize,
 }
 
 impl NoiseGate {
@@ -85,6 +94,7 @@ impl NoiseGate {
             last_duty: 0.0,
             fs,
             ambiguous_for: 0,
+            over_close_for: 0,
         }
     }
 
@@ -106,9 +116,33 @@ impl NoiseGate {
         for (i, v) in voice.iter_mut().enumerate() {
             let level = self.smooth.process(noise.get(i).copied().unwrap_or(0.0));
             if self.open {
+                // A weak carrier partially quiets the band, so its level
+                // hovers just OVER the close line rather than clearly below
+                // it as a strong carrier does. One sample over used to slam
+                // the gate shut instantly; combined with the 1.5 s ambiguity
+                // timer that produced periodic multi-second dropouts on
+                // marginal signals. Closing now scales with how far above
+                // the line the level sits: hovering (≤2×) must persist
+                // ~CLOSE_DELAY_S before closing, while deep dead-air (≥4×,
+                // full static) closes immediately as always.
                 if level > self.close_level {
-                    self.open = false;
-                    self.ambiguous_for = 0;
+                    let over = (level / self.close_level.max(1e-6)).max(1.0);
+                    if over >= 4.0 {
+                        self.open = false;
+                        self.ambiguous_for = 0;
+                        self.over_close_for = 0;
+                    } else {
+                        self.over_close_for += 1;
+                        // 1× → CLOSE_DELAY_S to close; 3× → 0.2 s.
+                        let seconds = CLOSE_DELAY_S * (2.0 - (over - 1.0)).clamp(0.25, 2.0) / 2.0;
+                        if self.over_close_for >= (seconds * self.fs).max(1.0) as usize {
+                            self.open = false;
+                            self.ambiguous_for = 0;
+                            self.over_close_for = 0;
+                        }
+                    }
+                } else {
+                    self.over_close_for = 0;
                 }
             } else if level < self.open_level {
                 self.open = true;
@@ -145,6 +179,7 @@ impl NoiseGate {
         self.open = false;
         self.last_duty = 0.0;
         self.ambiguous_for = 0;
+        self.over_close_for = 0;
     }
 }
 
@@ -318,5 +353,38 @@ mod tests {
     fn inverted_levels_are_clamped() {
         let g = NoiseGate::with_levels(FS as f64, 0.05, 0.01);
         assert_eq!(g.close_level, 0.05);
+    }
+
+    /// THE GLITCH THIS FIXES: a marginal carrier's band hovers just over the
+    /// close line. Before the depth-scaled close delay, one hovering sample
+    /// slammed the gate shut and the 1.5 s ambiguity timer kept it there —
+    /// periodic multi-second audio dropouts on weak signals. Hovering must
+    /// open (via the ambiguity path) and brief dips below must not re-close.
+    #[test]
+    fn a_marginal_carrier_holds_the_gate_open() {
+        let mut gate = NoiseGate::new(FS as f64);
+        // Strong carrier first: well under open_level, gate opens cleanly.
+        let strong = vec![0.0f32; FS as usize];
+        let mut audio = vec![0.3f32; strong.len()];
+        gate.process(&mut audio, &strong);
+        assert!(gate.is_open());
+        // Signal fades to marginal: band sits at ~1.2× close_level —
+        // hovering territory. Hold it through alternating hover /
+        // dip-below-line segments (speech-like) for many seconds.
+        for _ in 0..20 {
+            let hover = vec![DEFAULT_CLOSE * 1.2; FS as usize / 4];
+            let mut a = vec![0.3f32; hover.len()];
+            gate.process(&mut a, &hover);
+            let dip = vec![DEFAULT_CLOSE * 0.5; FS as usize / 20];
+            let mut a = vec![0.3f32; dip.len()];
+            gate.process(&mut a, &dip);
+        }
+        // Total gate-open duty over the whole fade must be high: the old code
+        // spent most of it in close/ambiguity churn.
+        assert!(
+            gate.duty() > 0.8,
+            "marginal carrier dropped out: final duty {:.2}",
+            gate.duty()
+        );
     }
 }

@@ -61,6 +61,11 @@ pub struct AprsDecoder {
 pub struct AprsPacket {
     pub from: String,
     pub to: String,
+    /// Digipeater path in transmission order, e.g. ["WIDE1-1", "WIDE2-2"].
+    /// Used-and-spent hops (a digi retransmitting replaces its call with
+    /// `VIACALL*`) keep the asterisk, as multimon-ng and every other APRS
+    /// client print them.
+    pub path: Vec<String>,
     pub text: String,
     pub lat: Option<f64>,
     pub lon: Option<f64>,
@@ -260,6 +265,7 @@ impl Lane {
     }
 }
 
+#[derive(Debug)]
 enum Ax25Frame {
     Packet(AprsPacket),
     Unsupported,
@@ -289,6 +295,19 @@ fn parse_ax25(buf: &[u8]) -> Ax25Frame {
     if i + 2 > data.len() {
         return Ax25Frame::Unsupported;
     }
+    // Addresses between dest+source and the last one are digipeaters, in
+    // transmission order. A hop whose command bit (bit 7 of the SSID byte)
+    // is set has already repeated this frame — shown with '*'.
+    let mut path = Vec::new();
+    if i > 14 {
+        for hop in data[14..i].chunks_exact(7) {
+            let mut call = callsign(hop);
+            if hop[6] & 0x80 != 0 {
+                call.push('*');
+            }
+            path.push(call);
+        }
+    }
     let control = data[i];
     if control & 0xef != 0x03 {
         return Ax25Frame::Unsupported;
@@ -299,6 +318,7 @@ fn parse_ax25(buf: &[u8]) -> Ax25Frame {
     Ax25Frame::Packet(AprsPacket {
         from,
         to,
+        path,
         text,
         lat,
         lon,
@@ -335,6 +355,31 @@ fn encode_call(s: &str, last: bool) -> [u8; 7] {
 #[cfg(test)]
 mod chain_tests {
     use super::*;
+
+    /// Digipeater addresses are surfaced in order, with the spent-hop '*'.
+    #[test]
+    fn digipeater_path_is_parsed_with_repeated_marks() {
+        let frame = build_ui_via(
+            "APRS",
+            "N1TEST-9",
+            &["WIDE1-1*", "WIDE2-2"],
+            "!4134.62N/07324.48W-hello",
+        );
+        match parse_ax25(&frame) {
+            Ax25Frame::Packet(p) => {
+                assert_eq!(p.path, vec!["WIDE1-1*", "WIDE2-2"]);
+                assert_eq!(p.from, "N1TEST-9");
+                assert!(p.text.contains("hello"));
+            }
+            other => panic!("expected packet, got {other:?}"),
+        }
+        // No path: empty, and the frame still parses (end bit on source).
+        let frame = build_ui("APRS", "N1TEST", "!4134.62N/07324.48W-x");
+        match parse_ax25(&frame) {
+            Ax25Frame::Packet(p) => assert!(p.path.is_empty()),
+            other => panic!("expected packet, got {other:?}"),
+        }
+    }
 
     /// End-to-end regression for the DecodeChain block-stall fix: FM-modulate
     /// a real AX.25 frame at +100 kHz IF, run DecodeChain -> NbfmDemod ->
@@ -464,9 +509,28 @@ fn dm(s: &str, hemi: u8) -> Option<f64> {
 
 /// Build an AX.25 UI frame (addresses + control + PID + info + FCS).
 pub fn build_ui(dest: &str, src: &str, info: &str) -> Vec<u8> {
+    build_ui_via(dest, src, &[], info)
+}
+
+/// `build_ui` with a digipeater path, for tests and tooling. A hop written
+/// with a trailing '*' is marked as already-repeated, e.g. `&["WIDE1-1*",
+/// "WIDE2-2"]`. The address-field end bit lands on the LAST address overall.
+pub fn build_ui_via(dest: &str, src: &str, path: &[&str], info: &str) -> Vec<u8> {
     let mut f = Vec::new();
+    let n = path.len();
+    // The address-field end bit (bit 0 of the SSID byte) sits on the LAST
+    // address: the source when there is no path, else the final hop.
     f.extend_from_slice(&encode_call(dest, false));
-    f.extend_from_slice(&encode_call(src, true));
+    f.extend_from_slice(&encode_call(src, n == 0));
+    for (k, hop) in path.iter().enumerate() {
+        let repeated = hop.ends_with('*');
+        let call = hop.trim_end_matches('*');
+        let mut enc = encode_call(call, k + 1 == n);
+        if repeated {
+            enc[6] |= 0x80;
+        }
+        f.extend_from_slice(&enc);
+    }
     f.push(0x03);
     f.push(0xf0);
     f.extend_from_slice(info.as_bytes());

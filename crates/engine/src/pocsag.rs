@@ -52,6 +52,61 @@ pub struct PocsagMessage {
     pub corrected_bits: u32,
     /// Native 20-bit message payload words, retained losslessly.
     pub raw_words: Vec<u32>,
+    /// SKYPER ROT-1 decipherment when the alphanumeric text looks like it
+    /// was transmitted shifted by one character (German Skyper network).
+    /// `None` when the page is not alphanumeric or shows no ROT-1 signature;
+    /// the plain interpretation stays in `text` either way.
+    #[serde(default)]
+    pub skyper_text: Option<String>,
+}
+
+/// Shift-alphabet ROT-1 decode used by Skyper pagers: every letter on air is
+/// the plaintext letter advanced by one; digits and space pass through.
+fn skyper_shift_minus_one(s: &str) -> String {
+    s.chars()
+        .map(|c| match c {
+            'A'..='Z' => ((c as u8 - b'A' + 25) % 26 + b'A') as char,
+            'a'..='z' => ((c as u8 - b'a' + 25) % 26 + b'a') as char,
+            _ => c,
+        })
+        .collect()
+}
+
+/// Count letter runs of ≥3 characters — length alone cannot separate ROT-1
+/// from plaintext (shifting preserves run lengths), so the score counts hits
+/// against a compact list of high-frequency German words that dominate Skyper
+/// traffic: greetings, common verbs, place holders.
+fn german_word_hits(s: &str) -> usize {
+    const WORDS: [&str; 22] = [
+        "GUTEN", "TAG", "ABEND", "NACHT", "BITTE", "DANKE", "ANRUF",
+        "HEUTE", "MORGEN", "WIR", "SIE", "ICH", "NICHT", "AUCH",
+        "BEI", "MIR", "DIR", "UM", "UHR", "BIS", "BALD", "GRUSS",
+    ];
+    let up = format!("{} ", s);
+    WORDS
+        .iter()
+        .filter(|w| {
+            // Whole-word match only, so "UHR" does not live inside "BUHR".
+            up.split(|c: char| !c.is_ascii_alphabetic())
+                .any(|t| t == **w)
+        })
+        .count() as usize
+}
+
+/// Does `alpha` read as ROT-1-shifted text? Returns the deciphered string
+/// when the shifted reading decodes recognisable German words and the plain
+/// reading decodes none — a page either is Skyper traffic or it is not.
+pub fn maybe_skyper(alpha: &str) -> Option<String> {
+    let shifted = skyper_shift_minus_one(alpha);
+    let plain_hits = german_word_hits(alpha);
+    let alt_hits = german_word_hits(&shifted);
+    // Require several real words so an unlucky coincidence on one fragment
+    // can never mangle ordinary text.
+    if alt_hits >= 2 && alt_hits > plain_hits {
+        Some(shifted)
+    } else {
+        None
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -705,6 +760,7 @@ impl Lane {
         Some(PocsagMessage {
             capcode,
             function: m.function,
+            skyper_text: maybe_skyper(&text),
             text,
             format: decoded.format,
             alpha_text: decoded.alpha,
@@ -938,6 +994,32 @@ mod tests {
     use super::*;
 
     const FS: f32 = 16_000.0;
+
+    /// Skyper ROT-1: shifted German reads as words after the minus-one
+    /// shift, plain English is never mangled, and detection needs a
+    /// decisive win.
+    #[test]
+    fn skyper_rot1_is_detected_but_never_forced() {
+        // Real case: plaintext "BITTE DANKE RUF AN" transmits as
+        // "CJUUF EBO LF S Vh BO"... verify with the actual +1 shift of
+        // "RUF MICH UM ACHT UHR AN":
+        let plain = "BITTE RUF MICH UM UHR";  // three strong German words
+        let on_air: String = plain
+            .chars()
+            .map(|c| if c.is_ascii_uppercase() {
+                ((c as u8 - b'A' + 1) % 26 + b'A') as char
+            } else {
+                c
+            })
+            .collect();
+        let decoded = maybe_skyper(&on_air).expect("ROT-1 German should be detected");
+        assert_eq!(decoded, plain);
+
+        // Ordinary English survives untouched: no signature, None.
+        assert_eq!(maybe_skyper("CALL ME AT HOME TONIGHT"), None);
+        // Short fragments cannot decide: no decisive win, None.
+        assert_eq!(maybe_skyper("AB CD"), None);
+    }
 
     #[test]
     fn bch_accepts_the_standard_words_and_corrects_two_bits() {

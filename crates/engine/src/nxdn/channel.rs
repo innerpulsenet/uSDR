@@ -21,6 +21,20 @@ pub struct NxdnSpec {
     pub ran: Option<u8>,
 }
 
+/// A voice-call assignment heard on a control channel: the site telling a
+/// radio which carrier to move to. Surfaced so the application layer can log
+/// or follow traffic, as dsd-fme does for Type-C.
+#[derive(Clone, Debug, PartialEq)]
+pub struct NxdnGrant {
+    pub talkgroup: u32,
+    pub group: bool,
+    pub source: u32,
+    /// Carrier number from the assignment. NXDN does not announce a band
+    /// plan in-band, so converting this to Hz is the operator's job — but
+    /// consecutive grants on the same number are directly comparable.
+    pub channel_number: u16,
+}
+
 pub struct NxdnChannelReceiver {
     pub spec: NxdnSpec,
     chain: DecodeChain,
@@ -41,6 +55,8 @@ pub struct NxdnChannelReceiver {
     control: Option<ControlMessage>,
     offset_sum: f64,
     offset_n: usize,
+    /// Call assignments since the last drain.
+    grants: std::collections::VecDeque<NxdnGrant>,
 }
 
 impl NxdnChannelReceiver {
@@ -65,6 +81,7 @@ impl NxdnChannelReceiver {
             control: None,
             offset_sum: 0.0,
             offset_n: 0,
+            grants: std::collections::VecDeque::new(),
             spec,
         };
         out.retune(span_center_hz);
@@ -92,6 +109,7 @@ impl NxdnChannelReceiver {
         self.control = None;
         self.offset_sum = 0.0;
         self.offset_n = 0;
+        self.grants.clear();
     }
 
     pub fn audio(&self) -> &[f32] {
@@ -136,14 +154,15 @@ impl NxdnChannelReceiver {
             {
                 continue;
             }
-            if let Some(message) = control.into_iter().find(|m| {
+            if let Some(message) = control.iter().find(|m| {
                 m.source_id.is_some()
                     || m.target_id.is_some()
                     || m.cipher_type.is_some()
                     || m.ran.is_some()
             }) {
-                self.control = Some(message);
+                self.control = Some(message.clone());
             }
+            self.observe_grants(&control);
             self.locked_rate = Some(frame.rate);
             self.system = Some(frame.system.label().into());
             self.afc.observe(frame.offset_hz, true);
@@ -198,6 +217,33 @@ impl NxdnChannelReceiver {
         self.end_call()
     }
 
+    /// A call assignment on a control channel is a trunking grant: the site
+    /// is moving that radio (and everyone listening) to a named carrier.
+    /// Queued for the application layer.
+    fn observe_grants(&mut self, control: &[ControlMessage]) {
+        for message in control {
+            let (Some(source), Some(target), Some(channel)) =
+                (message.source_id, message.target_id, message.channel_number)
+            else {
+                continue;
+            };
+            if self.grants.len() >= 8 {
+                self.grants.pop_front();
+            }
+            self.grants.push_back(NxdnGrant {
+                talkgroup: u32::from(target),
+                group: message.group.unwrap_or(true),
+                source: u32::from(source),
+                channel_number: channel,
+            });
+        }
+    }
+
+    /// Call assignments observed since the last call to this method.
+    pub fn pending_grants(&mut self) -> Vec<NxdnGrant> {
+        self.grants.drain(..).collect()
+    }
+
     fn end_call(&mut self) -> Option<CallEvent> {
         if !self.in_call {
             return None;
@@ -244,5 +290,53 @@ impl NxdnChannelReceiver {
         self.offset_sum = 0.0;
         self.offset_n = 0;
         Some(CallEvent::Ended(summary))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A Voice Call Assignment heard on a control channel queues a grant the
+    /// application can act on — this is the surface trunk-follow uses.
+    #[test]
+    fn call_assignments_queue_as_grants() {
+        let mut rx = NxdnChannelReceiver::new(
+            NxdnSpec {
+                name: "t".into(),
+                freq_hz: 450_100_000.0,
+                rate: Some(crate::nxdn::Rate::Nxdn48),
+                ran: None,
+            },
+            960_000.0,
+            450_100_000.0,
+        );
+        let assignment = ControlMessage {
+            channel: "FACCH1-A".into(),
+            message_type: 0x04,
+            message_name: "Voice Call Assignment".into(),
+            ran: Some(7),
+            source_id: Some(123),
+            target_id: Some(4567),
+            group: Some(true),
+            channel_number: Some(310),
+            location_id: None,
+            site_code: None,
+            service_options: Some(0x80),
+            emergency: true,
+            cipher_type: None,
+            key_id: None,
+            valid: true,
+            raw: String::new(),
+        };
+        rx.observe_grants(&[assignment]);
+        let pending = rx.pending_grants();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].talkgroup, 4567);
+        assert_eq!(pending[0].source, 123);
+        assert_eq!(pending[0].channel_number, 310);
+        assert!(pending[0].group);
+        // Drained: nothing twice.
+        assert!(rx.pending_grants().is_empty());
     }
 }

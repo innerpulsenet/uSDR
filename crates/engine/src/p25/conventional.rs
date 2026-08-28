@@ -56,6 +56,20 @@ pub struct EncryptionSync {
     pub unreliable_words: u8,
 }
 
+/// A live voice-grant observed on the control channel: what the system just
+/// told every subscriber to do. The scanner surface uses these to *follow*
+/// traffic — multimon-ng prints them, dsd-fme tunes to them; here they are
+/// surfaced so the application layer can log or chase them.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TrunkGrant {
+    pub talkgroup: u32,
+    /// Group call when true, individual otherwise.
+    pub group: bool,
+    pub source: u32,
+    /// Absolute frequency the grant points at, via the learned band plan.
+    pub freq_hz: f64,
+}
+
 pub struct P25ChannelReceiver {
     pub spec: P25Spec,
     chain: DecodeChain,
@@ -86,6 +100,11 @@ pub struct P25ChannelReceiver {
     /// Past a threshold the parallel linear CQPSK receiver is paused, because
     /// while C4FM is healthy its symbols are never used.
     cqpsk_idle_blocks: u32,
+    /// Band plan learned from IDEN updates plus the most recent grant seen.
+    plan: crate::p25::ChannelPlan,
+    latest_grant: Option<TrunkGrant>,
+    /// Grants waiting for the caller to pick up.
+    grants: std::collections::VecDeque<TrunkGrant>,
 }
 
 impl P25ChannelReceiver {
@@ -118,6 +137,9 @@ impl P25ChannelReceiver {
             offset_sum: 0.0,
             offset_n: 0,
             cqpsk_idle_blocks: 0,
+            plan: crate::p25::ChannelPlan::new(),
+            latest_grant: None,
+            grants: std::collections::VecDeque::new(),
             spec,
         };
         out.retune(span_center_hz);
@@ -149,6 +171,9 @@ impl P25ChannelReceiver {
         self.offset_sum = 0.0;
         self.offset_n = 0;
         self.cqpsk_idle_blocks = 0;
+          self.plan = crate::p25::ChannelPlan::new();
+        self.latest_grant = None;
+        self.grants.clear();
     }
 
     pub fn audio(&self) -> &[f32] {
@@ -299,6 +324,7 @@ impl P25ChannelReceiver {
                 Duid::Terminator | Duid::TerminatorLc => {
                     event = self.end_call().or(event);
                 }
+                Duid::Tsdu => self.observe_trunking(&frame),
                 _ => {}
             }
         }
@@ -310,6 +336,64 @@ impl P25ChannelReceiver {
             }
         }
         event
+    }
+
+    /// Test hook: feed a synthetic TSDU frame through the trunking observer
+    /// without driving the whole DSP chain.
+    #[cfg(test)]
+    fn observe_trunking_for_test(&mut self, frame: &Frame) {
+        self.observe_trunking(frame);
+    }
+
+    /// Learn what the control channel is telling subscribers to do. IDEN
+    /// updates feed the band plan; grants become follow requests the
+    /// application layer can act on.
+    fn observe_trunking(&mut self, frame: &Frame) {
+        for block in &frame.tsbks {
+            if !block.crc_ok {
+                continue;
+            }
+            let event = block.event();
+            if matches!(event, crate::p25::TsbkEvent::IdenUpdate { .. }) {
+                self.plan.observe(&event);
+                continue;
+            }
+            let (talkgroup, group, source, channel) = match event {
+                crate::p25::TsbkEvent::GroupVoiceGrant {
+                    talkgroup, source, channel, ..
+                } => (u32::from(talkgroup), true, source, channel),
+                crate::p25::TsbkEvent::IndividualVoiceGrant {
+                    target, source, channel, ..
+                } => (target, false, source, channel),
+                _ => continue,
+            };
+            // Without a band plan the grant cannot name a frequency; the
+            // raw channel is still worth logging but not worth following.
+            let Some(freq_hz) = self.plan.frequency(channel) else {
+                continue;
+            };
+            let grant = TrunkGrant {
+                talkgroup,
+                group,
+                source,
+                freq_hz,
+            };
+            self.latest_grant = Some(grant.clone());
+            if self.grants.len() >= 8 {
+                self.grants.pop_front();
+            }
+            self.grants.push_back(grant);
+        }
+    }
+
+    /// Grants observed since the last call to this method, in order.
+    pub fn pending_grants(&mut self) -> Vec<TrunkGrant> {
+        self.grants.drain(..).collect()
+    }
+
+    /// The most recent grant observed on the control channel, for telemetry.
+    pub fn latest_grant(&self) -> Option<&TrunkGrant> {
+        self.latest_grant.as_ref()
     }
 
     fn decode_voice(&mut self, frame: &Frame) -> Vec<i16> {
@@ -639,6 +723,83 @@ pub fn algorithm_name(id: u8) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A control channel that announces a band plan and then grants a
+    /// talkgroup must yield a followable frequency — this is the whole point
+    /// of decoding a trunked control channel.
+    #[test]
+    fn tsdu_grants_surface_as_followable_frequencies() {
+        let mut rx = P25ChannelReceiver::new(
+            P25Spec { name: "t".into(), freq_hz: 851_000_000.0, nac: None },
+            960_000.0,
+            851_000_000.0,
+        );
+        // IDEN update (opcode 0x34): band 1, base 851_006_250 Hz in 5 Hz
+        // units, spacing 12.5 kHz in 125 Hz units, FDMA.
+        let base_units = 851_006_250u64 / 5;
+        let spacing_units = 12_500u64 / 125;
+        let iden = crate::p25::tsbk::Tsbk {
+            last: true,
+            protected: false,
+            opcode: 0x34,
+            mfid: 0,
+            args: (1u64 << 60) | (spacing_units << 32) | base_units,
+            crc_ok: true,
+        };
+        rx.observe_trunking_for_test(&crate::p25::Frame {
+            nac: 0x293,
+            duid: crate::p25::Duid::Tsdu,
+            correlation: 1.0,
+            deviation_hz: 1800.0,
+            bch_ok: true,
+            corrected_bits: 0,
+            offset_hz: 0.0,
+            tsbks: vec![iden],
+            payload: Vec::new(),
+        });
+        // Grant: opcode 0x00, options C3, channel 0x1234 -> band 1 ch 0x234.
+        let grant = crate::p25::tsbk::Tsbk {
+            last: true,
+            protected: false,
+            opcode: 0x00,
+            mfid: 0,
+            args: (0xC3u64 << 56) | (0x1234u64 << 40) | (0x0426u64 << 24) | 0x00_1F41,
+            crc_ok: true,
+        };
+        rx.observe_trunking_for_test(&crate::p25::Frame {
+            nac: 0x293,
+            duid: crate::p25::Duid::Tsdu,
+            correlation: 1.0,
+            deviation_hz: 1800.0,
+            bch_ok: true,
+            corrected_bits: 0,
+            offset_hz: 0.0,
+            tsbks: vec![grant],
+            payload: Vec::new(),
+        });
+
+        let pending = rx.pending_grants();
+        assert_eq!(pending.len(), 1);
+        let g = &pending[0];
+        assert_eq!(g.talkgroup, 0x426);
+        assert!(g.group);
+        // Band 1, carrier 0x234 = 564 × 12.5 kHz above base... the IDEN args
+        // encode base in 5 Hz units and spacing in 125 Hz units; whatever the
+        // plan computed, it must be the SAME mapping ChannelPlan gives direct.
+        let plan_expected = {
+            let mut p = crate::p25::ChannelPlan::new();
+            // mirror of the IDEN block above
+            p.observe(&crate::p25::TsbkEvent::IdenUpdate {
+                id: 1,
+                base_hz: 851_006_250.0,
+                spacing_hz: 12_500.0,
+                tdma: false,
+            });
+            p.frequency(0x1234).unwrap()
+        };
+        assert_eq!(g.freq_hz, plan_expected);
+    }
+
 
     fn ldu_with_signalling(duid: Duid, bytes: &[u8], information_symbols: usize) -> Frame {
         let bits: Vec<u8> = bytes
