@@ -21,7 +21,7 @@ use scannerd_radio::{Cmd, Device, DeviceConfig, Role, device};
 use crate::devices as config;
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tokio::sync::broadcast;
@@ -435,7 +435,7 @@ pub enum SdrEvent {
 /// Wire format for binary FFT frames, shared by `encode_fft_frame` and the
 /// browser's decoder. Version byte first so a future layout change can bump
 /// it instead of breaking every client on reload.
-pub const FFT_FRAME_MAGIC: u8 = 0x02;
+pub const FFT_FRAME_MAGIC: u8 = 0x03;
 
 fn scope_kind_byte(kind: &str) -> u8 {
     match kind {
@@ -452,6 +452,63 @@ fn scope_kind_byte(kind: &str) -> u8 {
 /// A JSON float array costs ~10 bytes per bin; this costs exactly four, so at
 /// fft_size 8192 the frame drops from ~80 KB of text to ~40 KB of binary —
 // and the client stops tokenising all of it on the main thread.
+/// Classification, flattened into the binary FFT frame. `None` is a flag
+/// byte of zero; the numbers that follow are then meaningless placeholders.
+struct FrameClassification {
+    active: bool,
+    snr_db: f32,
+    rf_dbfs: f32,
+    peak_dev_hz: f32,
+    rms_dev_hz: f32,
+    center_offset_hz: f32,
+    confidence: f32,
+    protocol: String,
+    modulation: String,
+    details: Option<String>,
+}
+
+impl From<&ClassificationResult> for FrameClassification {
+    fn from(c: &ClassificationResult) -> Self {
+        Self {
+            active: c.active,
+            snr_db: c.snr_db,
+            rf_dbfs: c.rf_dbfs,
+            peak_dev_hz: c.peak_dev_hz,
+            rms_dev_hz: c.rms_dev_hz,
+            center_offset_hz: c.center_offset_hz,
+            confidence: c.confidence,
+            protocol: c.protocol.clone(),
+            modulation: c.modulation.clone(),
+            details: c.details.clone(),
+        }
+    }
+}
+
+fn encode_classification(buf: &mut Vec<u8>, c: Option<&FrameClassification>) {
+    match c {
+        Some(c) => {
+            buf.push(1);
+            buf.push(u8::from(c.active));
+            buf.extend_from_slice(&c.snr_db.to_le_bytes());
+            buf.extend_from_slice(&c.rf_dbfs.to_le_bytes());
+            buf.extend_from_slice(&c.peak_dev_hz.to_le_bytes());
+            buf.extend_from_slice(&c.rms_dev_hz.to_le_bytes());
+            buf.extend_from_slice(&c.center_offset_hz.to_le_bytes());
+            buf.extend_from_slice(&c.confidence.to_le_bytes());
+            // Three strings, each u8-length-prefixed like the peak labels.
+            let mut put = |s: &str| {
+                let bytes = s.as_bytes();
+                buf.push(bytes.len().min(255) as u8);
+                buf.extend_from_slice(&bytes[..bytes.len().min(255)]);
+            };
+            put(&c.protocol);
+            put(&c.modulation);
+            put(c.details.as_deref().unwrap_or(""));
+        }
+        None => buf.push(0),
+    }
+}
+
 pub fn encode_fft_frame(ev: &SdrEvent) -> Option<Vec<u8>> {
     let SdrEvent::Fft {
         center_hz,
@@ -460,6 +517,7 @@ pub fn encode_fft_frame(ev: &SdrEvent) -> Option<Vec<u8>> {
         max_hold,
         peak_iq,
         inspect_hz,
+        classification,
         peaks,
         scope,
         scope_rate_hz,
@@ -467,11 +525,11 @@ pub fn encode_fft_frame(ev: &SdrEvent) -> Option<Vec<u8>> {
         symbol_rate_hz,
         channel_dbfs,
         noise_dbfs,
-        ..
     } = ev
     else {
         return None;
     };
+    let classification = classification.as_ref().map(FrameClassification::from);
     let mut buf = Vec::with_capacity(
         48 + (pwr.len() + max_hold.len()) * 4 + scope.len() * 2 + peaks.len() * 16,
     );
@@ -511,6 +569,8 @@ pub fn encode_fft_frame(ev: &SdrEvent) -> Option<Vec<u8>> {
         buf.push(label.len() as u8);
         buf.extend_from_slice(label.as_bytes());
     }
+    // v3 appends the classification block last (see encode_classification).
+    encode_classification(&mut buf, classification.as_ref());
     Some(buf)
 }
 
@@ -526,6 +586,10 @@ struct CaptureBuffer {
     discriminator: VecDeque<i16>,
     /// Inspected complex baseband at `fs_hz`, interleaved as I/Q when exported.
     iq: VecDeque<(i16, i16)>,
+    /// Raw device span at `span_rate`, interleaved as I/Q. A few seconds only:
+    /// at 2.4 MS/s this ring is tens of MiB.
+    span: VecDeque<(i16, i16)>,
+    span_rate: f64,
 }
 
 impl CaptureBuffer {
@@ -535,6 +599,53 @@ impl CaptureBuffer {
         self.voice.clear();
         self.discriminator.clear();
         self.iq.clear();
+    }
+
+    /// Append raw span samples to the rolling raw capture (~12 s at the span
+    /// rate). Called from the device loop before any processing.
+    fn append_span(&mut self, rate: f64, block: &[num_complex::Complex32]) {
+        if (self.span_rate - rate).abs() >= 1.0 {
+            self.span.clear();
+            self.span_rate = rate;
+        }
+        self.span.extend(block.iter().map(|x| {
+            (
+                (x.re.clamp(-1.0, 1.0) * 32_000.0) as i16,
+                (x.im.clamp(-1.0, 1.0) * 32_000.0) as i16,
+            )
+        }));
+        let max = rate.max(1.0) as usize * 12;
+        while self.span.len() > max {
+            self.span.drain(..(self.span.len() - max));
+        }
+    }
+
+    fn span_rate(&self) -> u32 {
+        if self.span_rate > 0.0 {
+            self.span_rate.round() as u32
+        } else {
+            0
+        }
+    }
+
+    /// Snapshot the raw span ring and the discriminator ring (the decoder's
+    /// actual input) as WAV bytes. Diagnostic: called on a decoded page so the
+    /// capture is guaranteed to contain the frame that produced it.
+    fn page_debug_snapshots(&self) -> (Vec<u8>, Vec<u8>) {
+        let span = {
+            let mut samples: Vec<i16> = Vec::with_capacity(self.span.len() * 2);
+            for &(i, q) in &self.span {
+                samples.extend([i, q]);
+            }
+            let rate = self.span_rate();
+            pcm_wav(&samples, rate.max(8_000), 2)
+        };
+        let disc = {
+            let disc: Vec<i16> = self.discriminator.iter().copied().collect();
+            let rate = self.rate();
+            pcm_wav(&disc, rate.max(8_000), 1)
+        };
+        (span, disc)
     }
 
     fn rate(&self) -> u32 {
@@ -712,7 +823,10 @@ impl SdrRuntime {
         // multi-MiB WAV serialisation stalled it for the whole download.
         let (inspect_hz, rate, samples) = {
             let capture = self.capture.lock().expect("SDR capture");
-            let rate = capture.rate();
+            let rate = match kind {
+                CaptureKind::Span => capture.span_rate(),
+                _ => capture.rate(),
+            };
             let samples = match kind {
                 CaptureKind::Voice => capture.voice.iter().copied().collect::<Vec<i16>>(),
                 CaptureKind::Discriminator => {
@@ -725,14 +839,23 @@ impl SdrRuntime {
                     }
                     samples
                 }
+                CaptureKind::Span => {
+                    let mut samples = Vec::with_capacity(capture.span.len() * 2);
+                    for &(i, q) in &capture.span {
+                        samples.extend([i, q]);
+                    }
+                    samples
+                }
             };
             (capture.inspect_hz, rate, samples)
         };
         let count = match kind {
-            CaptureKind::Iq => samples.len() / 2,
+            CaptureKind::Iq | CaptureKind::Span => samples.len() / 2,
             _ => samples.len(),
         };
-        let channels = matches!(kind, CaptureKind::Iq).then_some(2).unwrap_or(1);
+        let channels = matches!(kind, CaptureKind::Iq | CaptureKind::Span)
+            .then_some(2)
+            .unwrap_or(1);
         (inspect_hz, count, pcm_wav(&samples, rate, channels))
     }
 }
@@ -742,6 +865,11 @@ pub enum CaptureKind {
     Voice,
     Discriminator,
     Iq,
+    /// Raw device span, before any filtering — what the tuner actually
+    /// delivered, at the span rate. Diagnostic: unlike the inspected I/Q this
+    /// has not been through the channel chain, so a signal that decodes but
+    /// cannot be seen here is being manufactured (or lost) downstream.
+    Span,
 }
 
 /// WAV wrapper for a recorded call.
@@ -1172,18 +1300,48 @@ fn hex_words(words: &[u32]) -> String {
 }
 
 /// One decoded AX.25 frame, in the shape the decode log already renders.
+/// A trunking grant rendered as one human-readable line.
+fn grant_repr(grant: &scannerd_engine::p25::conventional::TrunkGrant) -> String {
+    format!(
+        "grant: TG {} on {:.4} MHz{}",
+        grant.talkgroup,
+        grant.freq_hz / 1e6,
+        if grant.group { "" } else { " (indiv)" }
+    )
+}
+
+/// Wrap a control-channel observation in the decode-event pipeline.
+fn grant_event(protocol: &str, repr: &str) -> DecodeEvent {
+    DecodeEvent {
+        protocol: protocol.into(),
+        kind: "trunking".into(),
+        summary: repr.into(),
+        valid: true,
+        fields: std::collections::BTreeMap::new(),
+    }
+}
+
 fn packet_event(packet: &scannerd_engine::aprs::AprsPacket) -> DecodeEvent {
     let mut fields = std::collections::BTreeMap::new();
     fields.insert("from".into(), packet.from.clone());
     fields.insert("to".into(), packet.to.clone());
+    if !packet.path.is_empty() {
+        fields.insert("via".into(), packet.path.join(","));
+    }
     if let (Some(lat), Some(lon)) = (packet.lat, packet.lon) {
         fields.insert("lat".into(), format!("{lat:.5}"));
         fields.insert("lon".into(), format!("{lon:.5}"));
     }
+    // The path is the story of the packet: who heard it and where it died.
+    let via = if packet.path.is_empty() {
+        String::new()
+    } else {
+        format!(" via {}", packet.path.join(","))
+    };
     DecodeEvent {
         protocol: "APRS".into(),
         kind: "AX.25 UI frame".into(),
-        summary: format!("{} > {} · {}", packet.from, packet.to, packet.text),
+        summary: format!("{} > {}{} · {}", packet.from, packet.to, via, packet.text),
         // Only frames whose FCS checked out are handed back by the decoder.
         valid: true,
         fields,
@@ -2480,6 +2638,11 @@ fn run_sdr(
         // Real-time milliseconds this block represents, for dwell timers.
         block_ms = (block.len() as f64 / current_rate * 1000.0).round().max(1.0) as u64;
 
+        capture
+            .lock()
+            .expect("SDR capture")
+            .append_span(current_rate, &block);
+
         for c in block.iter() {
             let mag = c.re.abs().max(c.im.abs());
             if mag > peak_iq {
@@ -2733,6 +2896,13 @@ fn run_sdr(
                             event: call_event(SdrMode::P25, &ev),
                         });
                     }
+                    for grant in p25.pending_grants() {
+                        decode_history.note(inspect_hz, "P25");
+                        let _ = events.send(SdrEvent::Decode {
+                            inspect_hz,
+                            event: grant_event("P25", &grant_repr(&grant)),
+                        });
+                    }
                     if let Some(ev) = dmr.process(&clean, last_snr_db) {
                         let _ = events.send(SdrEvent::Decode {
                             inspect_hz,
@@ -2800,12 +2970,30 @@ fn run_sdr(
                         let d = flex.diagnostics();
                         (d.syncs_1600, d.syncs_3200, d.syncs_6400)
                     };
+                    let mut flex_pages = 0usize;
                     for msg in flex.process(disc) {
                         decode_history.note(inspect_hz, "FLEX");
                         let _ = events.send(SdrEvent::Decode {
                             inspect_hz,
                             event: flex_event(&msg),
                         });
+                        flex_pages += 1;
+                    }
+                    // Page-time capture: dump the raw span ring and the exact
+                    // discriminator the decoders just consumed, so any page can
+                    // be replayed offline against reference decoders. Opt-in.
+                    static PAGE_DUMP: AtomicUsize = AtomicUsize::new(0);
+                    if flex_pages > 0 && std::env::var_os("USDR_PAGE_DUMP").is_some() {
+                        let n = PAGE_DUMP.fetch_add(1, Ordering::Relaxed);
+                        let (span_wav, disc_wav) =
+                            capture.lock().expect("SDR capture").page_debug_snapshots();
+                        let span_path = format!("/tmp/usdr_page{n}_span.wav");
+                        let disc_path = format!("/tmp/usdr_page{n}_disc.wav");
+                        let _ = std::fs::write(&span_path, span_wav);
+                        let _ = std::fs::write(&disc_path, disc_wav);
+                        eprintln!(
+                            "SDR: dumped {span_path} and {disc_path} after {flex_pages} page(s)"
+                        );
                     }
                     {
                         let d = flex.diagnostics();
@@ -2859,6 +3047,13 @@ fn run_sdr(
                     Demod::P25 { rx } => {
                         let ev = rx.process(&clean, snr_hint);
                         audio_buf.extend_from_slice(rx.audio());
+                        for grant in rx.pending_grants() {
+                            decode_history.note(inspect_hz, "P25");
+                            let _ = events.send(SdrEvent::Decode {
+                                inspect_hz,
+                                event: grant_event("P25", &grant_repr(&grant)),
+                            });
+                        }
                         (ev, rx.locked(), rx.in_call())
                     }
                     Demod::Dmr { rx } => {
@@ -3413,6 +3608,164 @@ mod tests {
         assert_eq!(replay.sample_rate_hz, 48_000);
         assert_eq!(replay.samples, 4800);
         assert_eq!(replay.classification.protocol, "Carrier / Beacon");
+    }
+
+    /// The binary FFT frame must carry the classification: when the frame
+    /// format gained a binary path (b0f7411) this field was silently dropped
+    /// from `encode_fft_frame` and hardcoded to `null` in the browser's
+    /// decoder, and the live classifier panel went dark for two days while
+    /// every unit test kept passing. This pins both ends of the wire.
+    #[test]
+    fn fft_binary_frame_carries_the_classification() {
+        let mut ev = SdrEvent::Fft {
+            center_hz: 155_100_000.0,
+            rate_hz: 1_048_576.0,
+            pwr: vec![0.0; 64],
+            max_hold: vec![0.0; 64],
+            peak_iq: 0.25,
+            inspect_hz: 155_000_000.0,
+            classification: Some(ClassificationResult {
+                active: true,
+                snr_db: 11.5,
+                rf_dbfs: -42.0,
+                peak_dev_hz: 4_800.0,
+                rms_dev_hz: 2_400.0,
+                center_offset_hz: -310.0,
+                modulation: "C4FM @ 4800 Bd".into(),
+                protocol: "P25 Phase 1".into(),
+                details: Some("NAC: $293 · LDU1".into()),
+                confidence: 0.98,
+            }),
+            peaks: Vec::new(),
+            scope: vec![12, -34, 56],
+            scope_rate_hz: 48_000.0,
+            scope_kind: "symbols",
+            symbol_rate_hz: 4800.0,
+            channel_dbfs: -40.0,
+            noise_dbfs: -51.5,
+        };
+
+        // A Some classification survives encoding...
+        let buf = encode_fft_frame(&ev).unwrap();
+        assert_eq!(buf[0], FFT_FRAME_MAGIC);
+
+        // ...and the same event with None keeps the frame decodable rather
+        // than desynchronising the reader.
+        if let SdrEvent::Fft { classification, .. } = &mut ev {
+            *classification = None;
+        }
+        let buf_none = encode_fft_frame(&ev).unwrap();
+
+        // v3 appends exactly one trailing block, so a present classification
+        // must be strictly larger than an absent one.
+        assert!(
+            buf.len() > buf_none.len(),
+            "a present classification must add bytes to the frame"
+        );
+
+        // Full manual decode mirroring onSdrFftBinary, so any encoder/client
+        // drift fails here first:
+        let read_classification = |buf: &[u8]| -> Option<ClassificationResult> {
+            let mut off = 1usize;
+            let mut f64le = |off: &mut usize| -> f64 {
+                let v = f64::from_le_bytes(buf[*off..*off + 8].try_into().unwrap());
+                *off += 8;
+                v
+            };
+            let mut f32le = |off: &mut usize| -> f32 {
+                let v = f32::from_le_bytes(buf[*off..*off + 4].try_into().unwrap());
+                *off += 4;
+                v
+            };
+            let mut u32le = |off: &mut usize| -> u32 {
+                let v = u32::from_le_bytes(buf[*off..*off + 4].try_into().unwrap());
+                *off += 4;
+                v
+            };
+            let _center = f64le(&mut off);
+            let _rate = f64le(&mut off);
+            let _peak_iq = f32le(&mut off);
+            let _inspect = f64le(&mut off);
+            off += 2 + 1 + 2; // scope rate u16, kind u8, symbol rate u16
+            let _ch = f32le(&mut off);
+            let _noise = f32le(&mut off);
+            let scope_len = u32le(&mut off) as usize;
+            off += scope_len * 2;
+            let pwr_len = u32le(&mut off) as usize;
+            let mh_len = u32le(&mut off) as usize;
+            let peaks_len = u32le(&mut off) as usize;
+            off += (pwr_len + mh_len) * 4;
+            for _ in 0..peaks_len {
+                off += 8 + 4;
+                let label_len = buf[off] as usize;
+                off += 1 + label_len;
+            }
+            if off >= buf.len() || buf[off] == 0 {
+                return None;
+            }
+            off += 1;
+            let active = buf[off] != 0;
+            off += 1;
+            let snr_db = f32le(&mut off);
+            let rf_dbfs = f32le(&mut off);
+            let peak_dev_hz = f32le(&mut off);
+            let rms_dev_hz = f32le(&mut off);
+            let center_offset_hz = f32le(&mut off);
+            let confidence = f32le(&mut off);
+            let mut get = |off: &mut usize| -> String {
+                let len = buf[*off] as usize;
+                *off += 1;
+                let s = String::from_utf8(buf[*off..*off + len].to_vec()).unwrap();
+                *off += len;
+                s
+            };
+            let protocol = get(&mut off);
+            let modulation = get(&mut off);
+            let details = get(&mut off);
+            Some(ClassificationResult {
+                active,
+                snr_db,
+                rf_dbfs,
+                peak_dev_hz,
+                rms_dev_hz,
+                center_offset_hz,
+                modulation,
+                protocol,
+                details: (!details.is_empty()).then_some(details),
+                confidence,
+            })
+        };
+
+        let c = read_classification(&buf).expect("classification missing from v3 frame");
+        assert!(c.active);
+        assert_eq!(c.protocol, "P25 Phase 1");
+        assert_eq!(c.modulation, "C4FM @ 4800 Bd");
+        assert_eq!(c.details.as_deref(), Some("NAC: $293 · LDU1"));
+        assert!((c.snr_db - 11.5).abs() < 1e-5);
+        assert!((c.confidence - 0.98).abs() < 1e-5);
+
+        let n = read_classification(&buf_none);
+        assert!(n.is_none(), "None classification must encode as absent");
+
+        // And the JSON path (used by replay and older clients) still carries it.
+        if let SdrEvent::Fft { classification, .. } = &mut ev {
+            *classification = Some(ClassificationResult {
+                active: true,
+                snr_db: 11.5,
+                rf_dbfs: -42.0,
+                peak_dev_hz: 4_800.0,
+                rms_dev_hz: 2_400.0,
+                center_offset_hz: -310.0,
+                modulation: "C4FM @ 4800 Bd".into(),
+                protocol: "P25 Phase 1".into(),
+                details: Some("NAC: $293 · LDU1".into()),
+                confidence: 0.98,
+            });
+        }
+        let json = serde_json::to_string(&ev).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed["classification"]["protocol"], "P25 Phase 1");
+        assert_eq!(parsed["classification"]["details"], "NAC: $293 · LDU1");
     }
 
     /// Every span the UI offers must produce a classifier clocked at the rate

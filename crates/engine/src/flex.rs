@@ -2955,6 +2955,123 @@ pub(crate) mod tests {
         }
     }
 
+    /// TEMPORARY crosscheck scaffolding: write discriminator WAVs of synthetic
+    /// FLEX frames so an independent decoder (multimon-ng, hard-coded to
+    /// 22050 Hz) can confirm the test generator's air framing is not
+    /// self-consistent-but-wrong. Generated at 176 kHz (an exact multiple of
+    /// every FLEX rate) and box-decimated by 8 to exactly 22050.
+    ///
+    /// The 3200/4 frame carries a page in ALL FOUR phases: a one-phase frame
+    /// sits at one deviation polarity for over a second, which trips
+    /// multimon-ng's no-transition lock timeout — real frames never do this.
+    #[test]
+    #[ignore = "writes /tmp WAVs for external crosscheck"]
+    fn write_multimon_crosscheck_wavs() {
+        let fs = 176_000usize;
+        let levels = [-4_500.0f32, -1_500.0, 1_500.0, 4_500.0];
+
+        // One busy 3200/4 frame with an alphanumeric page in every phase.
+        let busy_frame = |serial: u32| -> Vec<f32> {
+            let mode_code = A_3200_4;
+            let sync = (u64::from(mode_code) << 48)
+                | (u64::from(SYNC_MARKER) << 16)
+                | u64::from(!mode_code);
+            let mut symbols = Vec::new();
+            for bit in (0..64).rev() {
+                symbols.push(if sync >> bit & 1 != 0 { 0u8 } else { 3 });
+            }
+            symbols.extend((0..16).map(|i| if i & 1 == 0 { 0 } else { 3 }));
+            let frame_word = fiw(3, 27);
+            for bit in 0..32 {
+                symbols.push(if frame_word >> bit & 1 != 0 { 3 } else { 0 });
+            }
+
+            let mut phases = [[encode_word(0); WORDS_PER_PHASE]; 4];
+            for (page, phase_words) in phases.iter_mut().enumerate() {
+                let text = format!("CROSS{page} HELLO");
+                let body = alpha_words(&text, 3, false);
+                phase_words[0] = encode_word(2 << 10);
+                phase_words[1] = encode_word(0x8000 + 456_000 + page as u32);
+                phase_words[2] = encode_word((5 << 4) | (3 << 7) | ((body.len() as u32) << 14));
+                for (index, word) in body.into_iter().enumerate() {
+                    phase_words[3 + index] = encode_word(word);
+                }
+            }
+            let gray = |a: u32, b: u32| match (a, b) {
+                (0, 0) => 0u8,
+                (0, 1) => 1,
+                (1, 1) => 2,
+                _ => 3,
+            };
+            for counter in 0..(WORDS_PER_PHASE * 32) as u32 {
+                let index = phase_index(counter);
+                let word_bit = (counter >> 3) & 31;
+                let a = (phases[0][index] >> word_bit) & 1;
+                let b = (phases[1][index] >> word_bit) & 1;
+                symbols.push(gray(a, b));
+                let c = (phases[2][index] >> word_bit) & 1;
+                let d = (phases[3][index] >> word_bit) & 1;
+                symbols.push(gray(c, d));
+            }
+
+            let mut samples = Vec::with_capacity(symbols.len() * 55);
+            for symbol in symbols[..(64 + 16 + 32)].iter().copied() {
+                samples.extend(std::iter::repeat_n(levels[symbol as usize], fs / 1600));
+            }
+            // SYNC2: 25 ms at the frame symbol rate.
+            for _ in 0..(3200 * SYNC2_MS / 1000) {
+                samples.extend(std::iter::repeat_n(levels[0], fs / 3200));
+            }
+            for symbol in &symbols[(64 + 16 + 32)..] {
+                samples.extend(std::iter::repeat_n(levels[*symbol as usize], fs / 3200));
+            }
+            samples
+        };
+
+        for (tag, db) in [("clean", 60), ("n24", 24), ("n16", 16), ("n12", 12), ("n8", 8)] {
+            let mut audio = Vec::new();
+            for serial in 0..3u32 {
+                // Real FLEX opens with a long alternating preamble; multimon-ng
+                // refuses to process syncs until it has locked on one.
+                let preamble_bits = 960usize;
+                let samples_per_bit = fs / 1600;
+                for bit in 0..preamble_bits {
+                    let level = if bit & 1 == 0 { -4_500.0f32 } else { 4_500.0 };
+                    audio.extend(std::iter::repeat_n(level, samples_per_bit));
+                }
+                audio.extend(busy_frame(serial));
+            }
+            if db < 60 {
+                add_awgn(&mut audio, db, 0xDA7A);
+            }
+            // Box decimate by 8 to 22050 Hz, ±4500 Hz deviation → ±11250 counts.
+            let mut pcm = Vec::with_capacity(audio.len() / 8 * 2);
+            for chunk in audio.chunks(8) {
+                let mean = chunk.iter().sum::<f32>() / chunk.len() as f32;
+                pcm.extend_from_slice(&((mean * 2.5) as i16).to_le_bytes());
+            }
+            let out_fs = 22_050u32;
+            let byte_rate = 2 * out_fs;
+            let mut wav = Vec::with_capacity(44 + pcm.len());
+            wav.extend_from_slice(b"RIFF");
+            wav.extend_from_slice(&((36 + pcm.len()) as u32).to_le_bytes());
+            wav.extend_from_slice(b"WAVEfmt ");
+            wav.extend_from_slice(&16u32.to_le_bytes());
+            wav.extend_from_slice(&1u16.to_le_bytes()); // PCM
+            wav.extend_from_slice(&1u16.to_le_bytes()); // mono
+            wav.extend_from_slice(&out_fs.to_le_bytes());
+            wav.extend_from_slice(&byte_rate.to_le_bytes());
+            wav.extend_from_slice(&2u16.to_le_bytes());
+            wav.extend_from_slice(&16u16.to_le_bytes());
+            wav.extend_from_slice(b"data");
+            wav.extend_from_slice(&(pcm.len() as u32).to_le_bytes());
+            wav.extend_from_slice(&pcm);
+            let path = format!("/tmp/crosscheck_{tag}.wav");
+            std::fs::write(&path, wav).unwrap();
+            println!("wrote {path}");
+        }
+    }
+
     const SWEEP_DB: [i32; 12] = [2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 24, 30];
 
     /// Where does this chain stop decoding? Sweeps Eb-ish SNR for every air

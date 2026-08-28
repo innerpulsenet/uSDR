@@ -3133,12 +3133,14 @@ function connect() {
   ws.binaryType = 'arraybuffer';
   ws.onmessage = (ev) => {
     if (typeof ev.data !== 'string') {
-      // Binary frames carry a version byte: 0x01 audio PCM, 0x02 FFT frame.
+      // Binary frames carry a version byte: 0x01 audio PCM, 0x02/0x03 FFT
+      // frame (v2 = bare, v3 = trailing classification block; onSdrFftBinary
+      // tells them apart by length).
       const view = new DataView(ev.data);
       if (view.byteLength < 1) return;
       const kind = view.getUint8(0);
       if (kind === 0x01) { onAudioFrame(ev.data); return; }
-      if (kind === 0x02) { onSdrFftBinary(ev.data, view); return; }
+      if (kind === 0x02 || kind === 0x03) { onSdrFftBinary(ev.data, view); return; }
       return;
     }
     const m = JSON.parse(ev.data);
@@ -3203,12 +3205,42 @@ function onSdrFftBinary(buf, view) {
     peaks.push({ freqHz, snrDb, pwrDb: 0, label });
   }
 
+  // v3 frames end with the classification block (encode_classification). A
+  // short read means an old server sent a v2 frame — degrade to null exactly
+  // as before this was fixed.
+  let classification = null;
+  if (off + 1 <= view.byteLength && view.getUint8(off) === 1) {
+    off += 1;
+    const active = view.getUint8(off) !== 0; off += 1;
+    const snrDb = f32();
+    const rfDbfs = f32();
+    const peakDevHz = f32();
+    const rmsDevHz = f32();
+    const centerOffsetHz = f32();
+    const confidence = f32();
+    const str = () => {
+      const len = view.getUint8(off); off += 1;
+      const s = new TextDecoder().decode(new Uint8Array(buf, off, len));
+      off += len;
+      return s;
+    };
+    const protocol = str();
+    const modulation = str();
+    const details = str();
+    classification = {
+      active, snrDb, rfDbfs, peakDevHz, rmsDevHz, centerOffsetHz, confidence,
+      protocol, modulation, details: details || null,
+    };
+  } else {
+    off += 1;
+  }
+
   onSdrFft({
     centerHz,
     rateHz,
     peakIq,
     inspectHz,
-    classification: null,
+    classification,
     peaks,
     scope,
     scopeRateHz,

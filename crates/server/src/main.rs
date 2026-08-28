@@ -651,6 +651,7 @@ async fn get_sdr_capture(
         "voice" => sdr::CaptureKind::Voice,
         "discriminator" | "disc" | "symbols" => sdr::CaptureKind::Discriminator,
         "iq" => sdr::CaptureKind::Iq,
+        "span" | "raw" => sdr::CaptureKind::Span,
         _ => {
             return Err(ApiError::BadRequest(
                 "capture kind must be voice, discriminator, symbols, or iq".into(),
