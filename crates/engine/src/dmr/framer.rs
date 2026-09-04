@@ -157,10 +157,28 @@ impl DmrReceiver {
 
     /// Feed one block of complex baseband; returns any completed bursts.
     pub fn process(&mut self, iq: &[Complex32]) -> Vec<Burst> {
-        self.front.process(iq, &mut self.hz);
+        let mut hz = std::mem::take(&mut self.hz);
+        self.front.process(iq, &mut hz);
+        let bursts = self.decode(&hz);
+        self.hz = hz;
+        bursts
+    }
+
+    /// Run the receiver over pre-discriminated Hz, for callers that
+    /// discriminate a shared filtered buffer once for several consumers.
+    pub fn process_hz(&mut self, hz: &[f32]) -> Vec<Burst> {
+        let mut boxed = std::mem::take(&mut self.hz);
+        self.front.process_hz(hz, &mut boxed);
+        let bursts = self.decode(&boxed);
+        self.hz = boxed;
+        bursts
+    }
+
+    /// Quality measurement and framing over discriminated Hz.
+    fn decode(&mut self, hz: &[f32]) -> Vec<Burst> {
         let mut signal = 0.0f64;
         let mut error = 0.0f64;
-        for &h in &self.hz {
+        for &h in hz {
             let ideal = f64::from(dibit_level(slice_at(h, DEV_OUTER_HZ)));
             signal += ideal * ideal;
             let residual = f64::from(h) - ideal;
@@ -171,7 +189,7 @@ impl DmrReceiver {
         } else {
             0.0
         };
-        self.framer.push(&self.hz)
+        self.framer.push(hz)
     }
 
     pub fn locked(&self) -> bool {
@@ -198,6 +216,9 @@ struct DmrFrontEnd {
     sum: f32,
     sps: usize,
     dc: OnePole,
+    /// Discriminated Hz scratch for the complex-input path; `process_hz`
+    /// callers bring their own discriminator and never fill this.
+    disc: Vec<f32>,
 }
 
 impl DmrFrontEnd {
@@ -211,11 +232,13 @@ impl DmrFrontEnd {
             sum: 0.0,
             sps,
             dc: OnePole::new((fs * 0.04) as f32),
+            disc: Vec::new(),
         }
     }
 
     fn process(&mut self, iq: &[Complex32], out: &mut Vec<f32>) {
-        out.clear();
+        self.disc.clear();
+        self.disc.reserve(iq.len());
         for &x in iq {
             let d = x * self.prev.conj();
             self.prev = x;
@@ -224,9 +247,21 @@ impl DmrFrontEnd {
             } else {
                 0.0
             };
+            self.disc.push(hz);
+        }
+        let disc = std::mem::take(&mut self.disc);
+        self.process_hz(&disc, out);
+        self.disc = disc;
+    }
+
+    /// Boxcar and DC tracking over pre-discriminated Hz, shared-shape entry
+    /// point mirroring [`crate::p25::C4fmFrontEnd::process_hz`].
+    fn process_hz(&mut self, hz: &[f32], out: &mut Vec<f32>) {
+        out.clear();
+        for &sample in hz {
             self.sum -= self.buf[self.head];
-            self.buf[self.head] = hz;
-            self.sum += hz;
+            self.buf[self.head] = sample;
+            self.sum += sample;
             self.head = (self.head + 1) % self.sps;
             if self.count < self.sps {
                 self.count += 1;
@@ -522,8 +557,11 @@ impl DmrFramer {
                 let abs = self.consumed as f64 + start as f64 + sync_at + j as f64 * self.sps;
                 centre[j] = slice_at(self.hz_at(abs) - self.offset, self.amp);
             }
+            // Pack the observation once; both polarity tests are then XOR +
+            // popcount against the same word.
+            let got = sync::pack_dibits(&centre);
             for inverted in [false, true] {
-                if let Some((_, err)) = sync::classify(&centre, inverted) {
+                if let Some((_, err)) = sync::classify_packed(got, inverted) {
                     if err <= ACQUIRE_MAX_ERRORS
                         && best.is_none_or(|(best_err, _, _)| err < best_err)
                     {
@@ -866,6 +904,47 @@ mod tests {
         assert_eq!(frames[0].data[0], 0x10);
         assert_eq!(frames[1].data[0], 0x20);
         assert_eq!(frames[2].data[0], 0x30);
+    }
+
+    /// The classifier discriminates the shared filtered buffer once and feeds
+    /// every consumer of it from that pass; the pre-discriminated entry point
+    /// must decode the same bursts as the inline-discrimination path.
+    #[test]
+    fn process_hz_matches_process_exactly() {
+        let mut stream = Vec::new();
+        for _ in 0..4 {
+            stream.extend(one_voice_frame_dibits());
+            stream.extend(encode_cach(2));
+            stream.extend(encode_data_burst(1, DT_IDLE, SyncKind::BsData));
+        }
+        let iq = modulate(&stream, CHANNEL_RATE);
+        let mut direct = DmrReceiver::new(CHANNEL_RATE);
+        let mut via_hz = DmrReceiver::new(CHANNEL_RATE);
+        let bursts_direct = direct.process(&iq);
+
+        // The same delay-line discrimination the front end performs inline.
+        let hz_per_rad = (CHANNEL_RATE / TAU as f64) as f32;
+        let mut prev = Complex32::new(0.0, 0.0);
+        let mut hz = Vec::new();
+        for &x in &iq {
+            let d = x * prev.conj();
+            prev = x;
+            hz.push(if d.norm_sqr() > 0.0 {
+                d.arg() * hz_per_rad
+            } else {
+                0.0
+            });
+        }
+        let bursts_hz = via_hz.process_hz(&hz);
+
+        assert!(!bursts_direct.is_empty(), "baseline decoded nothing");
+        assert_eq!(bursts_direct.len(), bursts_hz.len());
+        for (a, b) in bursts_direct.iter().zip(&bursts_hz) {
+            assert_eq!(a.slot, b.slot);
+            assert_eq!(a.source, b.source);
+            assert_eq!(a.dibits, b.dibits);
+            assert_eq!(format!("{:?}", a.kind), format!("{:?}", b.kind));
+        }
     }
 
     #[test]

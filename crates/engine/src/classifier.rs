@@ -124,16 +124,55 @@ impl ChannelFilters {
     }
 }
 
+/// Delay-line discriminator producing instantaneous frequency in Hz — the
+/// same three lines every protocol front end carries inline, hoisted out so
+/// the classifier can run it once per filtered buffer instead of once per
+/// consumer of that buffer.
+struct DiscHz {
+    prev: Complex32,
+    hz_per_rad: f32,
+}
+
+impl DiscHz {
+    fn new(fs: f64) -> Self {
+        Self {
+            prev: Complex32::new(0.0, 0.0),
+            hz_per_rad: (fs / std::f32::consts::TAU as f64) as f32,
+        }
+    }
+
+    fn process(&mut self, iq: &[Complex32], out: &mut Vec<f32>) {
+        out.clear();
+        out.reserve(iq.len());
+        for &x in iq {
+            let d = x * self.prev.conj();
+            self.prev = x;
+            let hz = if d.norm_sqr() > 0.0 {
+                d.arg() * self.hz_per_rad
+            } else {
+                0.0
+            };
+            out.push(hz);
+        }
+    }
+}
+
 pub struct SignalClassifier {
     fs: f64,
     nbfm: NbfmDemod,
-    disc_nbfm: NbfmDemod,
     ctcss: CtcssDetector,
     dcs: DcsDetector,
     demod: Demodulated,
     disc_buf: Vec<f32>,
     dev_abs_buf: Vec<f32>,
     filters: ChannelFilters,
+    /// One discriminator shared by every consumer of the `standard` filter
+    /// buffer. The P25 C4FM front end, the DMR front end and the NXDN96
+    /// receiver each used to discriminate the same filtered samples with
+    /// their own atan2 pass; the front ends' DC trackers and matched filters
+    /// all run after discrimination, so one pass feeds all three.
+    standard_disc: DiscHz,
+    standard_hz: Vec<f32>,
     p25_frontend: C4fmFrontEnd,
     p25_detector: FrameDetector,
     p25_buf: Vec<f32>,
@@ -157,6 +196,10 @@ pub struct SignalClassifier {
     /// span input blocks.
     analysis_buf: Vec<f32>,
     samples_since_analysis: usize,
+    /// Reused sort/partition scratch for the 50 ms matcher sweep. The
+    /// clock/level analysis orders a ~0.35 s window twice over; owning the
+    /// buffers keeps that off the allocator while a signal is active.
+    analysis_scratch: AnalysisScratch,
     last_clocked: Option<ClockedFeatures>,
     noise_floor_dbfs: f32,
     noise_floor_initialized: bool,
@@ -209,13 +252,14 @@ impl SignalClassifier {
         Self {
             fs,
             nbfm: NbfmDemod::new(fs),
-            disc_nbfm: NbfmDemod::new(fs),
             ctcss: CtcssDetector::new(fs),
             dcs: DcsDetector::new(fs),
             demod: Demodulated::default(),
             disc_buf: Vec::with_capacity(4096),
             dev_abs_buf: Vec::with_capacity(4096),
             filters: ChannelFilters::new(fs),
+            standard_disc: DiscHz::new(fs),
+            standard_hz: Vec::with_capacity(4096),
             p25_frontend: C4fmFrontEnd::new(fs),
             p25_detector: FrameDetector::with_packet_payload(),
             p25_buf: Vec::with_capacity(4096),
@@ -234,6 +278,7 @@ impl SignalClassifier {
             last_decode_events: BTreeMap::new(),
             analysis_buf: Vec::with_capacity(24_000),
             samples_since_analysis: 0,
+            analysis_scratch: AnalysisScratch::default(),
             last_clocked: None,
             noise_floor_dbfs: -95.0,
             noise_floor_initialized: false,
@@ -279,13 +324,14 @@ impl SignalClassifier {
 
     pub fn reset(&mut self) {
         self.nbfm.reset();
-        self.disc_nbfm.reset();
         self.ctcss.reset();
         self.dcs.reset();
         self.demod.clear();
         self.disc_buf.clear();
         self.dev_abs_buf.clear();
         self.filters = ChannelFilters::new(self.fs);
+        self.standard_disc = DiscHz::new(self.fs);
+        self.standard_hz.clear();
         self.p25_frontend = C4fmFrontEnd::new(self.fs);
         self.p25_detector = FrameDetector::with_packet_payload();
         self.p25_buf.clear();
@@ -313,6 +359,7 @@ impl SignalClassifier {
         self.last_decode_events.clear();
         self.analysis_buf.clear();
         self.samples_since_analysis = 0;
+        self.analysis_scratch.clear();
         self.last_clocked = None;
         self.noise_floor_initialized = false;
         self.init_min = f32::INFINITY;
@@ -450,11 +497,21 @@ impl SignalClassifier {
         let snr_db = (rf_dbfs - self.noise_floor_dbfs).max(0.0);
 
         // 2. Demodulate & Measure Deviation
+        // One demodulator instead of two. `discriminator_hz` computed
+        // `arg() * scale * deviation` while `process`'s `raw` computed
+        // `arg() * scale` from the same delay-line state on the same input, so
+        // the Hz view is exactly `raw * NARROW_DEVIATION_HZ` — the same two
+        // multiplications in the same order, and one atan2 pass per sample
+        // instead of two.
+        self.demod.clear();
+        self.nbfm.process(iq, &mut self.demod);
         self.disc_buf.clear();
-        // Keep discriminator and audio state independent. Reprocessing a block
-        // through one delay-line demodulator made the audio path's first sample
-        // compare the end of the block with its beginning on every call.
-        self.disc_nbfm.discriminator_hz(iq, &mut self.disc_buf);
+        self.disc_buf.extend(
+            self.demod
+                .raw
+                .iter()
+                .map(|&x| x * crate::nbfm::NARROW_DEVIATION_HZ),
+        );
 
         self.analysis_buf.extend_from_slice(&self.disc_buf);
         self.samples_since_analysis = self
@@ -516,9 +573,6 @@ impl SignalClassifier {
             hit
         };
 
-        self.demod.clear();
-        self.nbfm.process(iq, &mut self.demod);
-
         // Each receiver gets the bandwidth its protocol actually occupies
         // rather than the inspector's widest one. Taking the buffers out of
         // `self` keeps the borrow checker happy while the receivers, which
@@ -530,12 +584,16 @@ impl SignalClassifier {
         // Reuse the production P25 front end and BCH-validating frame detector.
         // The former classifier had a second, simplified slicer which disagreed
         // with the actual P25 decoder and could not span short SDR blocks.
+        // One discriminator for the three consumers of the standard buffer —
+        // P25, DMR and NXDN96 — instead of one atan2 pass inside each.
+        self.standard_disc.process(&standard, &mut self.standard_hz);
         self.p25_buf.clear();
-        self.p25_frontend.process(&standard, &mut self.p25_buf);
+        self.p25_frontend
+            .process_hz(&self.standard_hz, &mut self.p25_buf);
         let p25_frames = self.p25_detector.push(&self.p25_buf);
-        let dmr_bursts = self.dmr_receiver.process(&standard);
+        let dmr_bursts = self.dmr_receiver.process_hz(&self.standard_hz);
         let mut nxdn_frames = self.nxdn48_receiver.process(&narrow);
-        nxdn_frames.extend(self.nxdn96_receiver.process(&standard));
+        nxdn_frames.extend(self.nxdn96_receiver.process_hz(&self.standard_hz));
         self.filters.narrow_buf = narrow;
         self.filters.standard_buf = standard;
         let smartnet_osws = self.smartnet_decoder.process(&self.disc_buf);
@@ -1252,7 +1310,11 @@ impl SignalClassifier {
                 self.last_same_match = Some(now);
             }
 
-            self.last_clocked = analyze_clocked_modulation(&self.analysis_buf, self.fs as f32);
+            self.last_clocked = analyze_clocked_modulation(
+                &self.analysis_buf,
+                self.fs as f32,
+                &mut self.analysis_scratch,
+            );
         }
 
         if active {
@@ -1811,24 +1873,50 @@ struct ClockedFeatures {
     level_quality: f32,
 }
 
+/// Scratch buffers shared by the analysis passes (see the field on
+/// [`SignalClassifier`]).
+#[derive(Default)]
+struct AnalysisScratch {
+    sorted: Vec<f32>,
+    deviations: Vec<f32>,
+    symbols: Vec<f32>,
+}
+
+impl AnalysisScratch {
+    fn clear(&mut self) {
+        self.sorted.clear();
+        self.deviations.clear();
+        self.symbols.clear();
+    }
+}
+
 /// Derive an offset-independent FSK center and inner/outer slicing boundary.
-fn fsk_slicer(samples: &[f32], fraction: f32) -> (f32, f32) {
+fn fsk_slicer(samples: &[f32], fraction: f32, scratch: &mut AnalysisScratch) -> (f32, f32) {
     if samples.is_empty() {
         return (0.0, 900.0);
     }
-    let mut sorted: Vec<f32> = samples.iter().copied().filter(|x| x.is_finite()).collect();
-    if sorted.is_empty() {
+    scratch.sorted.clear();
+    scratch
+        .sorted
+        .extend(samples.iter().copied().filter(|x| x.is_finite()));
+    if scratch.sorted.is_empty() {
         return (0.0, 900.0);
     }
     // Two order statistics are read — the median and the 90th percentile of
     // |x − median| — so partitions replace both sorts.
-    let mid = sorted.len() / 2;
-    sorted.select_nth_unstable_by(mid, f32::total_cmp);
-    let center = sorted[mid];
-    let mut deviations: Vec<f32> = sorted.iter().map(|x| (x - center).abs()).collect();
-    let outer_idx = ((deviations.len() as f32 * 0.90) as usize).min(deviations.len() - 1);
-    deviations.select_nth_unstable_by(outer_idx, f32::total_cmp);
-    let outer = deviations[outer_idx];
+    let mid = scratch.sorted.len() / 2;
+    scratch.sorted.select_nth_unstable_by(mid, f32::total_cmp);
+    let center = scratch.sorted[mid];
+    scratch.deviations.clear();
+    scratch
+        .deviations
+        .extend(scratch.sorted.iter().map(|x| (x - center).abs()));
+    let outer_idx = ((scratch.deviations.len() as f32 * 0.90) as usize)
+        .min(scratch.deviations.len() - 1);
+    scratch
+        .deviations
+        .select_nth_unstable_by(outer_idx, f32::total_cmp);
+    let outer = scratch.deviations[outer_idx];
     (center, (outer * fraction).clamp(250.0, 2600.0))
 }
 
@@ -1880,7 +1968,11 @@ fn two_tone_fsk(samples: &[f32], f1: f32, f2: f32, baud: f32, fs: f32) -> bool {
 
 /// Look for transition energy aligned to a symbol clock, then measure whether
 /// samples taken at symbol centers form two or four stable deviation levels.
-fn analyze_clocked_modulation(samples: &[f32], fs: f32) -> Option<ClockedFeatures> {
+fn analyze_clocked_modulation(
+    samples: &[f32],
+    fs: f32,
+    scratch: &mut AnalysisScratch,
+) -> Option<ClockedFeatures> {
     const CANDIDATES: [u32; 8] = [300, 512, 600, 1200, 1600, 2400, 4800, 9600];
     const MAX_PHASE_BINS: usize = 20;
 
@@ -1888,7 +1980,7 @@ fn analyze_clocked_modulation(samples: &[f32], fs: f32) -> Option<ClockedFeature
     if samples.len() < (fs * 0.08) as usize {
         return None;
     }
-    let (center, _) = fsk_slicer(samples, 0.5);
+    let (center, _) = fsk_slicer(samples, 0.5, scratch);
     let mut best = (0u32, 0.0f32, 0usize);
 
     for baud in CANDIDATES {
@@ -1956,24 +2048,29 @@ fn analyze_clocked_modulation(samples: &[f32], fs: f32) -> Option<ClockedFeature
     let sps = fs / baud as f32;
     let phase_bins = MAX_PHASE_BINS.min((fs / baud as f32).floor().max(3.0) as usize);
     let boundary = best.2 as f32 / phase_bins as f32;
-    let mut symbols = Vec::with_capacity((samples.len() as f32 / sps) as usize);
-    let first_center = ((boundary + 0.5) * sps).rem_euclid(sps);
-    let mut pos = first_center;
-    while pos < samples.len() as f32 {
-        let idx = pos.round() as usize;
-        if idx < samples.len() {
-            symbols.push(samples[idx] - center);
+    let symbols = {
+        scratch.symbols.clear();
+        scratch
+            .symbols
+            .reserve((samples.len() as f32 / sps) as usize);
+        let first_center = ((boundary + 0.5) * sps).rem_euclid(sps);
+        let mut pos = first_center;
+        while pos < samples.len() as f32 {
+            let idx = pos.round() as usize;
+            if idx < samples.len() {
+                scratch.symbols.push(samples[idx] - center);
+            }
+            pos += sps;
         }
-        pos += sps;
-    }
-    if symbols.len() < 32 {
-        return None;
-    }
+        if scratch.symbols.len() < 32 {
+            return None;
+        }
 
-    // Trim impulsive discriminator spikes before level clustering.
-    symbols.sort_by(f32::total_cmp);
-    let trim = symbols.len() / 50;
-    let symbols = &symbols[trim..symbols.len().saturating_sub(trim).max(trim + 1)];
+        // Trim impulsive discriminator spikes before level clustering.
+        scratch.symbols.sort_by(f32::total_cmp);
+        let trim = scratch.symbols.len() / 50;
+        &scratch.symbols[trim..scratch.symbols.len().saturating_sub(trim).max(trim + 1)]
+    };
     let variance = signal_rms(symbols).powi(2).max(1.0);
     let q2 = (1.0 - kmeans_sse(symbols, 2) / (variance * symbols.len() as f32)).clamp(0.0, 1.0);
     let q4 = (1.0 - kmeans_sse(symbols, 4) / (variance * symbols.len() as f32)).clamp(0.0, 1.0);
@@ -2009,19 +2106,31 @@ fn mean_lag_difference(samples: &[f32], lag: usize) -> f32 {
         / (samples.len() - lag) as f32
 }
 
+/// Largest k any caller of [`kmeans_sse`] requests; the fixed scratch arrays
+/// inside are sized to it so the 50 ms sweep stays allocation-free.
+const KMEANS_MAX_K: usize = 4;
+
 fn kmeans_sse(samples: &[f32], k: usize) -> f32 {
+    assert!(
+        k <= KMEANS_MAX_K,
+        "k-means scratch holds {KMEANS_MAX_K} centers"
+    );
     if samples.is_empty() {
         return f32::INFINITY;
     }
-    let mut centers: Vec<f32> = (0..k)
-        .map(|i| samples[((2 * i + 1) * samples.len() / (2 * k)).min(samples.len() - 1)])
-        .collect();
+    let mut centers = [0.0f32; KMEANS_MAX_K];
+    for (i, c) in centers.iter_mut().enumerate().take(k) {
+        *c = samples[((2 * i + 1) * samples.len() / (2 * k)).min(samples.len() - 1)];
+    }
+    let mut sums = [0.0f32; KMEANS_MAX_K];
+    let mut counts = [0u32; KMEANS_MAX_K];
     for _ in 0..8 {
-        let mut sums = vec![0.0f32; k];
-        let mut counts = vec![0u32; k];
+        sums.fill(0.0);
+        counts.fill(0);
         for &x in samples {
             let (idx, _) = centers
                 .iter()
+                .take(k)
                 .enumerate()
                 .min_by(|(_, a), (_, b)| (x - **a).abs().total_cmp(&(x - **b).abs()))
                 .unwrap();
@@ -2039,6 +2148,7 @@ fn kmeans_sse(samples: &[f32], k: usize) -> f32 {
         .map(|&x| {
             centers
                 .iter()
+                .take(k)
                 .map(|&c| (x - c) * (x - c))
                 .min_by(f32::total_cmp)
                 .unwrap_or(0.0)

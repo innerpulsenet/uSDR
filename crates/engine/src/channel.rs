@@ -158,6 +158,12 @@ pub struct DigitalCallTelemetry {
     pub algorithm_id: Option<u8>,
     pub key_id: Option<u16>,
     pub talker_alias: Option<String>,
+    /// Smoothed voice-frame error metric, 0-100 — how heavily the demodulator
+    /// was correcting the frames that carried the voice. A call that *plays*
+    /// scrambled usually reads high here, which distinguishes a weak-but-real
+    /// signal from a clean one. DMR only; `None` where the protocol exposes
+    /// nothing comparable.
+    pub bit_error_pct: Option<u8>,
 }
 
 impl CallSummary {

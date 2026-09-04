@@ -18,8 +18,13 @@ struct Candidate {
 
 /// A placed biquad notch with its own state.
 struct Notch {
-    w0: f32,
-    r: f32,
+    /// `2·cos(w0)` — the feedforward coefficient, cached so the per-sample
+    /// work is multiplies only.
+    c2: f32,
+    /// `2·r·cos(w0)` — the feedback coefficient.
+    pc2: f32,
+    /// `r²`.
+    r2: f32,
     depth: f32,
     x1: f32,
     x2: f32,
@@ -29,9 +34,11 @@ struct Notch {
 
 impl Notch {
     fn new(freq_hz: f32, fs: f32, depth: f32) -> Self {
+        let c = (TAU * freq_hz / fs).cos();
         Self {
-            w0: TAU * freq_hz / fs,
-            r: 0.97,
+            c2: 2.0 * c,
+            pc2: 2.0 * 0.97 * c,
+            r2: 0.97 * 0.97,
             depth,
             x1: 0.0,
             x2: 0.0,
@@ -44,8 +51,8 @@ impl Notch {
     fn process(&mut self, x: f32) -> f32 {
         // Zeroes at exp(±jw0): 1 - 2cos(w0) z^-1 + z^-2
         // Poles at r·exp(±jw0): denominator (1 - 2r·cos(w0) z^-1 + r² z^-2)
-        let ff = x - 2.0 * self.w0.cos() * self.x1 + self.x2;
-        let y = ff + 2.0 * self.r * self.w0.cos() * self.y1 - self.r * self.r * self.y2;
+        let ff = x - self.c2 * self.x1 + self.x2;
+        let y = ff + self.pc2 * self.y1 - self.r2 * self.y2;
         self.x2 = self.x1;
         self.x1 = x;
         self.y2 = self.y1;
@@ -93,15 +100,23 @@ impl AutoNotch {
     }
 
     pub fn process(&mut self, x: &mut [f32]) {
-        for &s in x.iter() {
-            if self.window.len() == WINDOW_LEN {
-                self.window.remove(0);
+        // Batch the analysis window: extend once and trim once, instead of a
+        // per-sample `remove(0)` — an O(n) memmove on the always-on monitor
+        // path — and its per-sample modulo.
+        if !x.is_empty() {
+            let scans_before = self.sample_counter / SCAN_INTERVAL;
+            self.sample_counter += x.len();
+            self.window.extend_from_slice(x);
+            let excess = self.window.len().saturating_sub(WINDOW_LEN);
+            if excess > 0 {
+                self.window.drain(..excess);
             }
-            self.window.push(s);
-            self.sample_counter += 1;
-            if self.sample_counter % SCAN_INTERVAL == 0 && self.window.len() >= WINDOW_LEN / 2 {
+            // Rescan after the whole block has landed in the window. The old
+            // in-loop rescan broke out mid-block, so the samples after the
+            // scan boundary never reached the analysis window.
+            let boundary_crossed = self.sample_counter / SCAN_INTERVAL > scans_before;
+            if boundary_crossed && self.window.len() >= WINDOW_LEN / 2 {
                 self.rescan();
-                break;
             }
         }
         for s in x.iter_mut() {

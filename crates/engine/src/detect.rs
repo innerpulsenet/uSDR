@@ -86,6 +86,11 @@ impl SpanDetector {
         }
         let batch = std::mem::take(&mut self.buf);
         self.spec.power_db(&batch, &mut self.power);
+        // Hand the capacity back: `power_db` copies its input into its own
+        // segment accumulator, so the samples are consumed but the buffer
+        // itself should not be reallocated on every call.
+        self.buf = batch;
+        self.buf.clear();
         if self.power.len() != self.nfft {
             self.fresh = false;
             return false;

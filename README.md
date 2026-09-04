@@ -6,8 +6,9 @@ a live FFT and waterfall over the tuned span, plus a narrowband inspect chain
 that runs the same digital classifiers and protocol decoders the full scanner
 uses.
 
-There is no scanning, no call recording, no database, and no voice or data
-mode. This exists to point a receiver at a signal and find out what it is.
+There is no call database and no trunking follow — this exists to point a
+receiver at a signal and find out what it is, to decode what it finds, and,
+since the voice scanner arrived, to sweep a band for voice on its own.
 
 ## What it does
 
@@ -77,9 +78,11 @@ all on one LCD-style screen.
   A filter box narrows the list by protocol, kind or text, and the bytes can be
   copied to the clipboard.
 
-- **Last heard.** Finished P25 and DMR calls are kept — the most recent
-  sixteen — with their audio, so a call that went past can be played again.
-  Each is listed with its identities, colour code or NAC, and duration.
+- **Last heard.** Finished voice calls are kept — the most recent sixteen —
+  with their audio, so a call that went past can be played again. Each is
+  listed with its protocol (P25, DMR, or an analog NFM/AM hit the scanner
+  caught), frequency, duration, and identities where the protocol provides
+  them.
 
   This exists because a decoded call and an audible one are not the same
   thing. The receivers vocode encrypted voice to silence rather than to noise,
@@ -104,21 +107,29 @@ all on one LCD-style screen.
   dropped. If it ever does fall behind it says so rather than decoding patchily
   — *AUTO cannot keep up at 2.400 MS/s — dropping blocks; try a narrower span*.
 
+- **Voice scanning.** `SCAN` walks a configured frequency range looking for
+  voice, the way a scanner does — but it spends its slow hardware retunes on
+  span moves instead of channel steps, and finds carriers the cheap way. See
+  [Voice scanning](#voice-scanning).
+
 - **A layout that holds still.** Every live readout is a fixed size and every
   growing list scrolls inside its own fixed-height box, so nothing on the page
   moves as text updates. The decode and classification logs prepend rows, so
   they also hold your scroll position against the new rows rather than sliding
   the content up under you.
-- **Five modes**, switchable from the screen:
+- **Nine modes**, switchable from the screen:
 
   | Mode | What it does |
   |---|---|
   | `NFM` | Narrowband FM with the full digital classifier |
+  | `AM` | Envelope-detected AM with AGC — HF airband and broadcast |
   | `WFM` | 200 kHz broadcast FM, 75 µs de-emphasis, for listening |
   | `P25` | P25 Phase 1 C4FM decoded to voice through the IMBE vocoder |
   | `DMR` | DMR Tier II decoded to voice through the AMBE vocoder |
   | `PACKET` | AX.25 at 1200 baud, POCSAG at 512/1200/2400, and FLEX, all at once |
+  | `PAGER` | Whole-band POCSAG+FLEX sweep across the paging channels around the tune |
   | `AUTO` | Every decoder above at once, on whatever is in the passband |
+  | `SCAN` | Automatic voice scan across a configured range and mode set |
 
   `P25` and `DMR` extract and equalise their own channel out of the span and
   decode it to audio in real time; call starts and ends, NAC/colour code and
@@ -225,16 +236,18 @@ not be exposed to a network you do not control.
 | `POST /api/sdr/inspect` | `{"freq_hz": …}` — move the narrowband inspect chain |
 | `POST /api/sdr/rate` | `{"rate_hz": …}` |
 | `POST /api/sdr/gain` | `{"gain_db": …}` or `null` for AGC |
-| `POST /api/sdr/mode` | `{"mode": "nfm" \| "wfm" \| "p25" \| "dmr" \| "packet" \| "auto"}` |
+| `POST /api/sdr/mode` | `{"mode": "nfm" \| "am" \| "wfm" \| "p25" \| "dmr" \| "packet" \| "pager" \| "auto" \| "scan"}` |
+| `POST /api/sdr/scan/config` | `{"start_hz": …, "stop_hz": …, "modes": ["am","nfm","p25","dmr"], "threshold_db": …, "resume_delay_s": …}` — voice-scan configuration |
+| `POST /api/sdr/scan/control` | `{"action": "pause" \| "resume" \| "skip" \| "forget"}` |
 | `POST /api/sdr/frontend` | `{"lo_offset": bool, "clip_guard": bool}` |
 | `POST /api/sdr/zoom` | `{"zoom": 1..32}` — display magnification |
 | `POST /api/sdr/ppm` | `{"ppm": …}` — crystal correction |
 | `POST /api/sdr/calibrate` | Derive ppm from the tuned reference carrier |
 | `POST /api/sdr/spurs` | `{"offsets_hz": [...]}` — offsets from centre to notch |
 | `POST /api/sdr/device` | `{"serial": "…"}` |
-| `GET /api/sdr/calls` | Recent digital voice calls, newest first |
+| `GET /api/sdr/calls` | Recent voice calls, newest first (P25, DMR, and scanner-caught AM/NFM) |
 | `GET /api/sdr/calls/{id}/audio.wav` | That call's audio |
-| `GET /api/sdr/capture.wav?kind=` | `voice`, `discriminator`, or `iq` |
+| `GET /api/sdr/capture.wav?kind=` | `voice`, `discriminator`, `iq`, or `span` (raw device I/Q at the span rate; the ring is demand-armed — the first request starts the fill, so re-request for the full 12 s) |
 | `POST /api/sdr/replay?frequency_hz=` | Decode a posted I/Q WAV (≤ 16 MiB) |
 | `GET /ws` | JSON stream of `fft`, `decode`, and `status` events |
 
@@ -344,6 +357,82 @@ and each scan restarted at the head of that tail:
   noise are what produced confident labels on empty channels.
 
 All 302 engine tests pass unchanged.
+
+## Voice scanning
+
+`SCAN` is a scanner in the classic sense: you give it a frequency range and a
+set of voice modes (AM, NFM, P25, DMR), and it sweeps that range on its own,
+stopping to hold whatever it can actually decode, playing it when LISTEN is
+on, and filing each call into Last Heard with its frequency and mode.
+
+What it does not do is step the channel raster. An RTL-SDR's tuner faults
+above one control write per ~250 ms, so a 40 MHz range walked at 6.25 kHz
+steps is half an hour per sweep, nearly all of it spent listening to empty
+channels. The scanner instead spends its hardware retunes on **span moves**
+and finds carriers the cheap way:
+
+- The wideband FFT computed for the display every frame covers the whole span
+  — up to 3.2 MHz — at once. Peak detection over that spectrum (the same
+  local-maximum search the display uses, against its own noise floor and with
+  the tuner's spurs masked) produces the candidate carriers inside the
+  configured range.
+- The narrowband inspect chain can re-mix onto any channel inside the current
+  span **without touching the tuner**. Each candidate is centred by spectral
+  centroid, then test-decoded for about 1.2 s with the receivers for the
+  selected modes, all at once — the same arbitration `AUTO` uses.
+- Candidates are not tested one at a time. Up to **four parallel channels**
+  (configurable, 1–8) each carry their own receivers, and every sweep frame
+  the idle ones take the strongest carriers in the window. A birdie's test
+  dwell no longer serialises in front of the short call two channels away,
+  which matters most on bands like airband, where a transmission can be over
+  in a few seconds. When channels prove calls — in the same block or while
+  another call is already held — each holds its own: every held call records
+  its own audio while the pool keeps sweeping around it, the newest call
+  takes the speaker, and the window only moves once the last of them has
+  dropped.
+- Only when the current window's candidates are exhausted does the tuner move,
+  to the next overlapping window up the range, wrapping at the top.
+
+A candidate earns a lock on evidence, not on power alone:
+
+- **P25 / DMR** — the channel receiver found frame sync *and* a call started.
+  A receiver that locks and produces only grant and control traffic is a
+  **trunked control channel**: it decodes beautifully and carries no voice, so
+  it is parked out for half an hour and the skip is explained in the decode
+  log. A carrier that locks but never talks is retested after a minute.
+- **NFM / AM** — a hysteresis squelch on the channel SNR (default 8 dB,
+  configurable) says a carrier is present, and energy through the gated voice
+  audio says someone is talking. The two analog paths cross-check each other:
+  FM is near-constant-envelope, so the AM detector hears almost nothing from
+  it, and the discriminator hears almost nothing from AM — whichever path
+  carries voice is what the channel was.
+
+Each held call records on its own: digital calls exactly as in the P25/DMR
+modes, analog calls bracketed by their slot's squelch with the hang time
+trimmed off the tail — a blip of squelch with no voice behind it is filed
+nowhere. A call drops a couple of seconds after it goes quiet
+(configurable), releasing its slot back to the sweep; overlapping calls
+finish independently and each lands in Last Heard tagged with its mode —
+`P25`, `DMR`, `NFM`, `AM` — and its frequency. On the display, dashed amber
+brackets mark candidates under test, solid green brackets mark held calls
+recording in the background, and the filled passband is the call on the
+speaker.
+
+The operator is always senior to the scanner: tuning by hand pauses the sweep
+(the SCAN panel says so), and Pause, Resume, Skip and Forget-skips are on the
+panel next to the range. The panel also lists every learned skip — frequency,
+reason, time left — with a per-entry re-test button, because a memory that
+cannot be inspected cannot be trusted. Carriers that keep failing the test are
+treated as what they usually are, birdies and persistent hash: after a few
+strikes (configurable) they park for a long stretch and stop costing the sweep
+its dwell time, and they stay in the list — plainly labelled — until re-tested. Configuration — range, modes, threshold, resume
+delay — persists in `usdr.toml`, and a restart with `scan` as the saved mode
+comes straight back up scanning. Learned skips survive reconfiguration and
+the sweep wrapping around; only a server restart forgets them.
+
+Not in this first version: following a trunked control channel's voice grants
+(the engine already surfaces grants, so this is the natural next step), NXDN
+as a scan mode, and a manual per-channel lockout list.
 
 ## Troubleshooting
 

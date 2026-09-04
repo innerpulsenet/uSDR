@@ -42,6 +42,9 @@ impl Osw {
 pub struct SmartNetDecoder {
     fs: f64,
     samples: Vec<f32>,
+    /// Reused median-partition scratch, so the periodic decode does not copy
+    /// and fully sort the whole window.
+    scratch: Vec<f32>,
     since_decode: usize,
 }
 
@@ -50,6 +53,7 @@ impl SmartNetDecoder {
         Self {
             fs,
             samples: Vec::with_capacity((fs * 0.18) as usize),
+            scratch: Vec::new(),
             since_decode: 0,
         }
     }
@@ -78,21 +82,27 @@ impl SmartNetDecoder {
             return Vec::new();
         }
         self.since_decode = 0;
-        decode_window(&self.samples, self.fs)
+        let mut scratch = std::mem::take(&mut self.scratch);
+        let osws = decode_window(&self.samples, self.fs, &mut scratch);
+        self.scratch = scratch;
+        osws
     }
 }
 
-fn decode_window(samples: &[f32], fs: f64) -> Vec<Osw> {
+fn decode_window(samples: &[f32], fs: f64, scratch: &mut Vec<f32>) -> Vec<Osw> {
     let sps = fs / BAUD;
     if sps < 2.0 || samples.len() < (sps * FRAME_BITS as f64).ceil() as usize {
         return Vec::new();
     }
 
     // Remove receiver mistuning. Median is robust when the bit balance in the
-    // short decode window is uneven.
-    let mut levels = samples.to_vec();
-    levels.sort_by(f32::total_cmp);
-    let threshold = levels[levels.len() / 2];
+    // short decode window is uneven. Only that one order statistic is read,
+    // so a partition replaces the copy-and-full-sort this used to pay.
+    scratch.clear();
+    scratch.extend_from_slice(samples);
+    let mid = scratch.len() / 2;
+    scratch.select_nth_unstable_by(mid, f32::total_cmp);
+    let threshold = scratch[mid];
     let mut decoded = BTreeMap::<String, Osw>::new();
 
     // A phase bank acquires symbol timing. Integrating the middle 60% of each
@@ -295,7 +305,7 @@ mod tests {
                 }
             })
             .collect::<Vec<_>>();
-        let decoded = decode_window(&samples, fs);
+        let decoded = decode_window(&samples, fs, &mut Vec::new());
         assert!(decoded.iter().any(|osw| {
             osw.address == 12_345 && osw.lcn == 7 && osw.opcode_name == "group voice channel grant"
         }));

@@ -90,7 +90,8 @@ impl CqpskDemodulator {
             } else if self.phase < -TAU {
                 self.phase += TAU;
             }
-            let rot = Complex32::new(self.phase.cos(), -self.phase.sin());
+            let (sin_phase, cos_phase) = self.phase.sin_cos();
+            let rot = Complex32::new(cos_phase, -sin_phase);
             let s = equalized * rot;
 
             // One symbol period delay
@@ -111,7 +112,8 @@ impl CqpskDemodulator {
                 && s.norm_sqr() > 1e-6
             {
                 let err_phase = phase_error(d_phase);
-                let correction = Complex32::new((-err_phase).cos(), (-err_phase).sin());
+                let (sin_neg, cos_neg) = (-err_phase).sin_cos();
+                let correction = Complex32::new(cos_neg, sin_neg);
                 let error = s * correction - s;
                 let step = self.eq_mu / energy;
                 for tap in 0..self.eq_taps.len() {

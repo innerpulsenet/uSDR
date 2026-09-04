@@ -1038,6 +1038,11 @@ mod tests {
 /// channel filter, while an RF impulse is still only a few samples wide.
 pub struct NoiseBlanker {
     fs: f32,
+    /// `fs/4` and the same floored at 32 — the training gate below reads
+    /// these per sample at radio rate, so they are hoisted rather than
+    /// re-divided two or three million times a second.
+    train_q1: usize,
+    train_min: usize,
     background: f32,
     pub(crate) level: u8,
     tail: usize,
@@ -1053,8 +1058,11 @@ pub struct NoiseBlanker {
 
 impl NoiseBlanker {
     pub fn new(fs: f64) -> Self {
+        let q1 = fs as usize / 4;
         Self {
             fs: fs as f32,
+            train_q1: q1,
+            train_min: q1.max(32),
             background: 1e-3,
             level: 2,
             tail: 0,
@@ -1117,15 +1125,15 @@ impl NoiseBlanker {
             }
             // Clamping keeps a crash from raising the reference used to
             // recognise the rest of that same crash.
-            let observed = if self.trained < self.fs as usize / 4 {
+            let observed = if self.trained < self.train_q1 {
                 mag
             } else {
                 mag.min((self.background * 2.5).max(1e-6))
             };
             self.background += (observed - self.background) * a;
-            let hot = self.level != 0
-                && !self.inhibited
-                && self.trained >= (self.fs as usize / 4).max(32)
+            // `level != 0` is implicit: the off path returned above.
+            let hot = !self.inhibited
+                && self.trained >= self.train_min
                 && mag > threshold * self.background.max(1e-6);
             if hot {
                 for back in 0..=2 {

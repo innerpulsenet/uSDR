@@ -7,6 +7,7 @@
 //! and find out what it is.
 
 mod devices;
+mod scan;
 mod sdr;
 
 use sdr::SdrEvent;
@@ -82,6 +83,10 @@ struct Settings {
     /// Off by default: a gain set by hand should stay where it was put.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     clip_guard: Option<bool>,
+    /// Voice-scan configuration (range, modes, threshold), applied when the
+    /// mode is `scan`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    scan: Option<scan::ScanCfg>,
 }
 
 fn settings_path(explicit: Option<PathBuf>) -> Result<PathBuf> {
@@ -199,9 +204,15 @@ async fn main() -> Result<()> {
         mode: settings.mode.unwrap_or_default(),
         lo_offset: settings.lo_offset.unwrap_or(false),
         clip_guard: settings.clip_guard.unwrap_or(false),
+        scan: settings.scan.clone(),
     };
 
-    let (sdr_events, _) = tokio::sync::broadcast::channel(256);
+    // The FFT frames are the bulk of this stream at 25 fps and can reach
+    // ~70 KB each when zoomed out; 256 slots was ~18 MB of buffered frames
+    // per stalled client. A client that far behind only wants the newest
+    // frame anyway (the Lagged handler resumes from the present), so the
+    // queue stays short and the memory bounded.
+    let (sdr_events, _) = tokio::sync::broadcast::channel(64);
     // Audio is a live monitor: a client that falls behind should skip forward
     // to the present rather than play a growing delay, so the queue is short.
     let (audio_tx, _) = tokio::sync::broadcast::channel(32);
@@ -226,6 +237,8 @@ async fn main() -> Result<()> {
         .route("/api/sdr/gain", post(post_sdr_gain))
         .route("/api/sdr/rate", post(post_sdr_rate))
         .route("/api/sdr/mode", post(post_sdr_mode))
+        .route("/api/sdr/scan/config", post(post_sdr_scan_config))
+        .route("/api/sdr/scan/control", post(post_sdr_scan_control))
         .route("/api/sdr/frontend", post(post_sdr_frontend))
         .route("/api/sdr/spurs", post(post_sdr_spurs))
         .route("/api/sdr/ppm", post(post_sdr_ppm))
@@ -425,6 +438,43 @@ async fn post_sdr_mode(
 }
 
 #[derive(Deserialize)]
+struct SdrScanControlReq {
+    action: scan::ScanControl,
+    /// The frequency to re-test, for the `unskip` action.
+    #[serde(default)]
+    freq_hz: Option<f64>,
+}
+
+/// Replace the voice-scan configuration: range, modes, squelch threshold and
+/// resume delay. Persisted, so a restart comes back up scanning the same
+/// band the same way.
+async fn post_sdr_scan_config(
+    State(st): State<Arc<AppState>>,
+    Json(mut cfg): Json<scan::ScanCfg>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    cfg = cfg.normalized();
+    st.update_settings(|s| s.scan = Some(cfg.clone()));
+    if let Some(sdr) = st.sdr.lock().expect("sdr").as_ref() {
+        sdr.scan_config(cfg.clone())?;
+    }
+    Ok(Json(serde_json::json!({ "ok": true, "scan": cfg })))
+}
+
+/// Pause/resume/skip/forget/unskip for a running voice scan. Affects nothing
+/// when the mode is not `scan`; the status event still reports the state.
+async fn post_sdr_scan_control(
+    State(st): State<Arc<AppState>>,
+    Json(req): Json<SdrScanControlReq>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    if let Some(sdr) = st.sdr.lock().expect("sdr").as_ref() {
+        sdr.scan_control(req.action, req.freq_hz)?;
+    }
+    Ok(Json(
+        serde_json::json!({ "ok": true, "action": req.action }),
+    ))
+}
+
+#[derive(Deserialize)]
 struct SdrFrontendReq {
     lo_offset: Option<bool>,
     clip_guard: Option<bool>,
@@ -596,9 +646,14 @@ async fn get_sdr_status(
 }
 
 /// The digital voice calls heard recently, newest first.
+///
+/// Serialized under the lock rather than cloned out of it: a `RecordedCall`
+/// carries its whole audio buffer, and `serde(skip)` only stops that audio
+/// crossing the wire after the copy has already been made. Cloning the ring
+/// on every poll would copy minutes of i16 the response never contains.
 async fn get_sdr_calls(
     State(st): State<Arc<AppState>>,
-) -> Result<Json<Vec<sdr::RecordedCall>>, ApiError> {
+) -> Result<Json<Vec<serde_json::Value>>, ApiError> {
     let calls = st
         .sdr
         .lock()
@@ -606,7 +661,10 @@ async fn get_sdr_calls(
         .as_ref()
         .map(|r| {
             let ring = r.calls.lock().expect("calls");
-            ring.iter().rev().cloned().collect::<Vec<_>>()
+            ring.iter()
+                .rev()
+                .map(|c| serde_json::to_value(c).unwrap_or_default())
+                .collect::<Vec<_>>()
         })
         .unwrap_or_default();
     Ok(Json(calls))
@@ -658,13 +716,19 @@ async fn get_sdr_capture(
             ));
         }
     };
-    let (freq_hz, samples, wav) = st
-        .sdr
-        .lock()
-        .expect("sdr")
-        .as_ref()
-        .map(|runtime| runtime.capture_wav(kind))
-        .ok_or_else(|| ApiError::BadRequest("the receiver is not running".into()))?;
+    // A span capture copies and WAV-encodes on the order of a hundred MiB;
+    // that must not run on an async worker (see `list_devices` for the same
+    // reasoning).
+    let (freq_hz, samples, wav) = tokio::task::spawn_blocking(move || {
+        st.sdr
+            .lock()
+            .expect("sdr")
+            .as_ref()
+            .map(|runtime| runtime.capture_wav(kind))
+    })
+    .await
+    .map_err(|e| ApiError::BadRequest(format!("capture task failed: {e}")))?
+    .ok_or_else(|| ApiError::BadRequest("the receiver is not running".into()))?;
     Ok((
         [
             (header::CONTENT_TYPE, "audio/wav"),
@@ -704,7 +768,11 @@ async fn post_sdr_replay(
         .map(|runtime| runtime.status.lock().expect("sdr status").inspect_hz)
         .unwrap_or(0.0);
     let frequency_hz = query.frequency_hz.unwrap_or(live_hz);
-    let replay = sdr::replay_iq_wav(&body, frequency_hz)
+    // Replay runs the full classifier over up to the replay limit of I/Q —
+    // seconds of CPU that belongs on the blocking pool, not a worker thread.
+    let replay = tokio::task::spawn_blocking(move || sdr::replay_iq_wav(&body, frequency_hz))
+        .await
+        .map_err(|e| ApiError::BadRequest(format!("replay task failed: {e}")))?
         .map_err(|error| ApiError::BadRequest(error.to_string()))?;
     Ok(Json(replay))
 }
@@ -738,13 +806,18 @@ async fn ws_client(mut socket: WebSocket, st: Arc<AppState>) {
         tokio::select! {
             ev = sdr_ev.recv() => match ev {
                 Ok(ev) => match &ev {
+                    SdrEvent::FftBytes { frame } => {
+                        // The FFT frame is the 25 fps bulk of the stream;
+                        // pre-encoded binary (layout documented in
+                        // sdr::encode_fft_frame) — one encode per frame on
+                        // the DSP thread, shared by every client.
+                        if socket.send(Message::Binary(frame.clone().into())).await.is_err() {
+                            return;
+                        }
+                    }
                     SdrEvent::Fft { .. } => {
-                        // The FFT frame is the 25 fps bulk of the stream; a
-                        // JSON float array costs ~10 bytes/bin for values the
-                        // client only ever compares and scales. Ship it as
-                        // binary instead — layout documented in
-                        // sdr::encode_fft_frame. Everything else (status,
-                        // decode events) stays JSON.
+                        // Fallback for a frame that could not be encoded:
+                        // same binary layout, encoded here per client.
                         if let Some(buf) = sdr::encode_fft_frame(&ev)
                             && socket.send(Message::Binary(buf.into())).await.is_err()
                         {

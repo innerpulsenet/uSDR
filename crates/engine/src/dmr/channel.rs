@@ -67,9 +67,26 @@ pub struct DmrChannelReceiver {
 
 impl DmrChannelReceiver {
     pub fn new(spec: DmrSpec, fs_in: f64, span_center_hz: f64) -> Self {
-        let chain = DecodeChain::new(fs_in, DMR_BANDWIDTH_HZ, CHANNEL_RATE);
+        let mut rx = Self::build(spec, DecodeChain::new(fs_in, DMR_BANDWIDTH_HZ, CHANNEL_RATE));
+        rx.retune(span_center_hz);
+        rx
+    }
+
+    /// Build for input that is already the extracted channel: baseband
+    /// centred on `spec.freq_hz` at `channel_fs` — a narrowband chain's
+    /// output the receiver rides instead of re-extracting its own channel
+    /// from the whole span. The chain collapses to decimation 1, and its
+    /// rate grid makes `fs_out` exactly what the span-rate build would have
+    /// produced (`span / round(span / CHANNEL_RATE)`), so every downstream
+    /// symbol-timing constant is unchanged. The AFC base is zero: the
+    /// carrier arrives at DC and only residual ±2.5 kHz tracking remains.
+    pub fn new_on_channel(spec: DmrSpec, channel_fs: f64) -> Self {
+        Self::build(spec, DecodeChain::new(channel_fs, DMR_BANDWIDTH_HZ, CHANNEL_RATE))
+    }
+
+    fn build(spec: DmrSpec, chain: DecodeChain) -> Self {
         let fs_chan = chain.fs_out();
-        let mut rx = Self {
+        Self {
             chain,
             afc: Afc::new(0.0, 2_500.0),
             rx: DmrReceiver::new(fs_chan),
@@ -95,9 +112,7 @@ impl DmrChannelReceiver {
             data_assemblers: std::array::from_fn(|_| DataAssembler::new()),
             decoded_data: Vec::new(),
             spec,
-        };
-        rx.retune(span_center_hz);
-        rx
+        }
     }
 
     pub fn retune(&mut self, span_center_hz: f64) {
@@ -161,6 +176,14 @@ impl DmrChannelReceiver {
     /// a valid grant whose subscriber simply stopped transmitting.
     pub fn quality_db(&self) -> f32 {
         self.rx.quality_db()
+    }
+
+    /// Average carrier offset from the configured channel frequency while
+    /// locked, in Hz. `None` until enough frames have accumulated to trust
+    /// the average. This is what lets a scanner re-centre a candidate the
+    /// crystal residual left off-frequency.
+    pub fn carrier_offset_hz(&self) -> Option<f64> {
+        (self.offset_n > 32).then(|| self.offset_sum / self.offset_n as f64)
     }
 
     /// Demodulate a block and advance the call state machine.
@@ -403,6 +426,10 @@ impl DmrChannelReceiver {
         self.follow_slot = None;
         self.pending.clear();
         self.hang_s = 0.0;
+        // Captured before the reset below: it is the summary's record of how
+        // heavily the voice was being corrected, which is what tells a
+        // listener "scrambled" from "clean".
+        let bit_error_pct = Some((self.voice_error_rate * 100.0).clamp(0.0, 100.0) as u8);
         self.voice_error_rate = 0.0;
         let encrypted =
             self.link_control.as_ref().is_some_and(|lc| lc.encrypted) || self.privacy.is_some();
@@ -447,6 +474,7 @@ impl DmrChannelReceiver {
                     .link_control
                     .as_ref()
                     .and_then(|lc| lc.talker_alias.clone()),
+                bit_error_pct,
             }),
         };
         self.link_control = None;

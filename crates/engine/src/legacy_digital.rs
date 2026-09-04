@@ -149,6 +149,8 @@ const SPECS: &[SyncSpec] = &[
 pub struct LegacyDigitalDetector {
     fs: f64,
     samples: Vec<f32>,
+    /// Reused bit-packed scratch for the sliced sign windows.
+    words: Vec<u64>,
     since_decode: usize,
 }
 
@@ -157,6 +159,7 @@ impl LegacyDigitalDetector {
         Self {
             fs,
             samples: Vec::with_capacity((fs * 0.7) as usize),
+            words: Vec::new(),
             since_decode: 0,
         }
     }
@@ -196,11 +199,14 @@ impl LegacyDigitalDetector {
             return Vec::new();
         }
         self.since_decode = 0;
-        decode_window(&self.samples, self.fs)
+        let mut words = std::mem::take(&mut self.words);
+        let frames = decode_window(&self.samples, self.fs, &mut words);
+        self.words = words;
+        frames
     }
 }
 
-fn decode_window(samples: &[f32], fs: f64) -> Vec<LegacyFrame> {
+fn decode_window(samples: &[f32], fs: f64, words: &mut Vec<u64>) -> Vec<LegacyFrame> {
     let mut out = BTreeMap::<(&'static str, &'static str), LegacyFrame>::new();
     let dc = samples.iter().sum::<f32>() / samples.len().max(1) as f32;
     for baud in [2400u32, 4800, 9600] {
@@ -210,8 +216,17 @@ fn decode_window(samples: &[f32], fs: f64) -> Vec<LegacyFrame> {
         }
         for phase in 0..8 {
             let signs = slice_signs(samples, sps, phase as f64 / 8.0, dc);
-            for spec in SPECS.iter().filter(|spec| spec.baud == baud) {
-                if let Some((inverted, errors, hits)) = find_spec(&signs, spec) {
+            // Pack the sliced window once per phase: each alignment test is
+            // then a shift-and-XOR over pre-packed words instead of a
+            // per-position bit loop.
+            pack_signs(&signs, words);
+            for (spec, packed) in SPECS.iter().zip(packed_specs()) {
+                if spec.baud != baud {
+                    continue;
+                }
+                if let Some((inverted, errors, hits)) =
+                    find_spec(words, signs.len(), spec, packed)
+                {
                     out.entry((spec.protocol, spec.kind))
                         .or_insert(LegacyFrame {
                             protocol: spec.protocol,
@@ -246,36 +261,82 @@ fn slice_signs(samples: &[f32], sps: f64, phase: f64, dc: f32) -> Vec<bool> {
 /// Longest sync pattern in `SPECS`, in bits — bounds the packed-pattern array.
 const MAX_PATTERN_BITS: usize = 48;
 
-fn find_spec(signs: &[bool], spec: &SyncSpec) -> Option<(bool, usize, usize)> {
-    let expected: Vec<bool> = spec.pattern.bytes().map(|b| b == b'1').collect();
-    if signs.len() < expected.len() {
-        return None;
-    }
-    // Pack the pattern once; each alignment is then an XOR + popcount over a
-    // few words instead of a per-bit zip. The sweep over every start position
-    // was the dominant cost of the classifier's 10 Hz window scan.
-    let mut packed = [0u64; (MAX_PATTERN_BITS + 63) / 64];
-    for (i, &bit) in expected.iter().enumerate() {
+/// One spec's pattern pre-packed the way [`find_spec`] compares it: bit `i`
+/// of the pattern in bit `i % 64` of word `i / 64`, plus the bit count.
+struct PackedPattern {
+    words: [u64; (MAX_PATTERN_BITS + 63) / 64],
+    bits: usize,
+}
+
+/// Every spec's pattern, packed once. `decode_window` runs at 10 Hz over up
+/// to eight phases × three bauds; repacking each pattern per call was pure
+/// overhead on the sweep.
+fn packed_specs() -> &'static [PackedPattern; SPECS.len()] {
+    static PACKED: std::sync::OnceLock<[PackedPattern; SPECS.len()]> = std::sync::OnceLock::new();
+    PACKED.get_or_init(|| {
+        std::array::from_fn(|i| {
+            let mut words = [0u64; (MAX_PATTERN_BITS + 63) / 64];
+            let mut bits = 0;
+            for b in SPECS[i].pattern.bytes() {
+                if b == b'1' {
+                    words[bits / 64] |= 1 << (bits % 64);
+                }
+                bits += 1;
+            }
+            PackedPattern { words, bits }
+        })
+    })
+}
+
+/// Pack a sliced sign window into words with the same bit layout the packed
+/// patterns use, first bit in the low bit of word 0.
+fn pack_signs(signs: &[bool], words: &mut Vec<u64>) {
+    words.clear();
+    words.resize(signs.len().div_ceil(64), 0);
+    for (i, &bit) in signs.iter().enumerate() {
         if bit {
-            packed[i / 64] |= 1 << (i % 64);
+            words[i / 64] |= 1 << (i % 64);
         }
     }
-    let n_words = expected.len().div_ceil(64);
+}
+
+/// Extract `width` observation bits starting at absolute bit `base`,
+/// LSB-aligned, from the pre-packed window.
+#[inline]
+fn extract_bits(words: &[u64], base: usize, width: usize) -> u64 {
+    let wi = base / 64;
+    let off = base % 64;
+    let mut chunk = words[wi] >> off;
+    if off > 0 && wi + 1 < words.len() {
+        chunk |= words[wi + 1] << (64 - off);
+    }
+    if width < 64 {
+        chunk &= (1u64 << width) - 1;
+    }
+    chunk
+}
+
+fn find_spec(
+    signs: &[u64],
+    n_signs: usize,
+    spec: &SyncSpec,
+    packed: &PackedPattern,
+) -> Option<(bool, usize, usize)> {
+    let expected_len = packed.bits;
+    if n_signs < expected_len {
+        return None;
+    }
+    let n_words = expected_len.div_ceil(64);
     let mut matches = Vec::<(usize, bool, usize)>::new();
-    'scan: for start in 0..=signs.len() - expected.len() {
+    'scan: for start in 0..=n_signs - expected_len {
         let mut errors = 0usize;
-        // One word at a time, but never past the window: the tail of the
-        // last word belongs to whatever follows the candidate alignment.
+        // One word at a time, but never past the window: the tail of the last
+        // word belongs to whatever follows the candidate alignment.
         for w in 0..n_words {
             let base = start + w * 64;
-            let width = (expected.len() - w * 64).min(64);
-            let mut chunk = 0u64;
-            for b in 0..width {
-                if signs[base + b] {
-                    chunk |= 1 << b;
-                }
-            }
-            let mut want = packed[w];
+            let width = (expected_len - w * 64).min(64);
+            let chunk = extract_bits(signs, base, width);
+            let mut want = packed.words[w];
             // Zero the pattern bits above the window's last word so the
             // XOR counts only the alignment's own bits.
             if w == n_words - 1 && width < 64 {
@@ -286,14 +347,14 @@ fn find_spec(signs: &[bool], spec: &SyncSpec) -> Option<(bool, usize, usize)> {
             // every remaining bit flipping to agree (inverted polarity
             // gives `L - errors`); max_errors*2 covers both polarities'
             // budgets plus the parity flip the caller may still accept.
-            if errors > expected.len() && errors > 2 * spec.max_errors + expected.len() / 2 {
+            if errors > expected_len && errors > 2 * spec.max_errors + expected_len / 2 {
                 continue 'scan;
             }
         }
-        let (errors, inverted) = if errors <= expected.len() - errors {
+        let (errors, inverted) = if errors <= expected_len - errors {
             (errors, false)
         } else {
-            (expected.len() - errors, true)
+            (expected_len - errors, true)
         };
         if errors <= spec.max_errors {
             matches.push((start, inverted, errors));
@@ -347,7 +408,7 @@ mod tests {
     #[test]
     fn long_edacs_sync_qualifies_a_control_frame() {
         let pattern = "313131313131313131313111333133133131313131313131";
-        let got = decode_window(&waveform(pattern, 9600, 1, 80), 48_000.0);
+        let got = decode_window(&waveform(pattern, 9600, 1, 80), 48_000.0, &mut Vec::new());
         assert!(got.iter().any(|frame| frame.protocol == "EDACS / ESK"));
     }
 
@@ -357,7 +418,7 @@ mod tests {
     #[test]
     fn four_level_paging_shaped_noise_claims_no_family() {
         let cadence_stream = waveform("33331131", 4800, 3, 192);
-        let got = decode_window(&cadence_stream, 48_000.0);
+        let got = decode_window(&cadence_stream, 48_000.0, &mut Vec::new());
         assert!(
             got.iter().all(|frame| frame.protocol != "M17"),
             "M17 must stay removed: {got:?}"
@@ -371,7 +432,7 @@ mod tests {
         for sample in &mut iq {
             *sample = -*sample;
         }
-        let got = decode_window(&iq, 48_000.0);
+        let got = decode_window(&iq, 48_000.0, &mut Vec::new());
         assert!(
             got.iter()
                 .any(|frame| frame.protocol == "D-STAR" && frame.inverted)
@@ -387,7 +448,7 @@ mod tests {
             ("X2-TDMA", "113131333331313331113311", 4800, 2, 144),
         ];
         for (protocol, pattern, baud, repeat, cadence) in cases {
-            let got = decode_window(&waveform(pattern, baud, repeat, cadence), 48_000.0);
+            let got = decode_window(&waveform(pattern, baud, repeat, cadence), 48_000.0, &mut Vec::new());
             assert!(
                 got.iter().any(|frame| frame.protocol == protocol),
                 "{protocol} did not qualify: {got:?}"

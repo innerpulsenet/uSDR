@@ -62,12 +62,14 @@
     padding: 8px 12px; cursor: pointer; border-radius: 5px 5px 0 0;
     background: transparent; color: var(--dim); border: 1px solid transparent;
     border-bottom: none;
+    transition: color 100ms, background 100ms;
   }
-  .side-tab:hover { color: #c9dbe6; }
+  .side-tab:hover { color: #c9dbe6; background: rgba(255,255,255,0.03); }
   .side-tab.on {
     background: #10151b; color: #eaf2f7;
     border-color: var(--line);
     position: relative; top: 1px;
+    box-shadow: inset 0 -2px 0 #24608a;
   }
   .side-panel {
     display: none; flex-direction: column; min-height: 0; flex: 1;
@@ -269,6 +271,12 @@
   }
   #sdrSpectrumCanvas { width: 100%; height: 168px; display: block; cursor: crosshair; }
   #sdrWaterfallCanvas { width: 100%; height: 260px; display: block; cursor: crosshair; }
+  /* Voice-scan markers over the waterfall. The waterfall repaints itself from
+     its own history every frame, so anything drawn into it scrolls away and
+     tints the record; this canvas floats above it instead, ignores the
+     pointer, and is cleared and redrawn from cached scan state per frame.
+     Top/left/width/height are pinned to the waterfall's box in JS. */
+  #sdrScanOverlayCanvas { position: absolute; pointer-events: none; display: block; }
   .spec-readout {
     position: absolute; top: 6px; right: 8px; pointer-events: none;
     font: 11px/1.2 var(--mono); color: #9fe6ff; background: rgba(4,10,16,0.9);
@@ -379,8 +387,10 @@
   .panel > h2 {
     margin: 0; padding: 9px 14px; font-size: 11px; font-weight: 700;
     letter-spacing: 0.14em; text-transform: uppercase; color: #a9c2d1;
-    background: #141b22; border-bottom: 1px solid var(--line);
+    background: linear-gradient(#17202a, #131a22);
+    border-bottom: 1px solid var(--line);
     display: flex; align-items: center; gap: 10px;
+    box-shadow: inset 3px 0 0 #24608a;
   }
   .panel > h2 .note {
     font-weight: 400; letter-spacing: 0.02em;
@@ -418,22 +428,55 @@
   .sdr-preset-btn {
     font-family: var(--mono); border-radius: 3px; cursor: pointer;
     background: #0f172a; color: #cbd5e1; border: 1px solid #1e293b; padding: 2px 7px; font-size: 10px;
+    transition: border-color 100ms, background 100ms, color 100ms;
   }
-  .sdr-preset-btn:hover { border-color: var(--accent); }
+  .sdr-preset-btn:hover { border-color: var(--accent); color: #e6eef5; background: #12203a; }
+  .sdr-preset-btn:active { transform: translateY(1px); }
+  /* Keyboard focus is visible on the dark panels; the default ring is not. */
+  button:focus-visible, input:focus-visible, select:focus-visible, a:focus-visible {
+    outline: 1px solid var(--accent); outline-offset: 1px;
+  }
+  /* Dark, thin scrollbars — the default browser bar is a bright stripe down
+     an otherwise quiet panel. Firefox takes the two properties; the rest
+     takes the pseudo-elements. */
+  * { scrollbar-width: thin; scrollbar-color: #263340 transparent; }
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb {
+    background: #263340; border-radius: 5px; border: 2px solid transparent;
+    background-clip: content-box;
+  }
+  ::-webkit-scrollbar-thumb:hover { background-color: #35485c; }
   /* Fixed heights, never max-height. These lists grow several rows a second;
      letting them size to content made every panel below them jump. */
   .sdr-classifier-log, .sdr-decode-log {
     height: 190px; overflow-y: auto; overflow-x: hidden;
     font-family: var(--mono); font-size: 11px;
-    background: #060b10; border: 1px solid #17212a; border-radius: 4px; padding: 6px;
+    background: #060b10; border: 1px solid #17212a; border-radius: 4px; padding: 4px;
     overscroll-behavior: contain;
   }
   .sdr-decode-log { height: 250px; }
   .sdr-classifier-log > *, .sdr-decode-log > * {
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   }
-  .sdr-decode-event { padding: 2px 0; border-bottom: 1px solid #101820; }
-  .data-empty { color: var(--faint); font-size: 11px; padding: 4px; }
+  /* One row chrome for every list in the dock. Zebra striping keeps the eye
+     on a row across the column gaps and the pauses between transmissions;
+     the hover wash answers "which row am I about to click". Striping is
+     :nth-child CSS, not markup — the renderers rebuild these lists as flat
+     children, so parity comes free and cannot drift out of step. */
+  .sdr-classifier-log > *, .sdr-decode-log > * {
+    padding: 3px 6px;
+    border-radius: 3px;
+    transition: background 100ms;
+  }
+  .sdr-classifier-log > :nth-child(even), .sdr-decode-log > :nth-child(even) {
+    background: rgba(148, 197, 233, 0.05);
+  }
+  .sdr-classifier-log > :hover, .sdr-decode-log > :hover {
+    background: rgba(53, 167, 232, 0.1);
+  }
+  .sdr-decode-event { padding: 3px 6px; border-radius: 3px; }
+  .data-empty { color: var(--faint); font-size: 11px; padding: 14px 10px; text-align: center; }
   .sdr-decode-toolbar {
     display: flex; flex-wrap: wrap; align-items: center; gap: 7px; margin-bottom: 9px;
   }
@@ -494,6 +537,7 @@
           <button type="button" class="modebtn" data-mode="packet">PACKET</button>
           <button type="button" class="modebtn" data-mode="pager" title="Sweep POCSAG/FLEX across the 25 kHz paging channels around the tuned frequency">PAGER</button>
           <button type="button" class="modebtn" data-mode="auto" title="Run every decoder on the tuned channel at once">AUTO</button>
+          <button type="button" class="modebtn" data-mode="scan" title="Scan a frequency range for voice (AM / NFM / P25 / DMR): locks onto what it can decode and holds the call. Configure it in the SCAN panel.">SCAN</button>
         </span>
         <svg class="filt-glyph" width="34" height="12" viewBox="0 0 34 12" aria-hidden="true">
           <path d="M1 11 L9 2 L25 2 L33 11" fill="none" stroke="#8fb6cc" stroke-width="1.2"/>
@@ -547,6 +591,7 @@
       <div class="spec-canvases" id="sdrCanvasWrap">
         <canvas id="sdrSpectrumCanvas"></canvas>
         <canvas id="sdrWaterfallCanvas"></canvas>
+        <canvas id="sdrScanOverlayCanvas"></canvas>
         <div class="spec-readout" id="sdrHoverReadout" hidden></div>
       </div>
       <div class="spec-scale" id="specScale"></div>
@@ -653,6 +698,7 @@
       <button type="button" class="side-tab on" id="tabClassifier" role="tab" aria-selected="true">CLASSIFIER</button>
       <button type="button" class="side-tab" id="tabDecode" role="tab" aria-selected="false">DECODE LOG</button>
       <button type="button" class="side-tab" id="tabCalls" role="tab" aria-selected="false">LAST HEARD</button>
+      <button type="button" class="side-tab" id="tabScan" role="tab" aria-selected="false">SCAN</button>
       <span style="flex:1"></span>
       <button type="button" class="side-tab" id="dockWideBtn" title="Give the panels nearly the whole viewport (F)">⤢ tall</button>
     </div>
@@ -693,14 +739,106 @@
   </section>
 
     <section class="panel side-panel" id="panelCalls">
-    <h2>Last heard — digital voice
-      <span class="note" id="callsNote">P25 and DMR calls are kept here until the server restarts</span>
+    <h2>Last heard — voice
+      <span class="note" id="callsNote">Voice calls are kept here until the server restarts</span>
     </h2>
     <div class="panel-body">
-      <div id="callsList" class="sdr-classifier-log" style="height:150px">
-        <div class="data-empty">No digital voice calls yet.</div>
+      <div id="callsList" class="sdr-classifier-log">
+        <div class="data-empty">No voice calls yet.</div>
       </div>
       <audio id="callAudio" controls preload="none" style="width:100%; height:30px; margin-top:8px"></audio>
+    </div>
+  </section>
+
+    <section class="panel side-panel" id="panelScan">
+    <h2>Voice scan
+      <span class="note" id="scanStateBadge">idle</span>
+    </h2>
+    <div class="panel-body">
+      <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:baseline; margin-bottom:6px;">
+        <label style="font-size:11px; color:var(--dim)">from
+          <input type="number" id="scanStartMhz" step="0.0001" min="1" max="2200"
+                 style="width:90px; background:#0d1319; color:var(--text); border:1px solid #27323c;
+                        border-radius:4px; padding:4px 6px; font:12px var(--mono); outline:none"> MHz
+        </label>
+        <label style="font-size:11px; color:var(--dim)">to
+          <input type="number" id="scanStopMhz" step="0.0001" min="1" max="2200"
+                 style="width:90px; background:#0d1319; color:var(--text); border:1px solid #27323c;
+                        border-radius:4px; padding:4px 6px; font:12px var(--mono); outline:none"> MHz
+        </label>
+      </div>
+      <div style="display:flex; gap:12px; flex-wrap:wrap; margin-bottom:6px; font-size:11px; color:var(--dim)">
+        <label><input type="checkbox" id="scanModeAm"> AM</label>
+        <label><input type="checkbox" id="scanModeNfm" checked> NFM</label>
+        <label><input type="checkbox" id="scanModeP25" checked> P25</label>
+        <label><input type="checkbox" id="scanModeDmr" checked> DMR</label>
+      </div>
+      <div style="display:flex; gap:10px; align-items:baseline; margin-bottom:6px; font-size:11px; color:var(--dim)">
+        <label style="flex:1">squelch
+          <input type="range" id="scanThreshold" min="4" max="20" step="0.5" value="8" style="width:110px; vertical-align:middle">
+          <span id="scanThresholdVal" style="font:11px var(--mono); color:var(--text)">8 dB</span>
+        </label>
+        <label>resume after
+          <input type="number" id="scanResumeS" step="0.5" min="0.5" max="30" value="2"
+                 style="width:52px; background:#0d1319; color:var(--text); border:1px solid #27323c;
+                        border-radius:4px; padding:3px 5px; font:12px var(--mono); outline:none"> s
+        </label>
+      </div>
+      <div style="display:flex; gap:10px; align-items:baseline; margin-bottom:6px; font-size:11px; color:var(--dim)">
+        <label title="How many candidates are test-decoded at the same time. Each listens on its own receivers, so one quiet carrier's dwell no longer hides the call beside it.">
+          parallel channels
+          <input type="number" id="scanSlots" step="1" min="1" max="8" value="4"
+                 style="width:40px; background:#0d1319; color:var(--text); border:1px solid #27323c;
+                        border-radius:4px; padding:3px 5px; font:12px var(--mono); outline:none">
+        </label>
+        <span style="font-size:10px; color:#64748b">tested at once, strongest first</span>
+      </div>
+      <div style="display:flex; gap:10px; align-items:baseline; margin-bottom:6px; font-size:11px; color:var(--dim)">
+        <label>re-test skipped after
+          <input type="number" id="scanRetestS" step="5" min="5" max="600" value="60"
+                 style="width:56px; background:#0d1319; color:var(--text); border:1px solid #27323c;
+                        border-radius:4px; padding:3px 5px; font:12px var(--mono); outline:none"> s
+        </label>
+        <label>park control channels for
+          <input type="number" id="scanCtrlS" step="60" min="30" max="14400" value="1800"
+                 style="width:62px; background:#0d1319; color:var(--text); border:1px solid #27323c;
+                        border-radius:4px; padding:3px 5px; font:12px var(--mono); outline:none"> s
+        </label>
+      </div>
+      <div style="display:flex; gap:10px; align-items:baseline; margin-bottom:6px; font-size:11px; color:var(--dim)">
+        <label title="A carrier that fails this many test-decodes is a birdie: parked long-term so the sweep stops wasting dwells on it">persistent noise: park after
+          <input type="number" id="scanPersistAfter" step="1" min="0" max="10" value="3"
+                 style="width:44px; background:#0d1319; color:var(--text); border:1px solid #27323c;
+                        border-radius:4px; padding:3px 5px; font:12px var(--mono); outline:none"> fails
+        </label>
+        <label>for
+          <input type="number" id="scanPersistS" step="3600" min="300" max="604800" value="86400"
+                 style="width:70px; background:#0d1319; color:var(--text); border:1px solid #27323c;
+                        border-radius:4px; padding:3px 5px; font:12px var(--mono); outline:none"> s
+        </label>
+      </div>
+      <div style="display:flex; gap:6px; flex-wrap:wrap; margin-bottom:6px;">
+          <button type="button" class="sdr-preset-btn" id="scanStartBtn" onclick="startVoiceScan()" style="padding:5px 12px" title="Apply the form and scan">Start scan</button>
+        <button type="button" class="sdr-preset-btn" id="scanStopBtn" onclick="stopScan()" style="padding:5px 12px; display:none" title="Leave scan mode and return to the previous demodulator">Stop</button>
+        <button type="button" class="sdr-preset-btn" id="scanPauseBtn" onclick="scanControl('pause')" style="padding:5px 12px">Pause</button>
+        <button type="button" class="sdr-preset-btn" id="scanResumeBtn" onclick="scanControl('resume')" style="padding:5px 12px">Resume</button>
+        <button type="button" class="sdr-preset-btn" onclick="scanControl('skip')" title="Move on from the channel under test or locked">Skip</button>
+        <button type="button" class="sdr-preset-btn" onclick="scanControl('forget')" title="Re-test every frequency the scanner has learned to pass over">Forget skips</button>
+      </div>
+      <div id="scanProgress" class="sdr-classifier-subvalue" style="font-size:11px; color:#94a3b8; min-height:15px;">Configure a range and press Start.</div>
+      <div style="display:flex; align-items:baseline; margin-top:8px;">
+        <span class="sdr-classifier-label">Skipped channels</span>
+        <span class="note" id="scanSkipCount" style="margin-left:auto; font-size:10px; color:#64748b">none</span>
+      </div>
+      <div id="scanSkipList" class="sdr-classifier-log" style="margin-top:4px;">
+        <div class="data-empty">Nothing skipped yet.</div>
+      </div>
+      <div class="note" style="font-size:10px; color:#64748b; margin-top:4px;">
+        Peaks found across the span are test-decoded by several channels in
+        parallel, strongest first; the sweep holds each call it can decode and
+        parks control channels out. Tuning by hand pauses the scan; LISTEN is
+        heard only while a call is held.
+      </div>
     </div>
   </section>
 
@@ -751,7 +889,7 @@
 // Dock tabs: the three data panels stack in one column, so exactly one is
 // shown at a time. On narrow windows the media query stacks them all.
 function showSideTab(id) {
-  const tabs = [['tabClassifier', 'panelClassifier'], ['tabDecode', 'panelDecode'], ['tabCalls', 'panelCalls']];
+  const tabs = [['tabClassifier', 'panelClassifier'], ['tabDecode', 'panelDecode'], ['tabCalls', 'panelCalls'], ['tabScan', 'panelScan']];
   for (const [tabId, panelId] of tabs) {
     const on = tabId === id;
     const t = $(tabId), p = $(panelId);
@@ -762,7 +900,7 @@ function showSideTab(id) {
     if (p) p.classList.toggle('on', on);
   }
 }
-for (const [tabId, panelId] of [['tabClassifier', 'panelClassifier'], ['tabDecode', 'panelDecode'], ['tabCalls', 'panelCalls']]) {
+for (const [tabId, panelId] of [['tabClassifier', 'panelClassifier'], ['tabDecode', 'panelDecode'], ['tabCalls', 'panelCalls'], ['tabScan', 'panelScan']]) {
   const t = document.getElementById(tabId);
   if (t) t.addEventListener('click', () => showSideTab(tabId));
 }
@@ -832,7 +970,7 @@ let sdrLastLoggedTime = 0;
 function clearSdrClassLog() {
   sdrClassLogData.length = 0;
   const el = $('sdrClassLog');
-  if (el) el.innerHTML = '<div class="data-empty" style="padding:6px; color:#4a5b73; font-size:10px;">Log cleared. Waiting for new transmissions...</div>';
+  if (el) el.innerHTML = '<div class="data-empty">Log cleared. Waiting for new transmissions…</div>';
 }
 
 let sdrClassLastSig = '';
@@ -953,7 +1091,7 @@ function renderSdrClassLog() {
   const el = $('sdrClassLog');
   if (!el) return;
   if (!sdrClassLogData.length) {
-    el.innerHTML = '<div class="data-empty" style="padding:6px; color:#4a5b73; font-size:10px;">Classified transmissions will be recorded here...</div>';
+    el.innerHTML = '<div class="data-empty">Classified transmissions will be recorded here…</div>';
     return;
   }
   keepScrollAnchored(el, () => {
@@ -976,7 +1114,7 @@ function renderSdrClassLog() {
     const snrStr = e.snrDb != null ? `SNR +${e.snrDb.toFixed(1)}dB` : '';
     const detailsStr = e.details ? `· <span style="color:#cbd5e1">${esc(e.details)}</span>` : '';
 
-    return `<div style="display:flex; align-items:baseline; gap:8px; padding:2px 4px; border-bottom:1px solid #0f172a; font-size:11px; min-height:21px; white-space:nowrap; overflow:hidden;">
+    return `<div style="display:flex; align-items:baseline; gap:8px; font-size:11px; min-height:21px; white-space:nowrap; overflow:hidden;">
       <span style="color:#64748b; font-size:10px; flex-shrink:0;">${timeStr}</span>
       <span style="color:#38bdf8; font-weight:600; flex-shrink:0; cursor:pointer;" onclick="inspectSdrHz(${e.freqHz})" title="Tune inspector here">${freqStr}</span>
       <span style="color:${color}; font-weight:700; flex-shrink:0;">[${esc(e.protocol)}]</span>
@@ -1241,7 +1379,7 @@ function renderSdrDecodeLog() {
       ? `${list.length} of ${all.length} frames` : `${all.length} frames`;
   }
   if (!list.length) {
-    el.innerHTML = `<div class="data-empty" style="padding:6px; color:#4a5b73;">${
+    el.innerHTML = `<div class="data-empty">${
       all.length ? 'No frames match the filter.'
                  : 'Waiting for protocol frames and decoder diagnostics…'}</div>`;
     return;
@@ -1414,6 +1552,13 @@ let sdrStatus = null;
 let sdrColorLut = null;
 let sdrSpecCanvas = null, sdrSpecCtx = null;
 let sdrWfCanvas = null, sdrWfCtx = null;
+// Voice-scan marker state, cached from the last status event and consulted
+// by the per-frame spectrum/overlay draws (status events arrive on scan
+// state changes; frames arrive at 25 fps).
+let sdrScanState = null;      // "settling"|"sweeping"|"testing"|"locked"|"paused"
+let sdrScanTesting = [];      // frequencies under parallel test right now
+let sdrScanLocked = [];       // frequencies of calls being held and recorded
+let sdrScanOverlay = null, sdrScanOverlayCtx = null;
 let sdrTempCanvas = null, sdrTempCtx = null;
 let scopeSpecCanvas = null, scopeSpecCtx = null;
 let scopeWaveCanvas = null, scopeWaveCtx = null;
@@ -1477,6 +1622,8 @@ function initSdrCanvas() {
   if (!sdrSpecCanvas || !sdrWfCanvas) return;
   sdrSpecCtx = sdrSpecCanvas.getContext('2d');
   sdrWfCtx = sdrWfCanvas.getContext('2d', { alpha: false });
+  sdrScanOverlay = $('sdrScanOverlayCanvas');
+  if (sdrScanOverlay) sdrScanOverlayCtx = sdrScanOverlay.getContext('2d');
   scopeSpecCtx = scopeSpecCanvas.getContext('2d', { alpha: false });
   scopeWaveCtx = scopeWaveCanvas.getContext('2d', { alpha: false });
   if (!sdrTempCanvas) {
@@ -1507,9 +1654,20 @@ function resizeSdrCanvases() {
     sdrWfCtx.fillStyle = '#000';
     sdrWfCtx.fillRect(0, 0, w, h);
   }
+  // Pin the scan overlay exactly over the waterfall: the markers share the
+  // waterfall's frequency axis, and must not blanket the spectrum (which
+  // draws its own markers directly).
+  if (sdrScanOverlay) {
+    sdrScanOverlay.style.top = sdrWfCanvas.offsetTop + 'px';
+    sdrScanOverlay.style.left = sdrWfCanvas.offsetLeft + 'px';
+    sdrScanOverlay.style.width = sdrWfCanvas.offsetWidth + 'px';
+    sdrScanOverlay.style.height = sdrWfCanvas.offsetHeight + 'px';
+    fitCanvas(sdrScanOverlay, sdrScanOverlayCtx);
+  }
   fitCanvas(scopeSpecCanvas, scopeSpecCtx);
   fitCanvas(scopeWaveCanvas, scopeWaveCtx);
   if (sdrLastPwr.length) drawSdrSpectrum(sdrLastPwr);
+  drawScanOverlay();
   drawSpecScale();
 }
 
@@ -1778,6 +1936,63 @@ function drawSdrSpectrum(pwr) {
     ctx.closePath(); ctx.fill();
   }
 
+  // Voice-scan held calls: every slot recording a call that is NOT on the
+  // speaker gets a solid green bracket. The speaker's own call is the
+  // passband above — marking it again would read as two things at once.
+  if (sdrMode === 'scan' && sdrScanLocked.length) {
+    const halfBw = (sdrBandwidthHz / 2 / sdrRateHz) * W;
+    ctx.lineWidth = 1;
+    for (const hz of sdrScanLocked) {
+      if (Math.abs(hz - sdrInspectHz) < 5000) continue;
+      const tx = xForFreq(hz, W);
+      if (tx < -halfBw - 6 || tx > W + halfBw + 6) continue;
+      const x0 = Math.round(tx - halfBw) + 0.5;
+      const x1 = Math.round(tx + halfBw) + 0.5;
+      // Solid where the test brackets are dashed: this channel is held,
+      // not under judgement.
+      ctx.strokeStyle = 'rgba(43,255,106,0.6)';
+      ctx.beginPath();
+      ctx.moveTo(x0, 0); ctx.lineTo(x0, H);
+      ctx.moveTo(x1, 0); ctx.lineTo(x1, H);
+      ctx.moveTo(Math.round(tx) + 0.5, 0); ctx.lineTo(Math.round(tx) + 0.5, H);
+      ctx.stroke();
+      ctx.strokeStyle = 'rgba(43,255,106,0.8)';
+      ctx.beginPath();
+      ctx.moveTo(tx - 4, 0.5); ctx.lineTo(tx, 8.5); ctx.lineTo(tx + 4, 0.5);
+      ctx.closePath(); ctx.stroke();
+    }
+  }
+
+  // Voice-scan test markers: every candidate the parallel slots are
+  // test-decoding right now gets an amber bracket, so "what is it looking
+  // at" is on the display rather than only in the panel's progress line.
+  // The pool keeps testing even while a call is held, so these draw in
+  // every working state.
+  if (sdrMode === 'scan' && sdrScanTesting.length) {
+    const halfBw = (sdrBandwidthHz / 2 / sdrRateHz) * W;
+    ctx.lineWidth = 1;
+    for (const hz of sdrScanTesting) {
+      const tx = xForFreq(hz, W);
+      if (tx < -halfBw - 6 || tx > W + halfBw + 6) continue;
+      const x0 = Math.round(tx - halfBw) + 0.5;
+      const x1 = Math.round(tx + halfBw) + 0.5;
+      // Dashed where the passband is solid: this channel is under
+      // judgement, not held.
+      ctx.strokeStyle = 'rgba(255,193,69,0.8)';
+      ctx.setLineDash([4, 3]);
+      ctx.beginPath();
+      ctx.moveTo(x0, 0); ctx.lineTo(x0, H);
+      ctx.moveTo(x1, 0); ctx.lineTo(x1, H);
+      ctx.moveTo(Math.round(tx) + 0.5, 0); ctx.lineTo(Math.round(tx) + 0.5, H);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.strokeStyle = 'rgba(255,193,69,0.95)';
+      ctx.beginPath();
+      ctx.moveTo(tx - 5, 0.5); ctx.lineTo(tx, 9.5); ctx.lineTo(tx + 5, 0.5);
+      ctx.stroke();
+    }
+  }
+
   // anything a spur check proved is internal, marked so it is not mistaken
   // for a signal
   for (const off of sdrSpurOffsets) {
@@ -1889,6 +2104,53 @@ function drawSdrWaterfallRow(pwr) {
   sdrWfCtx.drawImage(sdrWfCanvas, 0, 0, W, H - 1, 0, 1, W, H - 1);
   sdrWfCtx.imageSmoothingEnabled = false;
   sdrWfCtx.drawImage(sdrTempCanvas, 0, 0, N, 1, 0, 0, W, 1);
+}
+
+/// Voice-scan markers over the waterfall: the same amber "under test"
+/// brackets the spectrum draws, plus one faint green line for the tuned
+/// centre (which, while locked, is the held channel). They live on a
+/// transparent canvas above the waterfall — drawn into the waterfall itself
+/// they would scroll up with the history and permanently tint the record.
+function drawScanOverlay() {
+  if (!sdrScanOverlayCtx || !sdrScanOverlay) return;
+  const { w: W, h: H } = cssSize(sdrScanOverlay);
+  const ctx = sdrScanOverlayCtx;
+  ctx.clearRect(0, 0, W, H);
+  if (sdrMode !== 'scan') return;
+  const halfBw = (sdrBandwidthHz / 2 / sdrRateHz) * W;
+  ctx.lineWidth = 1;
+  // Held calls that are not on the speaker: solid green brackets, matching
+  // the spectrum (the speaker's own call is the green centre line above).
+  ctx.strokeStyle = 'rgba(43,255,106,0.5)';
+  for (const hz of sdrScanLocked) {
+    if (Math.abs(hz - sdrInspectHz) < 5000) continue;
+    const tx = xForFreq(hz, W);
+    if (tx < -halfBw - 6 || tx > W + halfBw + 6) continue;
+    const x0 = Math.round(tx - halfBw) + 0.5;
+    const x1 = Math.round(tx + halfBw) + 0.5;
+    ctx.beginPath();
+    ctx.moveTo(x0, 0); ctx.lineTo(x0, H);
+    ctx.moveTo(x1, 0); ctx.lineTo(x1, H);
+    ctx.moveTo(Math.round(tx) + 0.5, 0); ctx.lineTo(Math.round(tx) + 0.5, H);
+    ctx.stroke();
+  }
+  // Candidates under test: dashed amber. The pool keeps testing while a
+  // call is held, so these draw in every working state.
+  if (!sdrScanTesting.length) return;
+  ctx.strokeStyle = 'rgba(255,193,69,0.75)';
+  ctx.setLineDash([4, 3]);
+  for (const hz of sdrScanTesting) {
+    const tx = xForFreq(hz, W);
+    if (tx < -halfBw - 6 || tx > W + halfBw + 6) continue;
+    const x0 = Math.round(tx - halfBw) + 0.5;
+    const x1 = Math.round(tx + halfBw) + 0.5;
+    ctx.beginPath();
+    ctx.moveTo(x0, 0); ctx.lineTo(x0, H);
+    ctx.moveTo(x1, 0); ctx.lineTo(x1, H);
+    ctx.moveTo(Math.round(tx) + 0.5, 0); ctx.lineTo(Math.round(tx) + 0.5, H);
+    ctx.stroke();
+  }
+  ctx.setLineDash([]);
 }
 
 // ---------- audio scope ----------
@@ -2445,6 +2707,16 @@ function setupControls() {
     updateSnapHint();
   });
 
+  // Scan panel: live threshold label, and "the operator edited the form"
+  // so the status prefill stops overwriting what is being typed.
+  $('scanThreshold').addEventListener('input', (e) => {
+    $('scanThresholdVal').textContent = `${e.target.value} dB`;
+  });
+  for (const id of ['scanStartMhz', 'scanStopMhz', 'scanThreshold', 'scanResumeS', 'scanRetestS', 'scanCtrlS',
+    'scanPersistAfter', 'scanPersistS', 'scanModeAm', 'scanModeNfm', 'scanModeP25', 'scanModeDmr', 'scanSlots']) {
+    $(id)?.addEventListener('input', () => { scanFormTouched = true; });
+  }
+
   $('ppmInput').addEventListener('change', async (e) => {
     const ppm = Number(e.target.value);
     if (!isFinite(ppm)) return;
@@ -2514,6 +2786,7 @@ function paintSdrFft(m) {
   drawSpecScale();
   drawSdrSpectrum(m.pwr);
   drawSdrWaterfallRow(m.pwr);
+  drawScanOverlay();
   drawScope(m.scope, m.scopeRateHz, m.scopeKind, m.symbolRateHz);
   updateSdrClassification(m.classification, m.inspectHz);
   renderSdrPeaks(m.peaks);
@@ -2630,16 +2903,22 @@ let audioVolume = 0.6;
 const AUDIO_LEAD = 0.12;     // seconds of scheduling lead
 const AUDIO_MAX_LAG = 0.45;  // resync rather than build a delay
 
-function startAudio() {
+/// Create the shared Web Audio graph if it does not exist yet. Both the live
+/// monitor and the Last Heard player run through it: one output path, one
+/// volume slider. Must be called from inside a user gesture (a click), which
+/// is what makes the context allowed to start.
+function ensureAudioGraph() {
   if (!audioCtx) {
     audioCtx = new (window.AudioContext || window.webkitAudioContext)();
     audioGain = audioCtx.createGain();
     audioGain.gain.value = audioVolume;
     audioGain.connect(audioCtx.destination);
   }
-  // Browsers only allow this from inside a user gesture, which is why LISTEN
-  // exists rather than the page just playing on load.
-  audioCtx.resume();
+  if (audioCtx.state === 'suspended') audioCtx.resume();
+}
+
+function startAudio() {
+  ensureAudioGraph();
   audioOn = true;
   audioNext = 0;
   $('btnListen').classList.add('on');
@@ -2648,7 +2927,11 @@ function startAudio() {
 
 function stopAudio() {
   audioOn = false;
-  if (audioCtx) audioCtx.suspend();
+  // Suspending the context silences everything that plays through it —
+  // including the Last Heard player, which rides the same graph — so only
+  // suspend when a call replay is not in progress.
+  const a = $('callAudio');
+  if (audioCtx && (!a || a.paused)) audioCtx.suspend();
   $('btnListen').classList.remove('on');
   $('btnListen').textContent = 'LISTEN';
 }
@@ -2682,6 +2965,9 @@ function onAudioFrame(buf) {
 // ---------- mode ----------
 
 let sdrMode = 'nfm';
+// The demodulator to return to when the scan stops. Everything except the
+// scan itself updates this.
+let lastVoiceMode = 'nfm';
 let sdrBandwidthHz = 25000;
 // Offsets from the display centre, in Hz, that a spur check found to be
 // internal to the receiver.
@@ -2762,6 +3048,8 @@ function updateSnapHint() {
 
 function applyModeUi(mode) {
   sdrMode = mode;
+  // What Stop returns to: the last demodulator that was not the scan.
+  if (mode !== 'scan') lastVoiceMode = mode;
   updateSnapHint();
   document.querySelectorAll('.modebtn').forEach(b =>
     b.classList.toggle('on', b.dataset.mode === mode));
@@ -2788,6 +3076,10 @@ function applyModeUi(mode) {
   if (mode === 'pager' && $('sdrClassDetails')) {
     $('sdrClassDetails').textContent = 'sweeping POCSAG/FLEX across ±480 kHz';
     $('sdrClassModulation').textContent = 'Paging scan';
+  }
+  if (mode === 'scan' && $('sdrClassDetails')) {
+    $('sdrClassDetails').textContent = 'scanning for voice…';
+    $('sdrClassModulation').textContent = 'Voice scan';
   }
 }
 
@@ -2854,7 +3146,7 @@ async function setSdrMode(mode) {
 //   p25/dmr 6.25 kHz — the same raster the digital channels sit on
 //   packet  2.5 kHz — divides both the 10 kHz APRS raster (144.390 lands on
 //                     it exactly) and the 12.5 kHz paging channels
-const SNAP_STEPS = { wfm: 100000, nfm: 6250, am: 9000, p25: 6250, dmr: 6250, packet: 2500, pager: 25000 };
+const SNAP_STEPS = { wfm: 100000, nfm: 6250, am: 9000, p25: 6250, dmr: 6250, packet: 2500, pager: 25000, scan: 6250 };
 
 // `auto` follows the mode's channel raster; anything else is the operator
 // overriding it, which is what a step control is for.
@@ -3056,6 +3348,10 @@ function updateSdrStatus(s) {
       ? `sweeping POCSAG/FLEX · ${s.pager_sweep}`
       : 'sweeping POCSAG/FLEX across ±480 kHz';
   }
+  // The voice scan: state badge, progress line and button states, plus a
+  // form prefill from the effective config. A null scan (mode left SCAN)
+  // resets the panel rather than leaving running-state buttons behind.
+  renderScan(s.scan || null);
   if ($('sdrAgc')) {
     $('sdrAgc').checked = s.gain_db == null;
     $('sdrGainRange').disabled = s.gain_db == null;
@@ -3063,6 +3359,157 @@ function updateSdrStatus(s) {
     $('sdrGainVal').textContent = s.gain_db == null ? 'auto' : s.gain_db + ' dB';
   }
   $('err').textContent = s.error || '';
+}
+
+// ---------- voice scan ----------
+//
+// The panel is the scan's front panel: it edits the configuration (which the
+// server persists and echoes back in every status event), starts and stops
+// the sweep, and reports where it is. The form always shows the server's
+// effective config rather than what was last typed, so what you see is what
+// the radio is doing.
+
+let scanFormTouched = false;
+
+function scanCfgFromForm() {
+  // Wire form is capitalised for the element ids; the wire format is the
+  // server's lowercase serde names.
+  const modes = ['am', 'nfm', 'p25', 'dmr'].filter(m => $('scanMode' + m[0].toUpperCase() + m.slice(1))?.checked);
+  return {
+    start_hz: Math.round(parseFloat($('scanStartMhz').value || '0') * 1e6),
+    stop_hz: Math.round(parseFloat($('scanStopMhz').value || '0') * 1e6),
+    modes,
+    threshold_db: parseFloat($('scanThreshold').value),
+    resume_delay_s: parseFloat($('scanResumeS').value || '2'),
+    retest_s: parseInt($('scanRetestS').value || '60', 10),
+    control_skip_s: parseInt($('scanCtrlS').value || '1800', 10),
+    persistent_after: parseInt($('scanPersistAfter').value || '3', 10),
+    persistent_skip_s: parseInt($('scanPersistS').value || '86400', 10),
+    slots: parseInt($('scanSlots')?.value || '4', 10),
+  };
+}
+
+async function postScan(path, body) {
+  try {
+    await fetch('/api/sdr/' + path, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+  } catch (e) { $('err').textContent = 'scan: ' + e; }
+}
+
+/// Apply the form to the scan. While a scan is running this reconfigures it
+/// live (the state machine restarts on the new range); when idle it starts
+/// one. Either way the configuration is persisted server-side.
+async function startVoiceScan() {
+  await postScan('scan/config', scanCfgFromForm());
+  // Let the server's normalized echo repopulate the form.
+  scanFormTouched = false;
+  await setSdrMode('scan');
+}
+
+/// Leave scan mode entirely — back to whatever demodulator was in use before.
+async function stopScan() {
+  await setSdrMode(lastVoiceMode);
+}
+
+async function scanControl(action) {
+  await postScan('scan/control', { action });
+}
+
+/// Re-test one skipped frequency ahead of its timer.
+async function unskipHz(hz) {
+  await postScan('scan/control', { action: 'unskip', freq_hz: hz });
+}
+
+function fmtDuration(s) {
+  if (s >= 90) return Math.round(s / 60) + ' min';
+  return s + ' s';
+}
+
+function renderScan(sc) {
+  // sc is null when no scan exists (mode left SCAN): reset the panel to its
+  // idle face, because the buttons would otherwise keep their running-state
+  // labels for good.
+  // The spectrum/waterfall markers read the same state per frame, so cache
+  // it here — the draws must not parse status payloads at 25 fps.
+  sdrScanState = sc ? sc.state : null;
+  sdrScanTesting = sc && Array.isArray(sc.testing) ? sc.testing : [];
+  sdrScanLocked = sc && Array.isArray(sc.locked) ? sc.locked : [];
+  const badge = $('scanStateBadge');
+  if (badge) {
+    if (sc) {
+      const colors = { locked: 'var(--green)', testing: 'var(--amber)', paused: 'var(--amber)' };
+      badge.textContent = sc.state + (sc.message ? ` · ${sc.message}` : '');
+      badge.style.color = colors[sc.state] || '';
+    } else {
+      badge.textContent = 'idle';
+      badge.style.color = '';
+    }
+  }
+  const prog = $('scanProgress');
+  if (prog) {
+    if (sc) {
+      const freq = sc.freq_hz ? `${(sc.freq_hz / 1e6).toFixed(4)} MHz` : '—';
+      // Testing continues around held calls (the progress line already
+      // counts them as "calls N"), so show whatever is under test as long
+      // as anything is.
+      const testing = sc.testing && sc.testing.length
+        ? ` · testing ${sc.testing.map(f => (f / 1e6).toFixed(4)).join(' ')}` : '';
+      prog.textContent = `${sc.progress}${testing} · ${freq} · hits ${sc.hits} · skipped ${sc.skipped}`;
+    } else {
+      prog.textContent = 'Configure a range and press Start.';
+    }
+  }
+  // Start (idle) becomes Apply (running) — the form is always appliable, so
+  // a running scan can be repointed without stopping it — and Stop appears
+  // only while a scan exists.
+  const running = !!sc;
+  if ($('scanStartBtn')) {
+    $('scanStartBtn').textContent = running ? 'Apply' : 'Start scan';
+  }
+  if ($('scanStopBtn')) $('scanStopBtn').style.display = running ? '' : 'none';
+  if ($('scanPauseBtn')) $('scanPauseBtn').style.display = sc && sc.state !== 'paused' ? '' : 'none';
+  if ($('scanResumeBtn')) $('scanResumeBtn').style.display = sc && sc.state === 'paused' ? '' : 'none';
+  // Prefill the form from the effective config until the operator edits it;
+  // the server normalizes what it receives and echoes it back.
+  if (!scanFormTouched && sc && sc.cfg) {
+    $('scanStartMhz').value = (sc.cfg.start_hz / 1e6).toFixed(4);
+    $('scanStopMhz').value = (sc.cfg.stop_hz / 1e6).toFixed(4);
+    $('scanThreshold').value = sc.cfg.threshold_db;
+    $('scanThresholdVal').textContent = `${sc.cfg.threshold_db} dB`;
+    $('scanResumeS').value = sc.cfg.resume_delay_s;
+    $('scanRetestS').value = sc.cfg.retest_s;
+    $('scanCtrlS').value = sc.cfg.control_skip_s;
+    $('scanPersistAfter').value = sc.cfg.persistent_after;
+    $('scanPersistS').value = sc.cfg.persistent_skip_s;
+    if ($('scanSlots')) $('scanSlots').value = sc.cfg.slots || 4;
+    for (const m of ['am', 'nfm', 'p25', 'dmr']) {
+      const box = $('scanMode' + m[0].toUpperCase() + m.slice(1));
+      if (box) box.checked = (sc.cfg.modes || []).includes(m);
+    }
+  }
+  // The learned skip list: where, why, how long left, and a re-test button.
+  const list = $('scanSkipList');
+  if (list) {
+    const entries = (sc && sc.skip_list) || [];
+    $('scanSkipCount').textContent = entries.length
+      ? `${entries.length} parked` + (sc && sc.skipped > entries.length ? ` (showing ${entries.length})` : '')
+      : 'none';
+    if (!entries.length) {
+      list.innerHTML = '<div class="data-empty">Nothing skipped yet.</div>';
+    } else {
+      list.innerHTML = entries.map(e => `
+        <div style="display:flex; align-items:baseline; gap:8px; font-size:11px;">
+          <span style="color:#38bdf8; font:11px var(--mono); flex:none">${(e.freqHz/1e6).toFixed(4)}</span>
+          <span style="color:${e.reason === 'persistent noise' ? '#f87171' : '#94a3b8'}; flex:none">${esc(e.reason)}${e.fails > 1 ? ` ×${e.fails}` : ''}</span>
+          <span style="color:#64748b; font-size:10px; margin-left:auto; flex:none">${fmtDuration(e.expiresInS)} left</span>
+          <button type="button" class="sdr-preset-btn" style="padding:1px 7px; flex:none"
+                  onclick="unskipHz(${e.freqHz})" title="Re-test this frequency now">re-test</button>
+        </div>`).join('');
+    }
+  }
 }
 
 // ---------- recorded calls ----------
@@ -3083,7 +3530,7 @@ async function loadCalls() {
     const el = $('callsList');
     if (!el) return;
     if (!list.length) {
-      el.innerHTML = '<div class="data-empty">No digital voice calls yet.</div>';
+      el.innerHTML = '<div class="data-empty">No voice calls yet.</div>';
       return;
     }
     el.innerHTML = list.map(c => {
@@ -3094,17 +3541,25 @@ async function loadCalls() {
         c.targetId != null ? `to ${c.targetId}` : null,
         c.tone || null,
       ].filter(Boolean).join(' · ');
-      // Why a call is silent matters more than that it is.
+      // Why a call is silent matters more than that it is. So does why it
+      // sounds scrambled: a high bit-error metric means weak signal, not a
+      // misidentified protocol.
+      const err = c.errorPct == null ? '' : c.errorPct >= 20
+        ? `<span style="color:#f87171; font-size:10px; flex:none" title="voice frames heavily corrected — weak signal">bit errors ~${c.errorPct}%</span>`
+        : c.errorPct >= 8
+          ? `<span style="color:#facc15; font-size:10px; flex:none">some errors</span>`
+          : '';
       const why = c.encrypted && !c.decrypted
         ? `<span style="color:#f87171">encrypted${c.algorithm ? ' · ALG ' + esc(c.algorithm) : ''} — muted</span>`
         : silent
           ? '<span style="color:#facc15">no audio decoded</span>'
           : `<button type="button" class="sdr-preset-btn" onclick="playCall(${c.id})">▶ play</button>`;
-      return `<div style="display:flex; align-items:baseline; gap:8px; padding:3px 4px; border-bottom:1px solid #101820;">
+      return `<div style="display:flex; align-items:baseline; gap:8px;">
         <span style="color:#64748b; font-size:10px; flex:none">${t}</span>
         <span style="color:#4ade80; font-weight:700; flex:none">${esc(c.protocol)}</span>
         <span style="color:#38bdf8; flex:none">${(c.freqHz/1e6).toFixed(4)}</span>
         <span style="color:#94a3b8; font-size:10px; flex:none">${c.durationS.toFixed(1)}s</span>
+        ${err}
         <span style="color:#94a3b8; font-size:10px; overflow:hidden; text-overflow:ellipsis">${esc(who)}</span>
         <span style="margin-left:auto; flex:none; font-size:10px">${why}</span>
       </div>`;
@@ -3112,11 +3567,31 @@ async function loadCalls() {
   } catch (e) { /* the status line already reports a missing radio */ }
 }
 
+// The replay player rides the live monitor's Web Audio graph rather than the
+// <audio> element's own output: same destination, same volume slider, and it
+// sidesteps environments where element output goes somewhere the listener
+// is not. Capturing the element into a graph mutes its direct output — the
+// graph is then the only thing that can be heard — so the capture happens
+// once, on first use, together with the context it needs.
+let callSource = null;
+
 function playCall(id) {
   const a = $('callAudio');
   if (!a) return;
+  try {
+    ensureAudioGraph();
+    if (!callSource) {
+      callSource = audioCtx.createMediaElementSource(a);
+      callSource.connect(audioGain);
+    }
+  } catch (e) {
+    $('err').textContent = 'call player: ' + e;
+  }
   a.src = `/api/sdr/calls/${id}/audio.wav`;
-  a.play().catch(() => {});
+  a.play().catch(err => {
+    // A rejected play used to vanish silently and look like a broken log.
+    $('err').textContent = 'playback failed: ' + err;
+  });
 }
 
 // ---------- socket ----------

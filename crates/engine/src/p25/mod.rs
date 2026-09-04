@@ -525,6 +525,10 @@ pub struct C4fmFrontEnd {
     /// about 2.9. Reporting the tracker's raw value as a frequency offset
     /// therefore overstated it by that factor.
     dc_gain: f32,
+    /// Discriminated Hz scratch for the complex-input path. Callers that
+    /// discriminate a shared buffer once for several consumers use
+    /// [`Self::process_hz`] instead and never fill this.
+    disc: Vec<f32>,
 }
 
 impl C4fmFrontEnd {
@@ -545,13 +549,14 @@ impl C4fmFrontEnd {
             hist: Vec::new(),
             // ~40 ms: far longer than a symbol, far shorter than a drift.
             dc: OnePole::new((fs * 0.04) as f32),
+            disc: Vec::new(),
         }
     }
 
     /// Instantaneous frequency in Hz, matched-filtered and carrier-corrected.
     pub fn process(&mut self, iq: &[Complex32], out: &mut Vec<f32>) {
-        out.clear();
-        let ntaps = self.taps.len();
+        self.disc.clear();
+        self.disc.reserve(iq.len());
         for &x in iq {
             let d = x * self.prev.conj();
             self.prev = x;
@@ -560,7 +565,23 @@ impl C4fmFrontEnd {
             } else {
                 0.0
             };
-            self.hist.push(hz);
+            self.disc.push(hz);
+        }
+        let disc = std::mem::take(&mut self.disc);
+        self.process_hz(&disc, out);
+        self.disc = disc;
+    }
+
+    /// Matched filter and carrier tracking over pre-discriminated Hz.
+    ///
+    /// The classifier discriminates each filtered buffer once and feeds every
+    /// consumer of it from that one pass; standalone callers keep
+    /// [`Self::process`], which discriminates with identical state first.
+    pub fn process_hz(&mut self, hz: &[f32], out: &mut Vec<f32>) {
+        out.clear();
+        let ntaps = self.taps.len();
+        for &sample in hz {
+            self.hist.push(sample);
             if self.hist.len() >= ntaps {
                 let base = self.hist.len() - ntaps;
                 let mut acc = 0.0;
@@ -590,6 +611,14 @@ pub struct FrameDetector {
     /// Which interleave and CRC convention to decode signalling blocks with.
     pub convention: Convention,
     buf: Vec<f32>,
+    /// Head index of the live window into `buf`.
+    ///
+    /// The packet-payload buffer retains ~132k samples, and draining the head
+    /// on every push memoved the whole tail — ~78 MB/s on a dead channel.
+    /// Advancing an index instead makes the trim free; the storage is
+    /// compacted back to the window only once the dead head exceeds half of
+    /// it, which amortises the move to ~one relocation per sample.
+    head: usize,
     levels: [f32; SYNC_SYMBOLS],
     /// Samples consumed, so a caller can reason about timing.
     pub consumed: u64,
@@ -636,21 +665,16 @@ const MAX_SYNC_ERRORS: usize = 2;
 const STATUS_SYMBOL_EVERY: usize = 36;
 
 /// Symbol index within the frame, skipping status symbols.
+///
+/// A status symbol sits at every air index `35, 71, 107, …` — every
+/// `STATUS_SYMBOL_EVERY`-th index counting from one — so the `nth` data
+/// symbol (zero-based) is at `nth` plus one skipped status per complete
+/// block of 35 data symbols before it: `nth + nth / 35`. The same rule the
+/// old per-call walk encoded, closed-form; the packet-payload path calls
+/// this once per symbol of a ~13,200-symbol unit, and the walk made that
+/// ~2.4M iterations per PDU.
 fn data_symbol_index(nth: usize) -> usize {
-    // Walk rather than compute, so the rule stays obvious.
-    let mut idx = 0;
-    let mut seen = 0;
-    loop {
-        if (idx + 1) % STATUS_SYMBOL_EVERY == 0 {
-            idx += 1;
-            continue;
-        }
-        if seen == nth {
-            return idx;
-        }
-        seen += 1;
-        idx += 1;
-    }
+    nth + nth / (STATUS_SYMBOL_EVERY - 1)
 }
 
 impl Default for FrameDetector {
@@ -664,6 +688,7 @@ impl FrameDetector {
         Self {
             convention: Convention::default(),
             buf: Vec::new(),
+            head: 0,
             levels: sync_levels(),
             consumed: 0,
             next_abs: 0,
@@ -693,6 +718,9 @@ impl FrameDetector {
     /// Feed samples; returns any frames whose sync and NID are fully present.
     pub fn push(&mut self, samples: &[f32]) -> Vec<Frame> {
         self.buf.extend_from_slice(samples);
+        // Samples visible to the scan: everything past the head index. The
+        // buffer is not mutated inside the loop, so the length is fixed here.
+        let buf_len = self.buf.len() - self.head;
         let mut found = Vec::new();
         let mut i = 0usize;
 
@@ -707,7 +735,7 @@ impl FrameDetector {
         if self.scanned_abs > self.consumed {
             i = (self.scanned_abs - self.consumed) as usize;
         }
-        while i + NID_SYMBOLS * SPS < self.buf.len() {
+        while i + NID_SYMBOLS * SPS < buf_len {
             let abs = self.consumed + i as u64;
             if i < first || abs < self.next_abs || abs < self.scanned_abs {
                 evaluated = evaluated.max(abs + 1);
@@ -724,7 +752,7 @@ impl FrameDetector {
                 // levels, which have half the margin, no longer slice reliably.
                 let mut best = (corr, amp, offset, start);
                 for probe in 1..SPS {
-                    if start + probe + (SYNC_SYMBOLS - 1) * SPS >= self.buf.len() {
+                    if start + probe + (SYNC_SYMBOLS - 1) * SPS >= buf_len {
                         break;
                     }
                     let (c, a, o) = self.correlate(start + probe);
@@ -738,13 +766,13 @@ impl FrameDetector {
                     continue;
                 }
                 let last_needed = start + data_symbol_index(SYNC_SYMBOLS + NID_SYMBOLS - 1) * SPS;
-                if last_needed >= self.buf.len() {
+                if last_needed >= buf_len {
                     break;
                 }
                 let mut bits = 0u64;
                 for k in 0..NID_SYMBOLS {
                     let sym = data_symbol_index(SYNC_SYMBOLS + k);
-                    let s = self.buf[start + sym * SPS] - offset;
+                    let s = self.buf[self.head + start + sym * SPS] - offset;
                     bits = (bits << 2) | u64::from(slice_dibit(s, amp));
                 }
                 // Correct before reading: the NAC and DUID are only meaningful
@@ -770,13 +798,13 @@ impl FrameDetector {
                 if full_unit && duid == Duid::Pdu {
                     let header_last =
                         data_symbol_index(SYNC_SYMBOLS + NID_SYMBOLS + tsbk::TSBK_DIBITS - 1);
-                    if start + header_last * SPS >= self.buf.len() {
+                    if start + header_last * SPS >= buf_len {
                         break;
                     }
                     let header_payload: Vec<u8> = (0..tsbk::TSBK_DIBITS)
                         .map(|k| {
                             let sym = data_symbol_index(SYNC_SYMBOLS + NID_SYMBOLS + k);
-                            slice_dibit(self.buf[start + sym * SPS] - offset, amp)
+                            slice_dibit(self.buf[self.head + start + sym * SPS] - offset, amp)
                         })
                         .collect();
                     if let Some(header) = data::decode_pdu_header(&header_payload) {
@@ -788,7 +816,7 @@ impl FrameDetector {
                 }
                 if full_unit {
                     let last_air = start + (unit_symbols - 1) * SPS;
-                    if last_air >= self.buf.len() {
+                    if last_air >= buf_len {
                         break;
                     }
                 }
@@ -803,19 +831,19 @@ impl FrameDetector {
                     // the next push re-finds it with the payload present.
                     let first_end =
                         data_symbol_index(SYNC_SYMBOLS + NID_SYMBOLS + tsbk::TSBK_DIBITS - 1);
-                    if start + first_end * SPS >= self.buf.len() {
+                    if start + first_end * SPS >= buf_len {
                         break;
                     }
                     for block in 0..3 {
                         let first = SYNC_SYMBOLS + NID_SYMBOLS + block * tsbk::TSBK_DIBITS;
                         let last = data_symbol_index(first + tsbk::TSBK_DIBITS - 1);
-                        if start + last * SPS >= self.buf.len() {
+                        if start + last * SPS >= buf_len {
                             break;
                         }
                         let samples: Vec<f32> = (0..tsbk::TSBK_DIBITS)
                             .map(|k| {
                                 let sym = data_symbol_index(first + k);
-                                self.buf[start + sym * SPS] - offset
+                                self.buf[self.head + start + sym * SPS] - offset
                             })
                             .collect();
                         match Tsbk::decode_soft(&samples, amp, self.convention) {
@@ -845,7 +873,7 @@ impl FrameDetector {
                     (SYNC_SYMBOLS + NID_SYMBOLS..data_count)
                         .map(|nth| {
                             let sym = data_symbol_index(nth);
-                            slice_dibit(self.buf[start + sym * SPS] - offset, amp)
+                            slice_dibit(self.buf[self.head + start + sym * SPS] - offset, amp)
                         })
                         .collect()
                 } else {
@@ -896,10 +924,17 @@ impl FrameDetector {
         } else {
             NEEDED + SPS
         };
-        if self.buf.len() > keep {
-            let drop = self.buf.len() - keep;
-            self.buf.drain(..drop);
+        let live = self.buf.len() - self.head;
+        if live > keep {
+            let drop = live - keep;
+            self.head += drop;
             self.consumed += drop as u64;
+            // Compact the dead head only once it outweighs the live window,
+            // so the move is paid rarely instead of on every push.
+            if self.head > self.buf.len() / 2 {
+                self.buf.drain(..self.head);
+                self.head = 0;
+            }
         }
         found
     }
@@ -914,7 +949,7 @@ impl FrameDetector {
     fn sync_errors(&self, start: usize, amp: f32, offset: f32) -> usize {
         let mut errors = 0;
         for k in 0..SYNC_SYMBOLS {
-            let got = slice_dibit(self.buf[start + k * SPS] - offset, amp);
+            let got = slice_dibit(self.buf[self.head + start + k * SPS] - offset, amp);
             let want = slice_dibit(self.levels[k], DEV_OUTER_HZ);
             if got != want {
                 errors += 1;
@@ -939,7 +974,7 @@ impl FrameDetector {
         let n = SYNC_SYMBOLS as f32;
         let (mut sx, mut sy, mut sxy, mut sxx, mut syy) = (0.0, 0.0, 0.0, 0.0, 0.0);
         for k in 0..SYNC_SYMBOLS {
-            let y = self.buf[start + k * SPS];
+            let y = self.buf[self.head + start + k * SPS];
             let x = self.levels[k];
             sx += x;
             sy += y;
@@ -1150,6 +1185,70 @@ mod tests {
         );
     }
 
+    /// The classifier discriminates each filtered buffer once and feeds every
+    /// consumer of it from that pass; the pre-discriminated entry point must
+    /// produce bit-identical samples to the inline-discrimination path, block
+    /// boundaries and all.
+    #[test]
+    fn process_hz_matches_process_bit_exactly() {
+        let dibits = padded(frame(0x293, 0x7, 3));
+        // A carrier offset exercises the DC tracker both paths run after
+        // discrimination.
+        let iq = modulate(&dibits, CHANNEL_RATE, 400.0);
+        let mut direct = C4fmFrontEnd::new(CHANNEL_RATE);
+        let mut a = Vec::new();
+        direct.process(&iq, &mut a);
+
+        // The same delay-line discrimination the front end performs inline.
+        let hz_per_rad = (CHANNEL_RATE / TAU as f64) as f32;
+        let mut via_hz = C4fmFrontEnd::new(CHANNEL_RATE);
+        let mut prev = Complex32::new(0.0, 0.0);
+        let mut block = Vec::new();
+        let mut b = Vec::new();
+        let mut b_all = Vec::new();
+        // Odd chunk length so block boundaries land inside symbols.
+        for part in iq.chunks(97) {
+            block.clear();
+            for &x in part {
+                let d = x * prev.conj();
+                prev = x;
+                block.push(if d.norm_sqr() > 0.0 {
+                    d.arg() * hz_per_rad
+                } else {
+                    0.0
+                });
+            }
+            via_hz.process_hz(&block, &mut b);
+            b_all.extend_from_slice(&b);
+        }
+        assert_eq!(a, b_all, "shared-Hz path diverged from inline discrimination");
+    }
+
+    /// The packet detector retains its window with an index-based head. After
+    /// enough short blocks to trim and compact the storage several times
+    /// over, a frame arriving late must still be found with its NID intact.
+    #[test]
+    fn packet_payload_detection_survives_head_trimming() {
+        let dibits = padded(frame(0x293, 0x7, 1));
+        let iq = modulate(&dibits, CHANNEL_RATE, 0.0);
+        let mut fe = C4fmFrontEnd::new(CHANNEL_RATE);
+        let mut frame_hz = Vec::new();
+        fe.process(&iq, &mut frame_hz);
+
+        let mut det = FrameDetector::with_packet_payload();
+        // Silence: nothing above the amplitude gate, but it still advances
+        // the head past more than three full packet windows.
+        let junk_blocks = (MAX_PDU_NEEDED * 3) / 500 + 1;
+        for _ in 0..junk_blocks {
+            det.push(&[0.0f32; 500]);
+        }
+        let frames = det.push(&frame_hz);
+        assert!(
+            frames.iter().any(|f| f.nac == 0x293 && f.duid == Duid::Tsdu),
+            "frame lost after head trimming: {frames:?}"
+        );
+    }
+
     #[test]
     fn a_linear_cqpsk_frame_yields_the_same_nid() {
         let dibits = padded(frame(0x293, 0x7, 77));
@@ -1341,6 +1440,26 @@ mod tests {
         assert_eq!(data_symbol_index(69), 70);
         // And the second status symbol pushes it again.
         assert_eq!(data_symbol_index(70), 72);
+        // The closed form must agree with the walk it replaced over the whole
+        // packet range (a maximum-length PDU spans ~13,200 symbols).
+        let walk = |nth: usize| {
+            let mut idx = 0;
+            let mut seen = 0;
+            loop {
+                if (idx + 1) % STATUS_SYMBOL_EVERY == 0 {
+                    idx += 1;
+                    continue;
+                }
+                if seen == nth {
+                    return idx;
+                }
+                seen += 1;
+                idx += 1;
+            }
+        };
+        for nth in 0..14_000 {
+            assert_eq!(data_symbol_index(nth), walk(nth));
+        }
     }
 
     /// Frame lengths differ by kind, which is how the scanner knows where the

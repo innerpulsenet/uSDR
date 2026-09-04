@@ -36,6 +36,8 @@ pub struct LtrWord {
 pub struct LtrDecoder {
     fs: f64,
     samples: Vec<f32>,
+    /// Reused median-partition scratch for the periodic decode.
+    scratch: Vec<f32>,
     since_decode: usize,
 }
 
@@ -44,6 +46,7 @@ impl LtrDecoder {
         Self {
             fs,
             samples: Vec::with_capacity(fs as usize),
+            scratch: Vec::new(),
             since_decode: 0,
         }
     }
@@ -65,20 +68,26 @@ impl LtrDecoder {
             return Vec::new();
         }
         self.since_decode = 0;
-        let words = decode_window(&self.samples, self.fs);
+        let mut scratch = std::mem::take(&mut self.scratch);
+        let words = decode_window(&self.samples, self.fs, &mut scratch);
+        self.scratch = scratch;
         self.samples.clear();
         words
     }
 }
 
-fn decode_window(samples: &[f32], fs: f64) -> Vec<LtrWord> {
+fn decode_window(samples: &[f32], fs: f64, scratch: &mut Vec<f32>) -> Vec<LtrWord> {
     let sps = fs / BAUD;
     if sps < 4.0 || samples.len() < (sps * WORD_BITS as f64) as usize {
         return Vec::new();
     }
-    let mut sorted = samples.to_vec();
-    sorted.sort_by(f32::total_cmp);
-    let threshold = sorted[sorted.len() / 2];
+    // The median slicer threshold needs one order statistic, not a full sort
+    // of the window — partition a reused scratch instead.
+    scratch.clear();
+    scratch.extend_from_slice(samples);
+    let mid = scratch.len() / 2;
+    scratch.select_nth_unstable_by(mid, f32::total_cmp);
+    let threshold = scratch[mid];
     let mut best_valid = Vec::new();
     let mut best_diagnostics = Vec::new();
     for phase in 0..12 {
@@ -204,7 +213,7 @@ mod tests {
             .iter()
             .flat_map(|&b| std::iter::repeat_n(if b { 1.0 } else { -1.0 }, sps))
             .collect();
-        let words = decode_window(&samples, 48_000.0);
+        let words = decode_window(&samples, 48_000.0, &mut Vec::new());
         assert!(words.iter().any(|w| w.crc_ok
             && w.channel == 7
             && w.home == 4

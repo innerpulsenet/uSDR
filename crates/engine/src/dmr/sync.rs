@@ -58,6 +58,16 @@ fn pack_pattern(word: u64) -> u64 {
     out
 }
 
+/// The sync words in [`classify`]'s packed form, computed once. `acquire`
+/// tests all four words at every sample position of its sweep, twice for
+/// polarity — repacking them on each call was pure overhead.
+fn packed_patterns() -> &'static [(u64, SyncKind); 4] {
+    static PACKED: std::sync::OnceLock<[(u64, SyncKind); 4]> = std::sync::OnceLock::new();
+    PACKED.get_or_init(|| {
+        std::array::from_fn(|i| (pack_pattern(PATTERNS[i].0), PATTERNS[i].1))
+    })
+}
+
 /// Ideal symbol levels for a sync word, for correlation and fitting.
 #[allow(dead_code)]
 pub fn levels(word: u64) -> [f32; SYNC_DIBITS] {
@@ -68,20 +78,23 @@ pub fn levels(word: u64) -> [f32; SYNC_DIBITS] {
     out
 }
 
-/// Which sync, if any, a burst's 24 centre dibits carry, and with how many
-/// dibit errors. Exact matches preferred; the caller sets the error budget.
-pub fn classify(centre: &[u8; SYNC_DIBITS], inverted: bool) -> Option<(SyncKind, u8)> {
-    // Pack the observed dibits once; each pattern test is then an XOR +
-    // popcount over one word instead of a 24-step dibit loop. `acquire`
-    // runs this at every sample position while hunting, so the constant
-    // factor matters.
+/// Pack a dibit observation into the word [`classify_packed`] compares
+/// against, first dibit in the high bits. Pack once per position and test
+/// both polarities against the result.
+pub fn pack_dibits(centre: &[u8; SYNC_DIBITS]) -> u64 {
     let mut got = 0u64;
     for &d in centre.iter() {
         got = (got << 2) | u64::from(d);
     }
+    got
+}
+
+/// Which sync, if any a packed observation (see [`pack_dibits`]) carries, and
+/// with how many dibit errors. Exact matches preferred; the caller sets the
+/// error budget.
+pub fn classify_packed(got: u64, inverted: bool) -> Option<(SyncKind, u8)> {
     let mut best: Option<(SyncKind, u8)> = None;
-    for &(word, kind) in &PATTERNS {
-        let want = pack_pattern(word);
+    for &(want, kind) in packed_patterns() {
         let diff = got ^ want;
         // Inversion flips the high bit of each dibit: a repeating 0b10 mask,
         // clipped to the 48 bits the packed word actually occupies.
@@ -96,6 +109,12 @@ pub fn classify(centre: &[u8; SYNC_DIBITS], inverted: bool) -> Option<(SyncKind,
         }
     }
     best
+}
+
+/// Which sync, if any, a burst's 24 centre dibits carry, and with how many
+/// dibit errors. Exact matches preferred; the caller sets the error budget.
+pub fn classify(centre: &[u8; SYNC_DIBITS], inverted: bool) -> Option<(SyncKind, u8)> {
+    classify_packed(pack_dibits(centre), inverted)
 }
 
 #[cfg(test)]
@@ -151,6 +170,16 @@ mod tests {
                 classify(&inverted.try_into().unwrap(), true),
                 Some((kind, 0))
             );
+        }
+    }
+
+    /// `dibits` extracts bits 47..0 in transmit order and the repack puts
+    /// them back in the same order, so packing is the identity on any 48-bit
+    /// word — the cached packed forms equal `PATTERNS` exactly.
+    #[test]
+    fn packed_patterns_are_the_words_themselves() {
+        for &(word, _) in &PATTERNS {
+            assert_eq!(pack_pattern(word), word);
         }
     }
 }

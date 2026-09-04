@@ -109,9 +109,26 @@ pub struct P25ChannelReceiver {
 
 impl P25ChannelReceiver {
     pub fn new(spec: P25Spec, fs_in: f64, span_center_hz: f64) -> Self {
-        let chain = DecodeChain::new(fs_in, C4FM_BANDWIDTH_HZ, CHANNEL_RATE);
+        let mut out = Self::build(spec, DecodeChain::new(fs_in, C4FM_BANDWIDTH_HZ, CHANNEL_RATE));
+        out.retune(span_center_hz);
+        out
+    }
+
+    /// Build for input that is already the extracted channel: baseband
+    /// centred on `spec.freq_hz` at `channel_fs` — a narrowband chain's
+    /// output the receiver rides instead of re-extracting its own channel
+    /// from the whole span. The chain collapses to decimation 1, and its
+    /// rate grid makes `fs_out` exactly what the span-rate build would have
+    /// produced (`span / round(span / CHANNEL_RATE)`), so every downstream
+    /// symbol-timing constant is unchanged. The AFC base is zero: the
+    /// carrier arrives at DC and only residual ±2.5 kHz tracking remains.
+    pub fn new_on_channel(spec: P25Spec, channel_fs: f64) -> Self {
+        Self::build(spec, DecodeChain::new(channel_fs, C4FM_BANDWIDTH_HZ, CHANNEL_RATE))
+    }
+
+    fn build(spec: P25Spec, chain: DecodeChain) -> Self {
         let fs_chan = chain.fs_out();
-        let mut out = Self {
+        Self {
             chain,
             afc: Afc::new(0.0, 2_500.0),
             front: C4fmFrontEnd::new(fs_chan),
@@ -141,9 +158,7 @@ impl P25ChannelReceiver {
             latest_grant: None,
             grants: std::collections::VecDeque::new(),
             spec,
-        };
-        out.retune(span_center_hz);
-        out
+        }
     }
 
     pub fn retune(&mut self, span_center_hz: f64) {
@@ -190,6 +205,14 @@ impl P25ChannelReceiver {
 
     pub fn locked(&self) -> bool {
         self.nac.is_some()
+    }
+
+    /// Average carrier offset from the configured channel frequency while
+    /// synced, in Hz. `None` until enough frames have accumulated to trust
+    /// the average. This is what lets a scanner re-centre a candidate the
+    /// crystal residual left off-frequency.
+    pub fn carrier_offset_hz(&self) -> Option<f64> {
+        (self.offset_n > 32).then(|| self.offset_sum / self.offset_n as f64)
     }
 
     /// `(encrypted, decrypted)` once the air interface has supplied enough
@@ -466,6 +489,7 @@ impl P25ChannelReceiver {
                 algorithm_id: ess.as_ref().map(|v| v.algorithm_id),
                 key_id: ess.as_ref().map(|v| v.key_id),
                 talker_alias: None,
+                bit_error_pct: None,
             }),
         };
         self.call_samples = 0;

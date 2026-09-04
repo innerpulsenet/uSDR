@@ -90,28 +90,46 @@ pub fn analyse(samples: &[f32]) -> Option<Detection> {
         return None;
     }
 
-    let words: Vec<(u16, u32)> = code_table()
-        .iter()
-        .copied()
-        .collect();
     let mut best: Option<(usize, u32, Detection)> = None;
+
+    // One packed bit stream, reused across phases: bit `i` of the phase's
+    // slicer output lives in bit `i % 64` of `packed[i / 64]`, so every
+    // candidate start extracts its 23-bit window with a shift-or instead of
+    // re-packing 23 bits one at a time (which dominated this search at
+    // ~30 phases x 105 codes x ~30 starts per window).
+    let mut packed: Vec<u64> = Vec::new();
 
     // Quarter-sample phase steps are cheap at this rate and tolerate the
     // fractional 7.4405 samples/bit without a separate clock-recovery loop.
     let phase_steps = (SAMPLES_PER_BIT * 4.0).ceil() as usize;
     for phase_step in 0..phase_steps {
         let phase = phase_step as f64 / 4.0;
-        let mut bits = Vec::new();
+        packed.clear();
+        let mut word = 0u64;
+        let mut used = 0u32;
+        let mut n_bits = 0usize;
         let mut at = phase;
         while (at.round() as usize) < samples.len() {
-            bits.push(samples[at.round() as usize] >= mean);
+            if samples[at.round() as usize] >= mean {
+                word |= 1u64 << used;
+            }
+            n_bits += 1;
+            used += 1;
+            if used == 64 {
+                packed.push(word);
+                word = 0;
+                used = 0;
+            }
             at += SAMPLES_PER_BIT;
         }
-        if bits.len() < 46 {
+        if used > 0 {
+            packed.push(word);
+        }
+        if n_bits < 46 {
             continue;
         }
 
-        for &(code, target) in &words {
+        for &(code, target) in code_table() {
             // Normal and inverted DCS names are cyclic/complement aliases (for
             // example 532-N is the same waveform as 343-I). Configuration in
             // scannerd uses the conventional normal form, so report the normal
@@ -119,12 +137,16 @@ pub fn analyse(samples: &[f32]) -> Option<Detection> {
             let inverted = false;
             let mut matches = 0usize;
             let mut errors = 0u32;
-            for start in 0..=bits.len() - 23 {
-                let mut received = 0u32;
-                for &bit in &bits[start..start + 23] {
-                    received = (received << 1) | u32::from(bit);
+            for start in 0..=n_bits - 23 {
+                // The 23 bits from `start`, first bit in bit 0 — the layout
+                // the reversed targets in `code_table` compare against.
+                let wi = start / 64;
+                let off = start % 64;
+                let mut window = packed[wi] >> off;
+                if off > 0 {
+                    window |= packed.get(wi + 1).copied().unwrap_or(0) << (64 - off);
                 }
-                let distance = (received ^ target).count_ones();
+                let distance = ((window & 0x7F_FFFF) ^ u64::from(target)).count_ones();
                 if distance <= MAX_ERRORS {
                     matches += 1;
                     errors += distance;
@@ -156,12 +178,22 @@ pub(crate) fn transmitted_word(code: u16) -> u32 {
     golay23_encode(reverse(data, 12))
 }
 
-/// code → transmitted word, computed once. The encode is a per-code Golay
+/// code → comparison word, computed once. The encode is a per-code Golay
 /// pass that used to rerun on every analyse window (~30×/s while active).
+///
+/// The stored word is the transmitted word *reversed into 23 bits*: bit 0 is
+/// the first bit on air, matching the LSB-first windows the packed bit
+/// stream yields, so a candidate start compares with one XOR + popcount.
+/// The Hamming distance is unchanged — both sides are permuted identically.
 fn code_table() -> &'static [(u16, u32)] {
     use std::sync::OnceLock;
     static TABLE: OnceLock<Vec<(u16, u32)>> = OnceLock::new();
-    TABLE.get_or_init(|| CODES.iter().map(|&c| (c, transmitted_word(c))).collect())
+    TABLE.get_or_init(|| {
+        CODES
+            .iter()
+            .map(|&c| (c, reverse(transmitted_word(c), 23)))
+            .collect()
+    })
 }
 
 fn reverse(mut value: u32, bits: usize) -> u32 {

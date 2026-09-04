@@ -283,6 +283,7 @@ impl NxdnChannelReceiver {
                 algorithm_id: control.as_ref().and_then(|m| m.cipher_type),
                 key_id: control.as_ref().and_then(|m| m.key_id).map(u16::from),
                 talker_alias: None,
+                bit_error_pct: None,
             }),
         };
         self.call_samples = 0;

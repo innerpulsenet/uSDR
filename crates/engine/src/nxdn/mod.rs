@@ -110,12 +110,25 @@ impl Frame {
 
 pub struct NxdnReceiver {
     rate: Rate,
+    /// Input sample rate the receiver was built for. The analog chain
+    /// delivers its true rate — ppm error and all — not the nominal channel
+    /// rate, so `reset` must rebuild with this rather than `CHANNEL_RATE`.
+    fs: f64,
     prev: Complex32,
     hz_per_rad: f32,
     dc: OnePole,
     raw: Vec<f32>,
     consumed: u64,
     next_abs: u64,
+    /// Absolute sample index up to which the sync scan has already judged
+    /// every position.
+    ///
+    /// The retained buffer overlaps between blocks, so without this cursor
+    /// each block re-correlated the whole retained tail against the few
+    /// hundred samples that were new. A position's fit cannot change once its
+    /// window has arrived, so a rejected position is final — a found frame
+    /// steps `next_abs` past itself, which this is maxed with.
+    scanned_abs: u64,
     last_offset_hz: f32,
     candidate: Option<(u64, Frame)>,
     locked: bool,
@@ -126,12 +139,14 @@ impl NxdnReceiver {
     pub fn new(rate: Rate, fs: f64) -> Self {
         Self {
             rate,
+            fs,
             prev: Complex32::new(0.0, 0.0),
             hz_per_rad: (fs / TAU as f64) as f32,
             dc: OnePole::new((fs * 0.05) as f32),
             raw: Vec::new(),
             consumed: 0,
             next_abs: 0,
+            scanned_abs: 0,
             last_offset_hz: 0.0,
             candidate: None,
             locked: false,
@@ -140,7 +155,7 @@ impl NxdnReceiver {
     }
 
     pub fn reset(&mut self) {
-        *self = Self::new(self.rate, CHANNEL_RATE);
+        *self = Self::new(self.rate, self.fs);
     }
 
     pub fn offset_hz(&self) -> f32 {
@@ -158,18 +173,39 @@ impl NxdnReceiver {
             };
             self.raw.push(hz - self.dc.process(hz));
         }
+        self.scan()
+    }
+
+    /// Run the receiver over pre-discriminated Hz, for callers that
+    /// discriminate a shared filtered buffer once for several consumers. The
+    /// carrier tracker still runs here, on the discriminated samples.
+    pub fn process_hz(&mut self, hz: &[f32]) -> Vec<Frame> {
+        for &h in hz {
+            self.raw.push(h - self.dc.process(h));
+        }
+        self.scan()
+    }
+
+    /// Correlate the FSW across the retained buffer; the shared tail of both
+    /// input paths.
+    fn scan(&mut self) -> Vec<Frame> {
         let sps = self.rate.samples_per_symbol();
         let needed = FRAME_SYMBOLS * sps;
         let mut out = Vec::new();
         let mut start = 0usize;
+        // Resume past positions earlier blocks already judged. Computed once:
+        // inside the loop `next_abs` only ever moves to a position the scan
+        // has already reached or stepped over.
+        let scan_from = self.next_abs.max(self.scanned_abs);
         while start + needed <= self.raw.len() {
-            if self.consumed + (start as u64) < self.next_abs {
+            if self.consumed + (start as u64) < scan_from {
                 start += 1;
                 continue;
             }
-            let sync: Vec<f32> = (0..FSW_SYMBOLS)
-                .map(|n| self.raw[start + n * sps])
-                .collect();
+            let mut sync = [0.0f32; FSW_SYMBOLS];
+            for n in 0..FSW_SYMBOLS {
+                sync[n] = self.raw[start + n * sps];
+            }
             let (corr, scale, offset) = fit_sync(&sync);
             if corr < 0.82 || scale.abs() < 250.0 {
                 start += 1;
@@ -180,9 +216,10 @@ impl NxdnReceiver {
                 if start + phase + needed > self.raw.len() {
                     break;
                 }
-                let probe: Vec<f32> = (0..FSW_SYMBOLS)
-                    .map(|n| self.raw[start + phase + n * sps])
-                    .collect();
+                let mut probe = [0.0f32; FSW_SYMBOLS];
+                for n in 0..FSW_SYMBOLS {
+                    probe[n] = self.raw[start + phase + n * sps];
+                }
                 let (c, a, o) = fit_sync(&probe);
                 if c > best.0 {
                     best = (c, a, o, start + phase);
@@ -228,6 +265,10 @@ impl NxdnReceiver {
                 start += 1;
             }
         }
+        // Everything below `start` has been judged — or deliberately stepped
+        // over by a found frame, which `next_abs` covers as well. `start`
+        // itself is the first position whose window has not fully arrived.
+        self.scanned_abs = self.scanned_abs.max(self.consumed + start as u64);
         let keep = needed + sps;
         if self.raw.len() > keep {
             let drop = self.raw.len() - keep;
@@ -369,9 +410,9 @@ mod tests {
         assert!(lich_layout(0x7f).is_none());
     }
 
-    #[test]
-    fn receiver_requires_and_acquires_consecutive_valid_frames() {
-        let lich = 0x57u8;
+    /// Three back-to-back valid frames at the wide rate, FM-modulated onto a
+    /// carrier so the whole discrimination/scan stack is exercised.
+    fn modulated_frames(lich: u8) -> Vec<Complex32> {
         let parity = ((lich >> 6) ^ (lich >> 5) ^ (lich >> 4) ^ (lich >> 3)) & 1;
         let lich_full = (lich << 1) | parity;
         let mut payload = vec![0u8; FRAME_SYMBOLS - FSW_SYMBOLS];
@@ -387,7 +428,7 @@ mod tests {
             .flatten()
             .collect::<Vec<_>>();
         let mut phase = 0.0f32;
-        let iq = dibits
+        dibits
             .iter()
             .flat_map(|&dibit| {
                 let level = match dibit {
@@ -402,7 +443,13 @@ mod tests {
                 phase += TAU * level * 600.0 / CHANNEL_RATE as f32;
                 Complex32::new(phase.cos(), phase.sin())
             })
-            .collect::<Vec<_>>();
+            .collect()
+    }
+
+    #[test]
+    fn receiver_requires_and_acquires_consecutive_valid_frames() {
+        let lich = 0x57u8;
+        let iq = modulated_frames(lich);
 
         let mut receiver = NxdnReceiver::new(Rate::Nxdn96, CHANNEL_RATE);
         let mut frames = Vec::new();
@@ -411,5 +458,37 @@ mod tests {
         }
         assert!(frames.len() >= 2, "decoded {} frames", frames.len());
         assert!(frames.iter().all(|frame| frame.lich == lich));
+    }
+
+    /// The classifier discriminates the shared filtered buffer once and feeds
+    /// every consumer from that pass; the pre-discriminated entry point must
+    /// decode exactly what the inline-discrimination path decodes.
+    #[test]
+    fn process_hz_matches_process_exactly() {
+        let iq = modulated_frames(0x57);
+        let mut direct = NxdnReceiver::new(Rate::Nxdn96, CHANNEL_RATE);
+        let mut via_hz = NxdnReceiver::new(Rate::Nxdn96, CHANNEL_RATE);
+        // The same delay-line discrimination the receiver performs inline.
+        let hz_per_rad = (CHANNEL_RATE / TAU as f64) as f32;
+        let mut prev = Complex32::new(0.0, 0.0);
+        let mut hz = Vec::new();
+        let mut frames_direct = Vec::new();
+        let mut frames_hz = Vec::new();
+        for block in iq.chunks(384) {
+            frames_direct.extend(direct.process(block));
+            hz.clear();
+            for &x in block {
+                let d = x * prev.conj();
+                prev = x;
+                hz.push(if d.norm_sqr() > 0.0 {
+                    d.arg() * hz_per_rad
+                } else {
+                    0.0
+                });
+            }
+            frames_hz.extend(via_hz.process_hz(&hz));
+        }
+        assert!(frames_direct.len() >= 2, "baseline decoded nothing");
+        assert_eq!(frames_direct, frames_hz);
     }
 }

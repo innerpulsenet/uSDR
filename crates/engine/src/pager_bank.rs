@@ -37,7 +37,7 @@ use crate::flex::FlexDecoder;
 use crate::nbfm::NbfmDemod;
 use crate::pocsag::PocsagDecoder;
 use num_complex::Complex32;
-use scannerd_dsp::DecimFir;
+use scannerd_dsp::{DecimFir, Nco};
 
 /// Channel spacing on US paging bands: FLEX uses 25 kHz allocations.
 pub const PAGER_CHANNEL_HZ: f64 = 25_000.0;
@@ -74,8 +74,14 @@ pub const DWELL_MS: u64 = 5_000;
 pub struct PagerChannel {
     /// Offset from the span centre, hertz.
     pub offset_hz: f64,
-    nco_phase: f64,
-    nco_inc: f64,
+    /// Mix-down oscillator. `set_freq(offset_hz, span_rate)` reproduces the
+    /// phasor `e^{-j·2π·offset·n/span_rate}` this used to evaluate with a
+    /// `sin_cos` per span-rate sample — a transcendental per sample of the
+    /// whole 2 MS/s span, which is the budget, not a rounding error in it.
+    /// The recurrence keeps phase across calls and renormalises itself.
+    nco: Nco,
+    /// Span-rate mix output, reused per block.
+    mixed: Vec<Complex32>,
     /// CIC-style running decimator: box-average over `every` samples.
     acc_re: f32,
     acc_im: f32,
@@ -126,8 +132,12 @@ impl PagerChannel {
         Self {
             offset_hz,
             // Mix DOWN by the offset: the channel sits at +offset in the span.
-            nco_phase: 0.0,
-            nco_inc: -std::f64::consts::TAU * offset_hz / span_rate,
+            nco: {
+                let mut nco = Nco::new();
+                nco.set_freq(offset_hz, span_rate);
+                nco
+            },
+            mixed: Vec::new(),
             acc_re: 0.0,
             acc_im: 0.0,
             count: 0,
@@ -162,20 +172,10 @@ impl PagerChannel {
         out_pocsag: &mut Vec<crate::pocsag::PocsagMessage>,
         out_audio: &mut Vec<f32>,
     ) {
-        for &x in iq {
-            let (s, c) = self.nco_phase.sin_cos();
-            let mixed = Complex32::new(
-                x.re * c as f32 - x.im * s as f32,
-                x.re * s as f32 + x.im * c as f32,
-            );
-            self.nco_phase += self.nco_inc;
-            if self.nco_phase >= std::f64::consts::TAU {
-                self.nco_phase -= std::f64::consts::TAU;
-            } else if self.nco_phase < 0.0 {
-                self.nco_phase += std::f64::consts::TAU;
-            }
-            self.acc_re += mixed.re;
-            self.acc_im += mixed.im;
+        self.nco.mix(iq, &mut self.mixed);
+        for &m in &self.mixed {
+            self.acc_re += m.re;
+            self.acc_im += m.im;
             self.count += 1;
             if self.count == self.every {
                 let d = self.every as f32;
