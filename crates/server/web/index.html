@@ -2761,16 +2761,31 @@ function setupControls() {
 
 let pendingSdrFft = null;
 let sdrFftPaintPending = false;
+// rAF starvation fallback: some rendering contexts throttle
+// requestAnimationFrame to ~1 Hz for a page that is visibly on screen —
+// embedded webview panes, battery saver, occluded windows. The app then
+// paints once a second and reads as hung. The watchdog paints the pending
+// frame when no animation frame arrived in time; it arms only while the
+// page is visible, so a genuinely hidden tab still suspends painting (and
+// its timers are throttled anyway).
+let sdrFftPaintWatchdog = 0;
+
+function paintSdrFftTick() {
+  if (!sdrFftPaintPending) return;
+  sdrFftPaintPending = false;
+  const f = pendingSdrFft;
+  if (f) paintSdrFft(f);
+}
 
 function onSdrFft(m) {
   pendingSdrFft = m;
   if (sdrFftPaintPending) return;
   sdrFftPaintPending = true;
-  requestAnimationFrame(() => {
-    sdrFftPaintPending = false;
-    const f = pendingSdrFft;
-    if (f) paintSdrFft(f);
-  });
+  requestAnimationFrame(paintSdrFftTick);
+  clearTimeout(sdrFftPaintWatchdog);
+  if (document.visibilityState === 'visible') {
+    sdrFftPaintWatchdog = setTimeout(paintSdrFftTick, 120);
+  }
 }
 
 function paintSdrFft(m) {
