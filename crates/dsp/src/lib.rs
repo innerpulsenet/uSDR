@@ -115,6 +115,22 @@ impl Spectrum {
         self.emit(out, scale);
     }
 
+    /// Feed samples without computing a periodogram.
+    ///
+    /// Display only needs a snapshot at frame rate; ingesting every radio
+    /// block keeps the pending window current without 30 FFTs per block.
+    pub fn ingest(&mut self, input: &[Complex32]) {
+        if input.is_empty() {
+            return;
+        }
+        self.pending.extend_from_slice(input);
+        let cap = self.size.saturating_mul(3).max(self.size);
+        if self.pending.len() > cap {
+            let extra = self.pending.len() - cap;
+            self.pending.drain(..extra);
+        }
+    }
+
     /// Average periodogram returning calibrated dBFS (0 dBFS = full scale CW tone).
     pub fn power_dbfs(&mut self, input: &[Complex32], out: &mut Vec<f32>) {
         let Some(nseg) = self.accumulate(input) else {
@@ -182,18 +198,71 @@ impl Spectrum {
 /// Per-bin minimum-statistics noise estimate. Falls promptly when a quiet
 /// observation arrives but rises slowly enough that traffic cannot become its
 /// own reference level.
+///
+/// Seeding mirrors the classifier's RF floor: the first second of frames
+/// establishes a per-bin running MINIMUM and the floor reports below it, so a
+/// burst at boot cannot pin the bins high and then take minutes to decay.
 pub struct NoiseFloor {
     bins: Vec<f32>,
+    /// Per-bin running minimum over the seeding window.
+    seed_min: Vec<f32>,
+    /// Frames collected toward the seed window; `SEED_FRAMES` ends seeding.
+    seed_blocks: u32,
 }
 
 impl NoiseFloor {
+    /// Frames collected before the floor trusts its slow-rise EMA — the same
+    /// one-second window the classifier's RF floor uses.
+    const SEED_FRAMES: u32 = 25;
+    /// While seeding, report this far below the running minimum so real
+    /// traffic is never treated as noise against a floor that is still
+    /// collecting. Tightens to [`Self::FLOOR_MARGIN_DB`] once the window
+    /// closes.
+    const SEED_MARGIN_DB: f32 = 6.0;
+    /// Margin held below the tracked minimum once seeded.
+    const FLOOR_MARGIN_DB: f32 = 3.0;
+
     pub fn new() -> Self {
-        Self { bins: Vec::new() }
+        Self {
+            bins: Vec::new(),
+            seed_min: Vec::new(),
+            seed_blocks: 0,
+        }
     }
 
     pub fn update<'a>(&'a mut self, power_db: &[f32]) -> &'a [f32] {
         if self.bins.len() != power_db.len() {
+            // First frame (or a size change): seed from the running-minimum
+            // path rather than copying the observation in. Copying would let
+            // a burst in frame one pin the floor at the burst level, exactly
+            // what the seeding window exists to prevent; reporting below the
+            // first observation is provisional but conservative.
             self.bins = power_db.to_vec();
+            self.seed_min = power_db.to_vec();
+            self.seed_blocks = 0;
+            let margin = Self::SEED_MARGIN_DB;
+            for (floor, seed) in self.bins.iter_mut().zip(&mut self.seed_min) {
+                *floor = *seed - margin;
+            }
+        } else if self.seed_blocks < Self::SEED_FRAMES {
+            // Seeding: track the per-bin running minimum and report below it.
+            self.seed_blocks += 1;
+            let margin = if self.seed_blocks == Self::SEED_FRAMES {
+                Self::FLOOR_MARGIN_DB
+            } else {
+                Self::SEED_MARGIN_DB
+            };
+            for ((floor, seed), &x) in self
+                .bins
+                .iter_mut()
+                .zip(&mut self.seed_min)
+                .zip(power_db)
+            {
+                if x < *seed {
+                    *seed = x;
+                }
+                *floor = *seed - margin;
+            }
         } else {
             for (floor, &x) in self.bins.iter_mut().zip(power_db) {
                 let a = if x < *floor { 0.25 } else { 0.002 };
@@ -477,9 +546,17 @@ impl DecimFir {
         self.work.resize(self.fft_len, Complex32::new(0.0, 0.0));
         self.overlap
             .resize(self.taps.len() - 1, Complex32::new(0.0, 0.0));
+        // The overlap is state of the OLD tap count: after a redesign its
+        // length meaning changed, so zero it rather than feed a stale tail
+        // into the first new frame. The buffered INPUT in `buf`, though, is
+        // raw samples that are valid under any tap set — keep it. Clearing it
+        // here used to drop up to one hop of real audio mid-stream, an audible
+        // gap on every `set_cutoff`/`set_taps`; the redesign's transient is
+        // already handled by re-arming `warmup`, and `process_fft` happily
+        // drains a `buf` longer than the new hop.
+        self.overlap.fill(Complex32::new(0.0, 0.0));
         self.fft = Some(fft);
         self.ifft = Some(ifft);
-        self.buf.clear();
         self.phase = 0;
         self.g = 0;
         self.warmup = (self.taps.len() - 1) as u64;
@@ -584,6 +661,13 @@ fn taps_for_transition(fs: f32, want_hz: f32, lo: usize, hi: usize) -> usize {
 }
 
 fn lowpass_taps(cutoff_hz: f32, fs: f32, ntaps: usize) -> Vec<f32> {
+    // Normalised-cutoff clamp. The 0.0005 floor exists so a near-DC cutoff
+    // cannot produce a degenerate all-zero (or negative-gain) tap set, but it
+    // is a FRACTION of fs, not a fixed frequency: at the 192 kHz chain rate it
+    // lifts any requested cutoff below 96 Hz up to 96 Hz (an 80 Hz request
+    // becomes 96 Hz), while at 8 kHz the same floor is 4 Hz. Callers wanting a
+    // specific sub-96 Hz corner at high rates must check against
+    // 0.0005 * fs themselves.
     let fc = (cutoff_hz / fs).clamp(0.0005, 0.49);
     let mid = (ntaps / 2) as f32;
     let mut taps = Vec::with_capacity(ntaps);
@@ -701,82 +785,6 @@ impl DecodeChain {
     }
 }
 
-/// Hang AGC for the decoder path. Measures each block, ducks quickly when
-/// the signal is hot, then holds and only creeps gain back up after a hang
-/// so static crashes and FT8 bursts do not pump the audio.
-pub struct SoftAgc {
-    gain: f32,
-    hang: u32,
-    hang_samples: u32,
-    attack: f32,
-    decay: f32,
-}
-
-impl SoftAgc {
-    pub fn new(fs: f64) -> Self {
-        let fs = fs as f32;
-        Self {
-            gain: 4.0,
-            hang: 0,
-            hang_samples: (0.8 * fs) as u32,
-            // Per-block blend toward the target. Blocks are ~80 ms of audio.
-            attack: 0.45,
-            decay: 0.92,
-        }
-    }
-
-    pub fn reset(&mut self) {
-        self.gain = 4.0;
-        self.hang = 0;
-    }
-
-    pub fn gain(&self) -> f32 {
-        self.gain
-    }
-
-    pub fn process(&mut self, samples: &mut [Complex32]) {
-        if samples.is_empty() {
-            return;
-        }
-        const TARGET: f32 = 0.10;
-        const CEILING: f32 = 0.55;
-
-        let mut peak = 0.0f32;
-        let mut sum_sq = 0.0f32;
-        for s in samples.iter() {
-            let n2 = s.norm_sqr();
-            sum_sq += n2;
-            let mag = n2.sqrt();
-            if mag > peak {
-                peak = mag;
-            }
-        }
-        let n = samples.len() as f32;
-        let rms = (sum_sq / n).sqrt() * self.gain;
-        let pk = peak * self.gain;
-
-        if pk > CEILING {
-            self.gain *= (CEILING / pk.max(1e-9)).clamp(0.05, 1.0);
-            self.hang = self.hang_samples;
-        } else if rms > TARGET * 1.15 {
-            let want = TARGET / rms.max(1e-9);
-            self.gain *= self.attack + (1.0 - self.attack) * want;
-            self.hang = self.hang_samples;
-        } else if self.hang > 0 {
-            self.hang = self.hang.saturating_sub(samples.len() as u32);
-        } else if rms > 1e-5 && rms < TARGET * 0.7 {
-            let want = (TARGET / rms).min(1.25);
-            self.gain *= self.decay + (1.0 - self.decay) * want;
-        }
-        self.gain = self.gain.clamp(0.08, 60.0);
-
-        let g = self.gain;
-        for s in samples.iter_mut() {
-            *s *= g;
-        }
-    }
-}
-
 /// One-pole smoother, used for envelopes and AGC-ish level tracking.
 #[derive(Clone, Copy)]
 pub struct OnePole {
@@ -821,23 +829,32 @@ mod tests {
     }
 
     #[test]
-    fn soft_agc_pulls_a_hot_block_down_and_does_not_pump() {
-        let mut agc = SoftAgc::new(8000.0);
-        let mut hot: Vec<Complex32> = (0..800).map(|_| Complex32::new(0.8, 0.0)).collect();
-        agc.process(&mut hot);
-        let peak = hot.iter().map(|c| c.norm()).fold(0.0f32, f32::max);
-        assert!(peak < 0.6, "hot block should be ducked, peak {peak}");
-
-        // After hang, a quiet block must not instantly slam the gain up.
-        let gain_after_hot = agc.gain();
-        let mut quiet: Vec<Complex32> = (0..800).map(|_| Complex32::new(0.01, 0.0)).collect();
-        agc.process(&mut quiet);
+    fn noise_floor_seeds_on_a_running_minimum() {
+        // A burst at boot used to pin the floor high: the EMA started from
+        // the first frame and took minutes to decay. Seeding must instead
+        // report below the minimum seen during the first second.
+        let burst: Vec<f32> = vec![-40.0; 64];
+        let quiet: Vec<f32> = vec![-90.0; 64];
+        let mut nf = NoiseFloor::new();
+        // 25 frames of a hot band (a carrier present at startup).
+        let mut floor_during_seed = f32::MIN;
+        for _ in 0..NoiseFloor::SEED_FRAMES - 1 {
+            let f = nf.update(&burst);
+            floor_during_seed = floor_during_seed.max(f[0]);
+        }
         assert!(
-            agc.gain() <= gain_after_hot * 1.05,
-            "gain pumped during hang: {} -> {}",
-            gain_after_hot,
-            agc.gain()
+            floor_during_seed <= -40.0 - NoiseFloor::SEED_MARGIN_DB + 0.5,
+            "provisional floor {floor_during_seed} should sit well below the burst"
         );
+        // A quiet frame immediately after seeds the min and drops the floor.
+        let f = nf.update(&quiet)[0];
+        assert!(
+            f <= -90.0 - NoiseFloor::FLOOR_MARGIN_DB + 0.5,
+            "final seed floor {f} should track the running minimum"
+        );
+        // Once seeded, a low reading still pulls the EMA down promptly.
+        let f = nf.update(&quiet)[0];
+        assert!(f < -92.0, "post-seed floor {f} should fall onto quiet bins");
     }
 
     #[test]
@@ -1173,6 +1190,19 @@ pub struct FrontEnd {
     iq_ifft: Arc<dyn Fft<f32>>,
     iq_buf: Vec<Complex32>,
     iq_orig: Vec<Complex32>,
+    /// Block staging for the image corrector: the radio delivers arbitrary
+    /// block sizes, and `chunks_exact_mut(4096)` alone left a different
+    /// remainder uncorrected on every call — whether a sample was corrected
+    /// depended on chunk alignment. `carry` holds the sub-block remainder,
+    /// `stage` is the aligned scratch it is corrected in.
+    carry: Vec<Complex32>,
+    stage: Vec<Complex32>,
+    /// Blocks skipped while the correction is idle (converged, nothing to
+    /// apply). Drives the periodic re-probe that lets a drifting front end
+    /// re-open the estimator without a manual reset.
+    idle: u32,
+    /// Consecutive probe blocks left in the current re-probe run.
+    probe: u32,
     /// Constant index tables for the image estimator: for FFT bin `k + 1`,
     /// its conjugate-symmetric mirror bin and which of the 12 bands it falls
     /// in. Recomputing them per block was two modulo chains over 4095 bins.
@@ -1224,6 +1254,10 @@ impl FrontEnd {
             iq_ifft: planner.plan_fft_inverse(4096),
             iq_buf: vec![Complex32::new(0.0, 0.0); 4096],
             iq_orig: vec![Complex32::new(0.0, 0.0); 4096],
+            carry: Vec::with_capacity(4095),
+            stage: Vec::new(),
+            idle: 0,
+            probe: 0,
             mirror_idx: (0..4095).map(|k| (4096 - (k + 1)) % 4096).collect(),
             band_idx: (0..4095)
                 .map(|k| {
@@ -1284,15 +1318,77 @@ impl FrontEnd {
     }
 
     fn correct_images(&mut self, iq: &mut [Complex32]) {
+        /// FFT/block length of the corrector.
         const N: usize = 4096;
         const K: usize = 12;
-        for block in iq.chunks_exact_mut(N) {
+        // The estimator re-probe: while the correction sits idle (converged
+        // and quiet) it still watches the spectrum at a slow duty cycle, so a
+        // front end whose gain/phase balance DRIFTS — temperature, retune,
+        // a different antenna — reopens the estimator and re-converges
+        // without anyone calling `reset`. A probe is a RUN of consecutive
+        // blocks, long enough that even a large image crosses the 1e-3
+        // activity threshold within it (alpha per block is 0.01–0.2); once
+        // any band's coefficient exceeds that the normal active condition
+        // takes over and full-rate convergence proceeds as at startup. A
+        // clean front end costs one run per ~250 blocks: 16 transforms out
+        // of 500.
+        const IDLE_PROBE_BLOCKS: u32 = 250;
+        const PROBE_RUN_BLOCKS: u32 = 8;
+        // Staging: process contiguous 4096-sample blocks out of a carry
+        // buffer, so every sample is corrected exactly once no matter how the
+        // radio chunks its deliveries. Before this, `chunks_exact_mut(N)`
+        // corrected only aligned blocks and silently skipped a
+        // block-sized remainder whose position depended on the caller's
+        // chunk sizes.
+        self.stage.clear();
+        self.stage.extend_from_slice(&self.carry);
+        let prev_carry = self.stage.len();
+        self.stage.extend_from_slice(iq);
+        let complete = self.stage.len() / N;
+        self.carry.clear();
+        self.carry
+            .extend_from_slice(&self.stage[complete * N..]);
+        for block in self.stage.chunks_exact_mut(N) {
             // Nothing worth correcting: skip both transforms. A dongle whose
             // driver already corrects the image reports ~100 dB of rejection,
             // and paying two 4096-pt FFTs per 4096 samples to apply a zero
             // was several percent of a core.
-            if self.warm >= self.settle && self.image.iter().all(|v| v.norm() < 1e-3) {
-                continue;
+            //
+            // The circular-FFT seam, documented rather than rebuilt: the
+            // per-bin correction `X[k] - a·conj(X[mirror])` is exact in the
+            // frequency domain, but applying it by one forward FFT, a
+            // bin-wise fix, and one inverse FFT treats the 4096-sample block
+            // as periodic — circular convolution, no overlap management.
+            // The mirror term is a time-domain convolution of the block with
+            // the band image response, so its circular wrap corrupts the
+            // first taps-1 samples of each block. It is bounded: the image
+            // coefficient |a| < 0.25 per band and the effective image
+            // response spans only a few taps, so the seam contributes error
+            // on the order of 0.25 × (few taps)/4096 of block power, i.e.
+            // below -30 dB, at the leading edge only. A 50% overlap-save
+            // scheme would double the transform count for a fix confined to
+            // those samples; the estimator would also re-converge around
+            // whatever the overlap returns. If the seam ever becomes
+            // measurable (a test failing within a few hundred samples of a
+            // block edge is the signature), stage two half-blocks with
+            // overlap-save there.
+            let active = self.warm < self.settle || !self.image.iter().all(|v| v.norm() < 1e-3);
+            if !active && self.probe == 0 {
+                self.idle += 1;
+                if self.idle >= IDLE_PROBE_BLOCKS {
+                    self.idle = 0;
+                    self.probe = PROBE_RUN_BLOCKS;
+                } else {
+                    continue;
+                }
+            }
+            if !active {
+                // Mid-probe and still nothing to correct: spend one probe
+                // block, and stop early only if the run ends up clean.
+                self.probe -= 1;
+            } else {
+                self.probe = 0;
+                self.idle = 0;
             }
             self.iq_buf.copy_from_slice(block);
             self.iq_fft.process(&mut self.iq_buf);
@@ -1348,6 +1444,12 @@ impl FrontEnd {
                 }
             }
         }
+        // Copy the corrected samples back over the caller's buffer. The
+        // caller's samples occupy `stage[prev_carry..]` (the leading carry
+        // has been consumed); blocks that were skipped (idle or warm-up) are
+        // already identical to the staged input, so the straight copy is
+        // correct for them too.
+        iq.copy_from_slice(&self.stage[prev_carry..]);
     }
 }
 
@@ -1727,6 +1829,23 @@ mod window_bench {
         let mut out = Vec::new();
         s.power_db(iq, &mut out);
         out
+    }
+
+    #[test]
+    fn ingest_then_empty_flush_still_yields_a_spectrum() {
+        let n = 1024;
+        let iq: Vec<Complex32> = (0..n * 2)
+            .map(|i| {
+                let p = 2.0 * PI * 10.0 * i as f32 / n as f32;
+                Complex32::new(p.cos(), p.sin())
+            })
+            .collect();
+        let mut s = Spectrum::new(n);
+        s.ingest(&iq);
+        let mut out = Vec::new();
+        s.power_dbfs(&[], &mut out);
+        assert_eq!(out.len(), n);
+        assert!(out.iter().any(|&v| v > -80.0), "flush produced a dead floor");
     }
 
     /// Two competing effects, measured against each other: how far a weak

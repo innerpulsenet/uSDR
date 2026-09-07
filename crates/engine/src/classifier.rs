@@ -240,6 +240,7 @@ pub struct SignalClassifier {
     /// matches, fed back through [`SignalClassifier::note_pocsag_sync`] /
     /// [`note_flex_sync`].
     pagers_external: bool,
+    flex_only: bool,
     /// Messages recovered by the internal banks this block, drained by the
     /// event pass later in `process`. Held as fields to keep the borrow of
     /// `self.disc_buf` and the decoders inside one method.
@@ -300,8 +301,32 @@ impl SignalClassifier {
             last_ctcss_match: None,
             last_dcs_match: None,
             pagers_external: false,
+            flex_only: false,
             pending_pocsag_messages: Vec::new(),
             pending_flex_messages: Vec::new(),
+        }
+    }
+
+    /// Dedicate the classifier exclusively to FLEX paging.
+    /// Disables voice, trunking, and legacy digital decoders (e.g. D-STAR).
+    pub fn set_flex_only(&mut self, enabled: bool) {
+        self.flex_only = enabled;
+        if enabled {
+            self.use_external_pagers();
+            self.last_p25_match = None;
+            self.last_p25_candidate = None;
+            self.last_dmr_match = None;
+            self.last_nxdn_match = None;
+            self.last_smartnet_match = None;
+            self.last_pocsag_match = None;
+            self.last_aprs_match = None;
+            self.last_same_match = None;
+            self.last_ctcss_match = None;
+            self.last_dcs_match = None;
+            self.last_ltr_match = None;
+            self.last_passport_match = None;
+            self.last_clocked = None;
+            self.p25_detector = FrameDetector::with_packet_payload();
         }
     }
 
@@ -402,6 +427,16 @@ impl SignalClassifier {
         &self.disc_buf
     }
 
+    /// Standard 12.5 kHz channel-filtered discriminator in hertz, for P25,
+    /// DMR and NXDN96 symbol visualization.
+    pub fn standard_discriminator_hz(&self) -> &[f32] {
+        if self.standard_hz.is_empty() {
+            &self.disc_buf
+        } else {
+            &self.standard_hz
+        }
+    }
+
     /// Deviation the monitored discriminator is scaled to, so a caller can
     /// normalise it against full deviation.
     pub fn deviation_scale_hz(&self) -> f32 {
@@ -416,6 +451,15 @@ impl SignalClassifier {
     /// Record a FLEX sync observed in an externally-owned decoder bank.
     pub fn note_flex_sync(&mut self, baud: u32) {
         self.flex_decoder.note_sync(baud);
+        self.last_flex_match = Some((baud, 0, std::time::Instant::now()));
+    }
+
+    /// True while a FLEX frame is in flight. Packet/NFM AFC must freeze: FLEX
+    /// idle is single-sided, so discriminator-mean steering walks 4FSK data.
+    pub fn flex_is_active(&self) -> bool {
+        self.last_flex_match.is_some_and(|(_, _, t)| {
+            t.elapsed() < std::time::Duration::from_secs(4)
+        })
     }
 
     fn publish_decode(&mut self, event: DecodeEvent, now: std::time::Instant) {
@@ -587,16 +631,35 @@ impl SignalClassifier {
         // One discriminator for the three consumers of the standard buffer —
         // P25, DMR and NXDN96 — instead of one atan2 pass inside each.
         self.standard_disc.process(&standard, &mut self.standard_hz);
+        let flex_hold = self.flex_only || self.flex_is_active();
         self.p25_buf.clear();
-        self.p25_frontend
-            .process_hz(&self.standard_hz, &mut self.p25_buf);
-        let p25_frames = self.p25_detector.push(&self.p25_buf);
-        let dmr_bursts = self.dmr_receiver.process_hz(&self.standard_hz);
-        let mut nxdn_frames = self.nxdn48_receiver.process(&narrow);
-        nxdn_frames.extend(self.nxdn96_receiver.process_hz(&self.standard_hz));
+        let p25_frames = if flex_hold {
+            Vec::new()
+        } else {
+            self.p25_frontend
+                .process_hz(&self.standard_hz, &mut self.p25_buf);
+            self.p25_detector.push(&self.p25_buf)
+        };
+        let dmr_bursts = if flex_hold {
+            Vec::new()
+        } else {
+            self.dmr_receiver.process_hz(&self.standard_hz)
+        };
+        let mut nxdn_frames = if flex_hold {
+            Vec::new()
+        } else {
+            self.nxdn48_receiver.process(&narrow)
+        };
+        if !flex_hold {
+            nxdn_frames.extend(self.nxdn96_receiver.process_hz(&self.standard_hz));
+        }
         self.filters.narrow_buf = narrow;
         self.filters.standard_buf = standard;
-        let smartnet_osws = self.smartnet_decoder.process(&self.disc_buf);
+        let smartnet_osws = if self.flex_only {
+            Vec::new()
+        } else {
+            self.smartnet_decoder.process(&self.disc_buf)
+        };
         // Three decibels is below anything that could actually sync, so this
         // only skips channels with nothing on them — where the sweep used to
         // spend a quarter of the classifier's time finding patterns in noise.
@@ -604,7 +667,11 @@ impl SignalClassifier {
         // there is provably nothing above noise, so skipping saves the sweep
         // from fitting names to noise. Above it, weak-but-real traffic gets
         // its chance — the cadence qualification inside rejects false syncs.
-        let legacy_frames = self.legacy_digital.process(&self.disc_buf, snr_db > 0.0);
+        let legacy_frames = if flex_hold {
+            Vec::new()
+        } else {
+            self.legacy_digital.process(&self.disc_buf, snr_db > 0.0)
+        };
 
         // One walk accumulates Σx and Σx²; mean and rms both follow, and the
         // |x − mean| fill reuses nothing extra. (This used to be three
@@ -1297,7 +1364,7 @@ impl SignalClassifier {
             }
         }
 
-        let analysis_due = self.samples_since_analysis >= (self.fs * 0.05) as usize;
+        let analysis_due = self.samples_since_analysis >= (self.fs * 0.15) as usize;
         if active && analysis_due {
             self.samples_since_analysis = 0;
             // 7. Correlate APRS / AX.25 (Bell 202 AFSK 1200)
@@ -1420,6 +1487,46 @@ impl SignalClassifier {
         }
 
         // 10. Prioritized Protocol Decision
+        if self.flex_only {
+            if let Some((baud, capcode, t)) = self.last_flex_match
+                && now.duration_since(t) < hold_duration
+            {
+                let cap = if capcode > 0 {
+                    format!(" · Cap: {capcode}")
+                } else {
+                    String::new()
+                };
+                return ClassificationResult {
+                    active: true,
+                    snr_db,
+                    rf_dbfs,
+                    peak_dev_hz,
+                    rms_dev_hz,
+                    center_offset_hz: mean_offset_hz,
+                    modulation: format!("2/4-FSK @ {baud} bps"),
+                    protocol: "FLEX Pager".into(),
+                    details: Some(format!("Motorola FLEX frame sync{cap}")),
+                    confidence: 0.95,
+                };
+            }
+            return ClassificationResult {
+                active,
+                snr_db,
+                rf_dbfs,
+                peak_dev_hz,
+                rms_dev_hz,
+                center_offset_hz: mean_offset_hz,
+                modulation: "4-FSK / 2-FSK @ 1600/3200 Bd".into(),
+                protocol: "FLEX Search".into(),
+                details: Some(if active {
+                    "Carrier active · searching for FLEX sync…".into()
+                } else {
+                    "Dedicated FLEX mode · awaiting carrier…".into()
+                }),
+                confidence: if active { 0.85 } else { 0.0 },
+            };
+        }
+
         if let Some((nac, duid, correlation, corrected, t)) = self.last_p25_match
             && now.duration_since(t) < std::time::Duration::from_secs(8)
         {
@@ -1534,7 +1641,8 @@ impl SignalClassifier {
             };
         }
 
-        if let Some((ref frame, t)) = self.last_legacy_match
+        if !flex_hold
+            && let Some((ref frame, t)) = self.last_legacy_match
             && now.duration_since(t) < hold_duration
         {
             return ClassificationResult {
@@ -1770,6 +1878,7 @@ impl SignalClassifier {
                 confidence: 0.88,
             };
         }
+
 
         // Clocked-modulation analysis is deliberately below exact protocol
         // matchers. It expands coverage without turning every 4-FSK carrier into

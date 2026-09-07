@@ -359,16 +359,23 @@ impl ChannelReceiver {
 
         // Steer the NCO from the residual discriminator DC. Frozen when
         // there is no carrier — including the energy-squelch hang, whose
-        // input is noise that would drag the mix back toward zero.
+        // input is noise that would drag the mix back toward zero. The
+        // lock bar is the squelch's *open* threshold plus an open noise
+        // gate: an unlocked discriminator mean is noise with a random DC,
+        // and integrating it walks the mix off the channel. A pass that
+        // fails the bar decays the correction toward zero rather than
+        // holding a stale offset the receiver can no longer justify.
         // The recorded offset is correction + residual: after AFC locks
         // the residual is ~0, and the correction is the true LO error.
-        let tracking = have_rf && (self.gate.is_open() || snr_db >= self.squelch.close_db);
+        let tracking = have_rf && self.gate.is_open() && snr_db >= self.squelch.open_db;
         if tracking && !self.demodulated.voice.is_empty() {
             self.afc.observe(self.demodulated.mean_offset_hz, true);
             self.chain.set_offset(self.afc.mix_hz());
             let total = self.afc.correction_hz() + self.demodulated.mean_offset_hz;
             self.offset_sum += f64::from(total) * self.demodulated.voice.len() as f64;
             self.offset_n += self.demodulated.voice.len();
+        } else {
+            self.afc.observe(0.0, false);
         }
 
         let was_carrier = self.last_carrier;

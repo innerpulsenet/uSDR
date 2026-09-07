@@ -64,17 +64,39 @@ pub struct TimingLoop {
 }
 
 impl TimingLoop {
-    /// `samples_per_symbol` is `fs / baud`.
-    pub fn new(samples_per_symbol: f64) -> Self {
+    /// Minimum workable samples-per-symbol. Two samples per symbol is the
+    /// practical floor for a timing loop: the Gardner TED needs a distinct
+    /// midpoint sample, and a period of 1 makes every sample a boundary.
+    /// Below it the loop cannot measure timing at all — `tick()` would fire
+    /// on every sample — so callers get `None` instead of a silently clamped
+    /// (and therefore silently wrong) clock.
+    const MIN_SPS: f64 = 2.0;
+
+    /// `samples_per_symbol` is `fs / baud`. Returns `None` when
+    /// `samples_per_symbol` is below 2 (see [`Self::MIN_SPS`]) — the caller
+    /// should refuse the lane rather than run a clock that cannot work.
+    pub fn new(samples_per_symbol: f64) -> Option<Self> {
         Self::with_bandwidth(samples_per_symbol, 0.10, MAX_PULL_PPM)
     }
 
     /// `loop_bw` is the proportional gain in symbols of correction per symbol
     /// of measured error. `max_pull_ppm` of zero makes this a purely
     /// first-order, phase-only loop; see [`MAX_PULL_PPM`].
-    pub fn with_bandwidth(samples_per_symbol: f64, loop_bw: f64, max_pull_ppm: f64) -> Self {
-        let period = samples_per_symbol.max(2.0);
-        Self {
+    ///
+    /// Returns `None` when `samples_per_symbol` is below 2: that is a caller
+    /// bug (a baud rate the sample rate cannot support), and the old
+    /// `max(2.0)` clamp hid it behind a clock that ticked 2×–N× fast.
+    pub fn with_bandwidth(
+        samples_per_symbol: f64,
+        loop_bw: f64,
+        max_pull_ppm: f64,
+    ) -> Option<Self> {
+        if !(samples_per_symbol >= Self::MIN_SPS) {
+            // Catches NaN too.
+            return None;
+        }
+        let period = samples_per_symbol;
+        Some(Self {
             nominal: period,
             period,
             elapsed: 0.0,
@@ -86,7 +108,7 @@ impl TimingLoop {
                 0.0
             },
             max_pull: max_pull_ppm * 1e-6,
-        }
+        })
     }
 
     pub fn reset(&mut self) {
@@ -111,8 +133,16 @@ impl TimingLoop {
 
     /// Re-target the loop, keeping the phase — FLEX changes symbol rate
     /// mid-stream once the sync word says which mode this frame is.
+    ///
+    /// Below 2 samples per symbol (see [`Self::MIN_SPS`]) the request is
+    /// ignored: the loop keeps its current nominal rather than adopting a
+    /// clock that cannot work. Callers pass rates negotiated from the air
+    /// interface, so this guards a misparse, not ordinary operation.
     pub fn set_period(&mut self, samples_per_symbol: f64) {
-        self.nominal = samples_per_symbol.max(2.0);
+        if !(samples_per_symbol >= Self::MIN_SPS) {
+            return;
+        }
+        self.nominal = samples_per_symbol;
         self.period = self.nominal;
         self.elapsed = 0.0;
     }
@@ -132,12 +162,17 @@ impl TimingLoop {
         // an exact symbol edge), so carrying a phase fraction measured on the
         // old rate would land the first new symbol mid-edge and smear every
         // integration that follows.
+        if !(samples_per_symbol >= Self::MIN_SPS) {
+            // Ignore, like `set_period`: a mid-frame retarget to a broken
+            // rate must not destroy the working clock already held.
+            return;
+        }
         let ratio = if self.nominal > 0.0 {
             self.period / self.nominal
         } else {
             1.0
         };
-        self.nominal = samples_per_symbol.max(2.0);
+        self.nominal = samples_per_symbol;
         self.period = self.nominal * ratio;
         self.elapsed = 0.0;
     }
@@ -280,7 +315,7 @@ mod tests {
     /// chase it every symbol.
     #[test]
     fn a_steady_error_is_absorbed_into_the_period() {
-        let mut t = TimingLoop::new(13.333);
+        let mut t = TimingLoop::new(13.333).unwrap();
         for _ in 0..2000 {
             t.correct(0.02);
         }
@@ -291,7 +326,7 @@ mod tests {
         );
         assert!(t.pull_ppm() < -100.0, "pull {} ppm", t.pull_ppm());
 
-        let mut early = TimingLoop::new(13.333);
+        let mut early = TimingLoop::new(13.333).unwrap();
         for _ in 0..2000 {
             early.correct(-0.02);
         }
@@ -310,7 +345,7 @@ mod tests {
             seed ^= seed << 17;
             ((seed >> 11) as f64 / (1u64 << 53) as f64) * 2.0 - 1.0
         };
-        let mut t = TimingLoop::new(13.333);
+        let mut t = TimingLoop::new(13.333).unwrap();
         for _ in 0..500_000 {
             t.correct(rng());
         }
@@ -325,7 +360,7 @@ mod tests {
     /// must not accumulate at all.
     #[test]
     fn a_phase_only_loop_never_moves_its_rate() {
-        let mut t = TimingLoop::with_bandwidth(13.333, 0.10, 0.0);
+        let mut t = TimingLoop::with_bandwidth(13.333, 0.10, 0.0).unwrap();
         for _ in 0..10_000 {
             t.correct(0.4);
         }
@@ -334,12 +369,12 @@ mod tests {
 
     #[test]
     fn the_period_cannot_run_away() {
-        let mut t = TimingLoop::with_bandwidth(20.0, 0.5, 1_000.0);
+        let mut t = TimingLoop::with_bandwidth(20.0, 0.5, 1_000.0).unwrap();
         for _ in 0..100_000 {
             t.correct(0.5);
         }
         assert!(t.pull_ppm() >= -1_000.1, "pull {} ppm", t.pull_ppm());
-        let mut t = TimingLoop::with_bandwidth(20.0, 0.5, 1_000.0);
+        let mut t = TimingLoop::with_bandwidth(20.0, 0.5, 1_000.0).unwrap();
         for _ in 0..100_000 {
             t.correct(-0.5);
         }
@@ -348,7 +383,7 @@ mod tests {
 
     #[test]
     fn a_nonsense_error_is_ignored() {
-        let mut t = TimingLoop::new(16.0);
+        let mut t = TimingLoop::new(16.0).unwrap();
         let before = t.period();
         t.correct(f64::NAN);
         t.correct(f64::INFINITY);
@@ -358,9 +393,31 @@ mod tests {
     /// Ticking at the nominal period yields exactly `baud` symbols per second.
     #[test]
     fn an_untouched_loop_ticks_at_the_nominal_rate() {
-        let mut t = TimingLoop::new(16_000.0 / 1200.0);
+        let mut t = TimingLoop::new(16_000.0 / 1200.0).unwrap();
         let ticks = (0..16_000).filter(|_| t.tick()).count();
         assert!((ticks as i32 - 1200).abs() <= 1, "got {ticks} ticks");
+    }
+
+    /// Below 2 samples per symbol the loop is refused outright — the old
+    /// `max(2.0)` clamp silently built a clock ticking at the wrong rate.
+    #[test]
+    fn a_clock_that_cannot_work_is_rejected() {
+        assert!(TimingLoop::new(1.999).is_none());
+        assert!(TimingLoop::new(0.0).is_none());
+        assert!(TimingLoop::new(f64::NAN).is_none());
+        assert!(TimingLoop::with_bandwidth(1.0, 0.1, 800.0).is_none());
+        // The boundary itself is fine.
+        assert!(TimingLoop::new(2.0).is_some());
+
+        // And the setters ignore broken retargets rather than destroying a
+        // working clock.
+        let mut t = TimingLoop::new(16.0).unwrap();
+        t.set_period(1.0);
+        assert_eq!(t.period(), 16.0);
+        t.retarget(0.5);
+        assert_eq!(t.period(), 16.0);
+        t.set_period(8.0);
+        assert_eq!(t.period(), 8.0);
     }
 
     /// Gardner reports nothing without a transition, and opposite signs for

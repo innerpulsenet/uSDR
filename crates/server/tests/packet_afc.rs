@@ -24,6 +24,36 @@ fn burst_iq(hz_samples: &[f32], fs: f32, offset_hz: f32) -> Vec<Complex32> {
         .collect()
 }
 
+/// Deterministic PRNG so failures reproduce exactly.
+struct Rng(u64);
+
+impl Rng {
+    fn next_f32(&mut self) -> f32 {
+        // xorshift64*
+        let mut x = self.0;
+        x ^= x >> 12;
+        x ^= x << 25;
+        x ^= x >> 27;
+        self.0 = x;
+        let v = x.wrapping_mul(0x2545_F491_4F6C_DD1D);
+        (v >> 40) as f32 / (1u64 << 24) as f32 * 2.0 - 1.0
+    }
+    /// Roughly Gaussian, sum of four uniforms.
+    fn gauss(&mut self) -> f32 {
+        (self.next_f32() + self.next_f32() + self.next_f32() + self.next_f32()) * 0.5
+    }
+}
+
+/// Add AWGN at `sigma` per component — a real receiver never delivers a
+/// signal without a noise floor beneath it, and the classifier's SNR (and
+/// therefore the AFC lock gate) is measured against that floor.
+fn add_noise(iq: &mut [Complex32], sigma: f32, rng: &mut Rng) {
+    for c in iq.iter_mut() {
+        c.re += rng.gauss() * sigma;
+        c.im += rng.gauss() * sigma;
+    }
+}
+
 #[test]
 fn an_off_centre_pocsag_carrier_is_afc_tracked_and_decoded() {
     let mut chain = DecodeChain::new(FS_IN, 25_000.0, 48_000.0);
@@ -167,8 +197,41 @@ fn an_off_centre_pocsag_carrier_is_afc_tracked_and_decoded() {
     let mut blocks_processed = 0usize;
     let lead = vec![0.0f32; FS_IN as usize * 8];
     let full = [lead, audio.clone()].concat();
+    // The monitor gate run_sdr keeps for the inspect path, rated for the
+    // chain's output like the real one.
+    let mut mon_gate = scannerd_engine::NoiseGate::new(f64::from(fs_out));
+    let mut last_snr_db = 0.0f32;
+    // A receiver's noise floor: the added noise sets the span floor the
+    // SNR is measured over, and the AFC lock gate opens only on a signal
+    // well above it — as on a real radio.
+    let mut rng = Rng(0x9E37_79B9_7F4A_7C15);
+    // σ chosen so the burst clears the 8 dB lock bar (~15 dB span SNR)
+    // while the quieted carrier still pulls the gate's noise band under
+    // its close threshold — a real marginal-but-decodable receiver.
+    let noise_sigma = 0.12f32;
+    let mut p_floor = f32::INFINITY;
+    // Realistic warm-up: the receiver boots into static before the pager
+    // transmits, so the classifier's minimum-statistics floor is set on
+    // noise (as it is on a real radio) and the SNR lock bar is meaningful.
+    let warmup_samples = (FS_IN as usize) * 2;
+    let mut warm_iq = Vec::with_capacity(384);
+    for _ in (0..warmup_samples).step_by(384) {
+        warm_iq.clear();
+        warm_iq.resize(384, Complex32::new(0.0, 0.0));
+        add_noise(&mut warm_iq, noise_sigma, &mut rng);
+        let mut out = Vec::new();
+        chain.process(&warm_iq, &mut out);
+        if out.is_empty() {
+            continue;
+        }
+        let _ = classifier.process(&out, 929_585_000.0);
+        let mut voice = classifier.monitor_voice().to_vec();
+        mon_gate.process(&mut voice, classifier.monitor_noise());
+        last_snr_db = 0.0; // static: never locked during warm-up
+    }
     'outer: for _repeat in 0..8 {
-        let iq = burst_iq(&full, FS_IN as f32, TRUE_OFFSET);
+        let mut iq = burst_iq(&full, FS_IN as f32, TRUE_OFFSET);
+        add_noise(&mut iq, noise_sigma, &mut rng);
         // ~380 samples per block at 47.6 kHz, matching the radio's cadence.
         for chunk in iq.chunks(384) {
             let mut out = Vec::new();
@@ -176,8 +239,18 @@ fn an_off_centre_pocsag_carrier_is_afc_tracked_and_decoded() {
             if out.is_empty() {
                 continue;
             }
-            // Exactly what run_sdr now does each block.
-            afc.observe(last_center_offset, true);
+            // Exactly what run_sdr now does each block: steer on the
+            // previous block's lock evidence (squelch-open SNR plus an
+            // open monitor gate), then classify, then advance the gate.
+            // run_sdr's SNR is span power over a min-statistics noise
+            // floor (channel_dbfs - noise_dbfs), not the classifier's,
+            // so measure it the same way here.
+            let p = out.iter().map(|c| c.norm_sqr()).sum::<f32>() / out.len() as f32;
+            p_floor = p_floor.min(p);
+            last_snr_db = 10.0 * (p / p_floor.max(1e-12)).log10();
+            let locked =
+                last_snr_db >= scannerd_engine::squelch::DEFAULT_OPEN_DB && mon_gate.is_open();
+            afc.observe(last_center_offset, locked);
             let corr = afc.correction_hz();
             if (corr - last_reported).abs() >= 50.0 {
                 chain.set_offset(f64::from(corr));
@@ -185,6 +258,8 @@ fn an_off_centre_pocsag_carrier_is_afc_tracked_and_decoded() {
             }
             let c = classifier.process(&out, 929_585_000.0);
             last_center_offset = c.center_offset_hz;
+            let mut voice = classifier.monitor_voice().to_vec();
+            mon_gate.process(&mut voice, classifier.monitor_noise());
             blocks_processed += 1;
             for _msg in pocsag.process(classifier.monitor_discriminator_hz()) {
                 decoded = true;

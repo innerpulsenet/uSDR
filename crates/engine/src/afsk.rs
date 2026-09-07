@@ -58,7 +58,8 @@ impl ToneSlicer {
             spb,
             win,
             gate,
-            clock: TimingLoop::new(f64::from(spb)),
+            clock: TimingLoop::new(f64::from(spb))
+                .expect("afsk spb is clamped to at least 4 sps"),
             tracking: false,
             delay: 0,
             delay0: 0,

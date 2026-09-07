@@ -33,6 +33,10 @@ pub const DEFAULT_RATE_HZ: f64 = 2_048_000.0;
 pub const DEFAULT_FFT_SIZE: usize = 1024;
 pub const DEFAULT_FPS: u32 = 25;
 pub const INSPECT_RATE: f64 = 48_000.0;
+/// Packet/FLEX 6400 4-FSK wants ≥4 samples/symbol at 3200 sym/s; 96 kS/s
+/// gives 15, the same rate the pager walking bank uses. Voice inspect stays
+/// at 48 kHz.
+pub const PACKET_INSPECT_RATE: f64 = 96_000.0;
 /// Widest channel the inspector has to pass. The classifier narrows this per
 /// protocol candidate; this is only the outer bound.
 pub const INSPECT_BANDWIDTH_HZ: f32 = 25_000.0;
@@ -49,10 +53,8 @@ const RECOVER_INTERVAL: Duration = Duration::from_secs(2);
 /// many failures, over a long window, *and* nothing having tuned successfully
 /// in all that time. A radio that is merely dropping the occasional write
 /// keeps running and simply reports the tunes it would not take.
-const CTL_FAULT_WINDOW: Duration = Duration::from_secs(30);
-const CTL_FAULT_LIMIT: usize = 6;
-/// No successful tune for this long is the other half of the test.
-const CTL_QUIET_BEFORE_REOPEN: Duration = Duration::from_secs(30);
+const CTL_FAULT_WINDOW: Duration = Duration::from_secs(15);
+const CTL_FAULT_LIMIT: usize = 2;
 /// How long a "cannot keep up" notice stays up after the last dropped block.
 const LAG_WARN_HOLD: Duration = Duration::from_secs(4);
 /// Longest gap between reopen attempts once reopening has stopped helping.
@@ -159,6 +161,9 @@ pub enum SdrMode {
     /// ([`ScanSlotRig`]), not here — there is one pool, not one per rebuild
     /// of this demodulator.
     Scan,
+    /// Dedicated Motorola FLEX pager decoding on the tuned channel with
+    /// 4-FSK/2-FSK symbol eye and discriminator level scope.
+    Flex,
 }
 
 impl SdrMode {
@@ -171,7 +176,7 @@ impl SdrMode {
             // the (idle) per-channel demod chain.
             SdrMode::Pager => (2.0 * PAGER_HALF_BAND_HZ) as f32,
             SdrMode::Wfm => WFM_BANDWIDTH_HZ,
-            SdrMode::Packet => PACKET_BANDWIDTH_HZ,
+            SdrMode::Packet | SdrMode::Flex => PACKET_BANDWIDTH_HZ,
             SdrMode::P25 => C4FM_BANDWIDTH_HZ,
             SdrMode::Dmr => DMR_BANDWIDTH_HZ,
             // Wide enough for every narrowband candidate at once.
@@ -189,7 +194,7 @@ impl SdrMode {
     fn scope_kind(self) -> &'static str {
         match self {
             // Auto is watching for digital, so the eye is the useful view.
-            SdrMode::P25 | SdrMode::Dmr | SdrMode::Auto => "symbols",
+            SdrMode::P25 | SdrMode::Dmr | SdrMode::Auto | SdrMode::Flex => "symbols",
             SdrMode::Wfm => "mpx",
             _ => "audio",
         }
@@ -200,6 +205,7 @@ impl SdrMode {
         match self {
             SdrMode::P25 | SdrMode::Dmr | SdrMode::Auto => 4_800.0,
             SdrMode::Packet => 1_200.0,
+            SdrMode::Flex => 1_600.0,
             _ => 0.0,
         }
     }
@@ -214,7 +220,7 @@ impl SdrMode {
             SdrMode::Wfm => 128_000.0,
             // Symbols are sent at the channel rate — decimating an eye
             // diagram destroys the thing it is meant to show.
-            SdrMode::P25 | SdrMode::Dmr | SdrMode::Auto => 48_000.0,
+            SdrMode::P25 | SdrMode::Dmr | SdrMode::Auto | SdrMode::Flex => 48_000.0,
             // The live pager channel, box-decimated from the bank's channel
             // rate down to 48 kS/s: a ±24 kHz axis brackets the ±4.8 kHz
             // FLEX deviation levels with room for several kHz of drift, and
@@ -229,6 +235,7 @@ impl SdrMode {
     fn target_rate(self) -> f64 {
         match self {
             SdrMode::Wfm => WFM_IF_RATE,
+            SdrMode::Packet | SdrMode::Flex => PACKET_INSPECT_RATE,
             _ => INSPECT_RATE,
         }
     }
@@ -345,6 +352,9 @@ pub struct SdrStatus {
     /// what the server is actually doing.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scan: Option<crate::scan::ScanStatus>,
+    /// Live FLEX decoder diagnostics when in FLEX mode.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub flex_diag: Option<scannerd_engine::flex::FlexDiagnostics>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -569,12 +579,12 @@ pub fn encode_fft_frame(ev: &SdrEvent) -> Option<Vec<u8>> {
     buf.extend_from_slice(&rate_hz.to_le_bytes());
     buf.extend_from_slice(&peak_iq.to_le_bytes());
     buf.extend_from_slice(&inspect_hz.to_le_bytes());
-    // Rates x10 as u16. The old x100 fields saturated their integers: a
-    // 96 kHz pager scope rate pinned an i16 at 32 767 (the browser read
-    // 327.67 kHz) and 4800/6400 Bd symbol rates pinned a u16 at 65 535,
-    // which drew P25/DMR eye diagrams against 655 Bd. x10 keeps 100 Hz
-    // resolution out to 6.5 MHz, which covers every rate either field holds.
-    buf.extend_from_slice(&((scope_rate_hz * 10.0) as u16).to_le_bytes());
+    // Scope rate stored in steps of 10 Hz as u16 (supports up to 655.35 kHz).
+    // The previous `* 10.0` saturated u16 for any rate >= 6553.5 Hz (e.g. 48 kHz
+    // and 128 kHz both pinned at 65535, reading as 6553.5 Hz in the browser).
+    buf.extend_from_slice(
+        &(((scope_rate_hz / 10.0).round() as u32).min(u16::MAX as u32) as u16).to_le_bytes(),
+    );
     buf.push(scope_kind_byte(scope_kind));
     buf.extend_from_slice(&((symbol_rate_hz * 10.0) as u16).to_le_bytes());
     buf.extend_from_slice(&channel_dbfs.to_le_bytes());
@@ -695,23 +705,22 @@ impl CaptureBuffer {
     }
 
     /// Snapshot the raw span ring and the discriminator ring (the decoder's
-    /// actual input) as WAV bytes. Diagnostic: called on a decoded page so the
-    /// capture is guaranteed to contain the frame that produced it.
-    fn page_debug_snapshots(&self) -> (Vec<u8>, Vec<u8>) {
-        let span = {
-            let mut samples: Vec<i16> = Vec::with_capacity(self.span.len() * 2);
-            for &(i, q) in &self.span {
-                samples.extend([i, q]);
-            }
-            let rate = self.span_rate();
-            pcm_wav(&samples, rate.max(8_000), 2)
-        };
-        let disc = {
-            let disc: Vec<i16> = self.discriminator.iter().copied().collect();
-            let rate = self.rate();
-            pcm_wav(&disc, rate.max(8_000), 1)
-        };
-        (span, disc)
+    /// actual input) as interleaved i16 samples plus their rates. Diagnostic:
+    /// called on a decoded page so the capture is guaranteed to contain the
+    /// frame that produced it.
+    ///
+    /// Returns samples rather than finished WAV bytes so the caller can
+    /// release the capture lock before serialising: this runs in the radio
+    /// loop, and a multi-megabyte WAV encode under the mutex stalls the DSP
+    /// thread for the whole encode — the same fault `capture_wav` was fixed
+    /// for.
+    fn page_debug_samples(&self) -> (Vec<i16>, u32, Vec<i16>, u32) {
+        let mut span: Vec<i16> = Vec::with_capacity(self.span.len() * 2);
+        for &(i, q) in &self.span {
+            span.extend([i, q]);
+        }
+        let disc: Vec<i16> = self.discriminator.iter().copied().collect();
+        (span, self.span_rate().max(8_000), disc, self.rate().max(8_000))
     }
 
     fn rate(&self) -> u32 {
@@ -1169,9 +1178,9 @@ fn build_inspect(rate_hz: f64, offset_hz: f64, mode: SdrMode) -> (DecodeChain, S
     let mut chain = DecodeChain::new(rate_hz, mode.bandwidth_hz(), mode.target_rate());
     chain.set_offset(offset_hz);
     let mut classifier = SignalClassifier::new(chain.fs_out());
-    // PACKET and AUTO run their own pager banks over the same discriminator;
-    // the classifier's would be a second identical set.
-    if matches!(mode, SdrMode::Packet | SdrMode::Auto) {
+    if mode == SdrMode::Flex {
+        classifier.set_flex_only(true);
+    } else if matches!(mode, SdrMode::Packet | SdrMode::Auto) {
         classifier.use_external_pagers();
     }
     (chain, classifier)
@@ -1199,6 +1208,9 @@ enum Demod {
         /// One decoder per POCSAG rate: a pager channel does not announce
         /// which it uses, and running all three costs less than guessing.
         pocsag: Vec<PocsagDecoder>,
+        flex: FlexDecoder,
+    },
+    Flex {
         flex: FlexDecoder,
     },
     Am {
@@ -1310,6 +1322,9 @@ impl Demod {
                     .collect(),
                 flex: FlexDecoder::new(fs_out),
             },
+            SdrMode::Flex => Demod::Flex {
+                flex: FlexDecoder::new(fs_out),
+            },
             SdrMode::Pager => Demod::Packet {
                 // The per-channel decoders are idle here: PAGER decodes from
                 // the wide span through the walking bank instead.
@@ -1326,6 +1341,7 @@ impl Demod {
             Demod::Wfm { decim, .. } => fs_out / *decim as f64,
             Demod::P25 { rx } => rx.audio_rate(),
             Demod::Dmr { rx } => rx.audio_rate(),
+            Demod::Flex { .. } => 0.0,
             // Whichever receiver is carrying a call sets the rate; otherwise
             // the analogue path is what is being heard.
             Demod::Auto { p25, dmr, .. } => {
@@ -2190,11 +2206,16 @@ fn rms(samples: &[f32]) -> f32 {
     (sumsq / samples.len() as f64).sqrt() as f32
 }
 
-/// Peak absolute sample of a finished recording, so a silent one is obvious
-/// without playing it.
+/// Peak absolute sample of a finished recording, as its fraction of full
+/// scale, so a silent one is obvious without playing it.
+///
+/// `CallRecorder` stores `x.clamp(-1, 1) * 28_000` (headroom below i16 full
+/// scale), so the reference is 28 000. Dividing by 32 768 understated every
+/// peak by 1.35 dB and made the silence gate (`peak >= 0.002` in
+/// `flush_scan_rec`) trip 2.4× earlier than intended.
 fn call_peak(buf: &[i16]) -> f32 {
     buf.iter()
-        .map(|&v| (v as f32 / 32768.0).abs())
+        .map(|&v| (v as f32 / 28_000.0).abs())
         .fold(0.0f32, f32::max)
 }
 
@@ -2343,6 +2364,13 @@ fn run_sdr(
         }
     };
     current_serial = Some(serial.clone());
+    // The driver is free to clamp the requested rate (device.rs keeps the
+    // value it actually selected and logs the substitution). Every chain,
+    // classifier and demodulator below must be built for the rate samples
+    // really arrive at, and the status must publish it — believing the
+    // request makes block_ms and every inspect-path filter lie by the same
+    // ratio, and a classifier told the wrong rate misses syncs outright.
+    current_rate = dev.rate;
 
     let mut fft_size = if (256..=8192).contains(&cfg.fft_size) {
         cfg.fft_size
@@ -2381,12 +2409,13 @@ fn run_sdr(
             pager_sweep: None,
             pager_live_hz: None,
             scan: None,
+            flex_diag: None,
         };
     }
 
     let _ = dev.cmd.send(Cmd::ClipGuard(clip_guard_on));
     tuned_freq = current_freq;
-    let rx = dev.iq.subscribe_with_depth(16);
+    let rx = dev.iq.subscribe_with_depth(32);
     let mut dev_opt = Some(dev);
     let mut rx_opt = Some(rx);
 
@@ -2557,12 +2586,17 @@ fn run_sdr(
     // Smoothed carrier error. A single frame's centroid is noisy; a
     // calibration wants a settled figure.
     let mut freq_error_hz: Option<f64> = None;
+    let mut flex_carrier_corr_hz: f64 = 0.0;
+    let mut last_flex_inspect_hz: f64 = inspect_hz;
     let mut next_call_id: u64 = 1;
     // Audio for the browser, refilled each block. Reused so a steady stream of
-    // blocks does not allocate.
     let mut audio_buf: Vec<f32> = Vec::new();
 
-    let frame_interval = Duration::from_millis(1000 / DEFAULT_FPS as u64);
+    // Slight threshold hysteresis (38 ms instead of 40 ms) so that two
+    // 20.0 ms blocks consistently satisfy the interval without jittering
+    // to a 3rd block on sub-millisecond clock variations.
+    let frame_interval =
+        Duration::from_millis((1000 / DEFAULT_FPS as u64).saturating_sub(2).max(1));
     let mut last_frame = Instant::now();
     let mut peak_iq = 0.0f32;
     // Audio for the scope, decimated as it arrives and kept as a rolling
@@ -2585,7 +2619,7 @@ fn run_sdr(
     // the local oscillator, so they stay put as the radio tunes.
     let mut spurs: Vec<f64> = Vec::new();
     let mut ctl_faults: VecDeque<Instant> = VecDeque::new();
-    let mut last_tune_ok = Instant::now();
+    let mut _last_tune_ok = Instant::now();
     let mut fault_reopen = false;
     // A deliberate reconfigure (the LO offset moving) rather than a fault, so
     // it reopens at once instead of waiting out the fault backoff.
@@ -2609,6 +2643,10 @@ fn run_sdr(
     let mut agc_on = cfg.gain_db.is_none();
     let mut dropped_blocks = 0u64;
     let mut lagged_blocks = 0u64;
+    // Set by command handlers that want the inspect chain re-mixed, applied
+    // once after the drain: a UI burst of Tune/Inspect/Rate/Mode in one batch
+    // is one chain rebuild (FIR design + FFT plan + capture clear), not five.
+    let mut inspect_dirty = false;
 
     while !stop.load(Ordering::Relaxed) {
         // Drain commands
@@ -2634,22 +2672,8 @@ fn run_sdr(
                             inspect_hz = f;
                         }
                         pending_tune = Some(f);
-                        remix_inspect(
-                            &mut InspectParts {
-                                inspect_chain: &mut inspect_chain,
-                                classifier: &mut classifier,
-                                demod: &mut demod,
-                                scope_fm: &mut scope_fm,
-                                capture: &capture,
-                                afc: &mut afc,
-                                afc_last_reported: &mut afc_last_reported,
-                            },
-                            current_rate,
-                            current_freq,
-                            inspect_hz,
-                            lo_offset_for(current_rate, lo_offset, current_mode),
-                            current_mode,
-                        );
+                        // Coalesced: rebuilt once after the drain, below.
+                        inspect_dirty = true;
                         // Deliberately not stamping freq_hz here: it reports
                         // where the tuner is, and it is not there yet.
                         let mut s = status.lock().unwrap();
@@ -2670,22 +2694,8 @@ fn run_sdr(
                     if let Some(sc) = scanner.as_mut() {
                         scan_actions.extend(sc.pause("the dial was moved by hand"));
                     }
-                    remix_inspect(
-                        &mut InspectParts {
-                            inspect_chain: &mut inspect_chain,
-                            classifier: &mut classifier,
-                            demod: &mut demod,
-                            scope_fm: &mut scope_fm,
-                            capture: &capture,
-                            afc: &mut afc,
-                            afc_last_reported: &mut afc_last_reported,
-                        },
-                        current_rate,
-                        current_freq,
-                        inspect_hz,
-                        lo_offset_for(current_rate, lo_offset, current_mode),
-                        current_mode,
-                    );
+                    // Coalesced: rebuilt once after the drain, below.
+                    inspect_dirty = true;
                     let mut s = status.lock().unwrap();
                     s.inspect_hz = inspect_hz;
                     let _ = events.send(SdrEvent::Status(s.clone()));
@@ -2740,22 +2750,8 @@ fn run_sdr(
                             current_freq
                                 + display_rate_for(current_rate, lo_offset, current_mode) * 0.49,
                         );
-                        remix_inspect(
-                            &mut InspectParts {
-                                inspect_chain: &mut inspect_chain,
-                                classifier: &mut classifier,
-                                demod: &mut demod,
-                                scope_fm: &mut scope_fm,
-                                capture: &capture,
-                                afc: &mut afc,
-                                afc_last_reported: &mut afc_last_reported,
-                            },
-                            current_rate,
-                            current_freq,
-                            inspect_hz,
-                            lo_offset_for(current_rate, lo_offset, current_mode),
-                            current_mode,
-                        );
+                        // Coalesced: rebuilt once after the drain, below.
+                        inspect_dirty = true;
                         let mut s = status.lock().unwrap();
                         s.rate_hz = current_rate;
                         let shown = display_rate_for(current_rate, lo_offset, current_mode);
@@ -2775,22 +2771,8 @@ fn run_sdr(
                         if lo_active(current_rate, lo_offset, current_mode) != was {
                             force_reopen_now = true;
                         }
-                        remix_inspect(
-                            &mut InspectParts {
-                                inspect_chain: &mut inspect_chain,
-                                classifier: &mut classifier,
-                                demod: &mut demod,
-                                scope_fm: &mut scope_fm,
-                                capture: &capture,
-                                afc: &mut afc,
-                                afc_last_reported: &mut afc_last_reported,
-                            },
-                            current_rate,
-                            current_freq,
-                            inspect_hz,
-                            lo_offset_for(current_rate, lo_offset, current_mode),
-                            current_mode,
-                        );
+                        // Coalesced: rebuilt once after the drain, below.
+                        inspect_dirty = true;
                         let mut s = status.lock().unwrap();
                         s.mode = current_mode;
                         s.bandwidth_hz = f64::from(current_mode.bandwidth_hz());
@@ -3012,7 +2994,11 @@ fn run_sdr(
                         {
                             Ok((new_dev, s_serial, s_tuner)) => {
                                 current_serial = Some(s_serial.clone());
-                                let new_rx = new_dev.iq.subscribe_with_depth(16);
+                                // The new device may have clamped the rate;
+                                // rebuild the inspect path for what it
+                                // actually delivers.
+                                current_rate = new_dev.rate;
+                                let new_rx = new_dev.iq.subscribe_with_depth(32);
                                 dev_opt = Some(new_dev);
                                 rx_opt = Some(new_rx);
                                 let ppm = config::load().unwrap_or_default().ppm_for(&s_serial);
@@ -3036,6 +3022,7 @@ fn run_sdr(
                                 s.serial = s_serial;
                                 s.tuner = s_tuner;
                                 s.ppm = ppm;
+                                s.rate_hz = current_rate;
                                 s.inspect_hz = inspect_hz;
                                 let _ = events.send(SdrEvent::Status(s.clone()));
                             }
@@ -3046,6 +3033,30 @@ fn run_sdr(
                     }
                 }
             }
+        }
+
+        // One re-mix per loop pass, however many commands asked for one. The
+        // handlers above only read/write scalars, so deferring the chain
+        // rebuild to here changes nothing about the values it consumes: they
+        // are the post-drain, post-batch ones.
+        if inspect_dirty {
+            inspect_dirty = false;
+            remix_inspect(
+                &mut InspectParts {
+                    inspect_chain: &mut inspect_chain,
+                    classifier: &mut classifier,
+                    demod: &mut demod,
+                    scope_fm: &mut scope_fm,
+                    capture: &capture,
+                    afc: &mut afc,
+                    afc_last_reported: &mut afc_last_reported,
+                },
+                current_rate,
+                current_freq,
+                inspect_hz,
+                lo_offset_for(current_rate, lo_offset, current_mode),
+                current_mode,
+            );
         }
 
         // Apply at most one queued tuner write per interval, carrying whatever
@@ -3064,11 +3075,8 @@ fn run_sdr(
                 if let Some(g) = pending_gain.take() {
                     match g {
                         Some(db) => {
-                            if agc_on {
-                                let _ = dev.cmd.send(Cmd::Agc(false));
-                                agc_on = false;
-                            }
                             let _ = dev.cmd.send(Cmd::Gain(db));
+                            agc_on = false;
                         }
                         None => {
                             if !agc_on {
@@ -3126,8 +3134,11 @@ fn run_sdr(
                     // open() tunes as it goes, so the reopened device is
                     // genuinely where it was asked to be.
                     tuned_freq = current_freq;
-                    last_tune_ok = Instant::now();
-                    let new_rx = new_dev.iq.subscribe_with_depth(16);
+                    _last_tune_ok = Instant::now();
+                    // The reopened device may have clamped the rate; rebuild
+                    // the inspect path for what it actually delivers.
+                    current_rate = new_dev.rate;
+                    let new_rx = new_dev.iq.subscribe_with_depth(32);
                     dev_opt = Some(new_dev);
                     rx_opt = Some(new_rx);
                     let ppm = config::load().unwrap_or_default().ppm_for(&s_serial);
@@ -3162,6 +3173,7 @@ fn run_sdr(
                     s.serial = s_serial;
                     s.tuner = s_tuner;
                     s.ppm = ppm;
+                    s.rate_hz = current_rate;
                     if !deliberate {
                         s.error = Some(if !wedged {
                             "recovering from a USB fault…".into()
@@ -3204,9 +3216,7 @@ fn run_sdr(
                     ctl_faults.pop_front();
                 }
                 ctl_faults.push_back(now);
-                if ctl_faults.len() >= CTL_FAULT_LIMIT
-                    && last_tune_ok.elapsed() >= CTL_QUIET_BEFORE_REOPEN
-                {
+                if ctl_faults.len() >= CTL_FAULT_LIMIT {
                     ctl_faults.clear();
                     fault_reopen = true;
                 }
@@ -3256,10 +3266,18 @@ fn run_sdr(
                         // A tune the driver accepted: the radio is healthy.
                         futile_reopens = 0;
                         recover_backoff = RECOVER_INTERVAL;
-                        last_tune_ok = Instant::now();
+                        _last_tune_ok = Instant::now();
                         ctl_faults.clear();
                         tuned_freq = hw - lo_off;
-                        inspect_chain.set_offset(inspect_hz - hw);
+                        // Keep the AFC's accumulated correction: this event
+                        // confirms a tune the operator (or scanner) asked
+                        // for, not a re-mix of the same channel, so wiping
+                        // the correction would drop a locked carrier back
+                        // onto a filter skirt until the loop re-learns it.
+                        inspect_chain.set_offset(inspect_hz - hw + f64::from(afc.correction_hz()));
+                        // The offset already carries the correction; keep the
+                        // loop's bookkeeping in step so it does not re-apply.
+                        afc_last_reported = afc.correction_hz();
                         // Every digital receiver rides a narrowband chain —
                         // the demod's on the inspect chain above, each scan
                         // slot's on its own — so re-pointing those chains at
@@ -3323,7 +3341,12 @@ fn run_sdr(
         clean.extend_from_slice(&block);
         front.process(&mut clean);
 
-        spectrum.power_dbfs(&clean, &mut pwr);
+        // Spectrum is displayed at 25 fps. Ingest every block so the pending
+        // window stays current; FFT only when a frame is due.
+        spectrum.ingest(&clean);
+        if last_frame.elapsed() >= frame_interval {
+            spectrum.power_dbfs(&[], &mut pwr);
+        }
 
         // Process channel for classifier. In Scan the chain is purely
         // diagnostic — it follows the locked channel and nothing reads it
@@ -3487,39 +3510,51 @@ fn run_sdr(
                     ..Default::default()
                 }
             }
-            SdrMode::Nfm | SdrMode::Packet => {
-                // Steer the mix toward the carrier while one is present. The
-                // discriminator DC of a centred FM carrier is zero; anything
-                // else is residual error, measured on the previous block.
-                // Gating on SNR keeps an empty channel from integrating noise
-                // into an offset.
-                afc.observe(last_center_offset_hz, last_snr_db > 2.5);
-                let corr = afc.correction_hz();
-                if (corr - afc_last_reported).abs() >= 50.0 {
-                    // Based on the CONFIRMED tuning: a tune this dongle
-                    // refused leaves current_freq ahead of the hardware, and
-                    // steering against the request would re-mix the chain off
-                    // the frequency the State event had already corrected it
-                    // to.
-                    inspect_chain.set_offset(
-                        inspect_hz - tuned_freq
-                            - lo_offset_for(current_rate, lo_offset, current_mode)
-                            + f64::from(corr),
-                    );
-                    afc_last_reported = corr;
+            SdrMode::Nfm | SdrMode::Packet | SdrMode::Flex => {
+                if current_mode == SdrMode::Flex {
+                    // Carrier offset tracking and steering are handled synchronously
+                    // on sync locks in Demod::Flex to avoid single-sided idle frame distortion.
+                } else if classifier.flex_is_active() {
+                    // A FLEX frame is in flight on this channel (Packet and
+                    // NFM both share it in Auto-style rigs): FLEX idle is
+                    // single-sided, so the discriminator mean is not a
+                    // carrier offset. Freeze the steering until it ends.
+                    if afc.correction_hz().abs() >= 50.0 {
+                        afc.clear_correction();
+                        inspect_chain.set_offset(
+                            inspect_hz - tuned_freq
+                                - lo_offset_for(current_rate, lo_offset, current_mode),
+                        );
+                        afc_last_reported = 0.0;
+                    }
+                } else {
+                    // PACKET steers exactly like NFM: a 2 kHz click error
+                    // rides a skirt of the channel filter and the POCSAG/
+                    // FLEX syncs are missed without it. Steer only on a
+                    // locked, quieted carrier — the same lock the Auto
+                    // branch below applies.
+                    let locked = last_snr_db >= scannerd_engine::squelch::DEFAULT_OPEN_DB
+                        && mon_gate.is_open();
+                    afc.observe(last_center_offset_hz, locked);
+                    let corr = afc.correction_hz();
+                    if (corr - afc_last_reported).abs() >= 50.0 {
+                        inspect_chain.set_offset(
+                            inspect_hz - tuned_freq
+                                - lo_offset_for(current_rate, lo_offset, current_mode)
+                                + f64::from(corr),
+                        );
+                        afc_last_reported = corr;
+                    }
                 }
                 let c = classifier.process(&inspect_iq, inspect_hz);
                 last_center_offset_hz = c.center_offset_hz;
                 // Weak-signal listening: gate static, level what survives.
-                {
-                    // No noise gate in NFM/Packet: these are monitoring modes,
-                    // where dead-air hiss is information (it tells you the
-                    // channel is empty and the receiver is alive) and a latched
-                    // gate is how audio silently died once already.
+                if current_mode != SdrMode::Flex {
                     let tail = audio_buf.len();
                     audio_buf.extend_from_slice(classifier.monitor_voice());
                     let voice = &mut audio_buf[tail..];
                     mon_notch.process(voice);
+                    mon_gate.process(voice, classifier.monitor_noise());
                     mon_leveler.process(voice);
                 }
                 {
@@ -4016,23 +4051,36 @@ fn run_sdr(
             SdrMode::Auto => {
                 // AUTO steers the same discriminator the packet decoders read:
                 // an unsteered carrier costs it POCSAG/FLEX syncs exactly as
-                // it does PACKET. The voice receivers ride the chain too, so
-                // the steering carries them onto the carrier as well — no
-                // fixed-offset residual for their own trackers to absorb.
-                afc.observe(last_center_offset_hz, last_snr_db > 2.5);
-                let corr = afc.correction_hz();
-                if (corr - afc_last_reported).abs() >= 50.0 {
-                    // Based on the CONFIRMED tuning: a tune this dongle
-                    // refused leaves current_freq ahead of the hardware, and
-                    // steering against the request would re-mix the chain off
-                    // the frequency the State event had already corrected it
-                    // to.
-                    inspect_chain.set_offset(
-                        inspect_hz - tuned_freq
-                            - lo_offset_for(current_rate, lo_offset, current_mode)
-                            + f64::from(corr),
-                    );
-                    afc_last_reported = corr;
+                // it does PACKET. Freeze that steering while FLEX is synced —
+                // idle FLEX is single-sided and the disc mean is not a carrier
+                // offset.
+                if classifier.flex_is_active() {
+                    if afc.correction_hz().abs() >= 50.0 {
+                        afc.clear_correction();
+                        inspect_chain.set_offset(
+                            inspect_hz - tuned_freq
+                                - lo_offset_for(current_rate, lo_offset, current_mode),
+                        );
+                        afc_last_reported = 0.0;
+                    }
+                } else {
+                    // Steer only on a locked, quieted carrier: an unlocked
+                    // discriminator mean is noise with a random DC, and
+                    // integrating it walks the NCO off the channel. The
+                    // 8 dB open threshold (not the old 2.5 dB) is the same
+                    // bar the squelch applies before believing a signal.
+                    let locked = last_snr_db >= scannerd_engine::squelch::DEFAULT_OPEN_DB
+                        && mon_gate.is_open();
+                    afc.observe(last_center_offset_hz, locked);
+                    let corr = afc.correction_hz();
+                    if (corr - afc_last_reported).abs() >= 50.0 {
+                        inspect_chain.set_offset(
+                            inspect_hz - tuned_freq
+                                - lo_offset_for(current_rate, lo_offset, current_mode)
+                                + f64::from(corr),
+                        );
+                        afc_last_reported = corr;
+                    }
                 }
                 // Run everything. The classifier identifies and supplies the
                 // discriminator the packet decoders read; the two voice
@@ -4148,8 +4196,15 @@ fn run_sdr(
                     static PAGE_DUMP: AtomicUsize = AtomicUsize::new(0);
                     if flex_pages > 0 && std::env::var_os("USDR_PAGE_DUMP").is_some() {
                         let n = PAGE_DUMP.fetch_add(1, Ordering::Relaxed);
-                        let (span_wav, disc_wav) =
-                            capture.lock().expect("SDR capture").page_debug_snapshots();
+                        let (span_wav, disc_wav) = {
+                            let (span, span_rate, disc, disc_rate) =
+                                capture.lock().expect("SDR capture").page_debug_samples();
+                            // Encode outside the lock — see `page_debug_samples`.
+                            (
+                                pcm_wav(&span, span_rate, 2),
+                                pcm_wav(&disc, disc_rate, 1),
+                            )
+                        };
                         let span_path = format!("/tmp/usdr_page{n}_span.wav");
                         let disc_path = format!("/tmp/usdr_page{n}_disc.wav");
                         let _ = std::fs::write(&span_path, span_wav);
@@ -4246,9 +4301,11 @@ fn run_sdr(
                 {
                     let (buf, started) = rec_voice.stop();
                     let digital = summary.digital.as_ref();
+                    // Same scaling `call_peak` documents: recorder stores
+                    // full-scale-fraction * 28 000, so / 28 000 here too.
                     let peak = buf
                         .iter()
-                        .map(|&v| (v as f32 / 32768.0).abs())
+                        .map(|&v| (v as f32 / 28_000.0).abs())
                         .fold(0.0f32, f32::max);
                     let record = RecordedCall {
                         id: next_call_id,
@@ -4355,6 +4412,7 @@ fn run_sdr(
         {
             let disc = classifier.monitor_discriminator_hz();
             for packet in aprs.process(disc) {
+                decode_history.note(inspect_hz, "APRS");
                 let _ = events.send(SdrEvent::Decode {
                     inspect_hz,
                     event: packet_event(&packet),
@@ -4369,6 +4427,7 @@ fn run_sdr(
                     d.syncs_512 + d.syncs_1200 + d.syncs_2400
                 };
                 for msg in dec.process(disc) {
+                    decode_history.note(inspect_hz, "POCSAG");
                     let _ = events.send(SdrEvent::Decode {
                         inspect_hz,
                         event: pocsag_event(&msg),
@@ -4385,6 +4444,7 @@ fn run_sdr(
                 (d.syncs_1600, d.syncs_3200, d.syncs_6400)
             };
             for msg in flex.process(disc) {
+                decode_history.note(inspect_hz, "FLEX");
                 let _ = events.send(SdrEvent::Decode {
                     inspect_hz,
                     event: flex_event(&msg),
@@ -4406,6 +4466,52 @@ fn run_sdr(
                 };
                 if let Some(baud) = flex_sync_baud {
                     classifier.note_flex_sync(baud);
+                }
+            }
+        }
+
+        // Dedicated FLEX mode: decodes only Motorola FLEX traffic on this channel.
+        if let Demod::Flex { flex } = &mut demod {
+            let disc = classifier.monitor_discriminator_hz();
+            let flex_syncs_before = {
+                let d = flex.diagnostics();
+                (d.syncs_1600, d.syncs_3200, d.syncs_6400)
+            };
+            for msg in flex.process(disc) {
+                decode_history.note(inspect_hz, "FLEX");
+                let _ = events.send(SdrEvent::Decode {
+                    inspect_hz,
+                    event: flex_event(&msg),
+                });
+            }
+            let d = flex.diagnostics();
+            let flex_sync_baud = if d.syncs_6400 > flex_syncs_before.2 {
+                Some(6400)
+            } else if d.syncs_3200 > flex_syncs_before.1 {
+                Some(3200)
+            } else if d.syncs_1600 > flex_syncs_before.0 {
+                Some(1600)
+            } else {
+                None
+            };
+            if let Some(baud) = flex_sync_baud {
+                classifier.note_flex_sync(baud);
+                if (last_flex_inspect_hz - inspect_hz).abs() > 1.0 {
+                    flex_carrier_corr_hz = 0.0;
+                    last_flex_inspect_hz = inspect_hz;
+                }
+                if let Some(residual) = d.last_carrier_offset_hz {
+                    let residual_f64 = f64::from(residual);
+                    if residual_f64.abs() <= 3_000.0 {
+                        flex_carrier_corr_hz += residual_f64 * 0.70;
+                        flex_carrier_corr_hz = flex_carrier_corr_hz.clamp(-3_000.0, 3_000.0);
+                        freq_error_hz = Some(flex_carrier_corr_hz + residual_f64 * 0.30);
+                        inspect_chain.set_offset(
+                            inspect_hz - tuned_freq
+                                - lo_offset_for(current_rate, lo_offset, current_mode)
+                                + flex_carrier_corr_hz,
+                        );
+                    }
                 }
             }
         }
@@ -4482,13 +4588,40 @@ fn run_sdr(
                     .unwrap_or(scannerd_engine::pager_bank::PAGER_CHANNEL_RATE);
                 scope_dev_scale = scannerd_engine::pager_bank::PAGER_DEVIATION_HZ;
             }
+            SdrMode::Flex => {
+                // For FLEX: provide the monitor discriminator normalized against
+                // PAGER_DEVIATION_HZ (8000 Hz). Outer levels (±4.8 kHz) land at ±0.6,
+                // inner levels (±1.6 kHz) land at ±0.2, leaving headroom for carrier
+                // drift so offsets are visible without rail-clamping.
+                let disc = classifier.monitor_discriminator_hz();
+                let scale = scannerd_engine::pager_bank::PAGER_DEVIATION_HZ;
+                scope_src.extend(disc.iter().map(|&hz| (hz / scale).clamp(-1.0, 1.0)));
+                scope_src_rate = fs_chain;
+                scope_dev_scale = scale;
+            }
             SdrMode::Nfm | SdrMode::Packet | SdrMode::Auto => {
                 // The RAW discriminator, not the gated monitor audio: dead air
                 // is exactly when the scope matters most, and the noise gate
                 // flattens that to zero by design. Discriminator noise IS the
                 // activity — its collapse is what shows a carrier arrived.
-                let disc = classifier.monitor_discriminator_hz();
-                let scale = f64::from(classifier.deviation_scale_hz());
+                //
+                // However, when Auto mode has classified an active digital protocol
+                // (DMR, P25, NXDN), route the 12.5 kHz channel-filtered standard
+                // discriminator scaled by 3000 Hz so the digital eye scope receives
+                // the clean, matched baseband rather than wideband adjacent noise.
+                let is_digital_active = current_mode == SdrMode::Auto
+                    && classification.active
+                    && (classification.protocol.contains("DMR")
+                        || classification.protocol.contains("P25")
+                        || classification.protocol.contains("NXDN"));
+                let (disc, scale) = if is_digital_active {
+                    (classifier.standard_discriminator_hz(), 3_000.0f64)
+                } else {
+                    (
+                        classifier.monitor_discriminator_hz(),
+                        f64::from(classifier.deviation_scale_hz()),
+                    )
+                };
                 scope_src.extend(disc.iter().map(|&hz| (hz as f64 / scale).clamp(-1.0, 1.0) as f32));
                 scope_src_rate = fs_chain;
                 scope_dev_scale = scale as f32;
@@ -4566,6 +4699,9 @@ fn run_sdr(
         }
 
         for event in classifier.take_decode_events() {
+            if current_mode == SdrMode::Flex && event.protocol != "FLEX" {
+                continue;
+            }
             let _ = events.send(SdrEvent::Decode { inspect_hz, event });
         }
 
@@ -4576,6 +4712,11 @@ fn run_sdr(
                 s.dropped_blocks = dropped_blocks;
                 s.lagged_blocks = lagged_blocks;
                 s.freq_error_hz = freq_error_hz;
+                s.flex_diag = if let Demod::Flex { flex } = &demod {
+                    Some(flex.diagnostics().clone())
+                } else {
+                    None
+                };
                 // Running every decoder at once costs about a core, and scan
                 // runs a rig per configured slot — the heaviest mode there
                 // is. If the span is wide enough that blocks are being
@@ -4679,6 +4820,8 @@ fn run_sdr(
                         None => err,
                     });
                 }
+            } else if current_mode == SdrMode::Flex {
+                // freq_error_hz is maintained from flex.diagnostics().last_carrier_offset_hz
             } else if channel_dbfs - noise_dbfs > 3.0
                 && let Some(err) = carrier_offset_hz(
                     shown,
@@ -4692,7 +4835,7 @@ fn run_sdr(
                     Some(prev) => prev + (err - prev) * 0.15,
                     None => err,
                 });
-            } else if last_snr_db < 1.5 {
+            } else if last_snr_db < 1.5 && current_mode != SdrMode::Flex {
                 freq_error_hz = None;
             }
             // `shown` is re-centred on the display centre (which sits away
@@ -4857,7 +5000,15 @@ fn run_sdr(
                 scope: scope.iter().copied().collect(),
                 scope_rate_hz: current_mode.scope_rate_hz().min(scope_src_rate as f32),
                 scope_kind: current_mode.scope_kind(),
-                symbol_rate_hz: current_mode.symbol_rate_hz(),
+                symbol_rate_hz: if current_mode == SdrMode::Flex {
+                    if let Demod::Flex { flex } = &demod {
+                        flex.diagnostics().last_symbol_rate.map(|r| r as f32).unwrap_or(1_600.0)
+                    } else {
+                        current_mode.symbol_rate_hz()
+                    }
+                } else {
+                    current_mode.symbol_rate_hz()
+                },
                 channel_dbfs,
                 noise_dbfs,
             };

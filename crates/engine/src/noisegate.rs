@@ -133,7 +133,11 @@ impl NoiseGate {
                         self.over_close_for = 0;
                     } else {
                         self.over_close_for += 1;
-                        // 1× → CLOSE_DELAY_S to close; 3× → 0.2 s.
+                        // 1× → 0.2 s to close; 3× → 0.05 s (CLOSE_DELAY_S
+                        // 0.40 scaled by the `clamp(0.25, 2.0) / 2.0` factor
+                        // below: 1× → 0.5, 3× → 0.125). The old comment said
+                        // "1× → CLOSE_DELAY_S", which was off by 2× — the /2
+                        // has always been part of the constant's meaning.
                         let seconds = CLOSE_DELAY_S * (2.0 - (over - 1.0)).clamp(0.25, 2.0) / 2.0;
                         if self.over_close_for >= (seconds * self.fs).max(1.0) as usize {
                             self.open = false;

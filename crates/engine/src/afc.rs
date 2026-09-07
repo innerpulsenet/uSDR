@@ -6,9 +6,10 @@
 //! what lets the analog and P25 IFs sit at occupied bandwidth rather than
 //! the full 12.5 kHz allocation.
 //!
-//! The loop is a first-order integrator. It only moves while `locked`, so
-//! noise with the squelch closed or a Phase 2 framer unlocked cannot walk
-//! the NCO off the channel.
+//! The loop is a first-order integrator. It only moves while `locked`; an
+//! unlocked pass decays the correction back toward zero, so noise with the
+//! squelch closed or a Phase 2 framer unlocked cannot walk the NCO off the
+//! channel — and cannot leave it parked off a carrier that has gone away.
 
 /// Mix-frequency tracker: `base + correction`, with the correction integrated
 /// from residual discriminator (or sync-fit) error.
@@ -49,9 +50,18 @@ impl Afc {
         self.corr_hz = 0.0;
     }
 
-    /// Fold in a residual error. `locked` false freezes the integrator.
+    /// Fold in a residual error. `locked` false decays any accumulated
+    /// correction back toward zero: an unlocked discriminator mean is noise
+    /// with a random DC, so the integrator must neither follow it nor hold
+    /// a stale correction it can no longer justify.
     pub fn observe(&mut self, residual_hz: f32, locked: bool) {
-        if !locked || !residual_hz.is_finite() {
+        if !residual_hz.is_finite() {
+            return;
+        }
+        if !locked {
+            // Same time constant the loop integrates with, so an AFC that
+            // has pulled the carrier in unwinds at the rate it went out.
+            self.corr_hz *= 1.0 - self.alpha;
             return;
         }
         self.corr_hz += self.alpha * f64::from(residual_hz);
@@ -69,8 +79,9 @@ impl Afc {
         self.corr_hz as f32
     }
 
-    pub fn base_hz(&self) -> f64 {
-        self.base_hz
+    /// Drop a previously accumulated correction without changing the mix base.
+    pub fn clear_correction(&mut self) {
+        self.corr_hz = 0.0;
     }
 }
 
@@ -102,6 +113,24 @@ mod tests {
     }
 
     #[test]
+    fn unlocked_passes_decay_the_correction_toward_zero() {
+        let mut a = Afc::new(0.0, 5_000.0).with_alpha(0.10);
+        for _ in 0..80 {
+            a.observe(400.0, true);
+        }
+        let held = a.correction_hz();
+        assert!(held > 100.0, "setup: {held}");
+        for _ in 0..400 {
+            a.observe(0.0, false);
+        }
+        assert!(
+            a.correction_hz().abs() < 1.0,
+            "correction should decay to ~0, ended at {}",
+            a.correction_hz()
+        );
+    }
+
+    #[test]
     fn the_correction_is_clamped() {
         let mut a = Afc::new(0.0, 500.0).with_alpha(1.0);
         a.observe(5_000.0, true);
@@ -117,5 +146,15 @@ mod tests {
         a.set_base(-50_000.0);
         assert_eq!(a.correction_hz(), 0.0);
         assert_eq!(a.mix_hz(), -50_000.0);
+    }
+
+    #[test]
+    fn clear_correction_unwinds_without_moving_the_base() {
+        let mut a = Afc::new(-100_000.0, 2_000.0).with_alpha(1.0);
+        a.observe(400.0, true);
+        assert!(a.correction_hz().abs() > 0.0);
+        a.clear_correction();
+        assert_eq!(a.correction_hz(), 0.0);
+        assert_eq!(a.mix_hz(), -100_000.0);
     }
 }

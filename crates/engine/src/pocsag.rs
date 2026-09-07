@@ -230,9 +230,9 @@ impl MultimonPocsagClock {
 
 impl BitSlicer {
     fn new(fs: f64, baud: u32, delay: usize) -> Self {
-        let spb = (fs / f64::from(baud)).max(4.0);
+        let spb = (fs / f64::from(baud)).max(2.0);
         Self {
-            clock: TimingLoop::new(spb),
+            clock: TimingLoop::new(spb).expect("pocsag spb is clamped to at least 2 sps"),
             ted: GardnerTed::new(),
             delay,
             delay0: delay,
@@ -551,7 +551,7 @@ impl PocsagDecoder {
                     }
                     let phase_a = self.lanes[lane_a].slicer.clock.phase_fraction();
                     let phase_b = self.lanes[lane_b].slicer.clock.phase_fraction();
-                    if (phase_a - phase_b).abs() > 0.15 || bit_a == bit_b {
+                    if wrapped_phase_delta(phase_a, phase_b) > 0.22 || bit_a == bit_b {
                         continue;
                     }
                     // Disagreement at matched phase: the more reliable
@@ -571,9 +571,13 @@ impl PocsagDecoder {
                     if let Some(pos) = out.iter().position(|q: &PocsagMessage| {
                         q.capcode == p.capcode
                             && q.baud == p.baud
+                            && q.function == p.function
                             && (q.text == p.text
-                                || q.text.starts_with(&p.text)
-                                || p.text.starts_with(&q.text))
+                                || (!q.text.is_empty()
+                                    && !p.text.is_empty()
+                                    && q.raw_words.len() != p.raw_words.len()
+                                    && (q.text.starts_with(&p.text)
+                                        || p.text.starts_with(&q.text))))
                     }) {
                         // Prefer a longer decode, then a complete or lower-FEC
                         // decode when staggered timing lanes recovered the same
@@ -599,16 +603,28 @@ impl PocsagDecoder {
 impl Lane {
     fn push_bit(&mut self, bit: bool, diag: &mut PocsagDiagnostics) -> Option<PocsagMessage> {
         match self.baud {
-            512 => diag.bits_512 += 1,
-            1200 => diag.bits_1200 += 1,
-            2400 => diag.bits_2400 += 1,
+            512 => {
+                if self.multimon || self.phase == 0 {
+                    diag.bits_512 += 1;
+                }
+            }
+            1200 => {
+                if self.multimon || self.phase == 0 {
+                    diag.bits_1200 += 1;
+                }
+            }
+            2400 => {
+                if self.multimon || self.phase == 0 {
+                    diag.bits_2400 += 1;
+                }
+            }
             _ => {}
         }
         if self.word == usize::MAX {
             self.shift = (self.shift << 1) | u32::from(bit);
             let err_norm = (self.shift ^ SYNC).count_ones();
             let err_inv = (self.shift ^ !SYNC).count_ones();
-            if err_norm <= 2 || err_inv <= 2 {
+            if err_norm <= 1 || err_inv <= 1 {
                 self.inverted = err_inv < err_norm;
                 self.word = 0;
                 self.word_bits = 0;
@@ -617,11 +633,13 @@ impl Lane {
                 // preamble (tau ~ 2000 samples at 48 kS/s), so its DC is
                 // settled and honest; it now freezes for the batch.
                 let errs = err_norm.min(err_inv);
-                match self.baud {
-                    512 => diag.syncs_512 += 1,
-                    1200 => diag.syncs_1200 += 1,
-                    2400 => diag.syncs_2400 += 1,
-                    _ => {}
+                if self.multimon || self.phase == 0 {
+                    match self.baud {
+                        512 => diag.syncs_512 += 1,
+                        1200 => diag.syncs_1200 += 1,
+                        2400 => diag.syncs_2400 += 1,
+                        _ => {}
+                    }
                 }
                 diag.last_sync_baud = Some(self.baud);
                 diag.last_carrier_offset_hz = Some(self.slicer.dc);
@@ -651,32 +669,35 @@ impl Lane {
         self.bits_in = 0;
 
         if self.word == WORDS_PER_BATCH {
-            // We just finished reading the 32-bit SYNC word between batches!
-            let err_sync = (w ^ SYNC).count_ones();
-            if err_sync <= 3 {
-                // SYNC confirmed at batch boundary: advance to word 0 of the new batch
-                self.word = 0;
-                match self.baud {
-                    512 => diag.syncs_512 += 1,
-                    1200 => diag.syncs_1200 += 1,
-                    2400 => diag.syncs_2400 += 1,
-                    _ => {}
+            match decode_word(w) {
+                Some((fixed, _)) if fixed == SYNC => {
+                    self.word = 0;
+                    if self.multimon || self.phase == 0 {
+                        match self.baud {
+                            512 => diag.syncs_512 += 1,
+                            1200 => diag.syncs_1200 += 1,
+                            2400 => diag.syncs_2400 += 1,
+                            _ => {}
+                        }
+                    }
+                    diag.last_sync_baud = Some(self.baud);
+                    add_event(
+                        diag,
+                        format!(
+                            "SYNC locked next batch ({} baud, phase {})",
+                            self.baud, self.phase
+                        ),
+                    );
+                    return None;
                 }
-                diag.last_sync_baud = Some(self.baud);
-                add_event(
-                    diag,
-                    format!(
-                        "SYNC locked next batch ({} baud, phase {}, {} bit errs)",
-                        self.baud, self.phase, err_sync
-                    ),
-                );
-                return None;
-            } else {
-                // Expected SYNC missed / transmission finished. Flush in-progress message.
-                let msg = self.take_msg(diag, true);
-                self.word = usize::MAX;
-                self.shift = if self.inverted { !w } else { w };
-                return msg;
+                _ => {
+                    let msg = self.take_msg(diag, true);
+                    self.word = usize::MAX;
+                    self.shift = if self.inverted { !w } else { w };
+                    self.slicer.clock.reacquire();
+                    self.slicer.ted.reset();
+                    return msg;
+                }
             }
         }
 
@@ -774,6 +795,11 @@ impl Lane {
     }
 }
 
+/// Circular distance on the unit interval, so lanes at 0.98 and 0.02 vote.
+fn wrapped_phase_delta(a: f64, b: f64) -> f64 {
+    ((a - b + 0.5).rem_euclid(1.0) - 0.5).abs()
+}
+
 /// Remainder of the 31-bit BCH word (bit 30 = x^30) mod the generator.
 fn syndrome(mut v: u32) -> u32 {
     for i in (10..31).rev() {
@@ -868,6 +894,9 @@ fn decode_text(chunks: &[u32]) -> DecodedText {
     let alpha_text = alpha
         .iter()
         .collect::<String>()
+        .trim_start_matches(|c: char| {
+            c == '\0' || c == '\x02' || c == '\x03' || c == '\x04' || !(' '..='~').contains(&c)
+        })
         .trim_end_matches(|c: char| {
             c == '\0' || c == '\x03' || c == '\x04' || !(' '..='~').contains(&c)
         })
@@ -1288,5 +1317,18 @@ mod tests {
         assert!(page.partial);
         assert!(text.starts_with(&page.text));
         assert_eq!(page.raw_words.len(), 15);
+    }
+
+    #[test]
+    fn leading_stx_is_stripped_from_alpha() {
+        let decoded = decode_text(&alpha_words("\u{02}HELLO"));
+        assert_eq!(decoded.alpha, "HELLO");
+        assert!(!decoded.alpha.contains('\u{02}'));
+    }
+
+    #[test]
+    fn wrapped_phase_delta_treats_near_wraparound_as_close() {
+        assert!(wrapped_phase_delta(0.98, 0.02) < 0.05);
+        assert!(wrapped_phase_delta(0.0, 0.5) > 0.4);
     }
 }

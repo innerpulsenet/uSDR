@@ -57,8 +57,16 @@ impl Notch {
         self.x1 = x;
         self.y2 = self.y1;
         self.y1 = y;
-        // Blend by depth: depth 1 = fully nulled output.
-        x * (1.0 - self.depth) + y * self.depth
+        // Blend by depth: depth 1 = fully nulled output. The pole radius is
+        // 0.97, so the resonator's peak gain at w0 is ~1/(1-r) — deep in
+        // saturation territory for a full-scale tone. Hard-cap the mix at
+        // 1.0: the blend is linear in depth, so a depth driven past it (the
+        // score allowed 1.5) does not null "harder", it pushes the blend
+        // weight past unity and INVERTS the phase of the tone at the output,
+        // which re-injects it as a louder artifact. The score is clamped at
+        // its source in `rescan` for the same reason.
+        let depth = self.depth.min(1.0);
+        x * (1.0 - depth) + y * depth
     }
 }
 
@@ -175,7 +183,11 @@ impl AutoNotch {
             {
                 Some(c) => {
                     c.freq_hz = c.freq_hz * 0.5 + hz * 0.5;
-                    c.score = (c.score + share * 0.8).min(1.5);
+                    // Clamp the reinforcement at 1.0. The score feeds the
+                    // notch depth directly (via `(score - CLOSE_SCORE) /
+                    // (OPEN_SCORE - CLOSE_SCORE)`), and a depth past 1.0
+                    // inverts the notch's blend — see `Notch::process`.
+                    c.score = (c.score + share * 0.8).min(1.0);
                 }
                 None => self.candidates.push(Candidate { freq_hz: hz, score: share }),
             }

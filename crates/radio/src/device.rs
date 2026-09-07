@@ -300,7 +300,40 @@ impl Drop for Device {
     }
 }
 
-const BLOCK: usize = 16384;
+const MAX_BLOCK: usize = 131072;
+
+fn rx_stream(
+    dev: &soapysdr::Device,
+    driver: &str,
+    rate: f64,
+    log_tx: Option<&SyncSender<String>>,
+) -> Result<soapysdr::RxStream<Complex32>> {
+    let mut args = soapysdr::Args::new();
+    if driver.to_ascii_lowercase().contains("rtlsdr") {
+        // Target ~20 ms delivery interval (50 Hz) so userspace receives
+        // continuous, low-latency sample blocks across all sample rates
+        // instead of the default 131k-sample bursts (which cause 500+ ms
+        // stutter at low sample rates).
+        let target_samples = (rate * 0.020).round() as usize;
+        let target_bytes = target_samples * 2; // 2 bytes per complex sample in CS8
+        // USB bulk endpoint packet size is 512 bytes; librtlsdr requires bufflen % 512 == 0.
+        let bufflen = ((target_bytes + 256) / 512 * 512).clamp(4096, 131072);
+        args.set("bufflen", bufflen.to_string());
+        // Maintain a deep ring of buffers (48 buffers * ~20ms = ~960ms queue)
+        // and 32 async USB transfers to prevent any underruns or dropped packets.
+        args.set("buffers", "48");
+        args.set("asyncBuffs", "32");
+        if let Some(log) = log_tx {
+            let samples = bufflen / 2;
+            let ms = (samples as f64 / rate) * 1000.0;
+            let _ = log.try_send(format!(
+                "rtlsdr stream config: bufflen={bufflen} ({samples} samples, {ms:.1} ms), buffers=48, asyncBuffs=32"
+            ));
+        }
+    }
+    dev.rx_stream_args::<Complex32, _>(&[0], args)
+        .map_err(|e| anyhow::anyhow!("rx stream: {e}"))
+}
 
 pub fn open(cfg: &DeviceConfig) -> Result<Device> {
     let (cmd_tx, cmd_rx) = channel::<Cmd>();
@@ -363,12 +396,14 @@ pub fn open(cfg: &DeviceConfig) -> Result<Device> {
     dev.set_frequency(Rx, 0, corrected(tune.desired, tune.ppm), ())
         .context("setting frequency")?;
 
+    let mut initial_agc = false;
     match cfg.gain {
         Some(g) => {
-            apply_overall_gain(&dev, &caps, g, &log_tx);
+            apply_overall_gain(&dev, &caps, &mut initial_agc, g, &log_tx);
         }
         None if caps.hardware_agc => {
             let _ = dev.set_gain_mode(Rx, 0, true);
+            initial_agc = true;
             let _ = log_tx.try_send(format!("{}: hardware AGC enabled", cfg.serial));
         }
         None => {}
@@ -388,6 +423,7 @@ pub fn open(cfg: &DeviceConfig) -> Result<Device> {
             actual_rate,
             cover_hz,
             tune,
+            initial_agc,
             cmd_rx,
             fan,
             log_for_worker.clone(),
@@ -482,24 +518,20 @@ fn run(
     mut rate: f64,
     cover_hz: f64,
     mut tune: Tuning,
+    mut agc_enabled: bool,
     cmd_rx: Receiver<Cmd>,
     fanout: Fanout,
     log_tx: SyncSender<String>,
     event_tx: SyncSender<Event>,
 ) -> Result<()> {
-    let mut stream = dev.rx_stream::<Complex32>(&[0])?;
+    let mut stream = rx_stream(&dev, &caps.driver, rate, Some(&log_tx))?;
     stream.activate(None)?;
-    let mut buf = vec![Complex32::new(0.0, 0.0); BLOCK];
-    // The block handed to subscribers, recycled once every consumer is done
-    // with the previous one. `prev_block` watches whether the last broadcast
-    // has been fully consumed yet.
-    let mut out: Vec<Complex32> = Vec::with_capacity(BLOCK);
-    let mut prev_block: IqBlockArc = Arc::from(Vec::new());
+    let mut buf = vec![Complex32::new(0.0, 0.0); MAX_BLOCK];
     let mut dropped: u64 = 0;
     let mut lagged: u64 = 0;
     let mut clipped: u64 = 0;
     let mut counted: u64 = 0;
-    let mut clip_guard = if dev.gain_mode(Rx, 0).unwrap_or(true) {
+    let mut clip_guard = if agc_enabled {
         None
     } else {
         match caps.gain {
@@ -510,6 +542,7 @@ fn run(
         }
     };
     let mut usb_fails = 0u32;
+    let mut tune_fails = 0u32;
 
     loop {
         let mut last_tune = None;
@@ -526,7 +559,7 @@ fn run(
                     false
                 }
                 Ok(Cmd::Gain(g)) => {
-                    let ok = apply_overall_gain(&dev, &caps, g, &log_tx);
+                    let ok = apply_overall_gain(&dev, &caps, &mut agc_enabled, g, &log_tx);
                     if ok {
                         let applied = match caps.gain {
                             GainControl::Overall { min, max } => g.clamp(min, max),
@@ -560,7 +593,18 @@ fn run(
                     false
                 }
                 Ok(Cmd::Agc(on)) => {
-                    let ok = set_and_log(&log_tx, "AGC", dev.set_gain_mode(Rx, 0, on));
+                    let mut ok = false;
+                    for _attempt in 0..3 {
+                        if dev.set_gain_mode(Rx, 0, on).is_ok() {
+                            ok = true;
+                            agc_enabled = on;
+                            break;
+                        }
+                        std::thread::sleep(std::time::Duration::from_millis(10));
+                    }
+                    if !ok {
+                        let _ = log_tx.try_send("AGC failed".to_string());
+                    }
                     if ok {
                         if on {
                             clip_guard = None;
@@ -588,19 +632,22 @@ fn run(
                 Ok(Cmd::Rate(r)) => {
                     let _ = stream.deactivate(None);
                     drop(stream);
+                    std::thread::sleep(std::time::Duration::from_millis(25));
                     let ok = dev.set_sample_rate(Rx, 0, r);
                     if let Err(ref e) = ok {
                         let _ = log_tx.try_send(format!("rate failed: {e}"));
                     } else {
                         rate = dev.sample_rate(Rx, 0).unwrap_or(r);
                         let _ = log_tx.try_send(format!("sample rate {rate:.0} S/s"));
+                        std::thread::sleep(std::time::Duration::from_millis(15));
                         if let Err(e) = set_bandwidth(&dev, rate, cover_hz, &log_tx) {
                             let _ = log_tx.try_send(format!(
                                 "analog bandwidth after rate change unavailable: {e}"
                             ));
                         }
                     }
-                    stream = dev.rx_stream::<Complex32>(&[0])?;
+                    std::thread::sleep(std::time::Duration::from_millis(20));
+                    stream = rx_stream(&dev, &caps.driver, rate, Some(&log_tx))?;
                     stream.activate(None)?;
                     ok.is_ok()
                 }
@@ -624,20 +671,19 @@ fn run(
                 // silently dropped.
                 let ok = set_frequency_retrying(&dev, corrected(f, tune.ppm));
                 if ok {
-                    usb_fails = 0;
+                    tune_fails = 0;
                     // Only now is this where the radio is.
                     tune.desired = f;
                     publish_state(&dev, &caps, tune, &event_tx);
                 } else {
-                    usb_fails = usb_fails.saturating_add(1);
+                    tune_fails = tune_fails.saturating_add(1);
                     let _ = log_tx.try_send(format!(
-                        "tune failed: {:.4} MHz not accepted after {TUNE_ATTEMPTS} attempts",
+                        "tune failed: {:.4} MHz not accepted after {TUNE_ATTEMPTS} attempts ({tune_fails}/3)",
                         f / 1e6
                     ));
-                    // Deliberately not tearing the stream down. A tuner that
-                    // will not move still delivers samples at the frequency it
-                    // is on, and killing the receiver over it costs the
-                    // operator their audio and their waterfall to fix nothing.
+                    if tune_fails >= 3 {
+                        anyhow::bail!("tuner wedged after {tune_fails} failed tune attempts");
+                    }
                 }
             }
         }
@@ -652,22 +698,7 @@ fn run(
                     .count() as u64;
                 counted += n as u64;
 
-                // Hand the samples to subscribers by moving a recycled block
-                // into the Arc, not by copying the slice: `Arc::from(&[T])`
-                // clones 128 KB per block (~16-25 MB/s at 2-3.2 MS/s) on the
-                // thread that also has to keep up with USB. A Vec→Arc
-                // conversion is a pointer move. When every consumer is still
-                // holding the previous block, fall back to a fresh Vec rather
-                // than dropping samples.
-                let recyclable = out.capacity() >= n && Arc::strong_count(&prev_block) <= 1;
-                let block = if recyclable {
-                    out.clear();
-                    out.extend_from_slice(&buf[..n]);
-                    Arc::from(std::mem::take(&mut out))
-                } else {
-                    Arc::from(buf[..n].to_vec())
-                };
-                prev_block = Arc::clone(&block);
+                let block: IqBlockArc = Arc::from(&buf[..n]);
 
                 if fanout.subscriber_count() == 0 {
                     dropped += 1;
@@ -721,30 +752,45 @@ fn run(
 fn apply_overall_gain(
     dev: &soapysdr::Device,
     caps: &Capabilities,
+    agc_enabled: &mut bool,
     want: f64,
     log: &SyncSender<String>,
 ) -> bool {
-    if caps.hardware_agc {
-        let _ = dev.set_gain_mode(Rx, 0, false);
+    if caps.hardware_agc && *agc_enabled {
+        for _ in 0..3 {
+            if dev.set_gain_mode(Rx, 0, false).is_ok() {
+                *agc_enabled = false;
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        std::thread::sleep(std::time::Duration::from_millis(15));
     }
     let g = match caps.gain {
         GainControl::Overall { min, max } => want.clamp(min, max),
         GainControl::Sdrplay { .. } => want,
     };
-    match dev.set_gain(Rx, 0, g) {
-        Ok(()) => {
-            let got = dev.gain(Rx, 0).unwrap_or(g);
-            if (want - got).abs() > 0.15 {
-                let _ = log.try_send(format!("gain {want:.1} dB → {got:.1} dB"));
-            } else {
-                let _ = log.try_send(format!("gain {got:.1} dB"));
-            }
-            true
+    let mut ok = false;
+    for attempt in 0..3 {
+        if dev.set_gain(Rx, 0, g).is_ok() {
+            ok = true;
+            break;
         }
-        Err(e) => {
-            let _ = log.try_send(format!("gain {g} rejected: {e}"));
-            false
+        if attempt + 1 < 3 {
+            std::thread::sleep(std::time::Duration::from_millis(10));
         }
+    }
+    if ok {
+        let got = dev.gain(Rx, 0).unwrap_or(g);
+        if (want - got).abs() > 0.15 {
+            let _ = log.try_send(format!("gain {want:.1} dB → {got:.1} dB"));
+        } else {
+            let _ = log.try_send(format!("gain {got:.1} dB"));
+        }
+        true
+    } else {
+        let _ = log.try_send(format!("gain {g} failed"));
+        false
     }
 }
 

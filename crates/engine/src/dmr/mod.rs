@@ -165,7 +165,9 @@ impl Resampler8k {
         let mut out = Vec::with_capacity(pcm.len() * 2);
         for &s in pcm {
             if self.started {
-                out.push(f32::from(self.prev + s) / 65536.0);
+                // i16 + i16 overflows at full-scale extremes (the vocoder
+                // can emit both samples near ±32767); widen before adding.
+                out.push((i32::from(self.prev) + i32::from(s)) as f32 / 65536.0);
             } else {
                 out.push(f32::from(s) / 32768.0);
                 self.started = true;

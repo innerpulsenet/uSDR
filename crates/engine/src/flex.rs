@@ -114,6 +114,12 @@ pub struct FlexMessage {
     pub group_recipients: Vec<u64>,
     /// Corrected 21-bit message words, retained for secure/binary inspection.
     pub raw_words: Vec<u32>,
+    /// Alpha signature byte carried by a Complete/First fragment, if the
+    /// fragment's first content byte was a signature.
+    pub alpha_signature: Option<u8>,
+    /// Sum of this fragment's alpha character bytes. The signature covers
+    /// the whole message, so validation sums this across all fragments.
+    pub alpha_character_sum: u32,
 }
 
 #[derive(Clone, Debug, Default, Serialize, PartialEq)]
@@ -334,13 +340,24 @@ pub fn bch_correct_soft(raw: u32, reliabilities: &[f32; 32]) -> Result<(u32, usi
                 // positions; a miscorrection's spurious changes scatter onto
                 // arbitrary, often high-confidence bits.
                 let extra = (fixed ^ raw) & !pattern_mask;
+                // Extra BCH flips must live in the LOW-reliability half of
+                // the ranking (order is ascending confidence). order[D..] is
+                // the *more* reliable tail — accepting extras there is how a
+                // miscorrection flips a high-confidence format field and
+                // turns an alpha page into `[Binary payload]`.
                 let extra_ok = if extra == 0 {
-                    true
+                    // A 3- or 4-flip pattern that lands on a codeword with no
+                    // extra BCH work is usually a different codeword, not the
+                    // transmitted one. Genuine 1–2 weak-bit recoveries stay.
+                    flip_count <= 2
                 } else {
                     extra.count_ones() <= 2
-                        && (0..32)
-                            .filter(|&b| extra >> b & 1 != 0)
-                            .all(|b| order[D..].contains(&(b as u8)))
+                        && (0..32).filter(|&b| extra >> b & 1 != 0).all(|b| {
+                            order
+                                .iter()
+                                .position(|&p| p == b as u8)
+                                .is_some_and(|rank| rank < 16)
+                        })
                 };
                 if extra_ok {
                     return Ok((
@@ -572,7 +589,8 @@ impl SymbolClock {
         let release_samples = 0.050 * fs;
         Self {
             fs,
-            clock: TimingLoop::new(fs / 1600.0),
+            clock: TimingLoop::new(fs / 1600.0)
+                .expect("flex hunt rate is at least 2 sps at any real fs"),
             ted: GardnerTed::new(),
             delay,
             initial_delay: delay,
@@ -603,7 +621,8 @@ impl SymbolClock {
         if let Some(multimon) = &mut self.multimon {
             multimon.reset();
         }
-        self.clock = TimingLoop::new(self.fs / 1600.0);
+        self.clock = TimingLoop::new(self.fs / 1600.0)
+            .expect("flex hunt rate is at least 2 sps at any real fs");
         self.ted.reset();
         self.delay = self.initial_delay;
         self.clear_integration();
@@ -709,10 +728,15 @@ impl SymbolClock {
         } else {
             0
         };
-        // Soft reliability: how far the decision sits from the nearest slice
-        // boundary, as a fraction of the level reference. Near 0 the symbol
-        // sat on a boundary and any vote involving it is a coin flip.
-        self.quality = (average.abs() / self.outer).clamp(0.0, 2.0);
+        // Soft reliability: distance from the *nearest* slice boundary as a
+        // fraction of the level spacing, so it is 0.5 at a solid symbol and
+        // ~0 at a boundary straddle regardless of level. The old
+        // |average|/outer measure gave inner levels at most ~0.33 and made
+        // every clean 4-level frame look like mush.
+        let spacing = self.outer / 3.0;
+        let offset = (average.abs() % spacing.max(1.0) / spacing.max(1.0)).min(1.0);
+        let distance = offset.min(1.0 - offset);
+        self.quality = (distance / 0.5).clamp(0.0, 1.0);
         Some((symbol, self.quality))
     }
 }
@@ -915,22 +939,25 @@ impl Lane {
 
     fn push(&mut self, sample: f32, diag: &mut FlexDiagnostics) -> Option<(RawFrame, f32)> {
         let hunting = matches!(self.state, LaneState::Hunting { .. });
+        let (symbol, quality) = self.clock.push(sample, hunting)?;
         if hunting && self.cooldown > 0 {
             self.cooldown -= 1;
         }
-        let (symbol, quality) = self.clock.push(sample, hunting)?;
         match &mut self.state {
             LaneState::Hunting { shift, symbols } => {
                 *shift = (*shift << 1) | u64::from(symbol < 2);
                 *symbols = (*symbols + 1).min(64);
-                // Strict gate while any sibling lane is capturing a frame:
-                // a loose match against the middle of someone else's burst
-                // would drag this lane out of the hunt and cost it the next
-                // frame's sync word. Loose is only safe when the bank is
-                // otherwise idle, which is exactly when a real weak frame
-                // arrives.
+                // After releasing a frame the next 64 symbols can still be
+                // data tail in the hunt window. Tighten the marker budget
+                // for that window only — FIW still arbitrates. A whole-frame
+                // cooldown blocked the next SYNC1.
+                let (marker_b, code_b) = if self.cooldown > 0 {
+                    (2, 2)
+                } else {
+                    (SYNC_MARKER_MAX_ERRORS, SYNC_CODE_MAX_ERRORS)
+                };
                 if *symbols == 64
-                    && let Some((mode, inverted)) = sync_mode(*shift)
+                    && let Some((mode, inverted)) = sync_mode_budget(*shift, marker_b, code_b)
                 {
                     let baud = mode.baud();
                     match baud {
@@ -1052,11 +1079,10 @@ impl Lane {
                         qualities: std::mem::take(qualities),
                     };
                     self.parked = true;
-                    // One full frame window of strict hunting after release:
-                    // the data section still sliding under this lane's sync
-                    // window must not read as a sync candidate.
-                    self.cooldown =
-                        mode_copy.symbol_rate as usize * (DATA_MS + SYNC2_MS + 100) / 1000;
+                    // One hunt-window of leftover data (64 symbols), counted
+                    // per sliced symbol. A full-frame cooldown in samples
+                    // blocked the next SYNC1 and was never consulted anyway.
+                    self.cooldown = 64;
                 }
             }
             LaneState::Slicing { .. } => {}
@@ -1065,9 +1091,12 @@ impl Lane {
     }
 }
 
+#[cfg(test)]
 fn sync_mode(raw: u64) -> Option<(Mode, bool)> {
-    let marker_budget = SYNC_MARKER_MAX_ERRORS;
-    let code_budget = SYNC_CODE_MAX_ERRORS;
+    sync_mode_budget(raw, SYNC_MARKER_MAX_ERRORS, SYNC_CODE_MAX_ERRORS)
+}
+
+fn sync_mode_budget(raw: u64, marker_budget: u32, code_budget: u32) -> Option<(Mode, bool)> {
     let mut best: Option<(u32, Mode, bool)> = None;
     for inverted in [false, true] {
         let word = if inverted { !raw } else { raw };
@@ -1183,10 +1212,16 @@ fn deinterleave_with_quality(
 }
 
 /// Shift one reliability into a word's LSB-first reliability vector.
+///
+/// Deinterleaving shifts each word right, so the first-received symbol ends
+/// up as word bit 0 and the last as bit 31. Pushing each new quality in at
+/// slot 31 (older entries sliding down) keeps slot i aligned with word bit
+/// i; shifting the other way handed Chase-2 a mirrored ranking and made it
+/// flip exactly the wrong bits.
 #[inline]
 fn shift_rel(rel: &mut BitReliabilities, q: f32) {
-    rel.copy_within(0..31, 1);
-    rel[0] = q;
+    rel.copy_within(1..32, 0);
+    rel[31] = q;
 }
 
 /// Reliability of each bit of each word, in word-bit order (LSB-first).
@@ -1243,6 +1278,12 @@ fn correct_phase(
 struct PendingFragment {
     text: String,
     updated: Instant,
+    /// Accumulated alpha character bytes across the fragments so far; the
+    /// Complete/First fragment's signature validates against the total.
+    character_sum: u32,
+    /// Signature byte seen on the Complete/First fragment, kept so a
+    /// Continuation that lost its own header can still be validated.
+    signature: Option<u8>,
 }
 
 #[derive(Clone, Default)]
@@ -1450,20 +1491,38 @@ impl FlexDecoder {
     fn reassemble(&mut self, message: &mut FlexMessage, now: Instant) {
         let key = (message.capcode, message.message_number);
         match message.fragment {
-            FlexFragment::Complete => {}
+            FlexFragment::Complete => {
+                // A whole-message signature validates against this
+                // fragment's own characters.
+                if let Some(signature) = message.alpha_signature {
+                    message.payload_checksum_ok = Some(
+                        message.payload_checksum_ok.unwrap_or(true)
+                            && signature == ((!message.alpha_character_sum) & 0x7f) as u8,
+                    );
+                }
+            }
             FlexFragment::First => {
                 self.diag.fragments_started += 1;
+                if let Some(signature) = message.alpha_signature {
+                    message.payload_checksum_ok = Some(
+                        message.payload_checksum_ok.unwrap_or(true)
+                            && signature == ((!message.alpha_character_sum) & 0x7f) as u8,
+                    );
+                }
                 self.fragments.insert(
                     key,
                     PendingFragment {
                         text: message.text.clone(),
                         updated: now,
+                        character_sum: message.alpha_character_sum,
+                        signature: message.alpha_signature,
                     },
                 );
             }
             FlexFragment::Middle => {
                 if let Some(fragment) = self.fragments.get_mut(&key) {
                     fragment.text.push_str(&message.text);
+                    fragment.character_sum += message.alpha_character_sum;
                     fragment.updated = now;
                     message.text = fragment.text.clone();
                 } else {
@@ -1473,6 +1532,8 @@ impl FlexDecoder {
                         PendingFragment {
                             text: message.text.clone(),
                             updated: now,
+                            character_sum: message.alpha_character_sum,
+                            signature: None,
                         },
                     );
                 }
@@ -1480,11 +1541,22 @@ impl FlexDecoder {
             FlexFragment::Continuation => {
                 if let Some(mut pending) = self.fragments.remove(&key) {
                     pending.text.push_str(&message.text);
+                    pending.character_sum += message.alpha_character_sum;
                     message.text = pending.text;
                     message.parsed =
                         Some(crate::pager_parser::parse_pager_text(&message.text, None));
                     message.complete = true;
                     message.reassembled = true;
+                    // The signature from the First fragment covers every
+                    // character of the reassembled message, including the
+                    // tail — this is where an accumulated checksum lands.
+                    if let Some(signature) = message.alpha_signature.or(pending.signature) {
+                        message.alpha_signature = Some(signature);
+                        message.alpha_character_sum = pending.character_sum;
+                        let ok = signature == ((!pending.character_sum) & 0x7f) as u8;
+                        message.payload_checksum_ok =
+                            Some(message.payload_checksum_ok.unwrap_or(true) && ok);
+                    }
                     self.diag.fragments_completed += 1;
                 } else if message.payload_checksum_ok != Some(false) {
                     // No pending first fragment: publish the tail as an
@@ -1524,6 +1596,11 @@ impl FlexDecoder {
         let priority_words = ((biw >> 4) & 0x0F) as usize;
         let mut messages = Vec::new();
         let mut address_index = address_start;
+        // Vectors advance with the addresses: a short address owns one
+        // vector word, a long address two. Deriving the index from the
+        // address position alone slid every later vector one word off
+        // after the first long address on the phase.
+        let mut vector_cursor = vector_start;
         while address_index < vector_start {
             let Some(aw1) = phase.words[address_index] else {
                 address_index += 1;
@@ -1533,18 +1610,74 @@ impl FlexDecoder {
                 address_index += 1;
                 continue;
             }
-            let vector_index = vector_start + address_index - address_start;
-            let Some(viw) = phase.words.get(vector_index).copied().flatten() else {
-                break;
-            };
+            // A long-shaped first word owns a second address word even when
+            // the pair fails to decode as a valid capcode; advancing only
+            // one re-read that second word as a fresh (garbage) address.
+            let long_shaped =
+                (1..=0x8000).contains(&aw1) || (0x1F7FFF..=0x1FFFFE).contains(&aw1);
             let Some(address) = decode_address(phase, address_index, vector_start) else {
-                address_index += 1;
+                address_index += if long_shaped { 2 } else { 1 };
                 continue;
             };
             let capcode = address.capcode;
             let long_address = address.long;
             let consumed = address.consumed;
             self.diag.addr_words += consumed as u64;
+            let vector_index = vector_cursor;
+            vector_cursor += if long_address { 2 } else { 1 };
+            // An address whose vector window has run past the valid vector
+            // words is a tone alert: the page itself is real, only its
+            // vector is absent. Breaking here used to strand every later
+            // address in the phase.
+            let Some(viw) = phase.words.get(vector_index).copied().flatten() else {
+                let group_recipients = if (GROUP_MIN..=GROUP_MAX).contains(&capcode) {
+                    let group = (capcode - GROUP_MIN) as u8;
+                    self.groups
+                        .remove(&group)
+                        .filter(|assignment| {
+                            assignment.cycle == cycle && assignment.frame == frame
+                        })
+                        .map(|assignment| assignment.recipients)
+                        .unwrap_or_default()
+                } else {
+                    Vec::new()
+                };
+                messages.push(FlexMessage {
+                    capcode,
+                    cycle,
+                    frame,
+                    phase: phase_name,
+                    format: FlexFormat::ShortMessage,
+                    text: "[Tone Only]".into(),
+                    parsed: None,
+                    baud: mode.baud(),
+                    symbol_rate: mode.symbol_rate,
+                    levels: mode.levels,
+                    long_address,
+                    address_type: address.kind.into(),
+                    priority: address_index - address_start < priority_words,
+                    fragment: FlexFragment::Complete,
+                    fragment_number: None,
+                    message_number: None,
+                    retrieval: None,
+                    maildrop: None,
+                    payload_checksum_ok: None,
+                    secure_subtype: None,
+                    complete: true,
+                    reassembled: false,
+                    fec_corrected: fiw_errors
+                        + (address_index..address_index + consumed)
+                            .map(|index| u32::from(phase.errors[index]))
+                            .sum::<u32>(),
+                    fec_uncorrectable: 0,
+                    group_recipients,
+                    raw_words: Vec::new(),
+                    alpha_signature: None,
+                    alpha_character_sum: 0,
+                });
+                address_index += consumed;
+                continue;
+            };
             let format = FlexFormat::from_vector(viw);
             if format == FlexFormat::ShortInstruction {
                 let instruction_type = ((viw >> 7) & 7) as u8;
@@ -1600,8 +1733,6 @@ impl FlexDecoder {
                 } else {
                     // Types 2-7 are reserved; no real system sends them, and a
                     // vector that reads as one is a corrupted format field.
-                    // Publishing it put rows like "[Reserved instruction
-                    // type 3: 0x28E]" in the log for every marginal frame.
                     address_index += consumed;
                     continue;
                 };
@@ -1636,6 +1767,8 @@ impl FlexDecoder {
                     fec_uncorrectable: 0,
                     group_recipients,
                     raw_words: vec![viw],
+                    alpha_signature: None,
+                    alpha_character_sum: 0,
                 });
                 address_index += consumed;
                 continue;
@@ -1657,11 +1790,9 @@ impl FlexDecoder {
             // definition, since every real short/tone page renders text.
             let publishable = match decoded.payload_checksum_ok {
                 Some(true) => true,
-                Some(false) => {
-                    decoded.fragment == FlexFragment::Complete
-                        && decoded.fec_uncorrectable == 0
-                        && !decoded.text.is_empty()
-                }
+                // A K- complete page is plausible-looking corruption. Publishing
+                // it beside the clean repeat makes every row untrustworthy.
+                Some(false) => false,
                 None => decoded.complete && !decoded.text.is_empty(),
             };
             if !publishable {
@@ -1715,6 +1846,8 @@ impl FlexDecoder {
                 fec_uncorrectable: decoded.fec_uncorrectable,
                 group_recipients,
                 raw_words: decoded.raw_words,
+                alpha_signature: decoded.alpha_signature,
+                alpha_character_sum: decoded.alpha_character_sum,
             });
             address_index += consumed;
         }
@@ -1735,6 +1868,8 @@ struct VectorDecode {
     fec_corrected: u32,
     fec_uncorrectable: u32,
     raw_words: Vec<u32>,
+    alpha_signature: Option<u8>,
+    alpha_character_sum: u32,
 }
 
 struct DecodedAddress {
@@ -1867,6 +2002,8 @@ fn decode_vector(
         fec_corrected: 0,
         fec_uncorrectable: 0,
         raw_words: Vec::new(),
+        alpha_signature: None,
+        alpha_character_sum: 0,
     };
     match format {
         FlexFormat::ShortMessage => {
@@ -1910,11 +2047,15 @@ fn decode_vector(
                         Some(retrieval),
                     )
                 }
-                _ => (
-                    format!("[Reserved Short Message: 0x{:03X}]", (viw >> 9) & 0xfff),
-                    None,
-                    None,
-                ),
+                _ => {
+                    // Subtype 3 is reserved. Same garbage path as reserved
+                    // short-instruction types: drop it rather than log hex.
+                    return VectorDecode {
+                        text: String::new(),
+                        complete: false,
+                        ..default()
+                    };
+                }
             };
             VectorDecode {
                 text,
@@ -1956,17 +2097,42 @@ fn decode_vector(
             let text = decode_numeric_stream(&words, format == FlexFormat::NumberedNumeric);
             let header = words.first().copied();
             let checksum_ok = numeric_checksum_ok(viw, &words);
+            // The alpha fragment/continued bits (10/11) only exist on alpha
+            // and secure headers. Numbered-numeric headers carry N (message
+            // number, bits 2..8) and R (retrieval flag, bit 8) after the two
+            // check bits instead (TI SPRA183 Table 2-2); reading them as
+            // fragment bits fragmented every numbered-numeric page.
+            let (fragment, fragment_number, message_number, retrieval, complete) = if format
+                == FlexFormat::NumberedNumeric
+            {
+                let retrieval = header.map(|word| word >> 8 & 1 != 0).unwrap_or(false);
+                (
+                    FlexFragment::Complete,
+                    None,
+                    header.map(|word| ((word >> 2) & 0x3f) as u8),
+                    Some(retrieval),
+                    bad == 0 && checksum_ok,
+                )
+            } else {
+                (
+                    header
+                        .map(fragment_from_alpha_header)
+                        .unwrap_or(FlexFragment::Complete),
+                    header.map(|word| ((word >> 11) & 3) as u8),
+                    header.map(|word| ((word >> 13) & 0x3f) as u8),
+                    header.map(|word| word >> 19 & 1 != 0),
+                    bad == 0 && checksum_ok && header.is_some_and(|word| word >> 10 & 1 == 0),
+                )
+            };
             VectorDecode {
                 text,
-                fragment: header
-                    .map(fragment_from_alpha_header)
-                    .unwrap_or(FlexFragment::Complete),
-                fragment_number: header.map(|word| ((word >> 11) & 3) as u8),
-                message_number: header.map(|word| ((word >> 13) & 0x3f) as u8),
-                retrieval: header.map(|word| word >> 19 & 1 != 0),
+                fragment,
+                fragment_number,
+                message_number,
+                retrieval,
                 maildrop: header.map(|word| word >> 20 & 1 != 0),
                 payload_checksum_ok: Some(checksum_ok),
-                complete: bad == 0 && checksum_ok && header.is_some_and(|word| word >> 10 & 1 == 0),
+                complete,
                 fec_corrected: corrected,
                 fec_uncorrectable: bad,
                 raw_words: words,
@@ -2001,20 +2167,29 @@ fn decode_vector(
             }
             // An erased header decodes to a placeholder whose fragment bits
             // read as "continuation" — publishing that emits garbage under a
-            // real-looking capcode. Treat any erasure in the message as
-            // suspect: the page may still be shown, but it must never claim
-            // completeness or drive reassembly.
-            let header_erased = bad > 0 && !long && words.first().is_none_or(|w| *w == 0);
+            // real-looking capcode. Force Complete-but-incomplete so
+            // reassembly never treats the erasure as a fragment tail.
+            let header_erased = bad > 0 && header == 0;
             let fragment_number = ((header >> 11) & 3) as u8;
             let fragment = if header_erased {
-                FlexFragment::Continuation
+                FlexFragment::Complete
             } else {
                 fragment_from_alpha_header(header)
             };
             let secure_type = (header >> 19) & 3;
             let decode_as_alpha = format == FlexFormat::Alphanumeric || secure_type == 0;
-            let (text, signature_ok) = if decode_as_alpha {
-                decode_alpha_words_checked(&words, fragment_number == 3)
+            // Only a Complete or First fragment carries the signature byte:
+            // it is the first content byte of the message, and Middle /
+            // Continuation fragments start mid-message. Requiring one here
+            // fragmented every real continuation into orphan tails.
+            let signature_expected = matches!(
+                fragment,
+                FlexFragment::Complete | FlexFragment::First
+            );
+            let (text, signature, character_sum) = if decode_as_alpha {
+                let (text, signature, character_sum) =
+                    decode_alpha_words_checked(&words, signature_expected);
+                (text, signature, character_sum)
             } else {
                 (
                     format!(
@@ -2026,6 +2201,7 @@ fn decode_vector(
                             .join(" ")
                     ),
                     None,
+                    0u32,
                 )
             };
             let checksum_ok = alpha_checksum_ok(header, &words);
@@ -2045,15 +2221,21 @@ fn decode_vector(
                 message_number: Some(((header >> 13) & 0x3f) as u8),
                 retrieval: Some(header >> 19 & 1 != 0),
                 maildrop: Some(header >> 20 & 1 != 0),
-                payload_checksum_ok: Some(checksum_ok && signature_ok.unwrap_or(true)),
+                payload_checksum_ok: Some(
+                    checksum_ok && !header_erased,
+                ),
                 secure_subtype,
                 complete: fragment == FlexFragment::Complete
                     && bad == 0
                     && checksum_ok
-                    && signature_ok.unwrap_or(true),
+                    && signature
+                        .map(|received| received == ((!character_sum) & 0x7f) as u8)
+                        .unwrap_or(true),
                 fec_corrected: corrected,
                 fec_uncorrectable: bad,
                 raw_words: words,
+                alpha_signature: signature,
+                alpha_character_sum: character_sum,
             }
         }
         FlexFormat::Binary => {
@@ -2148,7 +2330,17 @@ fn word_group_sum(word: u32) -> u32 {
     (word & 0xff) + ((word >> 8) & 0xff) + ((word >> 16) & 0x1f)
 }
 
-fn decode_alpha_words_checked(words: &[u32], skip_signature: bool) -> (String, Option<bool>) {
+/// Decode alpha message words; when `skip_signature` the first byte of the
+/// first word is the checksum signature byte, not text.
+///
+/// Returns the text plus `(signature, character_sum)` when a signature was
+/// present: the signature equals the 7-bit complement of the sum of every
+/// character byte in the *whole* message, so validation of a reassembled
+/// multi-fragment page sums the per-fragment totals in `reassemble`.
+fn decode_alpha_words_checked(
+    words: &[u32],
+    skip_signature: bool,
+) -> (String, Option<u8>, u32) {
     let mut bytes = Vec::new();
     let mut signature = None;
     let mut character_sum = 0u32;
@@ -2170,7 +2362,8 @@ fn decode_alpha_words_checked(words: &[u32], skip_signature: bool) -> (String, O
     }
     (
         String::from_utf8_lossy(&bytes).trim_end().to_string(),
-        signature.map(|received| received == ((!character_sum) & 0x7f) as u8),
+        signature,
+        character_sum,
     )
 }
 
@@ -2224,20 +2417,20 @@ fn combine_frames(frames: Vec<(RawFrame, f32)>) -> Vec<RawFrame> {
         return frames.into_iter().map(|(frame, _)| frame).collect();
     }
     // Group by (FIW, mode fingerprint, length): one air transmission.
-    let mut groups: Vec<(u32, u8, Vec<usize>)> = Vec::new();
+    let mut groups: Vec<(u64, Vec<usize>)> = Vec::new();
     for (index, (frame, _)) in frames.iter().enumerate() {
         let mode_fp = (frame.mode.symbol_rate % 7) as u8 + frame.mode.levels;
         let key = ((frame.fiw as u64) << 24)
             | ((mode_fp as u64) << 16)
             | frame.symbols.len().min(0xFFFF) as u64;
-        match groups.iter_mut().find(|(known, _, _)| *known == key as u32) {
-            Some((_, _, members)) => members.push(index),
-            None => groups.push((key as u32, 0, vec![index])),
+        match groups.iter_mut().find(|(known, _)| *known == key) {
+            Some((_, members)) => members.push(index),
+            None => groups.push((key, vec![index])),
         }
     }
 
     let mut out: Vec<Option<(RawFrame, f32)>> = frames.into_iter().map(Some).collect();
-    for (_, _, members) in &groups {
+    for (_, members) in &groups {
         if members.len() < 2 {
             continue;
         }
@@ -2277,13 +2470,15 @@ fn combine_frames(frames: Vec<(RawFrame, f32)>) -> Vec<RawFrame> {
         }
         let mut voted = Vec::with_capacity(len);
         for position in 0..len {
-            // Quality-weighted plurality over the four levels. A capture
-            // whose quality says its symbols are coin flips barely moves the
-            // tally; two clean agreeing captures beat four mushy ones.
+            // Quality-weighted plurality over the four levels. Slicer
+            // quality is distance-to-boundary in 0..0.5, so it is squared
+            // into a vote weight: a capture whose quality says its symbols
+            // sat on a boundary barely moves the tally; two clean agreeing
+            // captures beat four mushy ones.
             let mut tally = [0f32; 4];
             for &member in merged.iter() {
                 let (capture, quality) = out[member].as_ref().unwrap();
-                let weight = *quality * *quality;
+                let weight = (*quality * 2.0).powi(2);
                 if weight <= f32::EPSILON {
                     continue;
                 }
@@ -3203,6 +3398,8 @@ pub(crate) mod tests {
             fec_uncorrectable: 0,
             group_recipients: Vec::new(),
             raw_words: Vec::new(),
+            alpha_signature: None,
+            alpha_character_sum: 0,
         };
         let mut first = base("STRUCTURE FIRE ", FlexFragment::First, false);
         decoder.reassemble(&mut first, now);
@@ -3243,6 +3440,8 @@ pub(crate) mod tests {
             fec_uncorrectable: 0,
             group_recipients: Vec::new(),
             raw_words: Vec::new(),
+            alpha_signature: None,
+            alpha_character_sum: 0,
         };
         let mut first = make("ALPHA ", FlexFragment::First);
         decoder.reassemble(&mut first, now);
@@ -3254,5 +3453,93 @@ pub(crate) mod tests {
         decoder.reassemble(&mut final_part, now);
         assert_eq!(final_part.text, "ALPHA BRAVO CHARLIE");
         assert!(final_part.complete && final_part.reassembled);
+    }
+
+    #[test]
+    fn a_checksum_failed_complete_page_is_not_published() {
+        let mode = Mode {
+            symbol_rate: 1600,
+            levels: 2,
+        };
+        let mut phase = CorrectedPhase {
+            words: [Some(0); WORDS_PER_PHASE],
+            errors: [0; WORDS_PER_PHASE],
+            reliabilities: [[1.0; 32]; WORDS_PER_PHASE],
+        };
+        let mut body = alpha_words("GARBAGE COMPLETE", 3, false);
+        body[1] ^= 0x55;
+        let start = 3usize;
+        phase.words[0] = Some((0u32 << 8) | (2u32 << 10));
+        phase.words[1] = Some(0x8000 + 99);
+        phase.words[2] = Some((5 << 4) | ((start as u32) << 7) | ((body.len() as u32) << 14));
+        for (index, word) in body.into_iter().enumerate() {
+            phase.words[start + index] = Some(word);
+        }
+        let mut decoder = FlexDecoder::new(16_000.0);
+        let pages = decoder.decode_phase(fiw(2, 77), 0, mode, 'A', &phase);
+        assert!(
+            pages
+                .iter()
+                .all(|p| p.payload_checksum_ok != Some(false)),
+            "K- complete page reached the log: {pages:?}"
+        );
+    }
+
+    #[test]
+    fn reserved_short_message_subtype_is_not_published() {
+        let mode = Mode {
+            symbol_rate: 1600,
+            levels: 2,
+        };
+        let mut phase = CorrectedPhase {
+            words: [Some(0); WORDS_PER_PHASE],
+            errors: [0; WORDS_PER_PHASE],
+            reliabilities: [[1.0; 32]; WORDS_PER_PHASE],
+        };
+        phase.words[0] = Some((0u32 << 8) | (2u32 << 10));
+        phase.words[1] = Some(0x8000 + 4242);
+        // Format 2 (short message), subtype 3 (reserved).
+        phase.words[2] = Some((2 << 4) | (3 << 7) | (0x424 << 9));
+        let mut decoder = FlexDecoder::new(16_000.0);
+        let pages = decoder.decode_phase(fiw(2, 77), 0, mode, 'A', &phase);
+        assert!(
+            pages.is_empty(),
+            "reserved short-message subtype published: {pages:?}"
+        );
+    }
+
+    #[test]
+    fn an_erased_alpha_header_does_not_look_like_a_continuation() {
+        let mut phase = CorrectedPhase {
+            words: [Some(0); WORDS_PER_PHASE],
+            errors: [0; WORDS_PER_PHASE],
+            reliabilities: [[1.0; 32]; WORDS_PER_PHASE],
+        };
+        let start = 3usize;
+        phase.words[start] = None;
+        phase.words[start + 1] = Some(0x12_3456);
+        let viw = (5 << 4) | ((start as u32) << 7) | (2u32 << 14);
+        let decoded = decode_vector(viw, 2, false, &phase);
+        assert_ne!(decoded.fragment, FlexFragment::Continuation);
+        assert!(!decoded.complete);
+    }
+
+    #[test]
+    fn combine_frames_keeps_distinct_fiws_apart() {
+        let mode = Mode {
+            symbol_rate: 3200,
+            levels: 4,
+        };
+        let symbols = vec![0u8; 100];
+        let qualities = vec![1.0f32; 100];
+        let frame = |fiw: u32| RawFrame {
+            mode,
+            fiw,
+            fiw_errors: 0,
+            symbols: symbols.clone(),
+            qualities: qualities.clone(),
+        };
+        let out = combine_frames(vec![(frame(0x100), 1.0), (frame(0x200), 1.0)]);
+        assert_eq!(out.len(), 2, "different FIWs must not merge, got {}", out.len());
     }
 }
