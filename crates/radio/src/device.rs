@@ -13,7 +13,7 @@
 //! instead of being derived from an amateur band plan, since a scanner's spans
 //! are set by the system being monitored, not by band edges.
 
-use crate::fanout::{Fanout, IqBlock as IqBlockArc};
+use crate::fanout::{Fanout, IqBlock};
 use anyhow::{Context, Result};
 use num_complex::Complex32;
 use soapysdr::Direction::Rx;
@@ -531,6 +531,12 @@ fn run(
     let mut lagged: u64 = 0;
     let mut clipped: u64 = 0;
     let mut counted: u64 = 0;
+    // Acquisition timeline: `sample_pos` is where the next read lands on the
+    // device's sample grid; `epoch` bumps on every ACCEPTED tune/rate change
+    // (and starts a new run when the thread opens the stream). Consumers use
+    // the pair to detect lost deliveries and stale queued blocks exactly.
+    let mut sample_pos: u64 = 0;
+    let mut epoch: u64 = 0;
     let mut clip_guard = if agc_enabled {
         None
     } else {
@@ -626,6 +632,12 @@ fn run(
                         let _ = log_tx.try_send(
                             "frequency correction failed: tuner would not accept it".into(),
                         );
+                    } else {
+                        // An accepted correction moves the LO: what follows is
+                        // a different sample run even though the dial did not
+                        // move. Stale queued blocks must not frame with it.
+                        epoch += 1;
+                        sample_pos = 0;
                     }
                     ok
                 }
@@ -638,6 +650,10 @@ fn run(
                         let _ = log_tx.try_send(format!("rate failed: {e}"));
                     } else {
                         rate = dev.sample_rate(Rx, 0).unwrap_or(r);
+                        // New rate = new sample grid: the old positions mean
+                        // nothing against it, so this starts a new epoch.
+                        epoch += 1;
+                        sample_pos = 0;
                         let _ = log_tx.try_send(format!("sample rate {rate:.0} S/s"));
                         std::thread::sleep(std::time::Duration::from_millis(15));
                         if let Err(e) = set_bandwidth(&dev, rate, cover_hz, &log_tx) {
@@ -674,6 +690,10 @@ fn run(
                     tune_fails = 0;
                     // Only now is this where the radio is.
                     tune.desired = f;
+                    // Accepted tune: samples before and after belong to
+                    // different RF windows — a new epoch, position restarts.
+                    epoch += 1;
+                    sample_pos = 0;
                     publish_state(&dev, &caps, tune, &event_tx);
                 } else {
                     tune_fails = tune_fails.saturating_add(1);
@@ -698,7 +718,12 @@ fn run(
                     .count() as u64;
                 counted += n as u64;
 
-                let block: IqBlockArc = Arc::from(&buf[..n]);
+                let block = IqBlock {
+                    samples: Arc::from(&buf[..n]),
+                    first_sample: sample_pos,
+                    epoch,
+                };
+                sample_pos += n as u64;
 
                 if fanout.subscriber_count() == 0 {
                     dropped += 1;

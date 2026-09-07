@@ -14,7 +14,7 @@ use num_complex::Complex32;
 use scannerd_dsp::OnePole;
 use std::f32::consts::TAU;
 
-pub use channel::{NxdnChannelReceiver, NxdnSpec};
+pub use channel::{NxdnChannelReceiver, NxdnGrant, NxdnSpec};
 pub use control::{ControlMessage, decode_control};
 
 pub const CHANNEL_RATE: f64 = 48_000.0;
@@ -389,6 +389,45 @@ fn lich_layout(lich: u8) -> Option<(System, Vec<usize>)> {
     Some(value)
 }
 
+/// Three back-to-back valid frames at the wide rate, FM-modulated onto a
+/// carrier so the whole discrimination/scan stack is exercised. Crate-level
+/// test helper: the channel-receiver tests use it too.
+#[cfg(test)]
+pub(crate) fn tests_modulated_frames(lich: u8) -> Vec<Complex32> {
+    use std::f32::consts::TAU;
+    let parity = ((lich >> 6) ^ (lich >> 5) ^ (lich >> 4) ^ (lich >> 3)) & 1;
+    let lich_full = (lich << 1) | parity;
+    let mut payload = vec![0u8; FRAME_SYMBOLS - FSW_SYMBOLS];
+    for (i, dibit) in payload.iter_mut().take(8).enumerate() {
+        *dibit = (((lich_full >> (7 - i)) & 1) << 1) | 1;
+    }
+    pn95(&mut payload, 0xe4);
+
+    let fsw = (0..FSW_SYMBOLS)
+        .map(|i| ((0xC_DF_59 >> (18 - i * 2)) & 3) as u8)
+        .collect::<Vec<_>>();
+    let dibits = std::iter::repeat_n(fsw.into_iter().chain(payload).collect::<Vec<_>>(), 3)
+        .flatten()
+        .collect::<Vec<_>>();
+    let mut phase = 0.0f32;
+    dibits
+        .iter()
+        .flat_map(|&dibit| {
+            let level = match dibit {
+                0 => 1.0,
+                1 => 3.0,
+                2 => -1.0,
+                _ => -3.0,
+            };
+            std::iter::repeat_n(level, Rate::Nxdn96.samples_per_symbol())
+        })
+        .map(|level| {
+            phase += TAU * level * 600.0 / CHANNEL_RATE as f32;
+            Complex32::new(phase.cos(), phase.sin())
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -411,39 +450,10 @@ mod tests {
     }
 
     /// Three back-to-back valid frames at the wide rate, FM-modulated onto a
-    /// carrier so the whole discrimination/scan stack is exercised.
+    /// carrier so the whole discrimination/scan stack is exercised. Shared
+    /// with the channel-receiver tests (same crate) as `tests_modulated_frames`.
     fn modulated_frames(lich: u8) -> Vec<Complex32> {
-        let parity = ((lich >> 6) ^ (lich >> 5) ^ (lich >> 4) ^ (lich >> 3)) & 1;
-        let lich_full = (lich << 1) | parity;
-        let mut payload = vec![0u8; FRAME_SYMBOLS - FSW_SYMBOLS];
-        for (i, dibit) in payload.iter_mut().take(8).enumerate() {
-            *dibit = (((lich_full >> (7 - i)) & 1) << 1) | 1;
-        }
-        pn95(&mut payload, 0xe4);
-
-        let fsw = (0..FSW_SYMBOLS)
-            .map(|i| ((0xC_DF_59 >> (18 - i * 2)) & 3) as u8)
-            .collect::<Vec<_>>();
-        let dibits = std::iter::repeat_n(fsw.into_iter().chain(payload).collect::<Vec<_>>(), 3)
-            .flatten()
-            .collect::<Vec<_>>();
-        let mut phase = 0.0f32;
-        dibits
-            .iter()
-            .flat_map(|&dibit| {
-                let level = match dibit {
-                    0 => 1.0,
-                    1 => 3.0,
-                    2 => -1.0,
-                    _ => -3.0,
-                };
-                std::iter::repeat_n(level, Rate::Nxdn96.samples_per_symbol())
-            })
-            .map(|level| {
-                phase += TAU * level * 600.0 / CHANNEL_RATE as f32;
-                Complex32::new(phase.cos(), phase.sin())
-            })
-            .collect()
+        super::tests_modulated_frames(lich)
     }
 
     #[test]

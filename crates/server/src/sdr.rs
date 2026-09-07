@@ -16,6 +16,7 @@ use scannerd_engine::leveler::Leveler;
 use scannerd_engine::noisegate::NoiseGate;
 use scannerd_engine::autonotch::AutoNotch;
 use scannerd_engine::nbfm::{Demodulated, NbfmDemod};
+use scannerd_engine::nxdn::{NXDN_BANDWIDTH_HZ, NxdnChannelReceiver, NxdnSpec};
 use scannerd_engine::{ClassificationResult, DecodeEvent, SignalClassifier};
 use scannerd_radio::{Cmd, Device, DeviceConfig, Role, device};
 use crate::devices as config;
@@ -146,6 +147,9 @@ pub enum SdrMode {
     P25,
     /// DMR Tier II, decoded to voice through the AMBE vocoder.
     Dmr,
+    /// NXDN48/NXDN96 conventional voice, decoded through the AMBE+2 vocoder.
+    /// Both symbol rates are acquired concurrently; whichever locks wins.
+    Nxdn,
     /// Everything at once: the classifier, both digital voice receivers, and
     /// every packet and paging decoder, all on the same channel. Costs more
     /// CPU than picking one, and answers "what is this?" without being told.
@@ -179,6 +183,7 @@ impl SdrMode {
             SdrMode::Packet | SdrMode::Flex => PACKET_BANDWIDTH_HZ,
             SdrMode::P25 => C4FM_BANDWIDTH_HZ,
             SdrMode::Dmr => DMR_BANDWIDTH_HZ,
+            SdrMode::Nxdn => NXDN_BANDWIDTH_HZ,
             // Wide enough for every narrowband candidate at once.
             SdrMode::Auto => INSPECT_BANDWIDTH_HZ,
             // The scan tests AM, NFM, P25 and DMR candidates through one
@@ -194,7 +199,9 @@ impl SdrMode {
     fn scope_kind(self) -> &'static str {
         match self {
             // Auto is watching for digital, so the eye is the useful view.
-            SdrMode::P25 | SdrMode::Dmr | SdrMode::Auto | SdrMode::Flex => "symbols",
+            SdrMode::P25 | SdrMode::Dmr | SdrMode::Nxdn | SdrMode::Auto | SdrMode::Flex => {
+                "symbols"
+            }
             SdrMode::Wfm => "mpx",
             _ => "audio",
         }
@@ -204,6 +211,9 @@ impl SdrMode {
     fn symbol_rate_hz(self) -> f32 {
         match self {
             SdrMode::P25 | SdrMode::Dmr | SdrMode::Auto => 4_800.0,
+            // NXDN runs both rates concurrently; the eye is drawn against the
+            // narrow conventional rate (NXDN48) as the common reference.
+            SdrMode::Nxdn => 2_400.0,
             SdrMode::Packet => 1_200.0,
             SdrMode::Flex => 1_600.0,
             _ => 0.0,
@@ -220,7 +230,7 @@ impl SdrMode {
             SdrMode::Wfm => 128_000.0,
             // Symbols are sent at the channel rate — decimating an eye
             // diagram destroys the thing it is meant to show.
-            SdrMode::P25 | SdrMode::Dmr | SdrMode::Auto | SdrMode::Flex => 48_000.0,
+            SdrMode::P25 | SdrMode::Dmr | SdrMode::Nxdn | SdrMode::Auto | SdrMode::Flex => 48_000.0,
             // The live pager channel, box-decimated from the bank's channel
             // rate down to 48 kS/s: a ±24 kHz axis brackets the ±4.8 kHz
             // FLEX deviation levels with room for several kHz of drift, and
@@ -240,6 +250,85 @@ impl SdrMode {
         }
     }
 
+    /// Authoritative per-mode capability description. The UI has historically
+    /// hardcoded what each mode can do and drifted from the truth (a mode
+    /// count in the README, an NXDN button that did not exist, scope labels
+    /// that did not match the binary frame). This is the single source the
+    /// browser and any other client should read: what the mode is called,
+    /// what it delivers (audio and/or decoded data), and how its scope is
+    /// drawn.
+    pub fn capabilities(self) -> ModeCapabilities {
+        let (label, kind, description) = match self {
+            SdrMode::Nfm => (
+                "NFM",
+                "voice",
+                "Narrowband FM plus the full digital classifier (CTCSS/DCS/MDC/POCSAG/FLEX/APRS detection)",
+            ),
+            SdrMode::Am => ("AM", "voice", "Amplitude modulation: airband and broadcast"),
+            SdrMode::Wfm => ("WFM", "voice", "Broadcast FM; classifier off"),
+            SdrMode::Packet => (
+                "PACKET",
+                "data",
+                "Every packet and paging decoder on the tuned channel: AX.25 1200, POCSAG 512/1200/2400, FLEX",
+            ),
+            SdrMode::P25 => ("P25", "voice+data", "P25 Phase 1 C4FM voice through the IMBE vocoder; trunk grants followed"),
+            SdrMode::Dmr => ("DMR", "voice+data", "DMR Tier II voice through the AMBE vocoder"),
+            SdrMode::Nxdn => ("NXDN", "voice+data", "NXDN48/NXDN96 conventional voice through AMBE+2; Type-C/D call assignments surfaced"),
+            SdrMode::Auto => ("AUTO", "voice+data", "Every decoder at once on the tuned channel: classifier, P25, DMR, and all packet/paging paths"),
+            SdrMode::Pager => ("PAGER", "data", "POCSAG+FLEX bank walked across the 25 kHz paging channels around the tuned frequency"),
+            SdrMode::Flex => ("FLEX", "data", "Dedicated Motorola FLEX demodulator with symbol eye and discriminator scope"),
+            SdrMode::Scan => ("SCAN", "voice+data", "Peak-driven voice scan over a configured range: AM/NFM/P25/DMR slots, locks and holds what decodes"),
+        };
+        ModeCapabilities {
+            mode: self,
+            label,
+            kind,
+            description,
+            // Every mode streams something audible: the data modes carry
+            // their live channel (PAGER's walking-bank channel audio, FLEX's
+            // gated monitor) so the operator can hear what is being decoded.
+            delivers_audio: true,
+            delivers_decode_events: !matches!(self, SdrMode::Wfm),
+            bandwidth_hz: self.bandwidth_hz(),
+            scope_kind: self.scope_kind(),
+            symbol_rate_hz: self.symbol_rate_hz(),
+        }
+    }
+
+    /// Every mode the server accepts, in UI order.
+    pub fn all() -> &'static [SdrMode] {
+        &[
+            SdrMode::Nfm,
+            SdrMode::Am,
+            SdrMode::Wfm,
+            SdrMode::P25,
+            SdrMode::Dmr,
+            SdrMode::Nxdn,
+            SdrMode::Packet,
+            SdrMode::Pager,
+            SdrMode::Flex,
+            SdrMode::Auto,
+            SdrMode::Scan,
+        ]
+    }
+}
+
+/// What one mode can do, as the API reports it.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModeCapabilities {
+    pub mode: SdrMode,
+    pub label: &'static str,
+    /// "voice", "data", or "voice+data".
+    pub kind: &'static str,
+    pub description: &'static str,
+    pub delivers_audio: bool,
+    pub delivers_decode_events: bool,
+    pub bandwidth_hz: f32,
+    /// Matches the scope-kind byte in the binary FFT frame: "audio",
+    /// "symbols", or "mpx".
+    pub scope_kind: &'static str,
+    pub symbol_rate_hz: f32,
 }
 
 /// One block of demodulated audio on its way to the browser.
@@ -308,6 +397,14 @@ pub struct SdrStatus {
     pub dropped_blocks: u64,
     #[serde(default)]
     pub lagged_blocks: u64,
+    /// Samples this loop knows it never saw (queue overflow between
+    /// successful deliveries, from the block sample-position metadata).
+    /// Distinct from `lagged_blocks`, which counts lost *deliveries*.
+    #[serde(default)]
+    pub lost_samples: u64,
+    /// Number of discontinuity events (a lost-sample gap the tracker saw).
+    #[serde(default)]
+    pub gap_events: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
     #[serde(default)]
@@ -676,8 +773,13 @@ impl CaptureBuffer {
     /// rate). Called from the device loop before any processing; a no-op
     /// while the ring is not armed — the rate is still tracked so a capture
     /// taken mid-fill is labelled with the true span rate.
-    fn append_span(&mut self, rate: f64, block: &[num_complex::Complex32]) {
-        if (self.span_rate - rate).abs() >= 1.0 {
+    ///
+    /// `discontinuous` marks a break in the sample timeline (a lost-delivery
+    /// gap or an acquisition epoch boundary): the ring is dropped rather than
+    /// spliced across a hole, so a downloaded capture never stitches samples
+    /// that were never adjacent on the air.
+    fn append_span(&mut self, rate: f64, block: &[num_complex::Complex32], discontinuous: bool) {
+        if (self.span_rate - rate).abs() >= 1.0 || discontinuous {
             self.span.clear();
             self.span_rate = rate;
         }
@@ -1223,6 +1325,9 @@ enum Demod {
     Dmr {
         rx: Box<DmrChannelReceiver>,
     },
+    Nxdn {
+        rx: Box<NxdnChannelReceiver>,
+    },
     /// Every decoder at once. The classifier still runs, because it is what
     /// identifies the analogue and one-off protocols the dedicated receivers
     /// know nothing about.
@@ -1270,6 +1375,19 @@ impl Demod {
                         freq_hz: channel_hz,
                         color_code: None,
                         slot: None,
+                    },
+                    fs_out,
+                )),
+            },
+            SdrMode::Nxdn => Demod::Nxdn {
+                rx: Box::new(NxdnChannelReceiver::new_on_channel(
+                    NxdnSpec {
+                        name: "inspect".into(),
+                        freq_hz: channel_hz,
+                        // Acquire NXDN48 and NXDN96 together; a conventional
+                        // channel does not announce which it uses.
+                        rate: None,
+                        ran: None,
                     },
                     fs_out,
                 )),
@@ -1335,12 +1453,71 @@ impl Demod {
         }
     }
 
+    /// Drop per-run decode state after a break in the sample timeline (a
+    /// lost-delivery gap or an acquisition epoch boundary). Framing state
+    /// must not stitch samples across a hole that never existed on the air;
+    /// the decoders restart their lock from the new run instead.
+    fn reset_timeline(&mut self, fs_out: f64) {
+        match self {
+            Demod::Nfm | Demod::Scan => {}
+            Demod::Wfm {
+                fm,
+                disc,
+                deemph,
+                phase,
+                acc,
+                ..
+            } => {
+                fm.reset();
+                disc.clear();
+                *deemph = scannerd_dsp::OnePole::new(WFM_DEEMPHASIS_TAU * fs_out as f32);
+                *phase = 0;
+                *acc = 0.0;
+            }
+            Demod::Packet {
+                aprs,
+                pocsag,
+                flex,
+            } => {
+                aprs.reset();
+                for dec in pocsag.iter_mut() {
+                    dec.reset();
+                }
+                flex.reset();
+            }
+            Demod::Flex { flex } => flex.reset(),
+            Demod::Am { demod, audio } => {
+                demod.reset();
+                audio.clear();
+            }
+            Demod::P25 { rx } => rx.reset(),
+            Demod::Dmr { rx } => rx.reset(),
+            Demod::Nxdn { rx } => rx.reset(),
+            Demod::Auto {
+                p25,
+                dmr,
+                aprs,
+                pocsag,
+                flex,
+            } => {
+                p25.reset();
+                dmr.reset();
+                aprs.reset();
+                for dec in pocsag.iter_mut() {
+                    dec.reset();
+                }
+                flex.reset();
+            }
+        }
+    }
+
     /// Audio rate this demodulator delivers, given the chain rate feeding it.
     fn audio_rate(&self, fs_out: f64) -> f64 {
         match self {
             Demod::Wfm { decim, .. } => fs_out / *decim as f64,
             Demod::P25 { rx } => rx.audio_rate(),
             Demod::Dmr { rx } => rx.audio_rate(),
+            Demod::Nxdn { rx } => rx.audio_rate(),
             Demod::Flex { .. } => 0.0,
             // Whichever receiver is carrying a call sets the rate; otherwise
             // the analogue path is what is being heard.
@@ -1543,6 +1720,18 @@ fn grant_repr(grant: &scannerd_engine::p25::conventional::TrunkGrant) -> String 
     )
 }
 
+/// NXDN does not announce a band plan in-band, so a control-channel
+/// assignment names a carrier *number*; consecutive grants on the same
+/// number are directly comparable, but it cannot be turned into Hz here.
+fn nxdn_grant_repr(grant: &scannerd_engine::nxdn::NxdnGrant) -> String {
+    format!(
+        "assignment: {} {} → channel {}",
+        if grant.group { "TG" } else { "ID" },
+        grant.talkgroup,
+        grant.channel_number
+    )
+}
+
 /// Wrap a control-channel observation in the decode-event pipeline.
 fn grant_event(protocol: &str, repr: &str) -> DecodeEvent {
     DecodeEvent {
@@ -1742,7 +1931,11 @@ fn flex_event(msg: &scannerd_engine::FlexMessage) -> DecodeEvent {
 
 /// A digital voice call starting or ending, as a decode-log line.
 fn call_event(mode: SdrMode, ev: &CallEvent) -> DecodeEvent {
-    let protocol = if mode == SdrMode::P25 { "P25" } else { "DMR" };
+    let protocol = match mode {
+        SdrMode::P25 => "P25",
+        SdrMode::Nxdn => "NXDN",
+        _ => "DMR",
+    };
     match ev {
         CallEvent::Started => DecodeEvent {
             protocol: protocol.into(),
@@ -2396,6 +2589,8 @@ fn run_sdr(
             inspect_rate_hz: 0.0,
             dropped_blocks: 0,
             lagged_blocks: 0,
+            lost_samples: 0,
+            gap_events: 0,
             error: None,
             mode: current_mode,
             audio_rate_hz: 0.0,
@@ -2592,12 +2787,14 @@ fn run_sdr(
     // Audio for the browser, refilled each block. Reused so a steady stream of
     let mut audio_buf: Vec<f32> = Vec::new();
 
-    // Slight threshold hysteresis (38 ms instead of 40 ms) so that two
-    // 20.0 ms blocks consistently satisfy the interval without jittering
-    // to a 3rd block on sub-millisecond clock variations.
-    let frame_interval =
-        Duration::from_millis((1000 / DEFAULT_FPS as u64).saturating_sub(2).max(1));
-    let mut last_frame = Instant::now();
+    // Display frames are paced on the *sample* clock, not the wall clock.
+    // The radio delivers ~20 ms blocks; a wall-clock gate measured from the
+    // previous frame's emission (which lands a few ms into a block, after
+    // the DSP for it) sees only ~37 ms at the second block and waits for a
+    // third, so the stream ran at 20 fps with 40/60 ms jitter. Counting
+    // samples makes it exactly every `rate / FPS` samples — two blocks —
+    // regardless of how long the previous block took to process.
+    let mut frame_pending_samples: u64 = 0;
     let mut peak_iq = 0.0f32;
     // Audio for the scope, decimated as it arrives and kept as a rolling
     // window so a frame always has a full trace to draw even when a block
@@ -2643,6 +2840,16 @@ fn run_sdr(
     let mut agc_on = cfg.gain_db.is_none();
     let mut dropped_blocks = 0u64;
     let mut lagged_blocks = 0u64;
+    // Sample-continuity bookkeeping for this loop's subscriber: every
+    // accepted IQ block carries its source position and acquisition epoch,
+    // so a lost delivery is visible at the next successful block (exact
+    // lost-sample count) and stale blocks queued before an accepted
+    // tune/rate change are identifiable instead of being framed across.
+    // Re-created wherever the subscription itself is replaced (a device
+    // switch or reopen starts a fresh epoch timeline from zero).
+    let mut continuity = scannerd_radio::ContinuityTracker::new();
+    let mut lost_samples = 0u64;
+    let mut gap_events = 0u64;
     // Set by command handlers that want the inspect chain re-mixed, applied
     // once after the drain: a UI burst of Tune/Inspect/Rate/Mode in one batch
     // is one chain rebuild (FIR design + FFT plan + capture clear), not five.
@@ -3001,6 +3208,9 @@ fn run_sdr(
                                 let new_rx = new_dev.iq.subscribe_with_depth(32);
                                 dev_opt = Some(new_dev);
                                 rx_opt = Some(new_rx);
+                                // New subscription: its epoch timeline starts
+                                // from nothing, not from the old device's.
+                                continuity = scannerd_radio::ContinuityTracker::new();
                                 let ppm = config::load().unwrap_or_default().ppm_for(&s_serial);
                                 remix_inspect(
                                     &mut InspectParts {
@@ -3141,6 +3351,9 @@ fn run_sdr(
                     let new_rx = new_dev.iq.subscribe_with_depth(32);
                     dev_opt = Some(new_dev);
                     rx_opt = Some(new_rx);
+                    // New subscription: its epoch timeline starts from
+                    // nothing, not from the faulted device's.
+                    continuity = scannerd_radio::ContinuityTracker::new();
                     let ppm = config::load().unwrap_or_default().ppm_for(&s_serial);
                     current_serial = Some(s_serial.clone());
                     // The reopened dongle is a fresh chain: anything buffered
@@ -3319,13 +3532,74 @@ fn run_sdr(
             let _ = events.send(SdrEvent::Status(s.clone()));
         }
         last_block = Instant::now();
+        // Sample-continuity gate: every block carries its source position
+        // and acquisition epoch. A stale block (queued before an accepted
+        // tune/rate change on the old epoch) never reaches a decode path;
+        // a gap (lost deliveries) or an epoch boundary resets the framing
+        // state so nothing splices samples across the hole.
+        let gap_report = continuity.observe(&block);
+        if gap_report.stale {
+            continue;
+        }
+        if gap_report.lost_samples > 0 {
+            lost_samples += gap_report.lost_samples;
+            gap_events += 1;
+        }
+        let discontinuous = gap_report.epoch_start || gap_report.lost_samples > 0;
+        if discontinuous {
+            // The sample timeline broke before this block. Drop every
+            // streaming state that would otherwise stitch what came before
+            // the hole onto what comes after — framing decoders would see a
+            // waveform that never existed on the air. The AFC correction is
+            // deliberately kept: it describes the carrier, not the sample
+            // run, and wiping it would drop a locked weak carrier back onto
+            // a filter skirt until the loop re-learns it (the same reason
+            // the accepted-tune path keeps it).
+            front.reset();
+            spectrum.clear();
+            inspect_chain.reset();
+            classifier.reset();
+            demod.reset_timeline(inspect_chain.fs_out());
+            scope_fm.reset();
+            let fs_now = inspect_chain.fs_out();
+            mon_gate = NoiseGate::new(fs_now);
+            mon_leveler = Leveler::new(fs_now);
+            mon_notch = AutoNotch::new(fs_now);
+            for slot in scan_slots.iter_mut().flatten() {
+                slot.chain.reset();
+                if let Some(rx) = slot.p25.as_mut() {
+                    rx.reset();
+                }
+                if let Some(rx) = slot.dmr.as_mut() {
+                    rx.reset();
+                }
+                if let Some(am) = slot.am.as_mut() {
+                    am.reset();
+                }
+                if let Some(fm) = slot.nbfm.as_mut() {
+                    fm.reset();
+                }
+                slot.fm_out = Demodulated::default();
+                slot.am_audio.clear();
+                slot.nfm_voice.clear();
+                slot.mon_gate.reset();
+                slot.mon_leveler.reset();
+                slot.mon_notch = AutoNotch::new(slot.chain.fs_out());
+            }
+            // The inspect-side capture rings (voice/discriminator/IQ) hold
+            // pre-hole samples; a downloaded capture must not splice across.
+            capture
+                .lock()
+                .expect("SDR capture")
+                .clear(inspect_hz, inspect_chain.fs_out());
+        }
         // Real-time milliseconds this block represents, for dwell timers.
         block_ms = (block.len() as f64 / current_rate * 1000.0).round().max(1.0) as u64;
 
         capture
             .lock()
             .expect("SDR capture")
-            .append_span(current_rate, &block);
+            .append_span(current_rate, &block, discontinuous);
 
         for c in block.iter() {
             let mag = c.re.abs().max(c.im.abs());
@@ -3341,10 +3615,13 @@ fn run_sdr(
         clean.extend_from_slice(&block);
         front.process(&mut clean);
 
-        // Spectrum is displayed at 25 fps. Ingest every block so the pending
-        // window stays current; FFT only when a frame is due.
+        // Spectrum is displayed at DEFAULT_FPS. Ingest every block so the
+        // pending window stays current; FFT only when a frame is due.
+        let frame_quantum = (current_rate / f64::from(DEFAULT_FPS)).round().max(1.0) as u64;
+        frame_pending_samples += block.len() as u64;
+        let frame_due = frame_pending_samples >= frame_quantum;
         spectrum.ingest(&clean);
-        if last_frame.elapsed() >= frame_interval {
+        if frame_due {
             spectrum.power_dbfs(&[], &mut pwr);
         }
 
@@ -4254,7 +4531,7 @@ fn run_sdr(
                     c
                 }
             }
-            SdrMode::P25 | SdrMode::Dmr => {
+            SdrMode::P25 | SdrMode::Dmr | SdrMode::Nxdn => {
                 // These receivers extract and equalise their own channel out
                 // of the span, so they are fed the corrected span rather than
                 // the inspect chain's narrowband output.
@@ -4279,6 +4556,20 @@ fn run_sdr(
                         audio_buf.extend_from_slice(rx.audio());
                         (ev, rx.locked(), rx.in_call())
                     }
+                    Demod::Nxdn { rx } => {
+                        let ev = rx.process(&inspect_iq, snr_hint);
+                        audio_buf.extend_from_slice(rx.audio());
+                        // Type-C/Type-D control channels announce voice-call
+                        // assignments: surface them like P25 trunk grants.
+                        for grant in rx.pending_grants() {
+                            decode_history.note(inspect_hz, "NXDN");
+                            let _ = events.send(SdrEvent::Decode {
+                                inspect_hz,
+                                event: grant_event("NXDN", &nxdn_grant_repr(&grant)),
+                            });
+                        }
+                        (ev, rx.locked(), rx.in_call())
+                    }
                     _ => (None, false, false),
                 };
 
@@ -4289,6 +4580,7 @@ fn run_sdr(
                     let rec_rate = match &demod {
                         Demod::P25 { rx } => rx.audio_rate(),
                         Demod::Dmr { rx } => rx.audio_rate(),
+                        Demod::Nxdn { rx } => rx.audio_rate(),
                         _ => fs_chain,
                     };
                     rec_voice.start(rec_rate, now_ms());
@@ -4309,8 +4601,12 @@ fn run_sdr(
                         .fold(0.0f32, f32::max);
                     let record = RecordedCall {
                         id: next_call_id,
-                        protocol: if current_mode == SdrMode::P25 { "P25" } else { "DMR" }
-                            .into(),
+                        protocol: match current_mode {
+                            SdrMode::P25 => "P25",
+                            SdrMode::Nxdn => "NXDN",
+                            _ => "DMR",
+                        }
+                        .into(),
                         started_ms: started,
                         duration_s: summary.duration_s(),
                         freq_hz: inspect_hz,
@@ -4339,15 +4635,18 @@ fn run_sdr(
                 }
                 ClassificationResult {
                     active: in_call,
-                    protocol: if current_mode == SdrMode::P25 {
-                        "P25 Phase 1".into()
-                    } else {
-                        "DMR Tier II".into()
+                    protocol: match current_mode {
+                        SdrMode::P25 => "P25 Phase 1".into(),
+                        SdrMode::Nxdn => match &demod {
+                            Demod::Nxdn { rx } => rx.rate_label().unwrap_or("NXDN").into(),
+                            _ => "NXDN".into(),
+                        },
+                        _ => "DMR Tier II".into(),
                     },
-                    modulation: if current_mode == SdrMode::P25 {
-                        "C4FM @ 4800 Bd".into()
-                    } else {
-                        "4-FSK @ 4800 Bd".into()
+                    modulation: match current_mode {
+                        SdrMode::P25 => "C4FM @ 4800 Bd".into(),
+                        SdrMode::Nxdn => "C4FM @ 2400/4800 Bd".into(),
+                        _ => "4-FSK @ 4800 Bd".into(),
                     },
                     details: Some(if in_call {
                         "voice call".into()
@@ -4558,6 +4857,15 @@ fn run_sdr(
                 scope_src_rate = fs_chain;
                 scope_dev_scale = 3_000.0;
             }
+            SdrMode::Nxdn => {
+                // NXDN is C4FM with ±480/±1440 Hz levels: scale against the
+                // outer deviation so the four eyes land at ±0.33/±1.0 and
+                // carrier drift stays visible without rail-clamping.
+                scope_fm.discriminator_hz(&inspect_iq, &mut scope_disc);
+                scope_src.extend(scope_disc.iter().map(|&hz| (hz / 1_440.0).clamp(-1.0, 1.0)));
+                scope_src_rate = fs_chain;
+                scope_dev_scale = 1_440.0;
+            }
             SdrMode::Wfm => {
                 if let Demod::Wfm { disc, .. } = &demod {
                     // Pre-de-emphasis, so the pilot and subcarriers survive.
@@ -4705,12 +5013,21 @@ fn run_sdr(
             let _ = events.send(SdrEvent::Decode { inspect_hz, event });
         }
 
-        if last_frame.elapsed() >= frame_interval && !pwr.is_empty() {
-            last_frame = Instant::now();
+        if frame_due && !pwr.is_empty() {
+            // Carry the remainder so the long-run rate is exact, but never
+            // owe more than one frame: after a stall (reopen, rate change)
+            // the display resumes rather than bursting to catch up.
+            frame_pending_samples = if frame_pending_samples >= 2 * frame_quantum {
+                0
+            } else {
+                frame_pending_samples - frame_quantum
+            };
             if let Ok(mut s) = status.lock() {
                 s.inspect_rate_hz = inspect_chain.fs_out();
                 s.dropped_blocks = dropped_blocks;
                 s.lagged_blocks = lagged_blocks;
+                s.lost_samples = lost_samples;
+                s.gap_events = gap_events;
                 s.freq_error_hz = freq_error_hz;
                 s.flex_diag = if let Demod::Flex { flex } = &demod {
                     Some(flex.diagnostics().clone())
@@ -5033,6 +5350,62 @@ fn run_sdr(
 mod tests {
     use super::*;
 
+    /// The capability table the `/api/sdr/modes` endpoint serves must cover
+    /// exactly the modes the server accepts, and each entry's serde name must
+    /// be what the UI's `data-mode` buttons post back — the table is the
+    /// contract between the two, so drift on either side fails here.
+    #[test]
+    fn mode_capabilities_cover_every_mode_and_match_the_wire_names() {
+        let caps: Vec<ModeCapabilities> =
+            SdrMode::all().iter().map(|m| m.capabilities()).collect();
+        // Every variant of the enum is listed exactly once.
+        let mut variants: Vec<SdrMode> = caps.iter().map(|c| c.mode).collect();
+        variants.sort_by_key(|m| format!("{m:?}"));
+        let mut all = SdrMode::all().to_vec();
+        all.sort_by_key(|m| format!("{m:?}"));
+        assert_eq!(variants, all, "SdrMode::all() must enumerate every mode once");
+
+        // The serde names the UI posts to /api/sdr/mode.
+        for c in &caps {
+            let wire = serde_json::to_value(c.mode).unwrap();
+            let name = wire.as_str().unwrap().to_string();
+            assert!(
+                !name.is_empty() && name == name.to_lowercase(),
+                "{name:?}: mode wire name must be lowercase (the UI's data-mode values are)"
+            );
+            // Round-trip: the name the UI posts must deserialize back.
+            let back: SdrMode = serde_json::from_value(wire).unwrap();
+            assert_eq!(back, c.mode);
+            // Scope kind must be one the binary frame's encoder knows.
+            assert!(
+                matches!(c.scope_kind, "audio" | "symbols" | "mpx"),
+                "{name}: unknown scope kind {:?}",
+                c.scope_kind
+            );
+            assert!(
+                matches!(c.kind, "voice" | "data" | "voice+data"),
+                "{name}: unknown capability kind {:?}",
+                c.kind
+            );
+        }
+
+        // Spot-check the drift-prone claims: NXDN is a real mode now, every
+        // mode streams audio (the data modes carry their live channel), WFM
+        // produces no decode events, and the digital voice modes draw symbol
+        // scopes.
+        let by = |m: SdrMode| caps.iter().find(|c| c.mode == m).unwrap().clone();
+        assert_eq!(by(SdrMode::Nxdn).label, "NXDN");
+        assert!(by(SdrMode::Nxdn).delivers_audio && by(SdrMode::Nxdn).delivers_decode_events);
+        assert!(by(SdrMode::Pager).delivers_audio && by(SdrMode::Pager).delivers_decode_events);
+        assert!(by(SdrMode::Flex).delivers_audio && by(SdrMode::Flex).delivers_decode_events);
+        assert!(by(SdrMode::Wfm).delivers_audio && !by(SdrMode::Wfm).delivers_decode_events);
+        for m in [SdrMode::P25, SdrMode::Dmr, SdrMode::Nxdn, SdrMode::Flex] {
+            assert_eq!(by(m).scope_kind, "symbols", "{m:?} must draw a symbol scope");
+        }
+        assert_eq!(by(SdrMode::Wfm).scope_kind, "mpx");
+        assert_eq!(by(SdrMode::Nxdn).bandwidth_hz, NXDN_BANDWIDTH_HZ);
+    }
+
     #[test]
     fn generated_iq_capture_replays_through_a_fresh_classifier() {
         let mut samples = Vec::new();
@@ -5317,6 +5690,11 @@ mod tests {
             for (bw, channel_rate, which) in [
                 (C4FM_BANDWIDTH_HZ, scannerd_engine::p25::CHANNEL_RATE, "P25"),
                 (DMR_BANDWIDTH_HZ, scannerd_engine::dmr::CHANNEL_RATE, "DMR"),
+                (
+                    NXDN_BANDWIDTH_HZ,
+                    scannerd_engine::nxdn::CHANNEL_RATE,
+                    "NXDN",
+                ),
             ] {
                 let rx = DecodeChain::new(fs, bw, channel_rate);
                 assert_eq!(

@@ -479,6 +479,48 @@
   }
   .spec-edge span { width: 100px; }
   .spec-edge span:last-child { text-align: right; }
+  /* Spectrum and waterfall in the middle, the selected channel's diagnostics
+     beside them: what is being received, and why it is or is not decoding,
+     without leaving the picture. */
+  .spec-row {
+    display: grid; grid-template-columns: minmax(0, 1fr) 236px; gap: 10px;
+    align-items: stretch;
+  }
+  .spec-col { min-width: 0; }
+  .chan-col {
+    display: flex; flex-direction: column; gap: 8px; min-width: 0;
+    padding-top: 16px;
+  }
+  .chan-col .chan-title {
+    font-size: 9px; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase;
+    color: #a9c5d8; display: flex; align-items: baseline; gap: 6px; height: 14px;
+  }
+  .chan-col .chan-title .note {
+    margin-left: auto; font: 10px var(--mono); color: var(--faint); letter-spacing: 0;
+    text-transform: none; white-space: nowrap;
+  }
+  .chan-col .sdr-classifier-cell { height: auto; min-height: 60px; }
+  .chan-col .sdr-classifier-value, .chan-col .sdr-classifier-subvalue { white-space: normal; height: auto; line-height: 1.35; }
+  .chan-col .sdr-peak-buttons { height: 74px; }
+  @media (max-width: 1080px) {
+    .spec-row { grid-template-columns: 1fr; }
+    .chan-col { padding-top: 0; }
+    .chan-col .sdr-classifier-cell { min-height: 0; }
+  }
+  .health-badge { cursor: default; }
+  .health-badge.bad { color: #ff8a7a; border-color: #5a2a26; }
+  details.advanced { margin-top: 10px; }
+  details.advanced > summary {
+    cursor: pointer; list-style: none; user-select: none;
+    font: 700 10px/1 var(--sans); letter-spacing: 0.14em; text-transform: uppercase;
+    color: var(--dim); padding: 7px 10px; border: 1px solid #1c2733; border-radius: 6px;
+    background: #0f161d;
+  }
+  details.advanced > summary::-webkit-details-marker { display: none; }
+  details.advanced > summary::before { content: '▸ '; color: var(--accent); }
+  details.advanced[open] > summary::before { content: '▾ '; }
+  details.advanced > summary:hover { color: #d8e5ee; }
+  details.advanced > .panelrow { margin-top: 8px; }
   .spec-canvases {
     position: relative; border: 1px solid #162432; border-radius: 4px;
     overflow: hidden; background: #020508; line-height: 0;
@@ -631,7 +673,10 @@
   .side-col {
     display: flex; flex-direction: column; min-height: 0;
     margin-top: 16px;
-    height: 64vh;
+    /* Results sit right under the receiver at a height that shows a useful
+       number of rows without pushing the page; the ⤢ tall toggle (F) gives
+       them the viewport when the operator is reading rather than tuning. */
+    height: 400px;
     border: 1px solid var(--line); border-radius: 8px;
     background: #0c1218; overflow: hidden;
     box-shadow: 0 12px 36px rgba(0,0,0,0.5);
@@ -777,8 +822,9 @@
   }
   ::-webkit-scrollbar-thumb:hover { background-color: #2b3e52; }
 
+  .side-col.tall { height: 84vh; }
   @media (max-width: 1080px) {
-    .side-col { height: 50vh; }
+    .side-col { height: 360px; }
   }
   @media (max-width: 900px) {
     .ctlgroup { border-right: none; border-bottom: 1px solid #232a31; width: 100%; }
@@ -829,6 +875,7 @@
           <button type="button" class="modebtn" data-mode="wfm">WFM</button>
           <button type="button" class="modebtn" data-mode="p25">P25</button>
           <button type="button" class="modebtn" data-mode="dmr">DMR</button>
+          <button type="button" class="modebtn" data-mode="nxdn" title="NXDN48/NXDN96 conventional voice through the AMBE+2 vocoder">NXDN</button>
           <button type="button" class="modebtn" data-mode="packet">PACKET</button>
           <button type="button" class="modebtn" data-mode="pager" title="Sweep POCSAG/FLEX across the 25 kHz paging channels around the tuned frequency">PAGER</button>
           <button type="button" class="modebtn" data-mode="flex" title="Dedicated Motorola FLEX pager demodulator with symbol eye and discriminator scope">FLEX</button>
@@ -840,6 +887,7 @@
         </svg>
         <span class="badge" id="badgeSpan">2.048M</span>
         <span class="badge" id="badgeProto">IDLE</span>
+        <span class="badge health-badge" id="badgeHealth" title="Sample stream health: dropped/lagged blocks and lost samples since start">STREAM —</span>
         <span class="spacer"></span>
         <span class="scr-vfo">VFO <b>A</b></span>
         <span class="scr-clock" id="scrClock">--:--</span>
@@ -1363,7 +1411,9 @@
           </svg>
         </div>
       </div>
-<div class="spec-edge">
+<div class="spec-row">
+      <div class="spec-col">
+      <div class="spec-edge">
         <span id="edgeLo">—</span>
         <span id="edgeHi">—</span>
       </div>
@@ -1374,13 +1424,39 @@
         <div class="spec-readout" id="sdrHoverReadout" hidden></div>
       </div>
       <div class="spec-scale" id="specScale"></div>
+      </div>
+      <div class="chan-col" aria-label="Selected channel">
+        <div class="chan-title">Selected channel
+          <span class="note" id="sdrInspectFreqBadge">—</span>
+        </div>
+        <div class="sdr-classifier-cell">
+          <div class="sdr-classifier-label">Protocol <span class="note" id="sdrInspectStatusBadge" style="float:right; text-transform:none; letter-spacing:0; font:10px var(--mono); color:var(--faint)">IDLE</span></div>
+          <div id="sdrClassProtocol" class="sdr-classifier-value" style="font-size:13px; font-weight:700; color:#38bdf8; margin-top:3px;">Idle / Noise</div>
+          <div id="sdrClassDetails" class="sdr-classifier-subvalue" style="font-size:11px; color:#94a3b8; margin-top:2px;">Waiting for carrier…</div>
+        </div>
+        <div class="sdr-classifier-cell">
+          <div class="sdr-classifier-label">Modulation</div>
+          <div id="sdrClassModulation" class="sdr-classifier-value" style="font-size:12px; font-weight:600; margin-top:3px;">—</div>
+          <div id="sdrClassConfidence" class="sdr-classifier-subvalue" style="font-size:11px; color:#94a3b8; margin-top:2px;">Confidence: —</div>
+        </div>
+        <div class="sdr-classifier-cell">
+          <div class="sdr-classifier-label">Signal</div>
+          <div id="sdrClassPower" class="sdr-classifier-value" style="font-size:12px; font-weight:600; margin-top:3px;">RF — · above floor — · quieting —</div>
+          <div id="sdrClassDev" class="sdr-classifier-subvalue" style="font-size:11px; color:#94a3b8; margin-top:2px;">Dev: —</div>
+        </div>
+        <div class="sdr-classifier-cell">
+          <div class="sdr-classifier-label">Peaks in span <span style="float:right; text-transform:none; letter-spacing:0; font:10px var(--mono); color:var(--faint)">dB above floor</span></div>
+          <div id="sdrPeakButtons" class="sdr-peak-buttons" style="margin-top:5px;"></div>
+        </div>
+      </div>
+</div>
 
       <div class="scr-scope">
         <div class="scope-header">
           <div class="scope-title" id="scopeTitle">AUDIO SCOPE</div>
           <div class="scope-badges">
             <span class="scope-mode-tag active" id="scopeModeTag">DIGITAL PHOSPHOR</span>
-            <span class="scope-trig-tag" id="scopeTrigTag">AUTO TRIG</span>
+            <span class="scope-trig-tag" id="scopeTrigTag">AUTO ZERO-CROSS</span>
           </div>
         </div>
         <div class="scope-panes">
@@ -1429,6 +1505,19 @@
     </div>
 
     <div class="ctlgroup">
+      <span class="grouplabel">Audio</span>
+      <div class="ctl">
+        <button type="button" class="softkey" id="btnListen" style="padding:6px 15px">LISTEN</button>
+        <input type="range" id="volRange" min="0" max="100" step="1" value="60" title="volume">
+        <span class="val" id="volVal">60%</span>
+      </div>
+    </div>
+    </div><!-- /panelrow -->
+
+    <details class="advanced">
+      <summary>Advanced · front end · calibration · display range</summary>
+    <div class="panelrow">
+    <div class="ctlgroup">
       <span class="grouplabel">Front end</span>
       <div class="ctl">
         <span class="cb"><input type="checkbox" id="chkLoOffset"> LO offset</span>
@@ -1455,22 +1544,15 @@
       </div>
     </div>
 
-    <div class="ctlgroup">
-      <span class="grouplabel">Audio</span>
-      <div class="ctl">
-        <button type="button" class="softkey" id="btnListen" style="padding:6px 15px">LISTEN</button>
-        <input type="range" id="volRange" min="0" max="100" step="1" value="60" title="volume">
-        <span class="val" id="volVal">60%</span>
-      </div>
     </div>
-    </div><!-- /panelrow, inside the rig -->
+    </details>
   </div>
 
   <div id="err"></div>
 
 <aside class="side-col">
     <div class="side-tabs" role="tablist" aria-label="Data panels">
-      <button type="button" class="side-tab on" id="tabClassifier" role="tab" aria-selected="true">CLASSIFIER</button>
+      <button type="button" class="side-tab on" id="tabClassifier" role="tab" aria-selected="true">CLASS LOG</button>
       <button type="button" class="side-tab" id="tabDecode" role="tab" aria-selected="false">DECODE LOG</button>
       <button type="button" class="side-tab" id="tabCalls" role="tab" aria-selected="false">LAST HEARD</button>
       <button type="button" class="side-tab" id="tabScan" role="tab" aria-selected="false">SCAN</button>
@@ -1479,34 +1561,12 @@
     </div>
 
     <section class="panel side-panel on" id="panelClassifier">
-    <h2>Digital Signal Classifier
-      <span class="note" id="sdrInspectStatusBadge">IDLE</span>
-      <span class="note" id="sdrInspectFreqBadge">—</span>
+    <h2>Classification log
+      <span class="note">what the classifier called each transmission on the selected channel</span>
     </h2>
     <div class="panel-body">
-      <div class="sdr-classifier-grid">
-        <div class="sdr-classifier-cell">
-          <div class="sdr-classifier-label">Protocol</div>
-          <div id="sdrClassProtocol" class="sdr-classifier-value" style="font-size:13px; font-weight:700; color:#38bdf8; margin-top:3px;">Idle / Noise</div>
-          <div id="sdrClassDetails" class="sdr-classifier-subvalue" style="font-size:11px; color:#94a3b8; margin-top:2px;">Waiting for carrier…</div>
-        </div>
-        <div class="sdr-classifier-cell">
-          <div class="sdr-classifier-label">Modulation</div>
-          <div id="sdrClassModulation" class="sdr-classifier-value" style="font-size:12px; font-weight:600; margin-top:3px;">—</div>
-          <div id="sdrClassConfidence" class="sdr-classifier-subvalue" style="font-size:11px; color:#94a3b8; margin-top:2px;">Confidence: —</div>
-        </div>
-        <div class="sdr-classifier-cell">
-          <div class="sdr-classifier-label">Signal</div>
-          <div id="sdrClassPower" class="sdr-classifier-value" style="font-size:12px; font-weight:600; margin-top:3px;">RF: — · SNR: —</div>
-          <div id="sdrClassDev" class="sdr-classifier-subvalue" style="font-size:11px; color:#94a3b8; margin-top:2px;">Dev: —</div>
-        </div>
-        <div class="sdr-classifier-cell">
-          <div class="sdr-classifier-label">Peaks in span</div>
-          <div id="sdrPeakButtons" class="sdr-peak-buttons" style="margin-top:5px;"></div>
-        </div>
-      </div>
-      <div style="display:flex; align-items:center; gap:10px; margin:10px 0 5px;">
-        <span class="sdr-classifier-label">Classification log</span>
+      <div style="display:flex; align-items:center; gap:10px; margin:0 0 6px;">
+        <span class="sdr-classifier-label">one line per label change · click a frequency to tune</span>
         <button type="button" class="sdr-preset-btn" style="margin-left:auto" onclick="clearSdrClassLog()">clear</button>
       </div>
       <div id="sdrClassLog" class="sdr-classifier-log"></div>
@@ -1728,6 +1788,7 @@ function computeAutoRange(pwr) {
 
 let sdrInspectHz = 155000000;
 let sdrLastPeaks = [];
+let sdrLastChannelDbfs = null, sdrLastNoiseDbfs = null;
 let sdrLastClassification = null;
 
 /// Tune to a frequency picked out of a list — a peak marker, a logged decode.
@@ -1856,7 +1917,15 @@ function updateSdrClassification(c, inspectHz) {
   if ($('sdrClassPower')) {
     const rf = c.rfDbfs != null ? c.rfDbfs.toFixed(1) : (displayObj.rfDbfs != null ? displayObj.rfDbfs.toFixed(1) : '---');
     const snr = c.snrDb != null ? c.snrDb.toFixed(1) : (displayObj.snrDb != null ? displayObj.snrDb.toFixed(1) : '0.0');
-    $('sdrClassPower').textContent = `RF: ${rf} dBFS · SNR: ${snr} dB`;
+    // Two different "SNR"s exist and used to share one label. The peak list
+    // and the meter measure the channel's power above the spectral noise
+    // floor; the classifier's figure is FM quieting — how far the
+    // discriminator's spread collapses below what noise produces — and is
+    // routinely 20 dB lower on the same carrier. Say which is which.
+    const above = (sdrLastChannelDbfs != null && sdrLastNoiseDbfs != null)
+      ? (sdrLastChannelDbfs - sdrLastNoiseDbfs).toFixed(1) : '—';
+    $('sdrClassPower').textContent = `RF ${rf} dBFS · above floor ${above} dB · quieting ${snr} dB`;
+    $('sdrClassPower').title = 'above floor: channel power over the spectral noise floor (what the peak list and meter use) · quieting: the classifier\'s discriminator-based SNR';
   }
   if ($('sdrClassDev')) {
     const peak = c.peakDevHz != null ? (c.peakDevHz / 1e3).toFixed(1) : '0.0';
@@ -2012,6 +2081,11 @@ function keepScrollAnchored(el, paint) {
 const sdrDecodeOpen = new Set();
 let sdrDecodeFilter = '';
 let sdrDecodeSelected = null;
+// Protocol view filter driven by the mode: FLEX mode shows only FLEX frames.
+// A VIEW, not a mutation — switching modes used to splice non-FLEX entries
+// out of the history permanently, destroying pages the operator had not
+// read yet. The underlying log now always keeps everything.
+let sdrDecodeProtocolView = null;
 
 function toggleDecodeRow(id) {
   // Clicking a frame both selects it — which is what the bytes pane follows —
@@ -2150,18 +2224,27 @@ function renderSdrDecodeLog() {
   const el = $('sdrDecodeLog');
   if (!el) return;
   const all = sdrDecodeLogData;
-  const list = sdrDecodeFilter
-    ? all.filter(e => `${e.protocol} ${e.kind} ${e.summary}`.toLowerCase().includes(sdrDecodeFilter))
+  // Mode-driven protocol view first (FLEX mode shows FLEX frames), then the
+  // operator's text filter on top of it. Neither touches the history itself.
+  const viewed = sdrDecodeProtocolView
+    ? all.filter(e => e.protocol === sdrDecodeProtocolView)
     : all;
+  const list = sdrDecodeFilter
+    ? viewed.filter(e => `${e.protocol} ${e.kind} ${e.summary}`.toLowerCase().includes(sdrDecodeFilter))
+    : viewed;
   const count = $('decodeCount');
   if (count) {
-    count.textContent = sdrDecodeFilter
-      ? `${list.length} of ${all.length} frames` : `${all.length} frames`;
+    const viewNote = sdrDecodeProtocolView ? ` · ${sdrDecodeProtocolView} view` : '';
+    count.textContent = list.length === viewed.length
+      ? `${viewed.length}${viewNote} frames`
+      : `${list.length} of ${viewed.length}${viewNote} frames`;
   }
   if (!list.length) {
     el.innerHTML = `<div class="data-empty">${
-      all.length ? 'No frames match the filter.'
-                 : 'Waiting for protocol frames and decoder diagnostics…'}</div>`;
+      viewed.length ? 'No frames match the filter.'
+                 : (sdrDecodeProtocolView
+                    ? `Waiting for ${sdrDecodeProtocolView} frames… (history kept: ${all.length})`
+                    : 'Waiting for protocol frames and decoder diagnostics…')}</div>`;
     return;
   }
   keepScrollAnchored(el, () => {
@@ -2806,7 +2889,10 @@ function setupRadioDeck() {
       if (freq) {
         tuneRxHz(freq, true);
         if (mode) setSdrMode(mode);
-        document.querySelectorAll('.band-btn').forEach(b => b.classList.toggle('active', b === btn));
+        // The highlight follows from the tune request immediately (feedback),
+        // and is then kept honest by updateBandPresetUi on every status
+        // frame — a preset only stays lit while the receiver is really there.
+        updateBandPresetUi();
       }
     });
   });
@@ -3633,7 +3719,13 @@ function setScopeChrome(kind) {
 
   if (title && title.textContent !== titleText) title.textContent = titleText;
   if (modeTag && modeTag.textContent !== modeText) modeTag.textContent = modeText;
-  if (trigTag && trigTag.textContent !== trigText) trigTag.textContent = trigText;
+  if (trigTag) {
+    if (trigTag.textContent !== trigText) trigTag.textContent = trigText;
+    // drawSymbolScope overwrites this tag per frame with a lock-quality
+    // colour; coming back to an audio/multiplex scope must clear that, or
+    // the old green "CLK LOCK" colour persists under the new label.
+    trigTag.style.color = '';
+  }
 }
 
 function drawScope(scope, rateHz, kind, symbolRate) {
@@ -4502,10 +4594,7 @@ function setupControls() {
     const lbl = $('keyAvgLabel') || $('keyAvg');
     if (lbl) lbl.textContent = label;
     $('keyAvg').classList.toggle('on', mode !== 'off');
-    fetch('/api/sdr/avg', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ mode }),
-    }).catch(e => { $('err').textContent = 'avg: ' + e; });
+    sdrPost('/api/sdr/avg', { mode }, 'avg').catch(e => { $('err').textContent = 'avg: ' + e.message; });
   });
   // Put the span back around the frequency being received.
   $('keyCenter').addEventListener('click', () => {
@@ -4552,9 +4641,8 @@ function setupControls() {
     const ppm = Number(e.target.value);
     if (!isFinite(ppm)) return;
     try {
-      await fetch('/api/sdr/ppm', { method:'POST', headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({ ppm }) });
-    } catch (err) { $('err').textContent = 'ppm: ' + err; }
+      await sdrPost('/api/sdr/ppm', { ppm }, 'ppm');
+    } catch (err) { $('err').textContent = 'ppm: ' + err.message; }
   });
 
   // Calibration needs a carrier whose true frequency the operator vouches for;
@@ -4592,6 +4680,16 @@ function setupControls() {
 // ---------- frame handling ----------
 
 let pendingSdrFft = null;
+// Frames that arrived since the last paint, oldest first. Every one of them
+// is a waterfall row: painting only the newest (what this used to do) threw
+// away rows whenever two frames landed inside one animation frame — a
+// throttled tab, a slow machine, a burst after a stall — and the waterfall
+// scrolled in visible jerks. The spectrum, scope and readouts only ever
+// need the newest frame.
+const sdrFftQueue = [];
+// More than this and the client is not keeping up: drop the oldest rows
+// rather than let latency grow without bound.
+const SDR_FFT_QUEUE_MAX = 8;
 let sdrFftPaintPending = false;
 // rAF starvation fallback: some rendering contexts throttle
 // requestAnimationFrame to ~1 Hz for a page that is visibly on screen —
@@ -4607,11 +4705,34 @@ function paintSdrFftTick() {
   sdrFftPaintPending = false;
   clearTimeout(sdrFftPaintWatchdog);
   const f = pendingSdrFft;
-  if (f) paintSdrFft(f);
+  if (!f) { sdrFftQueue.length = 0; return; }
+  // Older rows first, then the full paint of the newest — which draws its
+  // own row.
+  const older = sdrFftQueue.splice(0, sdrFftQueue.length - 1);
+  sdrFftQueue.length = 0;
+  if (older.length) paintSdrWaterfallBacklog(older);
+  paintSdrFft(f);
+}
+
+/// Waterfall rows for frames that will not get a full paint of their own.
+/// Only what a row depends on is applied: the axis (so a pan lands under
+/// the right frequencies) and the auto range (so the colours are continuous
+/// with the row painted after them).
+function paintSdrWaterfallBacklog(frames) {
+  for (const m of frames) {
+    if (m.rateHz !== sdrRateHz || m.centerHz !== sdrCenterHz) sdrSmoothPwr = null;
+    sdrCenterHz = m.centerHz;
+    sdrRateHz = m.rateHz;
+    if (sdrAutoRange) computeAutoRange(m.pwr);
+    syncWaterfallAxis(m.centerHz, m.rateHz);
+    drawSdrWaterfallRow(m.pwr);
+  }
 }
 
 function onSdrFft(m) {
   pendingSdrFft = m;
+  sdrFftQueue.push(m);
+  if (sdrFftQueue.length > SDR_FFT_QUEUE_MAX) sdrFftQueue.splice(0, sdrFftQueue.length - SDR_FFT_QUEUE_MAX);
   if (sdrFftPaintPending) return;
   sdrFftPaintPending = true;
   requestAnimationFrame(paintSdrFftTick);
@@ -4639,6 +4760,8 @@ function paintSdrFft(m) {
   drawSdrWaterfallRow(m.pwr);
   drawScanOverlay();
   drawScope(m.scope, m.scopeRateHz, m.scopeKind, m.symbolRateHz);
+  sdrLastChannelDbfs = isFinite(m.channelDbfs) ? m.channelDbfs : null;
+  sdrLastNoiseDbfs = isFinite(m.noiseDbfs) ? m.noiseDbfs : null;
   updateSdrClassification(m.classification, m.inspectHz);
   renderSdrPeaks(m.peaks);
   updateMeter(m.classification, m.peakIq, m.channelDbfs, m.noiseDbfs, m.scope);
@@ -5001,12 +5124,8 @@ async function runSpurCheck() {
 /// them and notches any that fall inside the channel being decoded.
 async function applySpurNotch() {
   try {
-    await fetch('/api/sdr/spurs', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ offsets_hz: sdrSpurOffsets }),
-    });
-  } catch (e) { $('err').textContent = 'spur notch: ' + e; }
+    await sdrPost('/api/sdr/spurs', { offsets_hz: sdrSpurOffsets }, 'spur notch');
+  } catch (e) { $('err').textContent = 'spur notch: ' + e.message; }
 }
 
 
@@ -5019,9 +5138,14 @@ function updateSnapHint() {
     eff.textContent = label;
     eff.title = snapOverrideHz ? 'manual step' : `${sdrMode.toUpperCase()} channel raster`;
     eff.style.color = snapOverrideHz ? 'var(--amber)' : 'var(--accent)';
+    // Show the effective step whenever it differs from the AUTO default —
+    // a manual override in force must be visible without opening the select.
+    eff.style.display = snapOverrideHz ? '' : 'none';
   }
   const optAuto = $('snapOptAuto');
-  if (optAuto) optAuto.textContent = 'AUTO (' + label + ')';
+  // AUTO always advertises the mode's own raster, even while an override is
+  // applied — the override is what the pill's amber badge is for.
+  if (optAuto) optAuto.textContent = 'AUTO (' + fmtStepHz(modeSnapStepHz()) + ')';
   const sel = $('snapSel');
   if (sel) {
     sel.style.color = snapOverrideHz ? 'var(--amber)' : '#38bdf8';
@@ -5033,6 +5157,32 @@ function updateSnapHint() {
   }
   const jogBadge = $('jogStepBadge');
   if (jogBadge) jogBadge.textContent = `${label} · FLYWHEEL`;
+}
+
+/// Step size as a compact label: "6.25 kHz", "8.33 kHz", "100 Hz".
+function fmtStepHz(st) {
+  if (st < 1000) return `${st} Hz`;
+  return `${String(+(st / 1000).toFixed(2))} kHz`;
+}
+
+/// Band-preset highlighting driven by ACKNOWLEDGED receiver state, not the
+/// last click: a preset stays lit only while the receiver is actually there
+/// (mode matches and the tune frequency is within a tolerance). Tuning away
+/// by any means — dial, flywheel, direct entry, scan hop — clears the row,
+/// and a preset whose tune was rejected by the tuner never shows as active.
+function updateBandPresetUi() {
+  const btns = document.querySelectorAll('.band-btn');
+  if (!btns.length) return;
+  // Tolerance: half the mode's own raster, floored at 1 kHz — the receiver
+  // must really be on the preset, not merely near it.
+  const tol = Math.max(1000, modeSnapStepHz() / 2);
+  btns.forEach(btn => {
+    const freq = Number(btn.dataset.freq);
+    const mode = btn.dataset.mode;
+    const atFreq = freq && Math.abs(sdrInspectHz - freq) <= tol;
+    const atMode = !mode || mode === sdrMode;
+    btn.classList.toggle('active', !!(atFreq && atMode));
+  });
 }
 
 function applyModeUi(mode) {
@@ -5074,11 +5224,12 @@ function applyModeUi(mode) {
     if ($('sdrClassDetails')) $('sdrClassDetails').textContent = 'FLEX pager demodulator · symbol eye active';
     if ($('sdrClassModulation')) $('sdrClassModulation').textContent = 'FLEX 2/4-FSK';
     sdrLastDetected = null;
-    if (sdrDecodeLogData.some(e => e.protocol !== 'FLEX')) {
-      sdrDecodeLogData.splice(0, sdrDecodeLogData.length, ...sdrDecodeLogData.filter(e => e.protocol === 'FLEX'));
-      renderSdrDecodeLog();
-    }
   }
+  // FLEX mode narrows the decode-log VIEW to FLEX frames; every other mode
+  // shows the whole history again. The log data itself is never mutated —
+  // switching out of FLEX must bring the operator's earlier pages back.
+  sdrDecodeProtocolView = mode === 'flex' ? 'FLEX' : null;
+  renderSdrDecodeLog();
   if (mode === 'scan' && $('sdrClassDetails')) {
     $('sdrClassDetails').textContent = 'scanning for voice…';
     $('sdrClassModulation').textContent = 'Voice scan';
@@ -5116,33 +5267,23 @@ async function setZoom(z) {
   if (sdrLastPwr && sdrLastPwr.length) drawSdrSpectrum(sdrLastPwr);
 
   try {
-    await fetch('/api/sdr/zoom', { method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ zoom }) });
-  } catch (e) { $('err').textContent = 'zoom: ' + e; }
+    await sdrPost('/api/sdr/zoom', { zoom }, 'zoom');
+  } catch (e) { $('err').textContent = 'zoom: ' + e.message; }
 }
 
 async function setFrontend(body) {
   try {
-    await fetch('/api/sdr/frontend', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
+    await sdrPost('/api/sdr/frontend', body, 'front end');
     sdrPeakPwr = [];
-  } catch (e) { $('err').textContent = 'front end: ' + e; }
+  } catch (e) { $('err').textContent = 'front end: ' + e.message; }
 }
 
 async function setSdrMode(mode) {
   applyModeUi(mode);
   sdrPeakPwr = [];
   try {
-    await fetch('/api/sdr/mode', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ mode }),
-    });
-  } catch (e) { $('err').textContent = 'mode failed: ' + e; }
+    await sdrPost('/api/sdr/mode', { mode }, 'mode');
+  } catch (e) { $('err').textContent = 'mode failed: ' + e.message; }
 }
 
 
@@ -5162,18 +5303,38 @@ async function setSdrMode(mode) {
 //
 //   wfm     100 kHz — broadcast FM as the dial is marked
 //   nfm     6.25 kHz — the narrowbanded land-mobile raster
-//   p25/dmr 6.25 kHz — the same raster the digital channels sit on
+//   p25/dmr/nxdn 6.25 kHz — the same raster the digital channels sit on
 //   packet  2.5 kHz — divides both the 10 kHz APRS raster (144.390 lands on
 //                     it exactly) and the 12.5 kHz paging channels
 //   flex    2.5 kHz — fine raster for tuned paging channels
-const SNAP_STEPS = { wfm: 100000, nfm: 6250, am: 9000, p25: 6250, dmr: 6250, packet: 2500, pager: 25000, flex: 2500, scan: 6250 };
+//   am      service-aware: 8.33 kHz inside the airband (118–137 MHz),
+//           10 kHz on the broadcast band (the Americas' AM raster) — a
+//           fixed 9 kHz step lands between channels on both services.
+const SNAP_STEPS = { wfm: 100000, nfm: 6250, p25: 6250, dmr: 6250, nxdn: 6250, packet: 2500, pager: 25000, flex: 2500, scan: 6250 };
+
+/// AM has two rasters depending on the service being tuned: the airband's
+/// 8.33 kHz channels and broadcast's 10 kHz (9 kHz outside the Americas).
+/// Pick from the frequency the operator is actually on.
+function amSnapStepHz() {
+  const hz = sdrInspectHz || sdrCenterHz || 0;
+  if (hz >= 118e6 && hz <= 137e6) return 8330;
+  return 10000;
+}
+
+/// The mode's own raster — what AUTO means. Never includes the manual
+/// override: the AUTO option must keep showing the default even while one
+/// is applied, or picking AUTO back is guesswork.
+function modeSnapStepHz() {
+  if (sdrMode === 'am') return amSnapStepHz();
+  return SNAP_STEPS[sdrMode] || 6250;
+}
 
 // `auto` follows the mode's channel raster; anything else is the operator
 // overriding it, which is what a step control is for.
 let snapOverrideHz = 0;
 
 function snapStepHz() {
-  return snapOverrideHz || SNAP_STEPS[sdrMode] || 6250;
+  return snapOverrideHz || modeSnapStepHz();
 }
 
 /// Round onto the current mode's raster. Hold Alt to tune off-raster.
@@ -5232,16 +5393,10 @@ async function tuneRxHz(hz, lockCentre = false) {
   if (sdrLastPwr.length) drawSdrSpectrum(sdrLastPwr);
   try {
     if (moved) {
-      await fetch('/api/sdr/tune', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ freq_hz: centre }),
-      });
+      await sdrPost('/api/sdr/tune', { freq_hz: centre }, 'tune');
     }
-    await fetch('/api/sdr/inspect', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ freq_hz: rx }),
-    });
-  } catch (e) { $('err').textContent = 'tune failed: ' + e; }
+    await sdrPost('/api/sdr/inspect', { freq_hz: rx }, 'inspect');
+  } catch (e) { $('err').textContent = 'tune failed: ' + e.message; }
 }
 
 /// A dial step: the tuned frequency stays put on screen and the spectrum moves.
@@ -5253,14 +5408,31 @@ async function centreSpanHz(hz) {
   sdrSmoothPwr = null;
   drawSpecScale();
   try {
-    await fetch('/api/sdr/tune', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ freq_hz: hz }),
-    });
-  } catch (e) { $('err').textContent = 'tune failed: ' + e; }
+    await sdrPost('/api/sdr/tune', { freq_hz: hz }, 'tune');
+  } catch (e) { $('err').textContent = 'tune failed: ' + e.message; }
 }
 
 // ---------- control API ----------
+
+/// POST a control command and surface a rejection. The server answers a
+/// refused command with a 4xx and a one-line reason; fetch only rejects on a
+/// network failure, so an unchecked response makes "the tuner refused the
+/// hop" indistinguishable from "the hop happened" — the UI shows the new
+/// frequency and the radio sits where it was. Throw on !ok so every caller's
+/// catch writes the server's reason into the error line.
+async function sdrPost(path, body, label) {
+  const r = await fetch(path, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!r.ok) {
+    let detail = `HTTP ${r.status}`;
+    try { const t = await r.text(); if (t) detail = t; } catch (_) { /* keep the status */ }
+    throw new Error(`${label || path} refused: ${detail}`);
+  }
+  return r;
+}
 
 async function tuneSdrHz(hz) {
   const clamped = Math.max(1e6, Math.min(2.2e9, hz));
@@ -5269,43 +5441,27 @@ async function tuneSdrHz(hz) {
   renderFreq(clamped);
   drawSpecScale();
   try {
-    await fetch('/api/sdr/tune', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ freq_hz: clamped }),
-    });
-  } catch (e) { $('err').textContent = 'tune failed: ' + e; }
+    await sdrPost('/api/sdr/tune', { freq_hz: clamped }, 'tune');
+  } catch (e) { $('err').textContent = 'tune failed: ' + e.message; }
 }
 
 async function setSdrRate(rateHz) {
   try {
-    await fetch('/api/sdr/rate', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ rate_hz: rateHz }),
-    });
+    await sdrPost('/api/sdr/rate', { rate_hz: rateHz }, 'rate');
     sdrPeakPwr = [];
-  } catch (e) { $('err').textContent = 'rate failed: ' + e; }
+  } catch (e) { $('err').textContent = 'rate failed: ' + e.message; }
 }
 
 async function setSdrGain(gainDb) {
   try {
-    await fetch('/api/sdr/gain', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ gain_db: gainDb }),
-    });
-  } catch (e) { $('err').textContent = 'gain failed: ' + e; }
+    await sdrPost('/api/sdr/gain', { gain_db: gainDb }, 'gain');
+  } catch (e) { $('err').textContent = 'gain failed: ' + e.message; }
 }
 
 async function switchSdrDevice(serial) {
   try {
-    await fetch('/api/sdr/device', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ serial }),
-    });
-  } catch (e) { $('err').textContent = 'device switch failed: ' + e; }
+    await sdrPost('/api/sdr/device', { serial }, 'device switch');
+  } catch (e) { $('err').textContent = 'device switch failed: ' + e.message; }
 }
 
 async function loadSdrDevices() {
@@ -5323,6 +5479,17 @@ async function loadSdrDevices() {
 
 function updateSdrStatus(s) {
   sdrStatus = s;
+  const hb = $('badgeHealth');
+  if (hb) {
+    const drops = (s.dropped_blocks || 0) + (s.lagged_blocks || 0);
+    const lost = s.lost_samples || 0;
+    const gaps = s.gap_events || 0;
+    const bad = drops > 0 || lost > 0;
+    hb.textContent = bad ? `STREAM ${drops} drop · ${gaps} gap` : 'STREAM OK';
+    hb.classList.toggle('bad', bad);
+    hb.title = `Sample stream since start: ${drops} dropped/lagged blocks · ${gaps} gaps · ${lost} samples lost`
+      + (s.inspect_rate_hz ? ` · channel rate ${(s.inspect_rate_hz / 1e3).toFixed(1)} kS/s` : '');
+  }
   sdrCenterHz = s.freq_hz;
   // The displayed span is the edge-to-edge window, which is narrower than the
   // sampled rate whenever the LO is parked off-centre.
@@ -5331,6 +5498,7 @@ function updateSdrStatus(s) {
   if (s.inspect_hz) sdrInspectHz = s.inspect_hz;
   renderFreq(sdrInspectHz);
   drawSpecScale();
+  updateBandPresetUi();
   if ($('sdrRateSel')) $('sdrRateSel').value = String(Math.round(s.rate_hz));
   if ($('badgeSpan')) $('badgeSpan').textContent = (s.rate_hz / 1e6).toFixed(3).replace(/0+$/, '').replace(/\.$/, '') + 'M';
   if ($('sdrRadioSel') && s.serial) $('sdrRadioSel').value = s.serial;
@@ -5431,12 +5599,8 @@ function scanCfgFromForm() {
 
 async function postScan(path, body) {
   try {
-    await fetch('/api/sdr/' + path, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
-  } catch (e) { $('err').textContent = 'scan: ' + e; }
+    await sdrPost('/api/sdr/' + path, body, 'scan');
+  } catch (e) { $('err').textContent = 'scan: ' + e.message; }
 }
 
 /// Apply the form to the scan. While a scan is running this reconfigures it

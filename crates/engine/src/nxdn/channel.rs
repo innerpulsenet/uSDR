@@ -62,11 +62,38 @@ pub struct NxdnChannelReceiver {
 impl NxdnChannelReceiver {
     pub fn new(spec: NxdnSpec, fs_in: f64, span_center_hz: f64) -> Self {
         let chain = DecodeChain::new(fs_in, NXDN_BANDWIDTH_HZ, CHANNEL_RATE);
-        let mut out = Self {
+        let mut out = Self::build(spec, chain);
+        out.retune(span_center_hz);
+        out
+    }
+
+    /// Build for input that is already the extracted channel: baseband
+    /// centred on `spec.freq_hz` at `channel_fs` — a narrowband chain's
+    /// output the receiver rides instead of re-extracting its own channel
+    /// from the whole span, the same arrangement P25/DMR use in the server.
+    /// The chain collapses to decimation 1, and its rate grid makes `fs_out`
+    /// exactly what the span-rate build would have produced
+    /// (`span / round(span / CHANNEL_RATE)`), so every downstream
+    /// symbol-timing constant is unchanged. The AFC base is zero: the
+    /// carrier arrives at DC and only residual ±2 kHz tracking remains.
+    pub fn new_on_channel(spec: NxdnSpec, channel_fs: f64) -> Self {
+        Self::build(spec, DecodeChain::new(channel_fs, NXDN_BANDWIDTH_HZ, CHANNEL_RATE))
+    }
+
+    fn build(spec: NxdnSpec, chain: DecodeChain) -> Self {
+        // Build the symbol-timing receivers at the chain's ACTUAL output rate,
+        // not the nominal CHANNEL_RATE. A span-rate build lands on
+        // `span / round(span / 48 kHz)` (47 627.9 Hz at a 2.048 MS/s span),
+        // and `new_on_channel` inherits that grid from the inspect chain. The
+        // discriminator's hz-per-radian must match the rate the samples really
+        // arrive at, or every level is scaled by the clock error — the same
+        // reason P25 builds its front end at `chain.fs_out()`.
+        let fs_chan = chain.fs_out();
+        Self {
             chain,
             afc: Afc::new(0.0, 2_000.0),
-            rx48: NxdnReceiver::new(Rate::Nxdn48, CHANNEL_RATE),
-            rx96: NxdnReceiver::new(Rate::Nxdn96, CHANNEL_RATE),
+            rx48: NxdnReceiver::new(Rate::Nxdn48, fs_chan),
+            rx96: NxdnReceiver::new(Rate::Nxdn96, fs_chan),
             vocoder: rmbe::Decoder::new(),
             resampler: Resampler8k::new(),
             leveler: Leveler::new(AUDIO_RATE),
@@ -83,9 +110,7 @@ impl NxdnChannelReceiver {
             offset_n: 0,
             grants: std::collections::VecDeque::new(),
             spec,
-        };
-        out.retune(span_center_hz);
-        out
+        }
     }
 
     pub fn retune(&mut self, span_center_hz: f64) {
@@ -126,6 +151,12 @@ impl NxdnChannelReceiver {
 
     pub fn locked(&self) -> bool {
         self.locked_rate.is_some()
+    }
+
+    /// Which symbol rate locked, for display ("NXDN48"/"NXDN96"); `None`
+    /// while still searching.
+    pub fn rate_label(&self) -> Option<&'static str> {
+        self.locked_rate.map(|rate| rate.label())
     }
 
     pub fn process(&mut self, iq: &[Complex32], snr_db: f32) -> Option<CallEvent> {
@@ -297,6 +328,38 @@ impl NxdnChannelReceiver {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The server rides `new_on_channel`: the receiver is fed baseband
+    /// already centred on the channel, and its internal chain collapses to
+    /// decimation 1. That build path must still lock onto valid frames — the
+    /// same acquisition the span-rate build does. The rate-grid itself
+    /// (span-rate vs on-channel `fs_out` equality) is pinned separately by
+    /// the server's `channelized_receivers_keep_the_span_rate_grid`; here the
+    /// chain and the fixture are both at CHANNEL_RATE so the test isolates
+    /// the wiring, not a clock offset.
+    #[test]
+    fn on_channel_build_locks_frames_from_channel_baseband() {
+        let lich = 0x57u8;
+        let iq = super::super::tests_modulated_frames(lich);
+        let mut rx = NxdnChannelReceiver::new_on_channel(
+            NxdnSpec {
+                name: "test".into(),
+                freq_hz: 450_100_000.0,
+                rate: Some(Rate::Nxdn96),
+                ran: None,
+            },
+            CHANNEL_RATE,
+        );
+        // The on-channel chain still runs its anti-alias FIR (2047 taps),
+        // which swallows ~2046 samples of warm-up before it emits; three
+        // frames (5760 samples) would leave under two usable frames and
+        // acquisition needs consecutive valid ones. Feed the burst twice.
+        let stream = [iq.as_slice(), iq.as_slice()].concat();
+        for block in stream.chunks(384) {
+            rx.process(block, 20.0);
+        }
+        assert!(rx.locked(), "on-channel build never locked a valid frame");
+    }
 
     /// A Voice Call Assignment heard on a control channel queues a grant the
     /// application can act on — this is the surface trunk-follow uses.

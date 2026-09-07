@@ -9,6 +9,11 @@ use scannerd_engine::{Afc, SignalClassifier};
 
 const FS_IN: f64 = 2_048_000.0;
 const BLOCK: usize = 16_384;
+/// Production Packet/Flex inspect target rate (sdr.rs PACKET_INSPECT_RATE):
+/// FLEX 6400 4-FSK needs ≥4 samples/symbol at 3200 sym/s. The chain lands
+/// on FS_IN / round(FS_IN / 96 kHz), NOT 96 kHz exactly — decoders must be
+/// constructed at fs_out(), exactly as run_sdr does.
+const TARGET_RATE: f64 = 96_000.0;
 
 /// Turn discriminator hertz into complex baseband at `fs`, carrier parked at
 /// `offset_hz` from where the receiver will mix.
@@ -56,7 +61,7 @@ fn add_noise(iq: &mut [Complex32], sigma: f32, rng: &mut Rng) {
 
 #[test]
 fn an_off_centre_pocsag_carrier_is_afc_tracked_and_decoded() {
-    let mut chain = DecodeChain::new(FS_IN, 25_000.0, 48_000.0);
+    let mut chain = DecodeChain::new(FS_IN, 25_000.0, TARGET_RATE);
     // The operator clicked 2500 Hz below the true carrier.
     const TRUE_OFFSET: f32 = 2_500.0;
     chain.set_offset(-TRUE_OFFSET as f64);
@@ -77,7 +82,7 @@ fn an_off_centre_pocsag_carrier_is_afc_tracked_and_decoded() {
     // least produce POCSAG syncs. If it cannot, this test's synthesised
     // codewords are wrong and the AFC assertion would be meaningless.
     {
-        let mut chain0 = DecodeChain::new(FS_IN, 25_000.0, 48_000.0);
+        let mut chain0 = DecodeChain::new(FS_IN, 25_000.0, TARGET_RATE);
         chain0.set_offset(0.0);
         let fs0 = chain0.fs_out();
         let mut cls0 = SignalClassifier::new(fs0);
@@ -361,7 +366,8 @@ fn ascii_word(s: &str) -> u32 {
 #[test]
 fn synthesised_codewords_sync_a_bare_decoder() {
     use scannerd_engine::pocsag::PocsagDecoder;
-    let fs = 48_000.0f32;
+    // Production pager-bank rate for Packet/Flex (PACKET_INSPECT_RATE).
+    let fs = TARGET_RATE as f32;
     let audio = pocsag_burst_discriminator(fs);
     let mut dec = PocsagDecoder::new(f64::from(fs), 1200);
     for _ in 0..3 {

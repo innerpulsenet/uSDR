@@ -223,6 +223,13 @@ pub struct SignalClassifier {
         f32,
         std::time::Instant,
     )>,
+    /// Corroborated DMR bursts seen back to back: (count, time of the last).
+    /// One burst is published only as the second of a consecutive pair —
+    /// real DMR sends one every 30 ms, so this withholds nothing but the
+    /// first, while a lone sync collision on an idle or analog channel
+    /// (the four-dibit budget plus a one-in-three colour-code check) is
+    /// never logged as a base station that was not there.
+    dmr_burst_run: Option<(u8, std::time::Instant)>,
     last_nxdn_match: Option<(NxdnRate, String, u8, &'static str, f32, std::time::Instant)>,
     last_smartnet_match: Option<(u16, String, u8, usize, usize, std::time::Instant)>,
     last_pocsag_match: Option<(u32, u32, std::time::Instant)>,
@@ -289,6 +296,7 @@ impl SignalClassifier {
             last_p25_match: None,
             last_p25_candidate: None,
             last_dmr_match: None,
+            dmr_burst_run: None,
             last_nxdn_match: None,
             last_smartnet_match: None,
             last_pocsag_match: None,
@@ -316,6 +324,7 @@ impl SignalClassifier {
             self.last_p25_match = None;
             self.last_p25_candidate = None;
             self.last_dmr_match = None;
+            self.dmr_burst_run = None;
             self.last_nxdn_match = None;
             self.last_smartnet_match = None;
             self.last_pocsag_match = None;
@@ -393,6 +402,7 @@ impl SignalClassifier {
         self.last_p25_match = None;
         self.last_p25_candidate = None;
         self.last_dmr_match = None;
+        self.dmr_burst_run = None;
         self.last_nxdn_match = None;
         self.last_smartnet_match = None;
         self.last_pocsag_match = None;
@@ -879,6 +889,16 @@ impl SignalClassifier {
             let Some(color_code) = burst.color_code() else {
                 continue;
             };
+            // Consecutive-burst gate: see `dmr_burst_run`.
+            const DMR_BURST_GAP: std::time::Duration = std::time::Duration::from_millis(120);
+            let run = match self.dmr_burst_run {
+                Some((n, at)) if now.duration_since(at) <= DMR_BURST_GAP => n.saturating_add(1),
+                _ => 1,
+            };
+            self.dmr_burst_run = Some((run, now));
+            if run < 2 {
+                continue;
+            }
             let source = match burst.source {
                 SyncSource::Bs => "Base station",
                 SyncSource::Ms => "Mobile",
@@ -1906,9 +1926,9 @@ impl SignalClassifier {
                 rms_dev_hz,
                 center_offset_hz: mean_offset_hz,
                 modulation: "Unknown narrowband modulation".into(),
-                protocol: "Unclassified Digital / Data".into(),
+                protocol: "Unclassified FM".into(),
                 details: Some(format!(
-                    "Dev: Peak {:.1} kHz · RMS {:.1} kHz",
+                    "Dev: Peak {:.1} kHz · RMS {:.1} kHz · no symbol clock",
                     peak_dev_hz / 1e3,
                     rms_dev_hz / 1e3
                 )),
@@ -1922,14 +1942,19 @@ impl SignalClassifier {
                 peak_dev_hz,
                 rms_dev_hz,
                 center_offset_hz: mean_offset_hz,
-                modulation: "Unknown narrowband modulation".into(),
-                protocol: "Unclassified Digital / Voice".into(),
+                // Voice-band deviation with no recoverable symbol clock is
+                // what analog speech looks like; every digital mode this
+                // classifier knows has a clock the sweep above would have
+                // found. It used to say "Unclassified Digital / Voice", which
+                // labelled a NOAA weather broadcast as digital.
+                modulation: "Analog NBFM".into(),
+                protocol: "Analog Voice FM (probable)".into(),
                 details: Some(format!(
-                    "Dev: Peak {:.1} kHz · RMS {:.1} kHz",
+                    "Dev: Peak {:.1} kHz · RMS {:.1} kHz · no symbol clock",
                     peak_dev_hz / 1e3,
                     rms_dev_hz / 1e3
                 )),
-                confidence: 0.38,
+                confidence: 0.55,
             }
         } else {
             ClassificationResult {
@@ -2862,6 +2887,92 @@ mod tests {
                 .unwrap_or_default()
                 .contains("3 repeated")
         );
+    }
+
+    /// Receiver noise must not turn into DMR bursts. The framer's four-dibit
+    /// acquisition budget is met by sliced noise routinely (noise slices to
+    /// the outer levels, which is all a sync word uses), and the Golay/QR
+    /// colour-code fields that "corroborate" the sync accept about a third
+    /// of random words — so an idle channel logged "Base station data sync ·
+    /// Color Code 13 · quality -0.2 dB" every minute or so.
+    #[test]
+    fn receiver_noise_publishes_no_dmr_bursts() {
+        let mut seed = 0xd3a_u64;
+        let mut lcg = move || {
+            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            ((seed >> 33) as f32 / (1u64 << 31) as f32) * 2.0 - 1.0
+        };
+        let mut classifier = SignalClassifier::new(FS);
+        let secs = 90;
+        let mut dmr_events = Vec::new();
+        for _ in 0..(secs * FS as usize / 384) {
+            let iq: Vec<Complex32> = (0..384)
+                .map(|_| {
+                    let re: f32 = (0..6).map(|_| lcg()).sum::<f32>() * 0.05;
+                    let im: f32 = (0..6).map(|_| lcg()).sum::<f32>() * 0.05;
+                    Complex32::new(re, im)
+                })
+                .collect();
+            classifier.process(&iq, 162.4688e6);
+            for ev in classifier.take_decode_events() {
+                if ev.protocol == "DMR" {
+                    dmr_events.push(ev.summary);
+                }
+            }
+        }
+        assert!(dmr_events.is_empty(), "noise produced DMR bursts: {dmr_events:?}");
+    }
+
+    /// Analog NBFM voice on the channel — the commonest thing AUTO is pointed
+    /// at — must not turn into DMR bursts either. Voice slices into runs of
+    /// outer-level dibits and its envelope wanders, which is exactly the
+    /// shape a four-error sync budget and a one-in-three colour-code check
+    /// let through.
+    #[test]
+    fn analog_fm_voice_publishes_no_dmr_bursts() {
+        let mut seed = 0xf0f0_001c_u64;
+        let mut lcg = move || {
+            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            ((seed >> 33) as f32 / (1u64 << 31) as f32) * 2.0 - 1.0
+        };
+        let fs = FS as f32;
+        let mut classifier = SignalClassifier::new(FS);
+        let mut phases = [0.0f32; 4];
+        let mut freqs = [300.0f32, 900.0, 1700.0, 2400.0];
+        let mut amps = [1.0f32, 0.7, 0.5, 0.4];
+        let mut carrier = 0.0f32;
+        let mut dmr_events = Vec::new();
+        let secs = 90;
+        for block_idx in 0..(secs * FS as usize / 384) {
+            let iq: Vec<Complex32> = (0..384)
+                .map(|j| {
+                    let i = block_idx * 384 + j;
+                    if i % 480 == 0 {
+                        for k in 0..4 {
+                            freqs[k] = (freqs[k] + lcg() * 60.0).clamp(150.0, 3_000.0);
+                            amps[k] = (amps[k] + lcg() * 0.15).clamp(0.05, 1.2);
+                        }
+                    }
+                    let mut v = 0.0f32;
+                    for k in 0..4 {
+                        phases[k] += TAU * freqs[k] / fs;
+                        v += amps[k] * phases[k].sin();
+                    }
+                    let env = 0.55 + 0.45 * (i as f32 / fs * 3.7).sin();
+                    // ±3 kHz peak deviation, a little receiver noise on top.
+                    let dev_hz = v * env * 1_200.0 + lcg() * 150.0;
+                    carrier += TAU * dev_hz / fs;
+                    Complex32::new(carrier.cos() * 0.5, carrier.sin() * 0.5)
+                })
+                .collect();
+            classifier.process(&iq, 162.4688e6);
+            for ev in classifier.take_decode_events() {
+                if ev.protocol == "DMR" {
+                    dmr_events.push(ev.summary);
+                }
+            }
+        }
+        assert!(dmr_events.is_empty(), "analog voice produced DMR bursts: {dmr_events:?}");
     }
 
     #[test]

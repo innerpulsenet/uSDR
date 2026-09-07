@@ -18,6 +18,7 @@ use axum::extract::{DefaultBodyLimit, Query, State};
 use axum::http::{StatusCode, header};
 use axum::response::{Html, IntoResponse, Response};
 use axum::routing::{get, post};
+use axum::serve::ListenerExt;
 use axum::{Json, Router, body::Bytes};
 use clap::Parser;
 use serde::{Deserialize, Serialize};
@@ -72,6 +73,12 @@ struct Settings {
     serial: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     freq_hz: Option<f64>,
+    /// The frequency being *received* — the big readout — as distinct from
+    /// the span centre above. Without it a restart came back with the
+    /// receiver on the span centre, which is only where the operator was
+    /// listening if they never clicked a signal.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    inspect_hz: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     rate_hz: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -217,6 +224,17 @@ async fn main() -> Result<()> {
     // to the present rather than play a growing delay, so the queue is short.
     let (audio_tx, _) = tokio::sync::broadcast::channel(32);
     let runtime = sdr::spawn(cfg, sdr_events.clone(), audio_tx.clone())?;
+    // Put the receiver back on the channel it was on, if that channel is
+    // still inside the span it came up with.
+    if let Some(hz) = settings.inspect_hz {
+        let centre = settings.freq_hz.unwrap_or(sdr::DEFAULT_FREQ_HZ);
+        let rate = settings.rate_hz.unwrap_or(sdr::DEFAULT_RATE_HZ);
+        if (hz - centre).abs() <= rate / 2.0
+            && let Err(e) = runtime.inspect(hz)
+        {
+            eprintln!("restoring receive frequency {hz}: {e}");
+        }
+    }
 
     let state = Arc::new(AppState {
         sdr: Mutex::new(Some(runtime)),
@@ -246,6 +264,7 @@ async fn main() -> Result<()> {
         .route("/api/sdr/avg", post(post_sdr_avg))
         .route("/api/sdr/calibrate", post(post_sdr_calibrate))
         .route("/api/sdr/status", get(get_sdr_status))
+        .route("/api/sdr/modes", get(get_sdr_modes))
         .route("/api/sdr/calls", get(get_sdr_calls))
         .route("/api/sdr/calls/{id}/audio.wav", get(get_sdr_call_audio))
         .route("/api/sdr/capture.wav", get(get_sdr_capture))
@@ -264,6 +283,16 @@ async fn main() -> Result<()> {
     println!("uSDR listening on http://{}", listener.local_addr()?);
 
     let shutdown_state = Arc::clone(&state);
+    // The FFT stream is ~9-40 KB every 40 ms on one long-lived socket. With
+    // Nagle on, the partial trailing segment of each frame waits for the
+    // peer's delayed ACK (40 ms on Linux), so frames land in pairs 80 ms
+    // apart and the waterfall stutters at every span. Measured before this:
+    // 20 fps with p90 interval 83 ms; after: a steady 25 fps.
+    let listener = listener.tap_io(|tcp| {
+        if let Err(e) = tcp.set_nodelay(true) {
+            eprintln!("TCP_NODELAY: {e}");
+        }
+    });
     axum::serve(listener, app)
         .with_graceful_shutdown(async move {
             let _ = tokio::signal::ctrl_c().await;
@@ -274,6 +303,12 @@ async fn main() -> Result<()> {
 
     // Dropping the runtime stops the worker thread and releases the dongle.
     state.sdr.lock().expect("sdr").take();
+    // Settings writes are debounced; a change made in the last interval
+    // before Ctrl-C would otherwise never reach the file.
+    let final_settings = state.settings.lock().expect("settings").clone();
+    if let Err(e) = save_settings(&state.config_path, &final_settings) {
+        eprintln!("saving settings: {e}");
+    }
     Ok(())
 }
 
@@ -355,6 +390,7 @@ async fn post_sdr_inspect(
     if let Some(sdr) = st.sdr.lock().expect("sdr").as_ref() {
         sdr.inspect(req.freq_hz)?;
     }
+    st.update_settings(|s| s.inspect_hz = Some(req.freq_hz));
     Ok(Json(
         serde_json::json!({ "ok": true, "freq_hz": req.freq_hz }),
     ))
@@ -643,6 +679,17 @@ async fn get_sdr_status(
         .as_ref()
         .map(|r| r.status.lock().expect("sdr status").clone());
     Ok(Json(s))
+}
+
+/// Every mode the server accepts and what it can do — the authoritative
+/// capability table the UI reads instead of hardcoding mode behaviour.
+async fn get_sdr_modes() -> Json<Vec<sdr::ModeCapabilities>> {
+    Json(
+        sdr::SdrMode::all()
+            .iter()
+            .map(|m| m.capabilities())
+            .collect(),
+    )
 }
 
 /// The digital voice calls heard recently, newest first.

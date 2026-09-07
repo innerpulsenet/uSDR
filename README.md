@@ -117,7 +117,7 @@ all on one LCD-style screen.
   moves as text updates. The decode and classification logs prepend rows, so
   they also hold your scroll position against the new rows rather than sliding
   the content up under you.
-- **Nine modes**, switchable from the screen:
+- **Eleven modes**, switchable from the screen:
 
   | Mode | What it does |
   |---|---|
@@ -126,16 +126,21 @@ all on one LCD-style screen.
   | `WFM` | 200 kHz broadcast FM, 75 µs de-emphasis, for listening |
   | `P25` | P25 Phase 1 C4FM decoded to voice through the IMBE vocoder |
   | `DMR` | DMR Tier II decoded to voice through the AMBE vocoder |
+  | `NXDN` | NXDN48/NXDN96 conventional voice through the AMBE+2 vocoder; Type-C/D call assignments surface as trunking events |
   | `PACKET` | AX.25 at 1200 baud, POCSAG at 512/1200/2400, and FLEX, all at once |
   | `PAGER` | Whole-band POCSAG+FLEX sweep across the paging channels around the tune |
+  | `FLEX` | Dedicated Motorola FLEX demodulator with symbol eye and discriminator scope |
   | `AUTO` | Every decoder above at once, on whatever is in the passband |
   | `SCAN` | Automatic voice scan across a configured range and mode set |
 
-  `P25` and `DMR` extract and equalise their own channel out of the span and
-  decode it to audio in real time; call starts and ends, NAC/colour code and
-  duration land in the decode log. `PACKET` runs every packet and paging
-  decoder over the passband at the same time, so whatever is there decodes
-  without being told in advance what it is.
+  `P25`, `DMR` and `NXDN` extract and equalise their own channel out of the
+  span and decode it to audio in real time; call starts and ends,
+  NAC/colour-code/RAN and duration land in the decode log. `PACKET` runs
+  every packet and paging decoder over the passband at the same time, so
+  whatever is there decodes without being told in advance what it is.
+  `GET /api/sdr/modes` serves this table — labels, audio/decode capability,
+  bandwidth and scope kind per mode — so clients read what the server
+  actually supports instead of hardcoding it.
 
   The passband drawn on the spectrum and the audio scope's frequency axis both
   follow the mode's real channel width.
@@ -159,8 +164,18 @@ all on one LCD-style screen.
   All of it is real: the server picks the trace per mode — decimated audio,
   the pre-de-emphasis multiplex at 128 kHz, or the channel discriminator at
   10 samples per symbol — and says which it is sending. Nothing is simulated.
-- **Digital Signal Classifier** reporting modulation, symbol rate, protocol,
-  RF level, SNR, and deviation, refreshed with every FFT frame.
+- **Selected channel** panel beside the spectrum: protocol, modulation,
+  confidence, RF level, deviation, and the peaks in the span, refreshed with
+  every FFT frame. Two signal-to-noise figures are shown and named: *above
+  floor* is the channel's power over the spectral noise floor (what the peak
+  list and the meter use); *quieting* is the classifier's discriminator-based
+  figure, which runs much lower on the same carrier.
+- **Stream health** in the status strip: `STREAM OK`, or the count of
+  dropped blocks and sample gaps since start when the receiver is not
+  keeping up. Front-end options, calibration and the display range live in
+  an **Advanced** drawer under the main controls; the results (class log,
+  decode log, last heard, scan) sit directly below the receiver. The `⤢ tall`
+  button, or `F`, gives them most of the viewport.
 - **Protocol Decode / FEC panel** showing accepted *and* rejected frame
   attempts, so a heuristic label is never presented as a successful decode.
 - **Rolling 20-second capture** of voice audio, discriminator output, and
@@ -231,12 +246,13 @@ not be exposed to a network you do not control.
 | Route | Purpose |
 |---|---|
 | `GET /api/devices` | Dongles the driver can see, and which one is in use |
-| `GET /api/sdr/status` | Current tuning, span, gain, and sample-loss counters |
+| `GET /api/sdr/status` | Current tuning, span, gain, and sample-loss counters (`droppedBlocks`, `laggedBlocks`, plus `lostSamples`/`gapEvents` from the block timeline metadata) |
+| `GET /api/sdr/modes` | Every accepted mode with label, capability (audio/decode), bandwidth and scope kind |
 | `POST /api/sdr/tune` | `{"freq_hz": …}` — retune the span |
 | `POST /api/sdr/inspect` | `{"freq_hz": …}` — move the narrowband inspect chain |
 | `POST /api/sdr/rate` | `{"rate_hz": …}` |
 | `POST /api/sdr/gain` | `{"gain_db": …}` or `null` for AGC |
-| `POST /api/sdr/mode` | `{"mode": "nfm" \| "am" \| "wfm" \| "p25" \| "dmr" \| "packet" \| "pager" \| "auto" \| "scan"}` |
+| `POST /api/sdr/mode` | `{"mode": "nfm" \| "am" \| "wfm" \| "p25" \| "dmr" \| "nxdn" \| "packet" \| "pager" \| "flex" \| "auto" \| "scan"}` |
 | `POST /api/sdr/scan/config` | `{"start_hz": …, "stop_hz": …, "modes": ["am","nfm","p25","dmr"], "threshold_db": …, "resume_delay_s": …}` — voice-scan configuration |
 | `POST /api/sdr/scan/control` | `{"action": "pause" \| "resume" \| "skip" \| "forget"}` |
 | `POST /api/sdr/frontend` | `{"lo_offset": bool, "clip_guard": bool}` |
@@ -356,7 +372,7 @@ and each scan restarted at the head of that tail:
   is a correctness improvement as much as a saving: those sweeps searching
   noise are what produced confident labels on empty channels.
 
-All 302 engine tests pass unchanged.
+The full engine test suite passes unchanged (`cargo test -p scannerd-engine --release`).
 
 ## Voice scanning
 

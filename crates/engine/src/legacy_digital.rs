@@ -215,7 +215,8 @@ fn decode_window(samples: &[f32], fs: f64, words: &mut Vec<u64>) -> Vec<LegacyFr
             continue;
         }
         for phase in 0..8 {
-            let signs = slice_signs(samples, sps, phase as f64 / 8.0, dc);
+            let means = slice_means(samples, sps, phase as f64 / 8.0);
+            let signs: Vec<bool> = means.iter().map(|&m| m >= dc).collect();
             // Pack the sliced window once per phase: each alignment test is
             // then a shift-and-XOR over pre-packed words instead of a
             // per-position bit loop.
@@ -225,7 +226,7 @@ fn decode_window(samples: &[f32], fs: f64, words: &mut Vec<u64>) -> Vec<LegacyFr
                     continue;
                 }
                 if let Some((inverted, errors, hits)) =
-                    find_spec(words, signs.len(), spec, packed)
+                    find_spec(words, &means, dc, spec, packed)
                 {
                     out.entry((spec.protocol, spec.kind))
                         .or_insert(LegacyFrame {
@@ -244,7 +245,10 @@ fn decode_window(samples: &[f32], fs: f64, words: &mut Vec<u64>) -> Vec<LegacyFr
     out.into_values().collect()
 }
 
-fn slice_signs(samples: &[f32], sps: f64, phase: f64, dc: f32) -> Vec<bool> {
+/// Mean discriminator value over the middle half of each symbol period.
+/// The sign against the window's DC is the sliced bit; the magnitude is what
+/// [`eye_open`] judges a candidate sync word by.
+fn slice_means(samples: &[f32], sps: f64, phase: f64) -> Vec<f32> {
     let mut out = Vec::with_capacity((samples.len() as f64 / sps) as usize);
     let mut center = (phase + 0.5) * sps;
     while center + 0.25 * sps < samples.len() as f64 {
@@ -252,10 +256,49 @@ fn slice_signs(samples: &[f32], sps: f64, phase: f64, dc: f32) -> Vec<bool> {
         let end = (center + 0.25 * sps).ceil() as usize;
         let end = end.min(samples.len());
         let mean = samples[start..end].iter().sum::<f32>() / (end - start).max(1) as f32;
-        out.push(mean >= dc);
+        out.push(mean);
         center += sps;
     }
     out
+}
+
+/// The weakest symbol of a candidate sync word relative to the word's mean
+/// symbol magnitude. A sync word is a run of full-deviation symbols, so on
+/// real FSK every one sits near ±dev and this ratio is high (ISI on the
+/// isolated bits of an alternating run costs some, not most, of it). Sliced
+/// receiver noise or analog voice can match a 24-bit pattern by chance —
+/// often, across eight phases and both polarities of a 0.65 s window — but
+/// some of those symbols always sit close to the slicing threshold, and
+/// analog voice's envelope varies across the word besides. Below this ratio
+/// the bits were a coin toss, not a sync word.
+const EYE_OPEN_MIN: f32 = 0.35;
+
+fn eye_open(means: &[f32], dc: f32) -> bool {
+    // The word's own two levels, split by the same slicer that matched it,
+    // so a DC offset on the discriminator (carrier off-centre, or a window
+    // dominated by one polarity) does not skew the judgement.
+    let (mut hi_sum, mut hi_n, mut lo_sum, mut lo_n) = (0.0f32, 0usize, 0.0f32, 0usize);
+    for &m in means {
+        if m >= dc {
+            hi_sum += m;
+            hi_n += 1;
+        } else {
+            lo_sum += m;
+            lo_n += 1;
+        }
+    }
+    // Every sync word in SPECS has symbols of both signs.
+    if hi_n == 0 || lo_n == 0 {
+        return false;
+    }
+    let hi = hi_sum / hi_n as f32;
+    let lo = lo_sum / lo_n as f32;
+    let mid = (hi + lo) * 0.5;
+    let half = (hi - lo) * 0.5;
+    if half <= 0.0 {
+        return false;
+    }
+    means.iter().all(|&m| (m - mid).abs() >= EYE_OPEN_MIN * half)
 }
 
 /// Longest sync pattern in `SPECS`, in bits — bounds the packed-pattern array.
@@ -318,11 +361,13 @@ fn extract_bits(words: &[u64], base: usize, width: usize) -> u64 {
 
 fn find_spec(
     signs: &[u64],
-    n_signs: usize,
+    means: &[f32],
+    dc: f32,
     spec: &SyncSpec,
     packed: &PackedPattern,
 ) -> Option<(bool, usize, usize)> {
     let expected_len = packed.bits;
+    let n_signs = means.len();
     if n_signs < expected_len {
         return None;
     }
@@ -356,7 +401,7 @@ fn find_spec(
         } else {
             (expected_len - errors, true)
         };
-        if errors <= spec.max_errors {
+        if errors <= spec.max_errors && eye_open(&means[start..start + expected_len], dc) {
             matches.push((start, inverted, errors));
         }
     }
@@ -437,6 +482,77 @@ mod tests {
             got.iter()
                 .any(|frame| frame.protocol == "D-STAR" && frame.inverted)
         );
+    }
+
+    /// Deterministic LCG so the noise fixtures are the same on every run.
+    fn lcg(seed: &mut u64) -> f32 {
+        *seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        ((*seed >> 33) as f32 / (1u64 << 31) as f32) * 2.0 - 1.0
+    }
+
+    /// Approximately Gaussian via the sum of twelve uniforms.
+    fn gauss(seed: &mut u64) -> f32 {
+        (0..12).map(|_| lcg(seed)).sum::<f32>() / 2.0
+    }
+
+    /// Run the detector the way the classifier does — 20 ms blocks with the
+    /// carrier gate open — over `secs` of discriminator output, and return
+    /// every family it claimed.
+    fn run_detector(disc: &[f32], fs: f64) -> Vec<LegacyFrame> {
+        let mut det = LegacyDigitalDetector::new(fs);
+        let block = (fs * 0.02) as usize;
+        let mut got = Vec::new();
+        for chunk in disc.chunks(block) {
+            got.extend(det.process(chunk, true));
+        }
+        got
+    }
+
+    /// Receiver noise sliced at three bauds across eight phases for a long
+    /// time must not claim any family. 24-bit words with zero error budget
+    /// and no cadence requirement did — about once every half minute on an
+    /// idle channel, published as "D-STAR voice sync" at 0.94 confidence.
+    #[test]
+    fn discriminator_noise_claims_no_family() {
+        let fs = 48_000.0;
+        let mut seed = 0x5eed_1234_u64;
+        let disc: Vec<f32> = (0..(fs as usize * 120)).map(|_| gauss(&mut seed) * 2_500.0).collect();
+        let got = run_detector(&disc, fs);
+        assert!(got.is_empty(), "noise qualified a family: {got:?}");
+    }
+
+    /// Analog voice — a handful of tones wandering in frequency and level,
+    /// as a discriminator sees NBFM speech — must not qualify a family either.
+    /// A 2.4 kHz component slices to the 1010… run that opens the D-STAR
+    /// sync word, and a NOAA weather broadcast was labelled D-STAR by it.
+    #[test]
+    fn analog_voice_claims_no_family() {
+        let fs = 48_000.0;
+        let mut seed = 0x0f0f_1ce5_u64;
+        let n = fs as usize * 120;
+        let mut disc = Vec::with_capacity(n);
+        let mut phases = [0.0f32; 4];
+        let mut freqs = [300.0f32, 900.0, 1700.0, 2400.0];
+        let mut amps = [1.0f32, 0.7, 0.5, 0.4];
+        for i in 0..n {
+            if i % 480 == 0 {
+                // Every 10 ms the formants drift and the level breathes.
+                for k in 0..4 {
+                    freqs[k] = (freqs[k] + lcg(&mut seed) * 60.0).clamp(150.0, 3_000.0);
+                    amps[k] = (amps[k] + lcg(&mut seed) * 0.15).clamp(0.05, 1.2);
+                }
+            }
+            let mut v = 0.0f32;
+            for k in 0..4 {
+                phases[k] += std::f32::consts::TAU * freqs[k] / fs as f32;
+                v += amps[k] * phases[k].sin();
+            }
+            // Syllabic envelope plus a little receiver noise.
+            let env = 0.55 + 0.45 * (i as f32 / fs as f32 * 3.7).sin();
+            disc.push(v * env * 1_500.0 + gauss(&mut seed) * 200.0);
+        }
+        let got = run_detector(&disc, fs);
+        assert!(got.is_empty(), "analog voice qualified a family: {got:?}");
     }
 
     #[test]

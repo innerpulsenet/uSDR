@@ -126,6 +126,7 @@ pub fn analyse(samples: &[f32]) -> Option<Detection> {
             packed.push(word);
         }
         if n_bits < 46 {
+            // Two full repetitions are needed for the confirmation below.
             continue;
         }
 
@@ -135,24 +136,33 @@ pub fn analyse(samples: &[f32]) -> Option<Detection> {
             // scannerd uses the conventional normal form, so report the normal
             // code instead of returning an arbitrary equivalent polarity.
             let inverted = false;
-            let mut matches = 0usize;
-            let mut errors = 0u32;
-            for start in 0..=n_bits - 23 {
-                // The 23 bits from `start`, first bit in bit 0 — the layout
-                // the reversed targets in `code_table` compare against.
+            // The 23 bits from `start`, first bit in bit 0 — the layout the
+            // reversed targets in `code_table` compare against.
+            let distance_at = |start: usize| -> u32 {
                 let wi = start / 64;
                 let off = start % 64;
                 let mut window = packed[wi] >> off;
                 if off > 0 {
                     window |= packed.get(wi + 1).copied().unwrap_or(0) << (64 - off);
                 }
-                let distance = ((window & 0x7F_FFFF) ^ u64::from(target)).count_ones();
+                ((window & 0x7F_FFFF) ^ u64::from(target)).count_ones()
+            };
+            // DCS is the word repeated back to back, so a real one matches at
+            // `start` AND `start + 23` in the same phase, with the error
+            // budget shared across both repetitions. Counting any two matches
+            // anywhere in the window let noise qualify almost every window:
+            // 30 phases × 105 codes × 31 starts at three errors each is
+            // thousands of chances at a 2.4e-4 event.
+            let mut matches = 0usize;
+            let mut errors = 0u32;
+            for start in 0..=n_bits - 46 {
+                let distance = distance_at(start) + distance_at(start + 23);
                 if distance <= MAX_ERRORS {
                     matches += 1;
                     errors += distance;
                 }
             }
-            if matches < 2 {
+            if matches == 0 {
                 continue;
             }
             let detection = Detection {
@@ -260,5 +270,58 @@ mod tests {
     #[test]
     fn silence_is_not_a_code() {
         assert_eq!(analyse(&vec![0.0; WINDOW]), None);
+    }
+
+    fn lcg(seed: &mut u64) -> f32 {
+        *seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        ((*seed >> 33) as f32 / (1u64 << 31) as f32) * 2.0 - 1.0
+    }
+
+    /// The sub-audible band of a channel with no squelch code on it is
+    /// receiver noise. Two matches of a 23-bit word within three errors,
+    /// anywhere in a window, over 30 phases and 105 codes, was satisfied by
+    /// noise in almost every window: a NOAA weather broadcast carried a
+    /// steady "DCS Code: D074" it does not transmit.
+    #[test]
+    fn noise_is_not_a_code() {
+        let mut seed = 0xdc5_u64;
+        let mut hits = 0;
+        for _ in 0..200 {
+            let samples: Vec<f32> = (0..WINDOW)
+                .map(|_| (0..12).map(|_| lcg(&mut seed)).sum::<f32>() / 2.0 * 0.2)
+                .collect();
+            if analyse(&samples).is_some() {
+                hits += 1;
+            }
+        }
+        assert_eq!(hits, 0, "{hits} of 200 noise windows produced a DCS code");
+    }
+
+    /// Mains hum in the sub-audible band slices to a periodic bit stream,
+    /// which is not a DCS word at any phase.
+    #[test]
+    fn hum_is_not_a_code() {
+        for hum_hz in [50.0f32, 60.0, 100.0, 120.0, 180.0] {
+            let samples: Vec<f32> = (0..WINDOW)
+                .map(|i| (std::f32::consts::TAU * hum_hz * i as f32 / ANALYSIS_RATE as f32).sin() * 0.2)
+                .collect();
+            assert_eq!(analyse(&samples), None, "{hum_hz} Hz hum produced a DCS code");
+        }
+    }
+
+    /// A real word survives the successive-repetition requirement at the
+    /// bit-error rate a usable channel has.
+    #[test]
+    fn word_with_scattered_bit_errors_still_decodes() {
+        let mut samples = waveform(0o532, false, ANALYSIS_RATE, 0.7);
+        // Flip one bit's worth of samples in each of the two repetitions the
+        // detector compares.
+        for &at in &[40usize, 250] {
+            for x in &mut samples[at..at + 7] {
+                *x = -*x;
+            }
+        }
+        let got = analyse(&samples).expect("DCS with two bit errors");
+        assert_eq!(got.code, 0o532);
     }
 }

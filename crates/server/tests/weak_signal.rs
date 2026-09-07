@@ -1,56 +1,84 @@
 //! Weak-signal regression tests: the decoders must keep working as SNR
 //! drops, and the audio auto-notch must kill a stable tone.
+//!
+//! The POCSAG fixtures assert exact payload (capcode + text), not just sync
+//! detection: a decoder that locks sync and emits garbage must fail here.
+//! The burst builder mirrors the engine's proven `burst_audio` encoding
+//! (MSB-first alpha packing, idle-filled batches, ±4.5 kHz square wave)
+//! with an added IF-filter smoothing pass, and noise is injected on the
+//! discriminator-Hz waveform the decoder actually consumes.
 
 use scannerd_engine::autonotch::AutoNotch;
-use scannerd_engine::pocsag::PocsagDecoder;
+use scannerd_engine::pocsag::{PocsagDecoder, PocsagMessage};
 
-/// Minimal POCSAG burst: preamble + sync + one address + two message words.
-fn test_burst(fs: f32) -> Vec<f32> {
-    const SYNC: u32 = 0x7CD2_15D8;
-    const GEN: u32 = 0b111_0110_1001;
-    fn syndrome(mut v: u32) -> u32 {
-        for i in (10..31).rev() {
-            if v >> i & 1 == 1 {
-                v ^= GEN << (i - 10);
-            }
+const SYNC: u32 = 0x7CD2_15D8;
+const IDLE: u32 = 0x7A89_C197;
+/// BCH(31,21) generator x^10+x^9+x^8+x^6+x^5+x^3+1.
+const GEN: u32 = 0b111_0110_1001;
+const WORDS_PER_BATCH: usize = 16;
+
+fn syndrome(mut v: u32) -> u32 {
+    for i in (10..31).rev() {
+        if v >> i & 1 == 1 {
+            v ^= GEN << (i - 10);
         }
-        v & 0x3FF
     }
-    fn codeword(data20: u32, message: bool) -> u32 {
-        let bch_data = (data20 << 11 | u32::from(message) << 31) >> 1;
-        let bch = bch_data | syndrome(bch_data);
-        bch << 1 | (bch.count_ones() & 1)
+    v & 0x3FF
+}
+
+/// Build a 32-bit codeword: 20 data bits (30..11) + BCH + even parity.
+fn codeword(data20: u32, message: bool) -> u32 {
+    let bch_data = (data20 << 11 | u32::from(message) << 31) >> 1;
+    let bch = bch_data | syndrome(bch_data);
+    bch << 1 | (bch.count_ones() & 1)
+}
+
+/// 7-bit ASCII string → message words, groups MSB-first as the decoder
+/// expects (matches the engine's round-trip test helper).
+fn alpha_words(s: &str) -> Vec<u32> {
+    let mut bits = Vec::new();
+    for c in s.bytes() {
+        for j in 0..7 {
+            bits.push(c >> j & 1 == 1);
+        }
     }
-    let addr = (0x12345 << 3) | 2;
-    fn ascii_word(s: &str) -> u32 {
-        let mut bits: Vec<bool> = Vec::new();
-        for c in s.bytes() {
-            for j in 0..7 {
-                bits.push(c >> j & 1 == 1);
-            }
+    bits.chunks(20)
+        .map(|g| {
+            g.iter()
+                .enumerate()
+                .fold(0u32, |v, (j, &b)| v | u32::from(b) << (19 - j))
+        })
+        .collect()
+}
+
+/// Preamble + sync + one batch holding the address (18-bit `addr18`,
+/// function bits, frame `frame`) followed by the message words; the rest of
+/// the batch is idle. Rendered as a ±4.5 kHz square, then softened with a
+/// 16-tap moving average like a real transmitter's IF filter.
+fn burst_audio(fs: f32, baud: u32, addr18: u32, function: u8, frame: usize, msg: &[u32]) -> Vec<f32> {
+    let addr_word = codeword(addr18 << 2 | u32::from(function), false);
+    let mut batch = vec![IDLE; WORDS_PER_BATCH];
+    batch[frame * 2] = addr_word;
+    let mut msg_idx = 0;
+    for i in (frame * 2 + 1)..WORDS_PER_BATCH {
+        if msg_idx < msg.len() {
+            batch[i] = codeword(msg[msg_idx], true);
+            msg_idx += 1;
         }
-        while bits.len() < 20 {
-            bits.push(false);
-        }
-        let mut w = 0u32;
-        for (i, b) in bits.iter().take(20).enumerate() {
-            w |= u32::from(*b) << i;
-        }
-        w
     }
-    let words = [
-        SYNC,
-        codeword(addr, false),
-        codeword(ascii_word("HI"), true),
-        codeword(ascii_word("73"), true),
-    ];
-    let mut bits: Vec<bool> = (0..576).map(|i| i % 2 == 0).collect();
-    for w in words {
+    let mut all_words = vec![SYNC];
+    all_words.extend(batch);
+
+    let mut bits = Vec::new();
+    for i in 0..600 {
+        bits.push(i % 2 == 0);
+    }
+    for w in all_words {
         for i in (0..32).rev() {
             bits.push(w >> i & 1 == 1);
         }
     }
-    let spb = fs / 1200.0;
+    let spb = fs / baud as f32;
     let mut out = Vec::new();
     for (k, &b) in bits.iter().enumerate() {
         let hz = if b { 4500.0 } else { -4500.0 };
@@ -70,29 +98,93 @@ fn test_burst(fs: f32) -> Vec<f32> {
     smooth
 }
 
-#[test]
-fn pocsag_decodes_with_noise_at_moderate_snr() {
-    let fs = 48_000.0f32;
-    let burst = test_burst(fs);
-    let mut seed = 0x1234_5678u32;
+/// Deterministic xorshift noise scaled to `amp`.
+fn add_noise(sig: &[f32], amp: f32, seed: u32) -> Vec<f32> {
+    let mut s = seed;
     let mut rng = move || {
-        seed ^= seed << 13;
-        seed ^= seed >> 17;
-        seed ^= seed << 5;
-        seed as f32 / u32::MAX as f32 - 0.5
+        s ^= s << 13;
+        s ^= s >> 17;
+        s ^= s << 5;
+        s as f32 / u32::MAX as f32 - 0.5
     };
-    let noise_amp = 1_500.0; // ~1/3 of full deviation: rough but decodable
-    let noisy: Vec<f32> = burst.iter().map(|&x| x + noise_amp * rng()).collect();
+    sig.iter().map(|&x| x + amp * rng()).collect()
+}
 
-    let mut dec = PocsagDecoder::new(f64::from(fs), 1200);
-    for _ in 0..2 {
-        dec.process(&noisy);
-    }
+fn decode_all(fs: f32, baud: u32, audio: &[f32]) -> (Vec<PocsagMessage>, PocsagDecoder) {
+    let mut dec = PocsagDecoder::new(f64::from(fs), baud);
+    // One pass per burst, then a quiet tail so the final batch flushes.
+    // Feeding the same burst twice would decode it twice — that is correct
+    // decoder behavior, not junk, but it muddies exact-count assertions.
+    let mut msgs = dec.process(audio);
+    msgs.extend(dec.process(&[0.0f32; 2048]));
+    (msgs, dec)
+}
+
+/// The fixture burst itself must round-trip to the exact intended page:
+/// capcode, function, text, and completeness. Guards the fixture builder —
+/// if this fails, the noisy tests below prove nothing.
+#[test]
+fn pocsag_fixture_round_trips_to_exact_payload() {
+    let fs = 48_000.0f32;
+    let burst = burst_audio(fs, 1200, 0x12345, 3, 2, &alpha_words("HI73"));
+    let (msgs, _dec) = decode_all(fs, 1200, &burst);
+
+    let want_capcode = (0x12345u32 << 3) | 2;
+    let mine: Vec<&PocsagMessage> = msgs.iter().filter(|m| m.capcode == want_capcode).collect();
+    assert_eq!(mine.len(), 1, "expected exactly one page, got {msgs:#?}");
+    let m = mine[0];
+    assert_eq!(m.text, "HI73", "payload text mismatch: {m:#?}");
+    assert_eq!(m.function, 3);
+    assert_eq!(m.baud, 1200);
+    assert!(!m.partial, "clean burst must decode complete: {m:#?}");
+    // No junk beyond our page.
+    assert_eq!(
+        msgs.len(),
+        1,
+        "clean burst produced unexpected extra messages: {msgs:#?}"
+    );
+}
+
+/// Moderate discriminator noise: the exact page must still come through —
+/// same capcode, same text — and nothing else may be invented.
+#[test]
+fn pocsag_exact_payload_survives_moderate_noise() {
+    let fs = 48_000.0f32;
+    let burst = burst_audio(fs, 1200, 0x12345, 3, 2, &alpha_words("HI73"));
+    // ~1/3 of full deviation: rough but decodable.
+    let noisy = add_noise(&burst, 1_500.0, 0x1234_5678);
+    let (msgs, dec) = decode_all(fs, 1200, &noisy);
+
     assert!(
         dec.diagnostics().syncs_1200 > 0,
         "no sync at moderate noise; bits={}",
         dec.diagnostics().bits_1200
     );
+    let want_capcode = (0x12345u32 << 3) | 2;
+    let mine: Vec<&PocsagMessage> = msgs.iter().filter(|m| m.capcode == want_capcode).collect();
+    assert!(
+        mine.iter().any(|m| m.text == "HI73"),
+        "exact page not recovered under noise: {msgs:#?}"
+    );
+    // Junk control: noise must not manufacture unrelated pages.
+    let junk: Vec<&PocsagMessage> = msgs.iter().filter(|m| m.capcode != want_capcode).collect();
+    assert!(
+        junk.is_empty(),
+        "noise produced {} junk message(s): {junk:#?}",
+        junk.len()
+    );
+}
+
+/// Pure-noise control: uniform ±4.5 kHz-band noise with no burst must yield
+/// no syncs and no messages at all.
+#[test]
+fn pocsag_pure_noise_yields_no_pages() {
+    let fs = 48_000.0f32;
+    let burst = burst_audio(fs, 1200, 0x12345, 3, 2, &alpha_words("HI73"));
+    let noise_only = add_noise(&vec![0.0f32; burst.len()], 4_500.0, 0x99AA_BBCC);
+    let (msgs, dec) = decode_all(fs, 1200, &noise_only);
+    assert_eq!(dec.diagnostics().syncs_1200, 0, "false syncs on pure noise");
+    assert!(msgs.is_empty(), "pure noise produced pages: {msgs:#?}");
 }
 
 #[test]

@@ -131,6 +131,14 @@ impl Spectrum {
         }
     }
 
+    /// Drop buffered and accumulated display samples — after a break in the
+    /// sample timeline the pending Welch window would otherwise average
+    /// across a hole that never existed on the air.
+    pub fn clear(&mut self) {
+        self.buf.fill(Complex32::new(0.0, 0.0));
+        self.pending.clear();
+    }
+
     /// Average periodogram returning calibrated dBFS (0 dBFS = full scale CW tone).
     pub fn power_dbfs(&mut self, input: &[Complex32], out: &mut Vec<f32>) {
         let Some(nseg) = self.accumulate(input) else {
@@ -425,6 +433,13 @@ impl Nco {
         self.inc = Complex32::new(cos as f32, sin as f32);
     }
 
+    /// Restart the phase at DC while keeping the rotation rate — for a break
+    /// in the sample timeline, where continuing the old phase is meaningless.
+    pub fn reset_phase(&mut self) {
+        self.cur = Complex32::new(1.0, 0.0);
+        self.since_norm = 0;
+    }
+
     pub fn mix(&mut self, input: &[Complex32], out: &mut Vec<Complex32>) {
         out.clear();
         out.reserve(input.len());
@@ -500,6 +515,20 @@ impl DecimFir {
 
     pub fn decim(&self) -> usize {
         self.decim
+    }
+
+    /// Clear the streaming state — buffered input, overlap tail, and the
+    /// kept-sample grid — and re-arm the startup warm-up, without redesigning
+    /// the taps or rebuilding the FFT plan. This is the discontinuity reset:
+    /// after a break in the sample timeline the buffered history belongs to
+    /// samples that will never arrive, so it must not be stitched onto the
+    /// new run.
+    pub fn reset(&mut self) {
+        self.buf.clear();
+        self.overlap.fill(Complex32::new(0.0, 0.0));
+        self.phase = 0;
+        self.g = 0;
+        self.warmup = (self.taps.len().saturating_sub(1)) as u64;
     }
 
     pub fn process(&mut self, input: &[Complex32], out: &mut Vec<Complex32>) {
@@ -753,6 +782,25 @@ impl DecodeChain {
         self.nco.set_freq(hz, self.fs_in);
     }
 
+    /// Drop all streaming state — NCO phase and both FIR buffers — without
+    /// touching the design (offset, bandwidth, taps, FFT plans survive).
+    ///
+    /// Used when the sample timeline breaks (a lost-delivery gap or an
+    /// acquisition epoch boundary): the buffered tail belongs to samples the
+    /// consumer will never see again, and emitting it stitched to the new
+    /// run would hand framing decoders a waveform that never existed on the
+    /// air. After a reset the chain re-arms its warm-up and the first
+    /// outputs lag by the usual FIR transient, exactly like a fresh chain.
+    pub fn reset(&mut self) {
+        // Keep the rotation rate (the design), restart the phase: the sample
+        // run being mixed into is over, so the new run starts at DC phase.
+        self.nco.reset_phase();
+        self.fir.reset();
+        self.audio.reset();
+        self.mixed.clear();
+        self.decimated.clear();
+    }
+
     pub fn set_bandwidth(&mut self, bw: f32) {
         let fs_out = self.fs_out as f32;
         let half = (bw * 0.5).clamp(10.0, fs_out * 0.45);
@@ -806,6 +854,11 @@ impl OnePole {
     }
     pub fn value(&self) -> f32 {
         self.y
+    }
+    /// Forget the accumulated level — after a break in the sample timeline,
+    /// the old average describes samples that will never arrive again.
+    pub fn reset(&mut self) {
+        self.y = 0.0;
     }
 }
 

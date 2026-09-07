@@ -3134,7 +3134,12 @@ pub(crate) mod tests {
         let hit = pages
             .iter()
             .any(|page| page.capcode == capcode && page.text == "AWGN SWEEP");
-        let false_positives = pages.iter().filter(|p| p.text != "AWGN SWEEP").count() as u32;
+        // Junk = anything that is not the exact intended page: wrong text OR
+        // right text on a wrong capcode. Noise must not manufacture either.
+        let false_positives = pages
+            .iter()
+            .filter(|p| p.text != "AWGN SWEEP" || p.capcode != capcode)
+            .count() as u32;
         (hit, false_positives, decoder.diagnostics().clone())
     }
 
@@ -3284,6 +3289,9 @@ pub(crate) mod tests {
             ("1600/4", A_1600_4, 2),
             ("3200/2", A_3200_2, 2),
             ("3200/4", A_3200_4, 3),
+            // The alternate 3200/4 sync code: same 6400-baud air mode, a
+            // different SCF word — coverage must prove both spellings lock.
+            ("3200/4-alt", A_3200_4_ALT, 3),
         ];
         let trials: u64 = 10;
         for (name, code, phase) in modes {
@@ -3348,6 +3356,7 @@ pub(crate) mod tests {
             (A_1600_4, 2, 20),
             (A_3200_2, 2, 16),
             (A_3200_4, 3, 24),
+            (A_3200_4_ALT, 3, 24),
         ] {
             // Majority over three seeds: a single seed sits on the cliff
             // edge where one noise draw flips the outcome.

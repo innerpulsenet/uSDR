@@ -11,7 +11,7 @@ pub use device::{
     Capabilities, Cmd, Device, DeviceConfig, DeviceInfo, Event, GainControl, Role, State, cover_hz,
     cover_hz_offset, enumerate, open,
 };
-pub use fanout::{Fanout, IqBlock};
+pub use fanout::{ContinuityTracker, Fanout, GapReport, IqBlock};
 
 use anyhow::{Result, bail};
 use std::collections::BTreeMap;
