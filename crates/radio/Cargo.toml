@@ -8,3 +8,4 @@ description = "Multi-device SDR management and IQ fan-out for scannerd"
 anyhow.workspace = true
 num-complex.workspace = true
 soapysdr.workspace = true
+libc = "0.2"

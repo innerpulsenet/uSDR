@@ -205,12 +205,13 @@ impl ClipGuard {
         }
     }
 
-    fn set_ceiling(&mut self, gain: f64) {
-        let g = gain.clamp(self.min, self.max);
-        self.ceiling = g;
-        self.current = g;
-        self.high = 0;
-        self.low = 0;
+    /// Guard for automatic gain: starts at `start` and may climb all the
+    /// way to the hardware maximum on a quiet band, walking back down as
+    /// soon as the ADC clips.
+    fn auto(start: f64, min: f64, max: f64) -> Self {
+        let mut g = Self::new(start, min, max);
+        g.ceiling = max;
+        g
     }
 
     /// One observation of clip fraction (0..=1), typically once a second.
@@ -401,16 +402,33 @@ pub fn open(cfg: &DeviceConfig) -> Result<Device> {
         Some(g) => {
             apply_overall_gain(&dev, &caps, &mut initial_agc, g, &log_tx);
         }
-        None if caps.hardware_agc => {
-            let _ = dev.set_gain_mode(Rx, 0, true);
-            initial_agc = true;
-            let _ = log_tx.try_send(format!("{}: hardware AGC enabled", cfg.serial));
+        None => {
+            // "Automatic" gain is a clip-guarded loop on manual gain, never
+            // the tuner's own AGC. The R820T's AGC drives the LNA and mixer
+            // to full gain regardless of what is on the antenna; measured
+            // here it left the ADC at 0.997 of full scale with the noise
+            // floor 30 dB up, and every signal but the strongest gone — the
+            // receiver "went deaf" until a restart re-applied the saved
+            // manual gain. The guard walks gain down within two seconds of
+            // clipping and back up, a decibel at a time, when the band is
+            // quiet.
+            if caps.hardware_agc {
+                let _ = dev.set_gain_mode(Rx, 0, false);
+            }
+            if let GainControl::Overall { min, max } = caps.gain {
+                let start = auto_gain_start(min, max);
+                apply_overall_gain(&dev, &caps, &mut initial_agc, start, &log_tx);
+                initial_agc = true;
+                let _ = log_tx.try_send(format!(
+                    "{}: auto gain (clip-guarded) starting at {start:.1} dB",
+                    cfg.serial
+                ));
+            }
         }
-        None => {}
     }
     let _ = dev.write_setting("biasT_ctrl", "false");
 
-    publish_state(&dev, &caps, tune, &event_tx);
+    publish_state(&dev, &caps, tune, initial_agc, &event_tx);
 
     let serial = cfg.serial.clone();
     let cover_hz = cfg.cover_hz;
@@ -537,15 +555,20 @@ fn run(
     // the pair to detect lost deliveries and stale queued blocks exactly.
     let mut sample_pos: u64 = 0;
     let mut epoch: u64 = 0;
+    // `agc_enabled` is the auto-gain loop. Its guard climbs to the hardware
+    // maximum; the operator's optional clip guard (Cmd::ClipGuard) sits
+    // under a hand-set gain and never exceeds it. Exactly one of the two,
+    // or neither, is live in `clip_guard`.
+    let mut guard_wanted = false;
     let mut clip_guard = if agc_enabled {
-        None
-    } else {
         match caps.gain {
             GainControl::Overall { min, max } => {
-                dev.gain(Rx, 0).ok().map(|g| ClipGuard::new(g, min, max))
+                dev.gain(Rx, 0).ok().map(|g| ClipGuard::auto(g, min, max))
             }
             GainControl::Sdrplay { .. } => None,
         }
+    } else {
+        None
     };
     let mut usb_fails = 0u32;
     let mut tune_fails = 0u32;
@@ -567,18 +590,17 @@ fn run(
                 Ok(Cmd::Gain(g)) => {
                     let ok = apply_overall_gain(&dev, &caps, &mut agc_enabled, g, &log_tx);
                     if ok {
+                        agc_enabled = false;
                         let applied = match caps.gain {
                             GainControl::Overall { min, max } => g.clamp(min, max),
                             GainControl::Sdrplay { .. } => g,
                         };
-                        match &mut clip_guard {
-                            Some(cg) => cg.set_ceiling(applied),
-                            None => {
-                                if let GainControl::Overall { min, max } = caps.gain {
-                                    clip_guard = Some(ClipGuard::new(applied, min, max));
-                                }
+                        clip_guard = match caps.gain {
+                            GainControl::Overall { min, max } if guard_wanted => {
+                                Some(ClipGuard::new(applied, min, max))
                             }
-                        }
+                            _ => None,
+                        };
                     }
                     ok
                 }
@@ -589,36 +611,49 @@ fn run(
                     set_and_log(&log_tx, "IFGR", dev.set_gain_element(Rx, 0, "IFGR", g))
                 }
                 Ok(Cmd::ClipGuard(on)) => {
-                    clip_guard = if !on {
-                        None
-                    } else if let GainControl::Overall { min, max } = caps.gain {
-                        dev.gain(Rx, 0).ok().map(|g| ClipGuard::new(g, min, max))
-                    } else {
-                        None
-                    };
+                    guard_wanted = on;
+                    // Auto gain keeps its own guard whatever the checkbox says.
+                    if !agc_enabled {
+                        clip_guard = if !on {
+                            None
+                        } else if let GainControl::Overall { min, max } = caps.gain {
+                            dev.gain(Rx, 0).ok().map(|g| ClipGuard::new(g, min, max))
+                        } else {
+                            None
+                        };
+                    }
                     false
                 }
                 Ok(Cmd::Agc(on)) => {
-                    let mut ok = false;
-                    for _attempt in 0..3 {
-                        if dev.set_gain_mode(Rx, 0, on).is_ok() {
-                            ok = true;
-                            agc_enabled = on;
-                            break;
+                    // See open(): automatic gain is the guarded loop on manual
+                    // gain. The tuner's own AGC is never switched on.
+                    if on {
+                        match caps.gain {
+                            GainControl::Overall { min, max } => {
+                                let start = auto_gain_start(min, max);
+                                let mut hw_agc = agc_enabled && caps.hardware_agc;
+                                let ok = apply_overall_gain(&dev, &caps, &mut hw_agc, start, &log_tx);
+                                if ok {
+                                    agc_enabled = true;
+                                    clip_guard = Some(ClipGuard::auto(start, min, max));
+                                    let _ = log_tx.try_send(format!(
+                                        "auto gain (clip-guarded) starting at {start:.1} dB"
+                                    ));
+                                }
+                                ok
+                            }
+                            GainControl::Sdrplay { .. } => {
+                                let _ = log_tx.try_send("auto gain unavailable on this device".into());
+                                false
+                            }
                         }
-                        std::thread::sleep(std::time::Duration::from_millis(10));
+                    } else {
+                        // Leave the gain where the loop had it; the caller
+                        // follows with an explicit Gain to set its own.
+                        agc_enabled = false;
+                        clip_guard = None;
+                        true
                     }
-                    if !ok {
-                        let _ = log_tx.try_send("AGC failed".to_string());
-                    }
-                    if ok {
-                        if on {
-                            clip_guard = None;
-                        } else if let GainControl::Overall { min, max } = caps.gain {
-                            clip_guard = dev.gain(Rx, 0).ok().map(|g| ClipGuard::new(g, min, max));
-                        }
-                    }
-                    ok
                 }
                 Ok(Cmd::BiasT(on)) => set_and_log(
                     &log_tx,
@@ -674,7 +709,7 @@ fn run(
                 }
             };
             if changed {
-                publish_state(&dev, &caps, tune, &event_tx);
+                publish_state(&dev, &caps, tune, agc_enabled, &event_tx);
             }
         }
         if let Some(f) = last_tune {
@@ -694,7 +729,7 @@ fn run(
                     // different RF windows — a new epoch, position restarts.
                     epoch += 1;
                     sample_pos = 0;
-                    publish_state(&dev, &caps, tune, &event_tx);
+                    publish_state(&dev, &caps, tune, agc_enabled, &event_tx);
                 } else {
                     tune_fails = tune_fails.saturating_add(1);
                     let _ = log_tx.try_send(format!(
@@ -736,15 +771,18 @@ fn run(
                     if let Some(ref mut cg) = clip_guard
                         && let Some(new_g) = cg.on_stats(clipped_fraction)
                     {
-                        match dev.set_gain(Rx, 0, new_g) {
-                            Ok(()) => {
-                                let _ = log_tx.try_send(format!(
-                                    "gain {new_g:.1} dB (clip {clipped_fraction:.4})"
-                                ));
-                            }
-                            Err(e) => {
-                                let _ = log_tx.try_send(format!("clip-guard gain {new_g}: {e}"));
-                            }
+                        if crate::driver_log::checked(|| dev.set_gain(Rx, 0, new_g).is_ok()) {
+                            let _ = log_tx.try_send(format!(
+                                "gain {new_g:.1} dB (clip {clipped_fraction:.4})"
+                            ));
+                            publish_state(&dev, &caps, tune, agc_enabled, &event_tx);
+                        } else {
+                            // Counted by the server as a control fault; two
+                            // in a window reopen the device, which is what
+                            // clears a stalled tuner bus.
+                            let _ = log_tx.try_send(format!(
+                                "gain {new_g:.1} dB failed: tuner did not take the write"
+                            ));
                         }
                     }
                     let _ = event_tx.try_send(Event::StreamStats {
@@ -796,13 +834,15 @@ fn apply_overall_gain(
         GainControl::Sdrplay { .. } => want,
     };
     let mut ok = false;
-    for attempt in 0..3 {
-        if dev.set_gain(Rx, 0, g).is_ok() {
+    for attempt in 0..GAIN_ATTEMPTS {
+        // The driver reports success whether or not the I2C write took;
+        // the stderr watcher is what says it did.
+        if crate::driver_log::checked(|| dev.set_gain(Rx, 0, g).is_ok()) {
             ok = true;
             break;
         }
-        if attempt + 1 < 3 {
-            std::thread::sleep(std::time::Duration::from_millis(10));
+        if attempt + 1 < GAIN_ATTEMPTS {
+            std::thread::sleep(GAIN_RETRY_DELAY * (attempt + 1));
         }
     }
     if ok {
@@ -819,9 +859,23 @@ fn apply_overall_gain(
     }
 }
 
-/// Attempts per tuner write, and the pause between them.
-const TUNE_ATTEMPTS: u32 = 3;
-const TUNE_RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(6);
+/// Where the auto-gain loop starts: well below the maximum, so a strong
+/// band is not clipped for the seconds the guard takes to walk down (2 dB
+/// per two seconds), and high enough that a quiet band is usable while it
+/// climbs. On an R820T with a modest antenna the ADC clipped from about
+/// 28 dB up, so 40% of the range (~20 dB) starts under that.
+fn auto_gain_start(min: f64, max: f64) -> f64 {
+    (min + (max - min) * 0.4).clamp(min, max)
+}
+
+/// Attempts per tuner write, and the pause between them. The pause grows
+/// per attempt: a stalled control endpoint that fails at 6 ms sometimes
+/// clears by 30, and a write that still fails after that is reported so
+/// the receiver can be reopened, which is what does clear it.
+const TUNE_ATTEMPTS: u32 = 4;
+const TUNE_RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(8);
+const GAIN_ATTEMPTS: u32 = 4;
+const GAIN_RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(8);
 
 /// Set the tuner frequency, retrying a stalled I2C write.
 ///
@@ -831,11 +885,13 @@ const TUNE_RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(6
 /// never moved, and nothing said so.
 fn set_frequency_retrying(dev: &soapysdr::Device, hz: f64) -> bool {
     for attempt in 0..TUNE_ATTEMPTS {
-        if dev.set_frequency(Rx, 0, hz, ()).is_ok() {
+        // A partial write (the mux registers taken, the PLL not) leaves the
+        // tuner deaf at both frequencies; only a clean full write counts.
+        if crate::driver_log::checked(|| dev.set_frequency(Rx, 0, hz, ()).is_ok()) {
             return true;
         }
         if attempt + 1 < TUNE_ATTEMPTS {
-            std::thread::sleep(TUNE_RETRY_DELAY);
+            std::thread::sleep(TUNE_RETRY_DELAY * (attempt + 1));
         }
     }
     false
@@ -862,6 +918,7 @@ fn publish_state(
     dev: &soapysdr::Device,
     caps: &Capabilities,
     tune: Tuning,
+    auto_gain: bool,
     tx: &SyncSender<Event>,
 ) {
     // Report the frequency the tuner *reached*, not the one it was asked for.
@@ -875,7 +932,8 @@ fn publish_state(
         .ok()
         .map(|lo| lo * (1.0 + tune.ppm * 1e-6));
     let mut state = State {
-        agc: dev.gain_mode(Rx, 0).ok(),
+        // The guarded loop, not the tuner's gain mode (always manual now).
+        agc: Some(auto_gain),
         rate: dev.sample_rate(Rx, 0).ok(),
         bandwidth: dev.bandwidth(Rx, 0).ok(),
         frequency: achieved.or(Some(tune.desired)),
@@ -1043,14 +1101,33 @@ mod tests {
         assert_eq!(g.current, 30.0, "must not exceed the configured ceiling");
     }
 
+    /// A hand-set gain is replaced by a fresh guard at that gain (Cmd::Gain
+    /// rebuilds it), so the new ceiling is simply the new guard's start.
     #[test]
     fn clip_guard_never_exceeds_a_new_lower_ceiling() {
-        let mut g = ClipGuard::new(40.0, 0.0, 49.6);
-        g.set_ceiling(20.0);
+        let mut g = ClipGuard::new(20.0, 0.0, 49.6);
         for _ in 0..20 {
             assert!(g.on_stats(0.0).is_none());
         }
         assert_eq!(g.current, 20.0);
+    }
+
+    /// The auto-gain guard starts below the maximum, climbs to it on a quiet
+    /// band, and comes back down as soon as the ADC clips.
+    #[test]
+    fn auto_gain_guard_climbs_to_max_and_backs_off_on_clipping() {
+        let start = auto_gain_start(0.0, 49.6);
+        assert!((start - 19.84).abs() < 0.01);
+        let mut g = ClipGuard::auto(start, 0.0, 49.6);
+        let mut steps = 0;
+        for _ in 0..400 {
+            if g.on_stats(0.0).is_some() {
+                steps += 1;
+            }
+        }
+        assert!(steps > 0 && (g.current - 49.6).abs() < 0.05, "climbed to {}", g.current);
+        assert!(g.on_stats(0.01).is_none());
+        assert_eq!(g.on_stats(0.01), Some(47.6));
     }
 
     /// A dongle measured at +2.61 ppm puts a 773.9583 MHz signal about 2 kHz

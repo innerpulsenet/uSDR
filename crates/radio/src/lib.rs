@@ -5,6 +5,7 @@
 //! device's [`Fanout`], never by handing out the device itself.
 
 pub mod device;
+pub mod driver_log;
 pub mod fanout;
 
 pub use device::{

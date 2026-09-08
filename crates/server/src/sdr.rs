@@ -381,6 +381,10 @@ pub struct SdrStatus {
     pub freq_hz: f64,
     pub rate_hz: f64,
     pub gain_db: Option<f64>,
+    /// Gain the hardware is actually at. Differs from `gain_db` when auto
+    /// gain (`gain_db == None`) is walking it under the clip guard.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gain_now_db: Option<f64>,
     pub ppm: f64,
     pub min_freq_hz: f64,
     pub max_freq_hz: f64,
@@ -2580,6 +2584,7 @@ fn run_sdr(
             freq_hz: current_freq,
             rate_hz: current_rate,
             gain_db: current_gain,
+            gain_now_db: None,
             ppm,
             min_freq_hz: current_freq - display_rate_for(current_rate, lo_offset, current_mode) / 2.0,
             max_freq_hz: current_freq + display_rate_for(current_rate, lo_offset, current_mode) / 2.0,
@@ -3467,6 +3472,9 @@ fn run_sdr(
                 // Only published after a tune the driver accepted, so this is
                 // where the radio really is.
                 scannerd_radio::Event::State(state) => {
+                    if let Ok(mut st) = status.lock() {
+                        st.gain_now_db = state.overall_gain;
+                    }
                     // The driver reports where the *local oscillator* is. With
                     // the LO parked off-centre that is not the middle of the
                     // window on screen, and taking it as such shifted the whole

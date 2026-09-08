@@ -230,7 +230,7 @@ Then open <http://127.0.0.1:8073>.
 | `--serial` | Dongle serial; defaults to the first one found |
 | `--freq` | Centre frequency in MHz |
 | `--rate` | Span in MHz (0.2 – 3.2) |
-| `--gain` | Tuner gain in dB; omit for hardware AGC |
+| `--gain` | Tuner gain in dB; omit for automatic gain (a clip-guarded loop, see below) |
 | `--config` | Settings file, default `~/.config/usdr/usdr.toml` |
 | `--devices` | List visible dongles and exit |
 
@@ -330,14 +330,27 @@ Since the DC blocker already flattens the centre to about 2 dB, the full span
 is the better default. Turn the offset on when a weak signal sits close enough
 to the centre that even that residue is in the way.
 
-### Clip guard (off by default)
+### Automatic gain and the clip guard
 
-The radio layer can walk the tuner gain down when the ADC clips and back up
-when it clears. That is right for an unattended scanner and wrong here: a gain
-set by hand should stay where it was put, and watching the number move on its
-own is alarming rather than helpful. It also costs I2C traffic once a second on
-a clipping signal, which is exactly what provokes the tuner faults described
-below. It is available as a checkbox for anyone who wants it.
+`AGC` is **not** the R820T's own AGC. The tuner's AGC drives the LNA and mixer
+to full gain regardless of what is on the antenna; measured here it left the
+ADC at 0.997 of full scale with the noise floor 30 dB up, and everything but
+the strongest carrier gone. That is the receiver "going deaf after a bit of
+tuning around", and a restart only fixed it because the restart re-applied
+the saved manual gain.
+
+Automatic gain is instead a loop on manual gain: it starts at 60% of the
+tuner's range, walks the gain down 2 dB within two seconds of the ADC
+clipping, and back up 1 dB at a time when the band has been quiet for eight
+seconds, up to the hardware maximum. The gain control shows the level it is
+at (`auto · 28 dB`), and the status strip turns red with `ADC CLIPPING` while
+the converter is overloaded in any mode.
+
+**Clip guard (off by default)** is the same loop under a hand-set gain: it
+never exceeds the gain you chose, and walks down under it when the ADC clips.
+It is off by default because a gain set by hand should stay where it was
+put, and watching the number move on its own is alarming rather than
+helpful. It is available as a checkbox for anyone who wants it.
 
 ## Classifier cost
 

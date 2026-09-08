@@ -173,6 +173,11 @@ impl AppState {
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = Args::parse();
+    // Count the driver's own I2C fault lines: SoapyRTLSDR reports a gain or
+    // tune write as successful whether or not the tuner took it.
+    if !scannerd_radio::driver_log::install() {
+        eprintln!("could not watch driver stderr; tuner writes will be trusted blindly");
+    }
 
     if args.devices {
         let found = scannerd_radio::device::enumerate()?;

@@ -226,19 +226,61 @@
     filter: drop-shadow(0 0 5px rgba(0,0,0,0.5));
   }
 
-  /* IC-7700 Rectangular Tactile Pushbuttons - purely visual active state to prevent SVG displacement */
+  /* Transceiver Tactile Pushbuttons - high contrast and tactile active illumination */
   .ic-btn { cursor: pointer; user-select: none; }
-  .ic-btn:hover rect:first-child { fill: #2b3d4f; stroke: #38bdf8; }
+  .ic-btn text { fill: #dbeaf6; transition: fill 100ms; text-shadow: 0 1px 3px rgba(0,0,0,0.9); }
+  .ic-btn:hover rect:first-child { fill: #243547; stroke: #38bdf8; }
+  .ic-btn:hover text { fill: #ffffff; }
   .ic-btn:active rect:first-child { fill: #0a1016; stroke: #152636; }
-  .ic-btn.on rect:first-child { stroke: #2a4b67; fill: #172430; }
+  .ic-btn.on rect:first-child { stroke: #38bdf8; fill: #162636; box-shadow: 0 0 10px rgba(56, 189, 248, 0.4); }
+  .ic-btn.on text { fill: #ffffff; text-shadow: 0 0 5px rgba(255, 255, 255, 0.7); }
 
-  /* IC-7700 Horizontal Illuminated Jewel LED Slits */
+  /* Horizontal Illuminated Jewel LED Slits */
   .ic-led-bar { fill: #10161d; stroke: #192430; transition: fill 120ms, stroke 120ms, filter 120ms; }
-  .ic-btn.on .ic-led-bar.led-amber { fill: #ffb830; stroke: #ffd074; filter: drop-shadow(0 0 5px rgba(255,184,48,0.85)); }
-  .ic-btn.on .ic-led-bar.led-cyan { fill: #38bdf8; stroke: #7dd3fc; filter: drop-shadow(0 0 5px rgba(56,189,248,0.85)); }
-  .ic-btn.on .ic-led-bar.led-blue { fill: #60a5fa; stroke: #93c5fd; filter: drop-shadow(0 0 5px rgba(96,165,250,0.85)); }
-  .ic-btn.on .ic-led-bar.led-green { fill: #2bff6a; stroke: #86efac; filter: drop-shadow(0 0 5px rgba(43,255,106,0.85)); }
-  .ic-btn.on .ic-led-bar.led-violet { fill: #c084fc; stroke: #e9d5ff; filter: drop-shadow(0 0 5px rgba(192,132,252,0.85)); }
+  .ic-btn.on .ic-led-bar.led-amber { fill: #ffb830; stroke: #ffd074; filter: drop-shadow(0 0 6px rgba(255,184,48,0.95)); }
+  .ic-btn.on .ic-led-bar.led-cyan { fill: #38bdf8; stroke: #7dd3fc; filter: drop-shadow(0 0 6px rgba(56,189,248,0.95)); }
+  .ic-btn.on .ic-led-bar.led-blue { fill: #60a5fa; stroke: #93c5fd; filter: drop-shadow(0 0 6px rgba(96,165,250,0.95)); }
+  .ic-btn.on .ic-led-bar.led-green { fill: #2bff6a; stroke: #86efac; filter: drop-shadow(0 0 6px rgba(43,255,106,0.95)); }
+  .ic-btn.on .ic-led-bar.led-violet { fill: #c084fc; stroke: #e9d5ff; filter: drop-shadow(0 0 6px rgba(192,132,252,0.95)); }
+
+  /* Interactive Palette Swatch Popover */
+  .palette-popup {
+    position: absolute;
+    width: 290px;
+    max-height: 440px;
+    overflow-y: auto;
+    background: #070e17;
+    border: 1px solid #1e364e;
+    border-radius: 8px;
+    box-shadow: 0 18px 45px rgba(0,0,0,0.9), 0 0 0 1px rgba(56,189,248,0.25);
+    z-index: 1000;
+    padding: 10px;
+    backdrop-filter: blur(12px);
+  }
+  .palette-popup-head {
+    display: flex; align-items: center; justify-content: space-between;
+    padding-bottom: 7px; margin-bottom: 8px; border-bottom: 1px solid #142436;
+    font: 700 10.5px var(--mono); letter-spacing: 0.12em; color: #8cb2cc; text-transform: uppercase;
+  }
+  .palette-popup-close {
+    background: transparent; border: none; color: #64748b; font-size: 17px; cursor: pointer; padding: 0 4px; line-height: 1;
+  }
+  .palette-popup-close:hover { color: #fff; }
+  .palette-grid { display: flex; flex-direction: column; gap: 5px; }
+  .palette-item {
+    display: flex; flex-direction: column; gap: 4px; padding: 6px 9px;
+    background: #0b1522; border: 1px solid #172738; border-radius: 5px;
+    cursor: pointer; text-align: left; transition: all 120ms;
+  }
+  .palette-item:hover { background: #132438; border-color: #38bdf8; }
+  .palette-item.active { background: #122b46; border-color: #38bdf8; box-shadow: inset 2px 0 0 #38bdf8; }
+  .palette-item-top { display: flex; align-items: center; justify-content: space-between; }
+  .palette-item-name { font: 700 11px var(--mono); color: #cbd5e1; }
+  .palette-item.active .palette-item-name { color: #38bdf8; }
+  .palette-item-tag { font: 600 9px var(--mono); color: #64748b; text-transform: uppercase; }
+  .palette-swatch-bar {
+    width: 100%; height: 13px; border-radius: 2px; border: 1px solid rgba(255,255,255,0.15);
+  }
 
   /* Coaxial Knobs & VFO Flywheel */
   .concentric-outer { cursor: ns-resize; user-select: none; }
@@ -673,13 +715,14 @@
   .side-col {
     display: flex; flex-direction: column; min-height: 0;
     margin-top: 16px;
-    /* Results sit right under the receiver at a height that shows a useful
-       number of rows without pushing the page; the ⤢ tall toggle (F) gives
-       them the viewport when the operator is reading rather than tuning. */
-    height: 400px;
+    /* Spacious height so the operator can scroll through dozens of frames at once */
+    height: 600px;
     border: 1px solid var(--line); border-radius: 8px;
     background: #0c1218; overflow: hidden;
     box-shadow: 0 12px 36px rgba(0,0,0,0.5);
+  }
+  @media (min-height: 850px) {
+    .side-col { height: min(720px, calc(100vh - 360px)); }
   }
   .side-tabs {
     display: flex; gap: 3px; padding: 7px 10px 0;
@@ -724,8 +767,10 @@
     flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column;
     padding: 14px 16px;
   }
-  .side-panel .sdr-classifier-log,
-  .side-panel .sdr-decode-log {
+  #panelDecode .panel-body {
+    overflow: hidden;
+  }
+  .side-panel .sdr-classifier-log {
     height: auto; flex: 1; min-height: 140px;
   }
 
@@ -760,40 +805,128 @@
   .sdr-preset-btn:hover { border-color: var(--accent); color: #e6eef5; background: #132740; }
   .sdr-preset-btn:active { transform: translateY(1px); }
 
-  .sdr-classifier-log, .sdr-decode-log {
+  .sdr-classifier-log {
     height: 200px; overflow-y: auto; overflow-x: hidden;
     font-family: var(--mono); font-size: 11px;
     background: #04080e; border: 1px solid #13202d; border-radius: 5px; padding: 6px;
     overscroll-behavior: contain;
   }
-  .sdr-decode-log { height: 260px; }
-  .sdr-classifier-log > *, .sdr-decode-log > * {
+  .sdr-classifier-log > * {
     padding: 3px 7px; border-radius: 3px;
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
     transition: background 100ms;
   }
-  .sdr-classifier-log > :nth-child(even), .sdr-decode-log > :nth-child(even) {
-    background: rgba(56, 189, 248, 0.04);
-  }
-  .sdr-classifier-log > :hover, .sdr-decode-log > :hover {
-    background: rgba(56, 189, 248, 0.12);
-  }
-  .sdr-decode-event { padding: 4px 7px; border-radius: 3px; }
-  .sdr-decode-event.sel { background: #0b2238; box-shadow: inset 2px 0 0 var(--accent); }
-  .sdr-decode-event .row2 { white-space: normal; }
-  .data-empty { color: var(--faint); font-size: 11px; padding: 16px 10px; text-align: center; }
+  .sdr-classifier-log > :nth-child(even) { background: rgba(56, 189, 248, 0.04); }
+  .sdr-classifier-log > :hover { background: rgba(56, 189, 248, 0.12); }
 
+  /* ---------- Streamlined Decode Log & Inspector Master-Detail Layout ---------- */
+  .decode-main-split {
+    display: flex; gap: 12px; flex: 1; min-height: 0; height: 100%; overflow: hidden;
+  }
+  .decode-stream-col {
+    flex: 1 1 63%; min-width: 0; display: flex; flex-direction: column; height: 100%; min-height: 0;
+  }
+  .sdr-decode-log {
+    flex: 1; height: 100%; min-height: 0; overflow-y: auto; overflow-x: hidden;
+    font-family: var(--mono); font-size: 11px;
+    background: #04080e; border: 1px solid #13202d; border-radius: 6px; padding: 6px;
+    overscroll-behavior: contain;
+  }
+  .sdr-decode-log > * {
+    padding: 5px 8px; border-radius: 4px; margin-bottom: 2px;
+    transition: background 100ms;
+  }
+  .sdr-decode-log > :nth-child(even) { background: rgba(56, 189, 248, 0.03); }
+  .sdr-decode-log > :hover { background: rgba(56, 189, 248, 0.10); }
+  .sdr-decode-event { border-left: 2px solid transparent; }
+  .sdr-decode-event.sel {
+    background: #0d2338 !important; border-left: 3px solid var(--accent); box-shadow: inset 0 1px 0 rgba(255,255,255,0.06);
+  }
+  .sdr-decode-event .row2 { white-space: normal; line-height: 1.35; }
+  .data-empty { color: var(--faint); font-size: 11px; padding: 24px 10px; text-align: center; }
+
+  /* Decode Toolbar with Structured Rows & Quick Filter Chips */
   .sdr-decode-toolbar {
-    display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 10px;
+    display: flex; flex-direction: column; gap: 8px; margin-bottom: 10px;
+  }
+  .decode-toolbar-row {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+  }
+  .decode-toolbar-subrow {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+    padding: 4px 8px; background: #081018; border: 1px solid #132230; border-radius: 5px;
   }
   .sdr-decode-toolbar button, .sdr-decode-toolbar a {
-    font: 11px var(--sans); font-weight: 500; padding: 5px 10px; border-radius: 4px; cursor: pointer;
+    font: 11px var(--sans); font-weight: 600; padding: 4px 9px; border-radius: 4px; cursor: pointer;
     background: #141f2a; color: #c4d5e0; border: 1px solid #203142; text-decoration: none;
     transition: border-color 100ms, background 100ms, color 100ms;
   }
-  .sdr-decode-toolbar button:hover, .sdr-decode-toolbar a:hover { border-color: var(--accent); color: #fff; background: #1a2c3d; }
-  .sdr-decode-toolbar audio { height: 28px; }
+  .sdr-decode-toolbar button:hover, .sdr-decode-toolbar a:hover {
+    border-color: var(--accent); color: #fff; background: #1a2c3d;
+  }
+  .sdr-decode-toolbar audio { height: 26px; }
 
+  .proto-chips { display: inline-flex; gap: 4px; align-items: center; }
+  .proto-chip {
+    font: 700 10px/1 var(--mono); letter-spacing: 0.08em; padding: 5px 8px; border-radius: 4px;
+    background: #0d1622; color: #8da4b5; border: 1px solid #1c2c3c; cursor: pointer;
+    transition: all 100ms;
+  }
+  .proto-chip:hover { color: #fff; border-color: #38bdf8; background: #132438; }
+  .proto-chip.on {
+    background: #173d61; color: #ffffff; border-color: #38bdf8; box-shadow: 0 0 8px rgba(56,189,248,0.4);
+  }
+
+  /* Dedicated Right-Side Frame Inspector Card */
+  .decode-inspector-col {
+    flex: 0 0 37%; min-width: 290px; max-width: 480px; display: flex; flex-direction: column; height: 100%; min-height: 0;
+  }
+  .inspector-card {
+    display: flex; flex-direction: column; height: 100%; min-height: 0;
+    background: #04080e; border: 1px solid #142232; border-radius: 6px; overflow: hidden;
+  }
+  .inspector-head {
+    display: flex; align-items: center; gap: 8px; padding: 7px 10px;
+    background: linear-gradient(180deg, #101a26 0%, #0a111a 100%);
+    border-bottom: 1px solid #142232;
+  }
+  .inspector-title {
+    font-size: 11px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; color: #a9c5d8;
+  }
+  .inspector-meta {
+    margin-left: auto; font: 10px var(--mono); color: var(--faint);
+  }
+  .inspector-content {
+    flex: 1; min-height: 0; overflow-y: auto; padding: 8px; display: flex; flex-direction: column; gap: 8px;
+  }
+  .inspector-empty {
+    margin: auto 0; text-align: center; padding: 30px 12px; color: var(--faint);
+  }
+  .inspector-fields {
+    background: #060c14; border: 1px solid #121e2c; border-radius: 5px; padding: 6px 8px; font-size: 11px;
+  }
+  .inspector-bytes-box {
+    display: flex; flex-direction: column; flex: 1; min-height: 120px;
+    background: #020509; border: 1px solid #121e2c; border-radius: 5px; overflow: hidden;
+  }
+  .bytes-subhead {
+    display: flex; align-items: center; gap: 8px; padding: 5px 8px; background: #08111a; border-bottom: 1px solid #121e2c;
+    font-size: 9.5px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; color: #7f97a6;
+  }
+  .bytes-meta {
+    margin-left: auto; text-transform: none; letter-spacing: 0;
+    font: 10px var(--mono); color: var(--faint);
+  }
+  .inspector-bytes-box .bytes-body {
+    margin: 0; padding: 8px; flex: 1; min-height: 90px; overflow: auto;
+    font: 11px/1.45 var(--mono); color: #a5f3fc; white-space: pre;
+  }
+  @media (max-width: 960px) {
+    .decode-main-split { flex-direction: column; }
+    .decode-inspector-col { flex: 0 0 auto; max-height: 220px; max-width: none; }
+  }
+
+  /* Backward compatibility bytes-pane fallback */
   .bytes-pane {
     margin-top: 10px; border: 1px solid #14202d; border-radius: 5px;
     background: #03070c; overflow: hidden;
@@ -802,10 +935,6 @@
     display: flex; align-items: center; gap: 10px;
     padding: 5px 10px; background: #081119; border-bottom: 1px solid #14202d;
     font-size: 10px; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; color: #a9c5d8;
-  }
-  .bytes-meta {
-    margin-left: auto; text-transform: none; letter-spacing: 0;
-    font: 10px var(--mono); color: var(--faint);
   }
   .bytes-body {
     margin: 0; padding: 10px; height: 135px; overflow: auto;
@@ -1103,7 +1232,7 @@
           <div class="meter-peak" id="meterPeak" style="display:none"></div>
         </div>
 
-                <!-- VFO Multi-Telemetry Center Console (IC-7700 Architecture) -->
+                <!-- VFO Multi-Telemetry Center Console -->
         <div class="vfo-container">
           <!-- Top Telemetry Strip -->
           <div class="vfo-top-strip">
@@ -1157,7 +1286,7 @@
             </div>
           </div>
 
-          <!-- Quick Band Selector Strip (IC-7700 Keypad Array) -->
+          <!-- Quick Band Selector Strip -->
           <div class="vfo-band-strip">
             <button type="button" class="band-btn" data-freq="121500000" data-mode="am">AIR 118</button>
             <button type="button" class="band-btn" data-freq="144200000" data-mode="nfm">2M 144</button>
@@ -1170,8 +1299,8 @@
           </div>
         </div>
 
-        <!-- Authentic Transceiver Control Deck (Icom IC-7700 Architecture) -->
-        <div class="radio-deck">
+        <!-- Precision Transceiver Control Deck -->
+        <div class="radio-deck" style="position:relative">
           <svg class="deck-svg" id="deckSvg" viewBox="0 0 680 165" aria-hidden="true">
             <defs>
               <filter id="blurShadow" x="-20%" y="-20%" width="140%" height="140%">
@@ -1225,10 +1354,10 @@
                 <stop offset="100%" stop-color="#0a1016"/>
               </radialGradient>
               <linearGradient id="icBtnGrad" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0%" stop-color="#243444"/>
-                <stop offset="8%" stop-color="#182430"/>
-                <stop offset="92%" stop-color="#101821"/>
-                <stop offset="100%" stop-color="#080d12"/>
+                <stop offset="0%" stop-color="#283a4c"/>
+                <stop offset="12%" stop-color="#192634"/>
+                <stop offset="88%" stop-color="#121b25"/>
+                <stop offset="100%" stop-color="#0a0f16"/>
               </linearGradient>
               <radialGradient id="vfoHeavyBody" cx="35%" cy="32%" r="70%">
                 <stop offset="0%" stop-color="#42586e"/>
@@ -1244,7 +1373,7 @@
               </radialGradient>
             </defs>
             <rect x="1.5" y="1.5" width="677" height="162" rx="6" fill="url(#panelBg)" stroke="#142230" stroke-width="1.2"/>
-            <!-- SECTION 1: DUAL CONCENTRIC AF/RF KNOB (IC-7700 Hero Architecture) -->
+            <!-- SECTION 1: DUAL CONCENTRIC AF/RF KNOB -->
             <g id="deckDualAfRf">
               <circle cx="74" cy="78.5" r="44" fill="rgba(0,0,0,0.7)" filter="url(#blurShadow)"/>
               <g id="deckRfGainTicks">
@@ -1304,12 +1433,12 @@
             </g>
             <!-- Divider 1 -->
             <line x1="148" y1="12" x2="148" y2="153" stroke="#132332" stroke-width="1.2"/>
-            <!-- SECTION 2: DUAL CONCENTRIC DSP/PALETTE KNOB -->
+            <!-- SECTION 2: DUAL CONCENTRIC SPAN & ZOOM KNOB -->
             <g id="deckDualDsp">
               <g id="deckPalTicks"></g>
               <!-- Outer Active Luminous Arc -->
               <path id="deckPalArc" d="M 174.5 104.5 A 39.5 39.5 0 0 1 176.2 51.3" fill="none" stroke="#38bdf8" stroke-width="2.2" stroke-linecap="round"/>
-              <g id="deckPalWrap" class="concentric-outer" title="Waterfall Palette (Outer): Drag/scroll to cycle color theme.">
+              <g id="deckPalWrap" class="concentric-outer" title="Span Bandwidth (Outer): Drag/scroll to adjust RF sampling bandwidth.">
                 <circle cx="204" cy="76" r="34" fill="url(#outerKnobBody)" stroke="#060c12" stroke-width="1.5"/>
                 <g id="deckPalKnurls" transform="rotate(-59 204 76)"></g>
                 <circle cx="204" cy="76" r="29" fill="url(#outerKnobPlateau)" stroke="#1a2736" stroke-width="1"/>
@@ -1329,65 +1458,71 @@
                 </g>
                 <circle id="deckSpanBtn" cx="204" cy="76" r="4.8" fill="url(#centerCapGrad)" stroke="#111c26" stroke-width="1" style="cursor:pointer"/>
               </g>
-              <text x="204" y="14" font-family="var(--sans)" font-weight="900" font-size="7.5" fill="#587a96" text-anchor="middle" letter-spacing="0.12em">SPAN/ZOOM · PALETTE</text>
-              <text id="deckSpanReadout" x="204" y="152" font-family="var(--mono)" font-weight="700" font-size="7.5" fill="#dce6ee" text-anchor="middle">PAL MERIDIAN · ZOOM 1.0x</text>
+              <text x="204" y="14" font-family="var(--sans)" font-weight="900" font-size="8" fill="#587a96" text-anchor="middle" letter-spacing="0.12em">SPAN · FFT ZOOM</text>
+              <text id="deckSpanReadout" x="204" y="152" font-family="var(--mono)" font-weight="700" font-size="7.5" fill="#dce6ee" text-anchor="middle">SPAN 2.05M · ZOOM 1.0x</text>
             </g>
             <!-- Divider 2 -->
             <line x1="262" y1="12" x2="262" y2="153" stroke="#132332" stroke-width="1.2"/>
-            <!-- SECTION 3: IC-7700 TACTILE RECTANGULAR HARDKEYS WITH LED SLITS -->
-            <g id="keyPeak" class="ic-btn on" transform="translate(276, 24)" style="cursor:pointer" title="Peak Hold Trace">
-              <rect width="52" height="26" rx="3" fill="url(#icBtnGrad)" stroke="#060a0e" stroke-width="1.1"/>
-              <rect x="1" y="1" width="50" height="24" rx="2" fill="none" stroke="rgba(255,255,255,0.09)" stroke-width="0.8"/>
-              <rect class="ic-led-bar led-amber" x="7" y="5.5" width="38" height="3" rx="1.5"/>
-              <text id="keyPeakLabel" x="26.0" y="19.5" font-family="var(--mono)" font-weight="700" font-size="7.5" fill="#c4d5e2" text-anchor="middle">PEAK</text>
+            <!-- SECTION 3: TACTILE DSP HARDKEYS WITH LED SLITS & HIGH-CONTRAST LABELS -->
+            <g id="keyPeak" class="ic-btn on" transform="translate(276, 18)" style="cursor:pointer" title="Peak Hold Trace">
+              <rect width="52" height="32" rx="4" fill="url(#icBtnGrad)" stroke="#060a0e" stroke-width="1.1"/>
+              <rect x="1" y="1" width="50" height="30" rx="3" fill="none" stroke="rgba(255,255,255,0.09)" stroke-width="0.8"/>
+              <rect class="ic-led-bar led-amber" x="7" y="5" width="38" height="3" rx="1.5"/>
+              <text id="keyPeakLabel" x="26.0" y="23" font-family="var(--mono)" font-weight="800" font-size="9.5" fill="#ffffff" text-anchor="middle">PEAK</text>
             </g>
-            <g id="keyAuto" class="ic-btn on" transform="translate(333, 24)" style="cursor:pointer" title="Auto Dynamic Range">
-              <rect width="52" height="26" rx="3" fill="url(#icBtnGrad)" stroke="#060a0e" stroke-width="1.1"/>
-              <rect x="1" y="1" width="50" height="24" rx="2" fill="none" stroke="rgba(255,255,255,0.09)" stroke-width="0.8"/>
-              <rect class="ic-led-bar led-cyan" x="7" y="5.5" width="38" height="3" rx="1.5"/>
-              <text id="keyAutoLabel" x="26.0" y="19.5" font-family="var(--mono)" font-weight="700" font-size="7.5" fill="#c4d5e2" text-anchor="middle">AUTO</text>
+            <g id="keyAuto" class="ic-btn on" transform="translate(333, 18)" style="cursor:pointer" title="Auto Dynamic Range">
+              <rect width="52" height="32" rx="4" fill="url(#icBtnGrad)" stroke="#060a0e" stroke-width="1.1"/>
+              <rect x="1" y="1" width="50" height="30" rx="3" fill="none" stroke="rgba(255,255,255,0.09)" stroke-width="0.8"/>
+              <rect class="ic-led-bar led-cyan" x="7" y="5" width="38" height="3" rx="1.5"/>
+              <text id="keyAutoLabel" x="26.0" y="23" font-family="var(--mono)" font-weight="800" font-size="9.5" fill="#ffffff" text-anchor="middle">AUTO</text>
             </g>
-            <g id="keyFill" class="ic-btn on" transform="translate(390, 24)" style="cursor:pointer" title="Spectrum Trace Area Fill">
-              <rect width="52" height="26" rx="3" fill="url(#icBtnGrad)" stroke="#060a0e" stroke-width="1.1"/>
-              <rect x="1" y="1" width="50" height="24" rx="2" fill="none" stroke="rgba(255,255,255,0.09)" stroke-width="0.8"/>
-              <rect class="ic-led-bar led-blue" x="7" y="5.5" width="38" height="3" rx="1.5"/>
-              <text id="keyFillLabel" x="26.0" y="19.5" font-family="var(--mono)" font-weight="700" font-size="7.5" fill="#c4d5e2" text-anchor="middle">FILL</text>
+            <g id="keyFill" class="ic-btn on" transform="translate(390, 18)" style="cursor:pointer" title="Spectrum Trace Area Fill">
+              <rect width="52" height="32" rx="4" fill="url(#icBtnGrad)" stroke="#060a0e" stroke-width="1.1"/>
+              <rect x="1" y="1" width="50" height="30" rx="3" fill="none" stroke="rgba(255,255,255,0.09)" stroke-width="0.8"/>
+              <rect class="ic-led-bar led-blue" x="7" y="5" width="38" height="3" rx="1.5"/>
+              <text id="keyFillLabel" x="26.0" y="23" font-family="var(--mono)" font-weight="800" font-size="9.5" fill="#ffffff" text-anchor="middle">FILL</text>
             </g>
-            <g id="keyAvg" class="ic-btn" transform="translate(447, 24)" style="cursor:pointer" title="Frame Integration Average">
-              <rect width="52" height="26" rx="3" fill="url(#icBtnGrad)" stroke="#060a0e" stroke-width="1.1"/>
-              <rect x="1" y="1" width="50" height="24" rx="2" fill="none" stroke="rgba(255,255,255,0.09)" stroke-width="0.8"/>
-              <rect class="ic-led-bar led-green" x="7" y="5.5" width="38" height="3" rx="1.5"/>
-              <text id="keyAvgLabel" x="26.0" y="19.5" font-family="var(--mono)" font-weight="700" font-size="7.5" fill="#c4d5e2" text-anchor="middle">AVG OFF</text>
+            <g id="keyAvg" class="ic-btn" transform="translate(447, 18)" style="cursor:pointer" title="Frame Integration Average">
+              <rect width="52" height="32" rx="4" fill="url(#icBtnGrad)" stroke="#060a0e" stroke-width="1.1"/>
+              <rect x="1" y="1" width="50" height="30" rx="3" fill="none" stroke="rgba(255,255,255,0.09)" stroke-width="0.8"/>
+              <rect class="ic-led-bar led-green" x="7" y="5" width="38" height="3" rx="1.5"/>
+              <text id="keyAvgLabel" x="26.0" y="23" font-family="var(--mono)" font-weight="800" font-size="8.5" fill="#ffffff" text-anchor="middle">AVG OFF</text>
             </g>
-            <g id="keyCenter" class="ic-btn" transform="translate(276, 62)" style="cursor:pointer" title="Recenter Tuned Carrier">
-              <rect width="52" height="26" rx="3" fill="url(#icBtnGrad)" stroke="#060a0e" stroke-width="1.1"/>
-              <rect x="1" y="1" width="50" height="24" rx="2" fill="none" stroke="rgba(255,255,255,0.09)" stroke-width="0.8"/>
-              <rect class="ic-led-bar led-cyan" x="7" y="5.5" width="38" height="3" rx="1.5"/>
-              <text id="keyCenterLabel" x="26.0" y="19.5" font-family="var(--mono)" font-weight="700" font-size="7.5" fill="#c4d5e2" text-anchor="middle">CENT</text>
+            <g id="keyCenter" class="ic-btn" transform="translate(276, 56)" style="cursor:pointer" title="Recenter Tuned Carrier in Spectrum">
+              <rect width="52" height="32" rx="4" fill="url(#icBtnGrad)" stroke="#060a0e" stroke-width="1.1"/>
+              <rect x="1" y="1" width="50" height="30" rx="3" fill="none" stroke="rgba(255,255,255,0.09)" stroke-width="0.8"/>
+              <rect class="ic-led-bar led-cyan" x="7" y="5" width="38" height="3" rx="1.5"/>
+              <text id="keyCenterLabel" x="26.0" y="23" font-family="var(--mono)" font-weight="800" font-size="8.5" fill="#ffffff" text-anchor="middle">CENTER</text>
             </g>
-            <g id="keySpur" class="ic-btn" transform="translate(333, 62)" style="cursor:pointer" title="Spur Check and Auto Notch">
-              <rect width="52" height="26" rx="3" fill="url(#icBtnGrad)" stroke="#060a0e" stroke-width="1.1"/>
-              <rect x="1" y="1" width="50" height="24" rx="2" fill="none" stroke="rgba(255,255,255,0.09)" stroke-width="0.8"/>
-              <rect class="ic-led-bar led-violet" x="7" y="5.5" width="38" height="3" rx="1.5"/>
-              <text id="keySpurLabel" x="26.0" y="19.5" font-family="var(--mono)" font-weight="700" font-size="7.5" fill="#c4d5e2" text-anchor="middle">SPUR</text>
+            <g id="keySpur" class="ic-btn" transform="translate(333, 56)" style="cursor:pointer" title="Spur Check and Auto Notch">
+              <rect width="52" height="32" rx="4" fill="url(#icBtnGrad)" stroke="#060a0e" stroke-width="1.1"/>
+              <rect x="1" y="1" width="50" height="30" rx="3" fill="none" stroke="rgba(255,255,255,0.09)" stroke-width="0.8"/>
+              <rect class="ic-led-bar led-violet" x="7" y="5" width="38" height="3" rx="1.5"/>
+              <text id="keySpurLabel" x="26.0" y="23" font-family="var(--mono)" font-weight="800" font-size="9.5" fill="#ffffff" text-anchor="middle">SPUR</text>
             </g>
-            <g id="keyZoomOut" class="ic-btn" transform="translate(390, 62)" style="cursor:pointer" title="Zoom Out">
-              <rect width="52" height="26" rx="3" fill="url(#icBtnGrad)" stroke="#060a0e" stroke-width="1.1"/>
-              <rect x="1" y="1" width="50" height="24" rx="2" fill="none" stroke="rgba(255,255,255,0.09)" stroke-width="0.8"/>
-              <rect class="ic-led-bar led-blue" x="7" y="5.5" width="38" height="3" rx="1.5"/>
-              <text id="keyZoomOutLabel" x="26.0" y="19.5" font-family="var(--mono)" font-weight="700" font-size="7.5" fill="#c4d5e2" text-anchor="middle">ZOOM −</text>
+            <g id="keyZoomOut" class="ic-btn" transform="translate(390, 56)" style="cursor:pointer" title="Zoom Out">
+              <rect width="52" height="32" rx="4" fill="url(#icBtnGrad)" stroke="#060a0e" stroke-width="1.1"/>
+              <rect x="1" y="1" width="50" height="30" rx="3" fill="none" stroke="rgba(255,255,255,0.09)" stroke-width="0.8"/>
+              <rect class="ic-led-bar led-blue" x="7" y="5" width="38" height="3" rx="1.5"/>
+              <text id="keyZoomOutLabel" x="26.0" y="23" font-family="var(--mono)" font-weight="800" font-size="9.5" fill="#ffffff" text-anchor="middle">ZOOM −</text>
             </g>
-            <g id="keyZoomIn" class="ic-btn" transform="translate(447, 62)" style="cursor:pointer" title="Zoom In">
-              <rect width="52" height="26" rx="3" fill="url(#icBtnGrad)" stroke="#060a0e" stroke-width="1.1"/>
-              <rect x="1" y="1" width="50" height="24" rx="2" fill="none" stroke="rgba(255,255,255,0.09)" stroke-width="0.8"/>
-              <rect class="ic-led-bar led-blue" x="7" y="5.5" width="38" height="3" rx="1.5"/>
-              <text id="keyZoomInLabel" x="26.0" y="19.5" font-family="var(--mono)" font-weight="700" font-size="7.5" fill="#c4d5e2" text-anchor="middle">ZOOM +</text>
+            <g id="keyZoomIn" class="ic-btn" transform="translate(447, 56)" style="cursor:pointer" title="Zoom In">
+              <rect width="52" height="32" rx="4" fill="url(#icBtnGrad)" stroke="#060a0e" stroke-width="1.1"/>
+              <rect x="1" y="1" width="50" height="30" rx="3" fill="none" stroke="rgba(255,255,255,0.09)" stroke-width="0.8"/>
+              <rect class="ic-led-bar led-blue" x="7" y="5" width="38" height="3" rx="1.5"/>
+              <text id="keyZoomInLabel" x="26.0" y="23" font-family="var(--mono)" font-weight="800" font-size="9.5" fill="#ffffff" text-anchor="middle">ZOOM +</text>
             </g>
-            <text x="388" y="114" font-family="var(--mono)" font-weight="700" font-size="7.5" fill="#4d6f8a" text-anchor="middle" letter-spacing="0.14em">ICOM IC-7700 TACTILE ARCHITECTURE</text>
-            <text x="388" y="134" font-family="var(--mono)" font-weight="700" font-size="7" fill="#30475a" text-anchor="middle" letter-spacing="0.1em">DUAL COAXIAL ENCODERS · DSP HARDKEYS</text>
+            <!-- Interactive Palette Swatch Trigger Button -->
+            <g id="keyPalette" class="ic-btn" transform="translate(276, 95)" style="cursor:pointer" title="Waterfall & Spectrum Palette: Click to select color theme">
+              <rect width="223" height="28" rx="4" fill="url(#icBtnGrad)" stroke="#1a2d40" stroke-width="1.2"/>
+              <rect x="1" y="1" width="221" height="26" rx="3" fill="none" stroke="rgba(255,255,255,0.09)" stroke-width="0.8"/>
+              <rect class="ic-led-bar led-amber" x="8" y="4.5" width="207" height="2.5" rx="1.2"/>
+              <text id="keyPaletteLabel" x="111.5" y="19.5" font-family="var(--mono)" font-weight="800" font-size="9.5" fill="#ffffff" text-anchor="middle" letter-spacing="0.08em">PALETTE: SMARTSDR ▾</text>
+            </g>
+            <text x="387.5" y="140" font-family="var(--mono)" font-weight="700" font-size="7" fill="#4d6f8a" text-anchor="middle" letter-spacing="0.14em">PRECISION SDR WORKSTATION · DSP ENGINE</text>
             <!-- Divider 3 -->
             <line x1="518" y1="12" x2="518" y2="153" stroke="#132332" stroke-width="1.2"/>
-            <!-- SECTION 4: HERO VFO FLYWHEEL (IC-7700 Heavy Tuning Wheel) -->
+            <!-- SECTION 4: HERO VFO FLYWHEEL -->
             <g id="vfoFlywheelWrap" class="vfo-flywheel-wrap" style="cursor:grab" title="VFO Flywheel: Drag vertically or spin to tune. Hold Shift for fine step.">
               <circle cx="598" cy="79" r="57" fill="rgba(0,0,0,0.75)" filter="url(#blurShadow)"/>
               <circle cx="598" cy="76" r="55" fill="#04070a" stroke="#14202b" stroke-width="1.2"/>
@@ -1409,7 +1544,16 @@
             <text x="598" y="14" font-family="var(--sans)" font-weight="900" font-size="8.5" fill="#38bdf8" text-anchor="middle" letter-spacing="0.14em">MAIN TUNING</text>
             <text id="jogStepBadge" x="598" y="152" font-family="var(--mono)" font-weight="700" font-size="7.5" fill="#6d8fa8" text-anchor="middle">6.25 kHz · FLYWHEEL</text>
           </svg>
+          <!-- Palette Swatch Selection Popup Menu -->
+          <div id="paletteMenu" class="palette-popup" style="display:none">
+            <div class="palette-popup-head">
+              <span>Waterfall Color Theme</span>
+              <button type="button" class="palette-popup-close" onclick="togglePaletteMenu(false)">&times;</button>
+            </div>
+            <div class="palette-grid" id="paletteList"></div>
+          </div>
         </div>
+
       </div>
 <div class="spec-row">
       <div class="spec-col">
@@ -1498,7 +1642,7 @@
       </div>
       <div class="ctl">
         <label>Gain</label>
-        <span class="cb"><input type="checkbox" id="sdrAgc" checked> AGC</span>
+        <span class="cb" title="Automatic gain: a clip-guarded loop on manual gain. Walks the gain down within two seconds of ADC clipping and back up, a dB at a time, when the band is quiet. Never the tuner's own AGC, which overloads on a strong band."><input type="checkbox" id="sdrAgc" checked> AGC</span>
         <input type="range" id="sdrGainRange" min="0" max="50" step="1" value="40" disabled>
         <span class="val" id="sdrGainVal">auto</span>
       </div>
@@ -1680,39 +1824,75 @@
     <section class="panel side-panel" id="panelDecode">
     <h2>Protocol Decode / FEC
       <span class="note" id="decodeCount">0 frames</span>
-      <span class="note">click a frame to expand · valid green, rejected red</span>
+      <span class="note">click a frame to inspect · valid green, rejected red</span>
     </h2>
     <div class="panel-body">
       <div class="sdr-decode-toolbar">
-        <button type="button" onclick="playSdrCapture('voice')">Play voice (20s)</button>
-        <button type="button" onclick="playSdrCapture('discriminator')">Play discriminator</button>
-        <a href="/api/sdr/capture.wav?kind=voice" download="usdr-voice.wav">Voice WAV</a>
-        <a href="/api/sdr/capture.wav?kind=discriminator" download="usdr-discriminator.wav">Disc WAV</a>
-        <a href="/api/sdr/capture.wav?kind=iq" download="usdr-iq.wav" title="Stereo WAV: left=I, right=Q">I/Q WAV</a>
-        <button type="button" onclick="replayCurrentSdrIq()" title="Run the rolling I/Q capture through a fresh classifier">Replay current I/Q</button>
-        <button type="button" onclick="$('sdrReplayFile').click()">Replay saved I/Q…</button>
-        <input id="sdrReplayFile" type="file" accept="audio/wav,.wav" hidden onchange="replaySdrFile(this.files && this.files[0])">
-        <input type="text" id="decodeFilter" placeholder="filter: protocol, kind or text"
-               oninput="setDecodeFilter(this.value)"
-               style="flex:1; min-width:150px; background:#0d1319; color:var(--text);
-                      border:1px solid #27323c; border-radius:4px; padding:4px 8px;
-                      font:11px var(--mono); outline:none">
-        <button type="button" onclick="expandAllDecodes(true)">Expand all</button>
-        <button type="button" onclick="expandAllDecodes(false)">Collapse all</button>
-        <button type="button" onclick="clearSdrDecodeLog()">Clear</button>
-        <audio id="sdrCaptureAudio" controls preload="none"></audio>
-        <span id="sdrReplayStatus" class="sdr-replay-status">I/Q replay uses the same native decoders as live inspection.</span>
-      </div>
-      <div id="sdrDecodeLog" class="sdr-decode-log">
-        <div class="data-empty">Waiting for P25, DMR, NXDN, ProVoice, EDACS/ESK, X2-TDMA, dPMR, YSF, D-STAR, trunking, pager, and decoder diagnostics…</div>
-      </div>
-      <div class="bytes-pane">
-        <div class="bytes-head">
-          <span id="bytesTitle">Frame bytes</span>
-          <span class="bytes-meta" id="bytesMeta">select a frame</span>
-          <button type="button" class="sdr-preset-btn" id="bytesCopy" onclick="copyFrameBytes()">copy</button>
+        <!-- Row 1: Search, Quick Protocol Chips, Expand/Clear -->
+        <div class="decode-toolbar-row">
+          <input type="text" id="decodeFilter" placeholder="filter: protocol, talkgroup, or message text…"
+                 oninput="onDecodeFilterInput(this.value)"
+                 style="flex:1; min-width:200px; background:#080e14; color:var(--text);
+                        border:1px solid #1c2e40; border-radius:4px; padding:5px 10px;
+                        font:11px var(--mono); outline:none">
+          <div class="proto-chips">
+            <button type="button" class="proto-chip on" data-proto="" onclick="setProtoChip(this, '')">ALL</button>
+            <button type="button" class="proto-chip" data-proto="FLEX" onclick="setProtoChip(this, 'FLEX')">FLEX</button>
+            <button type="button" class="proto-chip" data-proto="DMR" onclick="setProtoChip(this, 'DMR')">DMR</button>
+            <button type="button" class="proto-chip" data-proto="P25" onclick="setProtoChip(this, 'P25')">P25</button>
+            <button type="button" class="proto-chip" data-proto="NXDN" onclick="setProtoChip(this, 'NXDN')">NXDN</button>
+            <button type="button" class="proto-chip" data-proto="POCSAG" onclick="setProtoChip(this, 'POCSAG')">POCSAG</button>
+          </div>
+          <button type="button" onclick="expandAllDecodes(true)" title="Expand all frames">Expand all</button>
+          <button type="button" onclick="expandAllDecodes(false)" title="Collapse all frames">Collapse all</button>
+          <button type="button" onclick="clearSdrDecodeLog()" title="Clear decode log history">Clear</button>
         </div>
-        <pre id="decodeBytes" class="bytes-body">no frame selected</pre>
+        <!-- Row 2: Audio Capture & I/Q Tools -->
+        <div class="decode-toolbar-subrow">
+          <button type="button" onclick="playSdrCapture('voice')">Play voice (20s)</button>
+          <button type="button" onclick="playSdrCapture('discriminator')">Play discriminator</button>
+          <audio id="sdrCaptureAudio" controls preload="none"></audio>
+          <a href="/api/sdr/capture.wav?kind=voice" download="usdr-voice.wav">Voice WAV</a>
+          <a href="/api/sdr/capture.wav?kind=discriminator" download="usdr-discriminator.wav">Disc WAV</a>
+          <a href="/api/sdr/capture.wav?kind=iq" download="usdr-iq.wav" title="Stereo WAV: left=I, right=Q">I/Q WAV</a>
+          <button type="button" onclick="replayCurrentSdrIq()" title="Run the rolling I/Q capture through a fresh classifier">Replay current I/Q</button>
+          <button type="button" onclick="$('sdrReplayFile').click()">Replay saved I/Q…</button>
+          <input id="sdrReplayFile" type="file" accept="audio/wav,.wav" hidden onchange="replaySdrFile(this.files && this.files[0])">
+          <span id="sdrReplayStatus" class="sdr-replay-status" style="margin-left:auto; font-size:10.5px; color:#607a90;">Native decoder replay</span>
+        </div>
+      </div>
+
+      <!-- Master-Detail Split: Left is expansive frame stream; Right is frame inspector -->
+      <div class="decode-main-split">
+        <div class="decode-stream-col">
+          <div id="sdrDecodeLog" class="sdr-decode-log">
+            <div class="data-empty">Waiting for P25, DMR, NXDN, ProVoice, EDACS/ESK, X2-TDMA, dPMR, YSF, D-STAR, trunking, pager, and decoder diagnostics…</div>
+          </div>
+        </div>
+
+        <div class="decode-inspector-col" id="decodeInspectorCol">
+          <div class="inspector-card">
+            <div class="inspector-head">
+              <span class="inspector-title" id="inspectorTitle">Frame Inspector</span>
+              <span class="inspector-meta" id="inspectorMeta">no frame selected</span>
+              <button type="button" class="sdr-preset-btn" id="bytesCopy" onclick="copyFrameBytes()" title="Copy raw payload">copy</button>
+            </div>
+            <div class="inspector-content" id="inspectorContent">
+              <div class="inspector-empty" id="inspectorEmpty">
+                <div style="font-size:12px; font-weight:700; color:#8ba5bd; margin-bottom:4px;">No Frame Selected</div>
+                <div style="font-size:10.5px; color:#556d82; line-height:1.4;">Click any decoded frame in the list to view its recovered fields, telemetry, and raw codewords.</div>
+              </div>
+              <div class="inspector-fields" id="inspectorFields" style="display:none"></div>
+              <div class="inspector-bytes-box" id="inspectorBytesBox" style="display:none">
+                <div class="bytes-subhead">
+                  <span id="bytesTitle">Frame bytes</span>
+                  <span class="bytes-meta" id="bytesMeta"></span>
+                </div>
+                <pre id="decodeBytes" class="bytes-body">no frame selected</pre>
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   </section>
@@ -1789,6 +1969,26 @@ function computeAutoRange(pwr) {
 let sdrInspectHz = 155000000;
 let sdrLastPeaks = [];
 let sdrLastChannelDbfs = null, sdrLastNoiseDbfs = null;
+// ADC overload is the way a receiver goes quietly deaf: the floor rises
+// under everything weaker than the carrier doing the clipping. Hold the
+// warning a couple of seconds past the last clipped frame so it reads.
+let sdrClipHoldUntil = 0;
+function noteClipping(peakIq) {
+  const now = performance.now();
+  if (isFinite(peakIq) && peakIq >= 0.98) sdrClipHoldUntil = now + 2500;
+  const hb = $('badgeHealth');
+  if (!hb) return;
+  const clipping = now < sdrClipHoldUntil;
+  if (clipping !== hb.classList.contains('clip')) {
+    hb.classList.toggle('clip', clipping);
+    if (clipping) {
+      hb.textContent = 'ADC CLIPPING · lower gain';
+      hb.classList.add('bad');
+    } else if (sdrStatus) {
+      updateSdrStatus(sdrStatus);
+    }
+  }
+}
 let sdrLastClassification = null;
 
 /// Tune to a frequency picked out of a list — a peak marker, a logged decode.
@@ -2097,36 +2297,83 @@ function toggleDecodeRow(id) {
   renderFrameBytes();
 }
 
-/// The selected frame's raw data, in the pane below the list.
+/// The selected frame's raw data, in the dedicated inspector pane.
 function renderFrameBytes() {
   const pre = $('decodeBytes');
   const meta = $('bytesMeta');
   const title = $('bytesTitle');
-  if (!pre) return;
+  const inspTitle = $('inspectorTitle');
+  const inspMeta = $('inspectorMeta');
+  const inspEmpty = $('inspectorEmpty');
+  const inspFields = $('inspectorFields');
+  const inspBytesBox = $('inspectorBytesBox');
+
   const e = sdrDecodeLogData.find(x => x.uid === sdrDecodeSelected);
   if (!e) {
-    pre.textContent = 'no frame selected';
+    if (pre) pre.textContent = 'no frame selected';
     if (meta) meta.textContent = 'select a frame';
     if (title) title.textContent = 'Frame bytes';
+    if (inspTitle) inspTitle.textContent = 'Frame Inspector';
+    if (inspMeta) inspMeta.textContent = 'no frame selected';
+    if (inspEmpty) inspEmpty.style.display = 'block';
+    if (inspFields) { inspFields.style.display = 'none'; inspFields.innerHTML = ''; }
+    if (inspBytesBox) inspBytesBox.style.display = 'none';
     return;
   }
+
+  if (inspEmpty) inspEmpty.style.display = 'none';
+  const valColor = e.valid ? '#4ade80' : '#f87171';
+  if (inspTitle) inspTitle.innerHTML = `<span style="color:${valColor}; font-weight:700;">[${esc(e.protocol)}]</span> ${esc(e.kind)}`;
+  const timeStr = e.timeStr || new Date(e.t).toLocaleTimeString();
+  const mhzStr = (Number(e.freqHz) / 1e6).toFixed(4);
+  if (inspMeta) inspMeta.innerHTML = `<button type="button" onclick="inspectSdrHz(${Number(e.freqHz)})" style="padding:0; border:0; background:none; color:#38bdf8; font:inherit; font-weight:600; cursor:pointer;" title="Tune to frequency">${mhzStr} MHz</button> · ${timeStr}`;
   if (title) title.textContent = `${e.protocol} · ${e.kind}`;
+
+  // Populate Key-Value Parsed Fields
+  if (inspFields) {
+    inspFields.style.display = 'block';
+    const rows = [];
+    const addRow = (k, v, color) => {
+      rows.push(`<div style="display:flex; justify-content:space-between; gap:10px; padding:3px 0; border-bottom:1px solid #101a24; font-family:var(--mono); font-size:10.5px;">
+        <span style="color:#64748b; flex-shrink:0;">${esc(k)}</span>
+        <span style="color:${color || '#cbd5e1'}; font-weight:600; text-align:right; overflow-wrap:anywhere;">${esc(v)}</span>
+      </div>`);
+    };
+    addRow('protocol', e.protocol, '#38bdf8');
+    addRow('kind', e.kind);
+    addRow('status', e.valid ? 'VALID (CRC PASS)' : 'REJECTED (CRC FAIL)', valColor);
+    addRow('frequency', `${mhzStr} MHz`);
+    addRow('time', timeStr);
+
+    const fields = e.fields || {};
+    const payload = payloadOf(fields);
+    const keys = Object.keys(fields).filter(k => !payload || k !== payload[0]);
+    if (keys.length) {
+      for (const k of keys.sort()) addRow(k, String(fields[k]));
+    }
+    inspFields.innerHTML = rows.join('');
+  }
+
+  // Populate Raw Payload / Bytes Dump
+  if (inspBytesBox) inspBytesBox.style.display = 'flex';
   const payload = payloadOf(e.fields);
   if (!payload) {
-    pre.textContent = 'This decoder did not hand back the raw frame.\n\n'
-      + 'The fields above are what it recovered; there is no payload to show,\n'
-      + 'and inventing one would be worse than saying so.';
+    if (pre) {
+      pre.textContent = 'This decoder did not hand back the raw frame.\n\n'
+        + 'The fields above are what it recovered; there is no payload to show,\n'
+        + 'and inventing one would be worse than saying so.';
+    }
     if (meta) meta.textContent = 'no raw payload';
     return;
   }
   const [key, value] = payload;
   if (key === 'rawWords') {
     const words = value.trim().split(/\s+/);
-    pre.textContent = wordDump(value);
+    if (pre) pre.textContent = wordDump(value);
     if (meta) meta.textContent = `${words.length} codewords · not byte-aligned`;
   } else {
     const bytes = Math.floor(value.replace(/[^0-9a-fA-F]/g, '').length / 2);
-    pre.textContent = hexDump(value);
+    if (pre) pre.textContent = hexDump(value);
     if (meta) meta.textContent = `${bytes} bytes`;
   }
 }
@@ -2150,6 +2397,22 @@ function expandAllDecodes(open) {
 function setDecodeFilter(v) {
   sdrDecodeFilter = (v || '').trim().toLowerCase();
   renderSdrDecodeLog();
+}
+
+function setProtoChip(btn, proto) {
+  document.querySelectorAll('.proto-chip').forEach(b => b.classList.remove('on'));
+  if (btn) btn.classList.add('on');
+  const inp = $('decodeFilter');
+  if (inp) inp.value = proto;
+  setDecodeFilter(proto);
+}
+
+function onDecodeFilterInput(v) {
+  const norm = (v || '').trim().toUpperCase();
+  document.querySelectorAll('.proto-chip').forEach(b => {
+    b.classList.toggle('on', b.dataset.proto === norm);
+  });
+  setDecodeFilter(v);
 }
 
 /// Field names whose value is a payload worth showing as raw data.
@@ -2251,17 +2514,19 @@ function renderSdrDecodeLog() {
     el.innerHTML = list.map(e => {
       const colour = e.valid ? '#4ade80' : '#f87171';
       const open = sdrDecodeOpen.has(e.uid);
+      const isSel = e.uid === sdrDecodeSelected;
       const fieldCount = Object.keys(e.fields || {}).length;
-      return `<div class="sdr-decode-event${e.uid === sdrDecodeSelected ? ' sel' : ''}">
+      return `<div class="sdr-decode-event${isSel ? ' sel' : ''}">
         <div onclick="toggleDecodeRow(${e.uid})" style="cursor:pointer">
           <div style="display:flex; gap:8px; align-items:baseline; min-width:0">
             <span style="color:#64748b; flex:none; width:9px">${open ? '▾' : '▸'}</span>
-            <span style="color:#64748b; flex:none">${e.timeStr || new Date(e.t).toLocaleTimeString()}</span>
-            <button type="button" onclick="event.stopPropagation(); inspectSdrHz(${Number(e.freqHz)})" style="padding:0; border:0; background:none; color:#38bdf8; font:inherit; flex:none">${(Number(e.freqHz) / 1e6).toFixed(4)} MHz</button>
+            <span style="color:#8197aa; font-size:10.5px; flex:none">${e.timeStr || new Date(e.t).toLocaleTimeString()}</span>
+            <button type="button" onclick="event.stopPropagation(); inspectSdrHz(${Number(e.freqHz)})" style="padding:0; border:0; background:none; color:#38bdf8; font:inherit; font-weight:600; flex:none; cursor:pointer;" title="Tune here">${(Number(e.freqHz) / 1e6).toFixed(4)} MHz</button>
             <span style="color:${colour}; font-weight:700; flex:none">[${esc(e.protocol)}]</span>
-            <span style="margin-left:auto; color:#3d4a58; flex:none; font-size:10px">${fieldCount} fields</span>
+            <span style="color:#94a3b8; font-size:10.5px; flex:none">${esc(e.kind || '')}</span>
+            <span style="margin-left:auto; color:#475569; flex:none; font-size:10px">${fieldCount} fields</span>
           </div>
-          <div class="row2" style="padding-left:17px; color:#cbd5e1">${esc(e.summary)}</div>
+          <div class="row2" style="padding-left:17px; color:#e2e8f0; font-size:11px; margin-top:2px;">${esc(e.summary)}</div>
         </div>
         ${open ? decodeDetail(e) : ''}
       </div>`;
@@ -2338,9 +2603,20 @@ function renderSdrPeaks(peaks) {
 }
 
 // ---------- palettes ----------
-// `ham` first: the black → navy → blue → cyan → white ramp a rig's waterfall
-// uses, and what this display is built around.
+// `smartsdr` default: the iconic FlexRadio SmartSDR gradient from black noise floor
+// through blue, cyan, green, yellow, orange-red, magenta to white peaks.
 const SDR_PALETTES = {
+  smartsdr: [
+    [0.00, [0, 0, 0]],       // Pure black noise floor
+    [0.10, [0, 14, 110]],    // Deep midnight / cobalt blue
+    [0.24, [0, 85, 210]],    // Royal blue
+    [0.40, [0, 200, 235]],   // Electric cyan
+    [0.55, [20, 215, 60]],   // Vivid spring green
+    [0.72, [255, 225, 0]],   // Sunburst yellow
+    [0.86, [255, 75, 0]],    // Hot orange-red
+    [0.95, [230, 10, 85]],   // Saturated crimson / magenta
+    [1.00, [255, 255, 255]], // Peak signal white
+  ],
   meridian: [
     [0.00, [3, 4, 10]],
     [0.15, [25, 8, 60]],
@@ -2424,7 +2700,7 @@ const SDR_PALETTES = {
   ],
 };
 const PALETTE_NAMES = Object.keys(SDR_PALETTES);
-let sdrPalette = 'meridian';
+let sdrPalette = 'smartsdr';
 
 let sdrCenterHz = 155000000;
 let sdrRateHz = 2048000;
@@ -2730,15 +3006,97 @@ function updateAfVolReadout() {
   txt.textContent = `AF ${volStr} · RF ${gainStr}`;
 }
 
-function syncPaletteUi() {
-  let idx = PALETTE_NAMES.indexOf(sdrPalette);
-  if (idx < 0) idx = 0;
-  const frac = idx / Math.max(1, PALETTE_NAMES.length - 1);
+const SPAN_RATES = [250000, 1024000, 1536000, 2048000, 2400000, 3200000];
+
+function syncSpanKnobUi() {
+  const sel = $('sdrRateSel');
+  const curRate = sel ? Number(sel.value) : sdrRateHz;
+  let idx = SPAN_RATES.indexOf(curRate);
+  if (idx < 0) idx = 3;
+  const frac = idx / Math.max(1, SPAN_RATES.length - 1);
   setKnobArc('deckPalArc', 204, 76, 39.5, frac);
   setKnobPointer('deckPalPointer', 204, 76, frac);
   setKnobPointer('deckPalKnurls', 204, 76, frac);
   updateDspReadout();
 }
+
+function syncPaletteUi() {
+  const lbl = $('keyPaletteLabel');
+  if (lbl) lbl.textContent = `PALETTE: ${sdrPalette.toUpperCase()} ▾`;
+  renderPaletteMenuList();
+}
+
+function paletteCssGradient(stops) {
+  const parts = stops.map(([pct, [r, g, b]]) => `rgb(${r},${g},${b}) ${(pct * 100).toFixed(0)}%`);
+  return `linear-gradient(to right, ${parts.join(', ')})`;
+}
+
+function renderPaletteMenuList() {
+  const list = $('paletteList');
+  if (!list) return;
+  list.innerHTML = Object.entries(SDR_PALETTES).map(([name, stops]) => {
+    const active = name === sdrPalette;
+    const grad = paletteCssGradient(stops);
+    const label = name === 'smartsdr' ? 'SmartSDR (FlexRadio)' : (name.charAt(0).toUpperCase() + name.slice(1));
+    const tag = name === 'smartsdr' ? 'Default' : '';
+    return `<button type="button" class="palette-item${active ? ' active' : ''}" onclick="selectPalette('${name}')">
+      <div class="palette-item-top">
+        <span class="palette-item-name">${label}</span>
+        ${tag ? `<span class="palette-item-tag">${tag}</span>` : ''}
+      </div>
+      <div class="palette-swatch-bar" style="background:${grad}"></div>
+    </button>`;
+  }).join('');
+}
+
+function togglePaletteMenu(force) {
+  const menu = $('paletteMenu');
+  if (!menu) return;
+  const show = force !== undefined ? force : (menu.style.display === 'none' || !menu.style.display);
+  menu.style.display = show ? 'block' : 'none';
+  if (show) {
+    renderPaletteMenuList();
+    const btn = $('keyPalette');
+    if (btn) {
+      const deckWrap = document.querySelector('.radio-deck-wrap');
+      if (deckWrap) {
+        const wrapRect = deckWrap.getBoundingClientRect();
+        const btnRect = btn.getBoundingClientRect();
+        if (wrapRect.width > 0 && btnRect.width > 0) {
+          menu.style.top = `${Math.round(btnRect.bottom - wrapRect.top + 4)}px`;
+          menu.style.left = `${Math.max(10, Math.round(btnRect.left - wrapRect.left - 20))}px`;
+        } else {
+          menu.style.top = '136px';
+          menu.style.left = '276px';
+        }
+      }
+    }
+  }
+}
+
+function selectPalette(name) {
+  if (!SDR_PALETTES[name]) return;
+  sdrPalette = name;
+  sdrColorLut = buildSdrLut(name);
+  syncPaletteUi();
+  if (sdrLastPwr.length) drawSdrSpectrum(sdrLastPwr);
+  togglePaletteMenu(false);
+}
+
+document.addEventListener('click', (e) => {
+  const menu = $('paletteMenu');
+  if (!menu || menu.style.display === 'none') return;
+  const palKey = $('keyPalette');
+  if (!menu.contains(e.target) && (!palKey || !palKey.contains(e.target))) {
+    togglePaletteMenu(false);
+  }
+});
+
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') {
+    togglePaletteMenu(false);
+  }
+});
 
 function syncZoomUi() {
   const frac = Math.max(0, Math.min(1, Math.log2(sdrZoom || 1) / 5.0));
@@ -2750,8 +3108,11 @@ function syncZoomUi() {
 function updateDspReadout() {
   const txt = $('deckSpanReadout');
   if (!txt) return;
-  const zStr = (sdrZoom && sdrZoom > 1.05) ? `${sdrZoom.toFixed(1)}x` : `${(sdrRateHz/1e6).toFixed(2)}M`;
-  txt.textContent = `PAL ${sdrPalette.toUpperCase()} · ${zStr}`;
+  const sel = $('sdrRateSel');
+  const curRate = sel ? Number(sel.value) : sdrRateHz;
+  const rateM = (curRate / 1e6).toFixed(curRate >= 1e6 ? (curRate % 1e6 === 0 ? 1 : 2) : 3);
+  const zStr = (sdrZoom && sdrZoom > 1.05) ? `${sdrZoom.toFixed(1)}x` : '1.0x';
+  txt.textContent = `SPAN ${rateM}M · ZOOM ${zStr}`;
 }
 
 function buildConcentricTicks() {
@@ -2843,17 +3204,24 @@ function setupRadioDeck() {
     syncAfVolUi();
   });
 
-  // 2. Dual Concentric Knob 2: SPAN/ZOOM (inner) & PALETTE (outer)
-  const cyclePalette = (dir) => {
-    let i = PALETTE_NAMES.indexOf(sdrPalette);
-    if (i < 0) i = 0;
-    sdrPalette = PALETTE_NAMES[(i + dir + PALETTE_NAMES.length) % PALETTE_NAMES.length];
-    sdrColorLut = buildSdrLut(sdrPalette);
-    syncPaletteUi();
-    if (sdrLastPwr.length) drawSdrSpectrum(sdrLastPwr);
+  // 2. Dual Concentric Knob 2: SPAN (outer) & FFT ZOOM (inner)
+  const stepSpanRate = (dir) => {
+    const sel = $('sdrRateSel');
+    const curRate = sel ? Number(sel.value) : sdrRateHz;
+    let idx = SPAN_RATES.indexOf(curRate);
+    if (idx < 0) {
+      idx = SPAN_RATES.reduce((best, r, i) => Math.abs(r - curRate) < Math.abs(SPAN_RATES[best] - curRate) ? i : best, 0);
+    }
+    const nextIdx = Math.max(0, Math.min(SPAN_RATES.length - 1, idx + dir));
+    if (nextIdx !== idx) {
+      const newRate = SPAN_RATES[nextIdx];
+      setSdrRate(newRate);
+      if (sel) sel.value = String(newRate);
+      syncSpanKnobUi();
+    }
   };
   makeKnobDraggable('deckPalWrap', (dy) => {
-    cyclePalette(dy > 0 ? 1 : -1);
+    stepSpanRate(dy > 0 ? 1 : -1);
   });
   makeKnobDraggable('deckSpanWrap', (dy) => {
     if (dy > 0) setZoom(sdrZoom * 1.25);
@@ -2900,6 +3268,7 @@ function setupRadioDeck() {
   syncGainUi();
   syncAfVolUi();
   syncPaletteUi();
+  syncSpanKnobUi();
   syncZoomUi();
   updateSubVfoUi();
   updateVfoTelemetry();
@@ -4571,14 +4940,11 @@ function setupControls() {
   });
   const palKey = $('keyPalette');
   if (palKey) {
-    palKey.addEventListener('click', () => {
-      const i = PALETTE_NAMES.indexOf(sdrPalette);
-      sdrPalette = PALETTE_NAMES[(i + 1) % PALETTE_NAMES.length];
-      sdrColorLut = buildSdrLut(sdrPalette);
-      palKey.textContent = sdrPalette.toUpperCase();
-      syncPaletteUi();
+    palKey.addEventListener('click', (e) => {
+      e.stopPropagation();
+      togglePaletteMenu();
     });
-    palKey.textContent = sdrPalette.toUpperCase();
+    syncPaletteUi();
   }
   // AVERAGE: cycle off → slow → deep. Integration is server-side; the trace
   // arrives pre-averaged in the fft frame.
@@ -4760,6 +5126,7 @@ function paintSdrFft(m) {
   drawSdrWaterfallRow(m.pwr);
   drawScanOverlay();
   drawScope(m.scope, m.scopeRateHz, m.scopeKind, m.symbolRateHz);
+  noteClipping(m.peakIq);
   sdrLastChannelDbfs = isFinite(m.channelDbfs) ? m.channelDbfs : null;
   sdrLastNoiseDbfs = isFinite(m.noiseDbfs) ? m.noiseDbfs : null;
   updateSdrClassification(m.classification, m.inspectHz);
@@ -5480,7 +5847,7 @@ async function loadSdrDevices() {
 function updateSdrStatus(s) {
   sdrStatus = s;
   const hb = $('badgeHealth');
-  if (hb) {
+  if (hb && !hb.classList.contains('clip')) {
     const drops = (s.dropped_blocks || 0) + (s.lagged_blocks || 0);
     const lost = s.lost_samples || 0;
     const gaps = s.gap_events || 0;
@@ -5501,6 +5868,7 @@ function updateSdrStatus(s) {
   updateBandPresetUi();
   if ($('sdrRateSel')) $('sdrRateSel').value = String(Math.round(s.rate_hz));
   if ($('badgeSpan')) $('badgeSpan').textContent = (s.rate_hz / 1e6).toFixed(3).replace(/0+$/, '').replace(/\.$/, '') + 'M';
+  syncSpanKnobUi();
   if ($('sdrRadioSel') && s.serial) $('sdrRadioSel').value = s.serial;
   if (s.mode && s.mode !== sdrMode) applyModeUi(s.mode);
   if (s.bandwidth_hz) sdrBandwidthHz = s.bandwidth_hz;
@@ -5563,7 +5931,9 @@ function updateSdrStatus(s) {
     $('sdrAgc').checked = s.gain_db == null;
     $('sdrGainRange').disabled = s.gain_db == null;
     if (s.gain_db != null) $('sdrGainRange').value = s.gain_db;
-    $('sdrGainVal').textContent = s.gain_db == null ? 'auto' : s.gain_db + ' dB';
+    $('sdrGainVal').textContent = s.gain_db == null
+      ? (s.gain_now_db != null ? `auto · ${Number(s.gain_now_db).toFixed(0)} dB` : 'auto')
+      : s.gain_db + ' dB';
     syncGainUi();
   }
   $('err').textContent = s.error || '';
