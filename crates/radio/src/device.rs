@@ -183,6 +183,57 @@ pub fn cover_hz_offset(offset_hz: f64, channel_bw_hz: f64) -> f64 {
 /// already measures clip fraction; this is the loop that acts on it. It
 /// never exceeds the operator's requested gain, and it never touches
 /// hardware AGC or SDRplay's two-element controls.
+/// The R820T/R828D tuner's gain settings, in dB. librtlsdr rounds any
+/// request down to one of these, so a loop stepping in decibels writes
+/// values the tuner cannot take and the readback drifts from the hardware.
+/// Every gain this crate writes to such a tuner is snapped to the table.
+const R82XX_GAINS_DB: &[f64] = &[
+    0.0, 0.9, 1.4, 2.7, 3.7, 7.7, 8.7, 12.5, 14.4, 15.7, 16.6, 19.7, 20.7, 22.9, 25.4, 28.0,
+    29.7, 32.8, 33.8, 36.4, 37.2, 38.6, 40.2, 42.1, 43.4, 43.9, 44.5, 48.0, 49.6,
+];
+
+/// Discrete gain settings for this tuner, empty when it is continuous.
+fn gain_steps(caps: &Capabilities) -> &'static [f64] {
+    let hw = caps.hardware.to_ascii_uppercase();
+    if hw.contains("R820") || hw.contains("R828") {
+        R82XX_GAINS_DB
+    } else {
+        &[]
+    }
+}
+
+/// The table value nearest to `g` (continuous tuners return `g`).
+fn snap_gain(steps: &[f64], g: f64) -> f64 {
+    steps
+        .iter()
+        .copied()
+        .min_by(|a, b| (a - g).abs().total_cmp(&(b - g).abs()))
+        .unwrap_or(g)
+}
+
+/// Smallest table value at least `g` (or the largest if none), for
+/// stepping up; `g` itself on a continuous tuner.
+fn snap_gain_up(steps: &[f64], g: f64) -> f64 {
+    steps
+        .iter()
+        .copied()
+        .find(|v| *v >= g - 1e-6)
+        .or_else(|| steps.last().copied())
+        .unwrap_or(g)
+}
+
+/// Largest table value at most `g` (or the smallest if none), for
+/// stepping down.
+fn snap_gain_down(steps: &[f64], g: f64) -> f64 {
+    steps
+        .iter()
+        .rev()
+        .copied()
+        .find(|v| *v <= g + 1e-6)
+        .or_else(|| steps.first().copied())
+        .unwrap_or(g)
+}
+
 struct ClipGuard {
     ceiling: f64,
     current: f64,
@@ -190,11 +241,12 @@ struct ClipGuard {
     max: f64,
     high: u8,
     low: u8,
+    steps: &'static [f64],
 }
 
 impl ClipGuard {
-    fn new(gain: f64, min: f64, max: f64) -> Self {
-        let g = gain.clamp(min, max);
+    fn new(gain: f64, min: f64, max: f64, steps: &'static [f64]) -> Self {
+        let g = snap_gain(steps, gain.clamp(min, max));
         Self {
             ceiling: g,
             current: g,
@@ -202,34 +254,47 @@ impl ClipGuard {
             max,
             high: 0,
             low: 0,
+            steps,
         }
     }
 
     /// Guard for automatic gain: starts at `start` and may climb all the
     /// way to the hardware maximum on a quiet band, walking back down as
     /// soon as the ADC clips.
-    fn auto(start: f64, min: f64, max: f64) -> Self {
-        let mut g = Self::new(start, min, max);
+    fn auto(start: f64, min: f64, max: f64, steps: &'static [f64]) -> Self {
+        let mut g = Self::new(start, min, max, steps);
         g.ceiling = max;
         g
     }
 
-    /// One observation of clip fraction (0..=1), typically once a second.
-    /// Returns a new gain when the hardware should be updated.
-    fn on_stats(&mut self, clipped_fraction: f64) -> Option<f64> {
+    /// One observation per second: the fraction of samples that clipped
+    /// and the largest |I| or |Q| seen. Returns a new gain when the
+    /// hardware should be updated.
+    ///
+    /// Coming down is always 2 dB after two clipped seconds. Going up
+    /// depends on headroom: with the peak below a quarter of full scale
+    /// (12 dB of room) the band is plainly quiet and the loop steps 3 dB
+    /// every two seconds, so a weak-signal band reaches full sensitivity
+    /// in well under a minute rather than the four it took at 1 dB per
+    /// eight seconds; within that last 12 dB it creeps 1 dB per eight
+    /// quiet seconds so it settles just under the clip point.
+    fn on_stats(&mut self, clipped_fraction: f64, peak: f64) -> Option<f64> {
         const CLIP_HIGH: f64 = 0.001;
         const CLIP_LOW: f64 = 0.0001;
         const HIGH_NEED: u8 = 2;
         const LOW_NEED: u8 = 8;
+        const FAST_NEED: u8 = 2;
+        const FAST_PEAK: f64 = 0.25;
         const DOWN_DB: f64 = 2.0;
         const UP_DB: f64 = 1.0;
+        const FAST_UP_DB: f64 = 3.0;
 
         if clipped_fraction > CLIP_HIGH {
             self.high = self.high.saturating_add(1);
             self.low = 0;
             if self.high >= HIGH_NEED {
                 self.high = 0;
-                let next = (self.current - DOWN_DB).max(self.min);
+                let next = snap_gain_down(self.steps, self.current - DOWN_DB).max(self.min);
                 if (next - self.current).abs() > 0.05 {
                     self.current = next;
                     return Some(self.current);
@@ -238,9 +303,13 @@ impl ClipGuard {
         } else if clipped_fraction < CLIP_LOW && self.current < self.ceiling - 0.05 {
             self.low = self.low.saturating_add(1);
             self.high = 0;
-            if self.low >= LOW_NEED {
+            let (need, step) = if peak < FAST_PEAK { (FAST_NEED, FAST_UP_DB) } else { (LOW_NEED, UP_DB) };
+            if self.low >= need {
                 self.low = 0;
-                let next = (self.current + UP_DB).min(self.ceiling).min(self.max);
+                let next = snap_gain_up(self.steps, self.current + step)
+                    .min(self.ceiling)
+                    .min(self.max);
+                let next = snap_gain_down(self.steps, next).max(self.current);
                 if (next - self.current).abs() > 0.05 {
                     self.current = next;
                     return Some(self.current);
@@ -549,6 +618,7 @@ fn run(
     let mut lagged: u64 = 0;
     let mut clipped: u64 = 0;
     let mut counted: u64 = 0;
+    let mut peak: f64 = 0.0;
     // Acquisition timeline: `sample_pos` is where the next read lands on the
     // device's sample grid; `epoch` bumps on every ACCEPTED tune/rate change
     // (and starts a new run when the thread opens the stream). Consumers use
@@ -563,7 +633,7 @@ fn run(
     let mut clip_guard = if agc_enabled {
         match caps.gain {
             GainControl::Overall { min, max } => {
-                dev.gain(Rx, 0).ok().map(|g| ClipGuard::auto(g, min, max))
+                dev.gain(Rx, 0).ok().map(|g| ClipGuard::auto(g, min, max, gain_steps(&caps)))
             }
             GainControl::Sdrplay { .. } => None,
         }
@@ -597,7 +667,7 @@ fn run(
                         };
                         clip_guard = match caps.gain {
                             GainControl::Overall { min, max } if guard_wanted => {
-                                Some(ClipGuard::new(applied, min, max))
+                                Some(ClipGuard::new(applied, min, max, gain_steps(&caps)))
                             }
                             _ => None,
                         };
@@ -617,7 +687,7 @@ fn run(
                         clip_guard = if !on {
                             None
                         } else if let GainControl::Overall { min, max } = caps.gain {
-                            dev.gain(Rx, 0).ok().map(|g| ClipGuard::new(g, min, max))
+                            dev.gain(Rx, 0).ok().map(|g| ClipGuard::new(g, min, max, gain_steps(&caps)))
                         } else {
                             None
                         };
@@ -635,7 +705,7 @@ fn run(
                                 let ok = apply_overall_gain(&dev, &caps, &mut hw_agc, start, &log_tx);
                                 if ok {
                                     agc_enabled = true;
-                                    clip_guard = Some(ClipGuard::auto(start, min, max));
+                                    clip_guard = Some(ClipGuard::auto(start, min, max, gain_steps(&caps)));
                                     let _ = log_tx.try_send(format!(
                                         "auto gain (clip-guarded) starting at {start:.1} dB"
                                     ));
@@ -747,10 +817,15 @@ fn run(
             Ok(0) => continue,
             Ok(n) => {
                 usb_fails = 0;
-                clipped += buf[..n]
-                    .iter()
-                    .filter(|c| c.re.abs() > 0.98 || c.im.abs() > 0.98)
-                    .count() as u64;
+                for c in &buf[..n] {
+                    let m = c.re.abs().max(c.im.abs());
+                    if m > 0.98 {
+                        clipped += 1;
+                    }
+                    if f64::from(m) > peak {
+                        peak = f64::from(m);
+                    }
+                }
                 counted += n as u64;
 
                 let block = IqBlock {
@@ -769,22 +844,29 @@ fn run(
                 if counted >= rate as u64 {
                     let clipped_fraction = clipped as f64 / counted.max(1) as f64;
                     if let Some(ref mut cg) = clip_guard
-                        && let Some(new_g) = cg.on_stats(clipped_fraction)
+                        && let Some(new_g) = cg.on_stats(clipped_fraction, peak)
                     {
-                        if crate::driver_log::checked(|| dev.set_gain(Rx, 0, new_g).is_ok()) {
+                        // Same retried write as a hand-set gain: on this
+                        // tuner the first attempt routinely stalls and the
+                        // second lands. A single attempt here, logged as a
+                        // failure, tripped the server's fault counter and
+                        // reopened the device every sixteen seconds.
+                        if set_gain_checked(&dev, new_g) {
                             let _ = log_tx.try_send(format!(
-                                "gain {new_g:.1} dB (clip {clipped_fraction:.4})"
+                                "gain {new_g:.1} dB (clip {clipped_fraction:.4} peak {peak:.2})"
                             ));
                             publish_state(&dev, &caps, tune, agc_enabled, &event_tx);
                         } else {
-                            // Counted by the server as a control fault; two
-                            // in a window reopen the device, which is what
-                            // clears a stalled tuner bus.
+                            // Only after every retry: counted by the server
+                            // as a control fault, two of which in a window
+                            // reopen the device — what clears a stalled bus.
                             let _ = log_tx.try_send(format!(
                                 "gain {new_g:.1} dB failed: tuner did not take the write"
                             ));
+                            cg.current = cg.current.min(new_g);
                         }
                     }
+                    peak = 0.0;
                     let _ = event_tx.try_send(Event::StreamStats {
                         dropped_blocks: dropped,
                         lagged_deliveries: lagged,
@@ -830,21 +912,10 @@ fn apply_overall_gain(
         std::thread::sleep(std::time::Duration::from_millis(15));
     }
     let g = match caps.gain {
-        GainControl::Overall { min, max } => want.clamp(min, max),
+        GainControl::Overall { min, max } => snap_gain(gain_steps(caps), want.clamp(min, max)),
         GainControl::Sdrplay { .. } => want,
     };
-    let mut ok = false;
-    for attempt in 0..GAIN_ATTEMPTS {
-        // The driver reports success whether or not the I2C write took;
-        // the stderr watcher is what says it did.
-        if crate::driver_log::checked(|| dev.set_gain(Rx, 0, g).is_ok()) {
-            ok = true;
-            break;
-        }
-        if attempt + 1 < GAIN_ATTEMPTS {
-            std::thread::sleep(GAIN_RETRY_DELAY * (attempt + 1));
-        }
-    }
+    let ok = set_gain_checked(dev, g);
     if ok {
         let got = dev.gain(Rx, 0).unwrap_or(g);
         if (want - got).abs() > 0.15 {
@@ -866,6 +937,21 @@ fn apply_overall_gain(
 /// 28 dB up, so 40% of the range (~20 dB) starts under that.
 fn auto_gain_start(min: f64, max: f64) -> f64 {
     (min + (max - min) * 0.4).clamp(min, max)
+}
+
+/// Set the tuner gain, retrying a write the driver reported as taken but
+/// the stderr watcher saw fail. The driver reports success whether or not
+/// the I2C write took; the watcher is what says it did.
+fn set_gain_checked(dev: &soapysdr::Device, g: f64) -> bool {
+    for attempt in 0..GAIN_ATTEMPTS {
+        if crate::driver_log::checked(|| dev.set_gain(Rx, 0, g).is_ok()) {
+            return true;
+        }
+        if attempt + 1 < GAIN_ATTEMPTS {
+            std::thread::sleep(GAIN_RETRY_DELAY * (attempt + 1));
+        }
+    }
+    false
 }
 
 /// Attempts per tuner write, and the pause between them. The pause grows
@@ -1086,17 +1172,17 @@ mod tests {
 
     #[test]
     fn clip_guard_backs_off_then_restores_toward_the_ceiling() {
-        let mut g = ClipGuard::new(30.0, 0.0, 49.6);
-        assert!(g.on_stats(0.0).is_none());
-        assert_eq!(g.on_stats(0.01), None, "one hot second is not enough");
-        assert_eq!(g.on_stats(0.01), Some(28.0));
+        let mut g = ClipGuard::new(30.0, 0.0, 49.6, &[]);
+        assert!(g.on_stats(0.0, 0.5).is_none());
+        assert_eq!(g.on_stats(0.01, 1.0), None, "one hot second is not enough");
+        assert_eq!(g.on_stats(0.01, 1.0), Some(28.0));
         // Eight clean seconds creep 1 dB back toward 30.
         for _ in 0..7 {
-            assert!(g.on_stats(0.0).is_none());
+            assert!(g.on_stats(0.0, 0.5).is_none());
         }
-        assert_eq!(g.on_stats(0.0), Some(29.0));
+        assert_eq!(g.on_stats(0.0, 0.5), Some(29.0));
         for _ in 0..8 {
-            g.on_stats(0.0);
+            g.on_stats(0.0, 0.5);
         }
         assert_eq!(g.current, 30.0, "must not exceed the configured ceiling");
     }
@@ -1105,9 +1191,9 @@ mod tests {
     /// rebuilds it), so the new ceiling is simply the new guard's start.
     #[test]
     fn clip_guard_never_exceeds_a_new_lower_ceiling() {
-        let mut g = ClipGuard::new(20.0, 0.0, 49.6);
+        let mut g = ClipGuard::new(20.0, 0.0, 49.6, &[]);
         for _ in 0..20 {
-            assert!(g.on_stats(0.0).is_none());
+            assert!(g.on_stats(0.0, 0.5).is_none());
         }
         assert_eq!(g.current, 20.0);
     }
@@ -1118,16 +1204,40 @@ mod tests {
     fn auto_gain_guard_climbs_to_max_and_backs_off_on_clipping() {
         let start = auto_gain_start(0.0, 49.6);
         assert!((start - 19.84).abs() < 0.01);
-        let mut g = ClipGuard::auto(start, 0.0, 49.6);
+        let mut g = ClipGuard::auto(start, 0.0, 49.6, R82XX_GAINS_DB);
         let mut steps = 0;
         for _ in 0..400 {
-            if g.on_stats(0.0).is_some() {
+            if g.on_stats(0.0, 0.5).is_some() {
                 steps += 1;
             }
         }
         assert!(steps > 0 && (g.current - 49.6).abs() < 0.05, "climbed to {}", g.current);
-        assert!(g.on_stats(0.01).is_none());
-        assert_eq!(g.on_stats(0.01), Some(47.6));
+        // With 12 dB of headroom the climb is 3 dB every two seconds: a
+        // quiet band goes from the start to full gain in about twenty.
+        let mut q = ClipGuard::auto(start, 0.0, 49.6, R82XX_GAINS_DB);
+        let mut secs = 0;
+        while (q.current - 49.6).abs() > 0.05 && secs < 200 {
+            q.on_stats(0.0, 0.05);
+            secs += 1;
+        }
+        assert!(secs <= 22, "quiet band took {secs} s to reach full gain");
+        assert!(g.on_stats(0.01, 1.0).is_none());
+        // Down 2 dB from 49.6 is 47.6, which the tuner cannot do: the next
+        // table entry at or below it is 44.5.
+        assert_eq!(g.on_stats(0.01, 1.0), Some(44.5));
+    }
+
+    /// Every gain the loop asks for is one the tuner can actually set.
+    #[test]
+    fn auto_gain_guard_only_requests_table_gains() {
+        let mut g = ClipGuard::auto(auto_gain_start(0.0, 49.6), 0.0, 49.6, R82XX_GAINS_DB);
+        assert!(R82XX_GAINS_DB.contains(&g.current), "start {}", g.current);
+        for i in 0..300 {
+            let clip = if i % 40 > 30 { 0.02 } else { 0.0 };
+            if let Some(next) = g.on_stats(clip, 0.1) {
+                assert!(R82XX_GAINS_DB.contains(&next), "requested {next}");
+            }
+        }
     }
 
     /// A dongle measured at +2.61 ppm puts a 773.9583 MHz signal about 2 kHz

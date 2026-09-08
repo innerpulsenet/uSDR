@@ -339,12 +339,24 @@ the strongest carrier gone. That is the receiver "going deaf after a bit of
 tuning around", and a restart only fixed it because the restart re-applied
 the saved manual gain.
 
-Automatic gain is instead a loop on manual gain: it starts at 60% of the
-tuner's range, walks the gain down 2 dB within two seconds of the ADC
-clipping, and back up 1 dB at a time when the band has been quiet for eight
-seconds, up to the hardware maximum. The gain control shows the level it is
-at (`auto · 28 dB`), and the status strip turns red with `ADC CLIPPING` while
-the converter is overloaded in any mode.
+Automatic gain is instead a loop on manual gain: it starts at 40% of the
+tuner's range and walks the gain down 2 dB within two seconds of the ADC
+clipping. Going up depends on headroom: while the peak sample is under a
+quarter of full scale it steps 3 dB every two seconds, so a quiet band
+reaches full sensitivity in about twenty seconds; inside that last 12 dB it
+creeps 1 dB per eight quiet seconds and settles just under the clip point.
+Every value it writes is one of the R820T's 29 real gain settings (0, 0.9,
+1.4 … 48.0, 49.6 dB) — librtlsdr rounds any other request down, so a loop
+stepping in whole decibels would write values the tuner cannot take. The
+gain control shows the level it is at (`auto · 43 dB`), and the status strip
+turns red with `ADC CLIPPING` while the converter is overloaded in any mode.
+
+The driver does not report a failed tuner write: on this dongle the first
+attempt of nearly every gain write stalls on the I2C bus and SoapyRTLSDR
+reports success anyway, so the receiver used to sit at whatever gain it
+had while the display claimed the new one. The radio layer now watches the
+driver's own stderr for those faults, retries a write that did not take,
+and reports one that keeps failing so the receiver reopens itself.
 
 **Clip guard (off by default)** is the same loop under a hand-set gain: it
 never exceeds the gain you chose, and walks down under it when the ADC clips.
