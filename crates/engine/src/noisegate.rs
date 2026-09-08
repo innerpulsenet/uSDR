@@ -20,14 +20,21 @@ use scannerd_dsp::OnePole;
 
 /// Noise-band envelope below which the gate opens.
 ///
-/// Measured on synthetic signals at the demodulator's scaling, where ±1.0 is
-/// full deviation: a quieted carrier sits near 1e-3, unmodulated noise near
-/// 2e-1. The two are more than two decades apart, so the exact threshold hardly
-/// matters — it only has to land in the gap. See the tests, which assert the
-/// separation rather than trusting these numbers.
-pub const DEFAULT_OPEN: f32 = 0.020;
+/// Measured through the real receive path (2.4 MS/s span, channel filter,
+/// 48 kS/s output, band bounded to 4–8 kHz per `nbfm::NOISE_BAND_TOP_HZ`),
+/// at the demodulator's scaling where ±1.0 is full deviation. A carrier with
+/// noise under it is not the 1e-3 a clean tone gives — FM noise rises with
+/// frequency — so the band reads 0.05 at 20 dB, 0.15–0.18 at 10 dB and
+/// 0.25–0.29 at 6 dB (12.5 / 25 kHz channels), while no carrier at all
+/// reads 0.46 (12.5 kHz channel at 16 kS/s) to 0.98 (25 kHz at 48 kS/s).
+/// The old thresholds of 0.020/0.045 were set against clean tones and shut
+/// the gate on anything noisier than ~25 dB, which after the monitor path
+/// moved onto the 48 kS/s chain was every real signal: NFM audio was mute.
+/// A carrier of ~9 dB or better opens the gate directly; a weaker one in
+/// the gap opens through the ambiguity timer.
+pub const DEFAULT_OPEN: f32 = 0.18;
 /// Envelope above which it closes again. The gap is hysteresis.
-pub const DEFAULT_CLOSE: f32 = 0.045;
+pub const DEFAULT_CLOSE: f32 = 0.28;
 
 /// Seconds to ramp fully open. Short, so a syllable's first moment is not lost.
 const OPEN_S: f32 = 0.004;
@@ -46,6 +53,18 @@ const AMBIGUOUS_S: f32 = 1.5;
 /// Rationale: a weak carrier's quieting leaves its band hovering at 1–2× the
 /// line; one speech transient there used to cost a multi-second dropout.
 const CLOSE_DELAY_S: f32 = 0.40;
+/// Band level, as a multiple of the close threshold, that is unmistakably
+/// carrier-less static and closes the gate at once. The lowest no-carrier
+/// reading measured (12.5 kHz channel, 16 kS/s) is 0.46 = 1.6×; 1.5 × 0.28
+/// = 0.42 sits under it, while a 3–6 dB carrier at 0.29–0.36 gets the
+/// delayed close.
+const DEEP_STATIC_OVER: f32 = 1.5;
+/// Samples after construction or reset during which the gate stays shut
+/// whatever the band says. A freshly built channel filter emits zeros
+/// while it fills, and a zero discriminator reads as a perfectly quieted
+/// carrier; the gate opened on that silence and, with the smoothed band
+/// still climbing toward its real level, a call could start on nothing.
+const WARMUP_S: f32 = 0.05;
 
 pub struct NoiseGate {
     open_level: f32,
@@ -71,6 +90,8 @@ pub struct NoiseGate {
     /// Samples the smoothed envelope has continuously exceeded `close_level`
     /// while open, feeding the depth-scaled close delay.
     over_close_for: usize,
+    /// Samples seen since construction or reset, against [`WARMUP_S`].
+    warm: usize,
 }
 
 impl NoiseGate {
@@ -95,6 +116,7 @@ impl NoiseGate {
             fs,
             ambiguous_for: 0,
             over_close_for: 0,
+            warm: 0,
         }
     }
 
@@ -113,9 +135,14 @@ impl NoiseGate {
     /// burst is itself an audible click, which is the very thing being removed.
     pub fn process(&mut self, voice: &mut [f32], noise: &[f32]) {
         let mut passed = 0.0f32;
+        let warm_need = (WARMUP_S * self.fs).max(1.0) as usize;
         for (i, v) in voice.iter_mut().enumerate() {
             let level = self.smooth.process(noise.get(i).copied().unwrap_or(0.0));
-            if self.open {
+            if self.warm < warm_need {
+                // Track the level, decide nothing yet.
+                self.warm += 1;
+                self.open = false;
+            } else if self.open {
                 // A weak carrier partially quiets the band, so its level
                 // hovers just OVER the close line rather than clearly below
                 // it as a strong carrier does. One sample over used to slam
@@ -127,18 +154,17 @@ impl NoiseGate {
                 // full static) closes immediately as always.
                 if level > self.close_level {
                     let over = (level / self.close_level.max(1e-6)).max(1.0);
-                    if over >= 4.0 {
+                    if over >= DEEP_STATIC_OVER {
                         self.open = false;
                         self.ambiguous_for = 0;
                         self.over_close_for = 0;
                     } else {
                         self.over_close_for += 1;
-                        // 1× → 0.2 s to close; 3× → 0.05 s (CLOSE_DELAY_S
-                        // 0.40 scaled by the `clamp(0.25, 2.0) / 2.0` factor
-                        // below: 1× → 0.5, 3× → 0.125). The old comment said
-                        // "1× → CLOSE_DELAY_S", which was off by 2× — the /2
-                        // has always been part of the constant's meaning.
-                        let seconds = CLOSE_DELAY_S * (2.0 - (over - 1.0)).clamp(0.25, 2.0) / 2.0;
+                        // 1× (a weak carrier hovering at the line) waits
+                        // the full CLOSE_DELAY_S; the wait shrinks linearly
+                        // to an eighth of it just under DEEP_STATIC_OVER.
+                        let depth = ((over - 1.0) / (DEEP_STATIC_OVER - 1.0)).clamp(0.0, 1.0);
+                        let seconds = CLOSE_DELAY_S * (1.0 - 0.875 * depth);
                         if self.over_close_for >= (seconds * self.fs).max(1.0) as usize {
                             self.open = false;
                             self.ambiguous_for = 0;
@@ -184,6 +210,7 @@ impl NoiseGate {
         self.last_duty = 0.0;
         self.ambiguous_for = 0;
         self.over_close_for = 0;
+        self.warm = 0;
     }
 }
 
@@ -254,6 +281,45 @@ mod tests {
             without > DEFAULT_CLOSE,
             "carrier-less noise ({without:.5}) must exceed the close threshold {DEFAULT_CLOSE}"
         );
+    }
+
+    /// The regression that muted NFM: on the shared 48 kS/s chain the noise
+    /// band ran from 4 kHz to Nyquist (24 kHz), and a strong carrier with a
+    /// realistic 20 dB of noise under it filled that band (FM noise rises
+    /// with frequency) to 0.35 — above the close threshold, so the gate never
+    /// opened. The band now stops at NOISE_BAND_TOP_HZ at any sample rate.
+    #[test]
+    fn a_noisy_carrier_still_opens_the_gate_at_the_chain_rate() {
+        const FS48: f32 = 48_000.0;
+        let n = 48_000;
+        let mut phase = 0.0f32;
+        let carrier: Vec<Complex32> = (0..n)
+            .map(|i| {
+                phase += TAU * NARROW_DEVIATION_HZ * (TAU * 1000.0 * i as f32 / FS48).sin() / FS48;
+                Complex32::new(phase.cos(), phase.sin())
+            })
+            .collect();
+        // Complex noise 20 dB below the carrier across the whole 48 kHz.
+        let noise = noise_iq(n, 5);
+        let noise_rms = rms(&noise.iter().map(|c| c.norm()).collect::<Vec<_>>());
+        let scale = 0.1 / noise_rms;
+        let iq: Vec<Complex32> = carrier.iter().zip(&noise).map(|(c, w)| c + w * scale).collect();
+        let mut d = NbfmDemod::new(FS48 as f64);
+        let mut out = Demodulated::default();
+        d.process(&iq, &mut out);
+        let band = mean(&out.noise[8192..]);
+        assert!(
+            band < DEFAULT_OPEN,
+            "a 20 dB carrier at 48 kS/s reads {band:.4} in the noise band; the gate would stay shut"
+        );
+        let mut voice = out.voice.clone();
+        let mut gate = NoiseGate::new(FS48 as f64);
+        gate.process(&mut voice, &out.noise);
+        assert!(gate.is_open() && gate.duty() > 0.5, "gate duty {:.2}", gate.duty());
+        // And carrier-less noise at that rate still closes it.
+        let mut out2 = Demodulated::default();
+        NbfmDemod::new(FS48 as f64).process(&noise_iq(n, 9), &mut out2);
+        assert!(mean(&out2.noise[8192..]) > DEFAULT_CLOSE);
     }
 
     /// The behaviour the user actually asked for: static between transmissions
@@ -333,13 +399,20 @@ mod tests {
     #[test]
     fn a_weak_carrier_in_the_hysteresis_gap_reopens() {
         let mut gate = NoiseGate::new(FS as f64);
-        // A steady mid-gap envelope: below close_level (0.045), above
-        // open_level (0.020). Voice content is irrelevant; what is under
+        // A steady mid-gap envelope: below close_level (0.28), above
+        // open_level (0.18). Voice content is irrelevant; what is under
         // test is the gate's own state machine.
-        let voice = vec![1.0f32; 3 * FS as usize]; // 3 s
-        let noise = vec![0.03f32; voice.len()];
+        // Two seconds for the ambiguity timer (1.5 s) to resolve, then a
+        // third second that must pass essentially whole. (This used to run
+        // as one 3 s block and pass on the smoother's zero start opening the
+        // gate at sample 0 — the warm-up now rules that out.)
+        let voice = vec![1.0f32; 2 * FS as usize];
+        let noise = vec![0.23f32; voice.len()];
         let mut gated = voice.clone();
         gate.process(&mut gated, &noise);
+        assert!(gate.is_open(), "ambiguity timer did not open the gate");
+        let mut third = vec![1.0f32; FS as usize];
+        gate.process(&mut third, &noise[..FS as usize]);
         assert!(
             gate.duty() > 0.9,
             "gate stayed latched shut on a mid-gap band (duty {})",
@@ -347,7 +420,7 @@ mod tests {
         );
         // And pure noise — which rides above close_level — still holds it shut.
         let mut gate2 = NoiseGate::new(FS as f64);
-        let loud_noise = vec![0.20f32; FS as usize];
+        let loud_noise = vec![0.90f32; FS as usize];
         let mut quiet_voice = vec![1.0f32; FS as usize];
         gate2.process(&mut quiet_voice, &loud_noise);
         assert!(gate2.duty() < 0.05, "gate opened on full-scale noise");
@@ -372,11 +445,11 @@ mod tests {
         let mut audio = vec![0.3f32; strong.len()];
         gate.process(&mut audio, &strong);
         assert!(gate.is_open());
-        // Signal fades to marginal: band sits at ~1.2× close_level —
+        // Signal fades to marginal: band sits at ~1.1× close_level —
         // hovering territory. Hold it through alternating hover /
         // dip-below-line segments (speech-like) for many seconds.
         for _ in 0..20 {
-            let hover = vec![DEFAULT_CLOSE * 1.2; FS as usize / 4];
+            let hover = vec![DEFAULT_CLOSE * 1.1; FS as usize / 4];
             let mut a = vec![0.3f32; hover.len()];
             gate.process(&mut a, &hover);
             let dip = vec![DEFAULT_CLOSE * 0.5; FS as usize / 20];

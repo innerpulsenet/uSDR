@@ -146,7 +146,10 @@ all on one LCD-style screen.
   follow the mode's real channel width.
 - **Listening.** Demodulated audio is streamed to the browser as raw PCM over
   the same WebSocket and played through Web Audio. Press LISTEN to start it —
-  browsers only allow audio to begin inside a user gesture.
+  browsers only allow audio to begin inside a user gesture. Analog audio is
+  gated on FM quieting, measured in a 4–8 kHz band of the discriminator
+  output: a carrier of about 9 dB or better opens the gate at once, a weaker
+  one after 1.5 s, and an empty channel is silent rather than static.
 - **Front-end correction** on the raw span before anything measures or
   demodulates it: DC offset removal, LO leakage suppression, and IQ image
   correction. See [Front end](#front-end) for what this is worth measured, and
@@ -366,6 +369,14 @@ manual gain left the ADC at 0.06 of full scale — four effective bits, and
 weak pages gone — while tuner AGC put the peak at 0.2 with the floor 10 dB
 higher and the pages back. On a strong band it overloads, which the
 `ADC CLIPPING` warning shows; it is the operator's call per band.
+
+With a pre-amplifier ahead of the dongle the right manual gain is low but
+not zero. Measured on 151–155 MHz here: at 0 dB the ADC peak was 0.1 of
+full scale and the strongest carriers read 10 dB over the floor; at 8 dB the
+peak was 0.5 and the same band read 22 dB, because at 0 dB the converter's
+own quantisation was setting the floor; at 16 dB it clipped. The guarded loop
+finds that point on its own — it walks down out of clipping and only climbs
+while the peak is under half of full scale — and settles at 8.7 dB there.
 
 **Clip guard (off by default)** is the same loop under a hand-set gain: it
 never exceeds the gain you chose, and walks down under it when the ADC clips.

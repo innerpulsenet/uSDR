@@ -5018,17 +5018,16 @@ function setupControls() {
     const b = $('btnCalibrate');
     b.textContent = 'measuring';
     try {
-      const r = await fetch('/api/sdr/calibrate', { method:'POST',
-        headers:{'Content-Type':'application/json'}, body:'{}' });
-      const j = await r.json();
-      if (!r.ok) { $('err').textContent = 'calibrate: ' + (j.error || await r.text()); }
-      else {
-        $('ppmInput').value = j.ppm.toFixed(1);
-        $('err').textContent = `calibrated to ${j.ppm.toFixed(1)} ppm from ` +
-          `${(j.referenceHz/1e6).toFixed(5)} MHz (${Math.round(j.measuredErrorHz)} Hz error)`;
-      }
+      // A refused calibration ("no signal to calibrate against…") comes
+      // back as plain text, not JSON; parsing it as JSON first turned the
+      // server's reason into a SyntaxError on screen. sdrPost reads the
+      // body as text and surfaces the reason itself.
+      const j = await (await sdrPost('/api/sdr/calibrate', {}, 'calibrate')).json();
+      $('ppmInput').value = j.ppm.toFixed(1);
+      $('err').textContent = `calibrated to ${j.ppm.toFixed(1)} ppm from ` +
+        `${(j.referenceHz/1e6).toFixed(5)} MHz (${Math.round(j.measuredErrorHz)} Hz error)`;
     } catch (e) {
-      $('err').textContent = 'calibrate: ' + e;
+      $('err').textContent = 'calibrate: ' + e.message;
     } finally { b.textContent = 'calibrate'; }
   });
 

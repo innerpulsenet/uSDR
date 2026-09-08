@@ -288,11 +288,19 @@ impl ClipGuard {
         const LOW_NEED: u8 = 8;
         const FAST_NEED: u8 = 2;
         const FAST_PEAK: f64 = 0.25;
+        /// No climbing at all above this peak: the next table step is up
+        /// to 4 dB, and from a peak of 0.65 that lands on full scale. The
+        /// loop used to hunt 8.7 → 12.5 → 14.4 (clip) → 8.7 every 16 s.
+        const CLIMB_PEAK_MAX: f64 = 0.5;
         const DOWN_DB: f64 = 2.0;
         const UP_DB: f64 = 1.0;
         const FAST_UP_DB: f64 = 3.0;
 
-        if clipped_fraction > CLIP_HIGH {
+        // A peak at full scale is clipping whatever the fraction says: a
+        // spectrum instrument cares about the intermod one strong burst
+        // makes, and at 0.1% of samples the loop sat clipping at 19.7 dB
+        // on a busy VHF band for half a minute.
+        if clipped_fraction > CLIP_HIGH || peak >= 0.98 {
             self.high = self.high.saturating_add(1);
             self.low = 0;
             if self.high >= HIGH_NEED {
@@ -303,7 +311,10 @@ impl ClipGuard {
                     return Some(self.current);
                 }
             }
-        } else if clipped_fraction < CLIP_LOW && self.current < self.ceiling - 0.05 {
+        } else if clipped_fraction < CLIP_LOW
+            && peak < CLIMB_PEAK_MAX
+            && self.current < self.ceiling - 0.05
+        {
             self.low = self.low.saturating_add(1);
             self.high = 0;
             let (need, step) = if peak < FAST_PEAK { (FAST_NEED, FAST_UP_DB) } else { (LOW_NEED, UP_DB) };
@@ -1237,16 +1248,16 @@ mod tests {
     #[test]
     fn clip_guard_backs_off_then_restores_toward_the_ceiling() {
         let mut g = ClipGuard::new(30.0, 0.0, 49.6, &[]);
-        assert!(g.on_stats(0.0, 0.5).is_none());
+        assert!(g.on_stats(0.0, 0.4).is_none());
         assert_eq!(g.on_stats(0.01, 1.0), None, "one hot second is not enough");
         assert_eq!(g.on_stats(0.01, 1.0), Some(28.0));
         // Eight clean seconds creep 1 dB back toward 30.
         for _ in 0..7 {
-            assert!(g.on_stats(0.0, 0.5).is_none());
+            assert!(g.on_stats(0.0, 0.4).is_none());
         }
-        assert_eq!(g.on_stats(0.0, 0.5), Some(29.0));
+        assert_eq!(g.on_stats(0.0, 0.4), Some(29.0));
         for _ in 0..8 {
-            g.on_stats(0.0, 0.5);
+            g.on_stats(0.0, 0.4);
         }
         assert_eq!(g.current, 30.0, "must not exceed the configured ceiling");
     }
@@ -1257,7 +1268,7 @@ mod tests {
     fn clip_guard_never_exceeds_a_new_lower_ceiling() {
         let mut g = ClipGuard::new(20.0, 0.0, 49.6, &[]);
         for _ in 0..20 {
-            assert!(g.on_stats(0.0, 0.5).is_none());
+            assert!(g.on_stats(0.0, 0.4).is_none());
         }
         assert_eq!(g.current, 20.0);
     }
@@ -1271,7 +1282,7 @@ mod tests {
         let mut g = ClipGuard::auto(start, 0.0, 49.6, R82XX_GAINS_DB);
         let mut steps = 0;
         for _ in 0..400 {
-            if g.on_stats(0.0, 0.5).is_some() {
+            if g.on_stats(0.0, 0.4).is_some() {
                 steps += 1;
             }
         }
@@ -1286,6 +1297,12 @@ mod tests {
         }
         assert!(secs <= 22, "quiet band took {secs} s to reach full gain");
         assert!(g.on_stats(0.01, 1.0).is_none());
+        // Sitting at 0.65 of full scale is not clipping, but it is no room
+        // to climb either: the loop must hold, not hunt.
+        let mut h = ClipGuard::auto(8.7, 0.0, 49.6, R82XX_GAINS_DB);
+        for _ in 0..40 {
+            assert!(h.on_stats(0.0, 0.65).is_none(), "climbed from 8.7 with the peak at 0.65");
+        }
         // Down 2 dB from 49.6 is 47.6, which the tuner cannot do: the next
         // table entry at or below it is 44.5.
         assert_eq!(g.on_stats(0.01, 1.0), Some(44.5));

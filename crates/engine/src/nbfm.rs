@@ -40,6 +40,17 @@ pub const DEEMPHASIS_TAU: f32 = 750e-6;
 /// region hard; its absence fills it with full-scale discriminator noise, which
 /// makes it a far faster and more reliable carrier detector than RF power.
 pub const NOISE_CORNER_HZ: f32 = 4000.0;
+/// Where the noise-detection band stops.
+///
+/// The band used to run from the corner to Nyquist, which was 4–8 kHz when
+/// the monitor path ran at 16 kS/s — the band the gate's thresholds were
+/// measured against. On the shared 48 kS/s channel chain the same high-pass
+/// reached 24 kHz, and a strong, fully quieted carrier still carries enough
+/// FM noise up there (FM noise rises with frequency, and the channel filter
+/// lets it through to its corner) to read as static: 0.35 against a close
+/// threshold of 0.045, so NFM audio was muted for good. Bounding the band
+/// makes the reference independent of the rate it is measured at.
+pub const NOISE_BAND_TOP_HZ: f32 = 8000.0;
 
 /// Where voice starts, and where CTCSS is required to have stopped.
 pub const VOICE_CORNER_HZ: f32 = 300.0;
@@ -55,6 +66,7 @@ pub struct NbfmDemod {
     voice_lp: Cascade,
     sub_lp: Cascade,
     noise_hp: Cascade,
+    noise_lp: Cascade,
     noise_env: OnePole,
 }
 
@@ -109,6 +121,7 @@ impl NbfmDemod {
             voice_lp: Cascade::lowpass(VOICE_LOWPASS_HZ, fs32, 2),
             sub_lp: Cascade::lowpass(SUBAUDIBLE_CORNER_HZ, fs32, 2),
             noise_hp: Cascade::highpass(NOISE_CORNER_HZ, fs32, 2),
+            noise_lp: Cascade::lowpass(NOISE_BAND_TOP_HZ.min(fs32 * 0.45), fs32, 2),
             // ~3 ms: fast enough to catch a dropout inside a syllable, slow
             // enough not to chatter on the noise's own peaks.
             noise_env: OnePole::new(0.003 * fs32),
@@ -134,8 +147,10 @@ impl NbfmDemod {
             };
             sum += f64::from(raw);
             out.raw.push(raw);
-            out.noise
-                .push(self.noise_env.process(self.noise_hp.process(raw).abs()));
+            out.noise.push(
+                self.noise_env
+                    .process(self.noise_lp.process(self.noise_hp.process(raw)).abs()),
+            );
             out.subaudible.push(self.sub_lp.process(raw));
             out.voice.push(
                 self.voice_lp
@@ -169,6 +184,7 @@ impl NbfmDemod {
         self.voice_lp.reset();
         self.sub_lp.reset();
         self.noise_hp.reset();
+        self.noise_lp.reset();
     }
 }
 
