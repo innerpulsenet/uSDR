@@ -358,6 +358,15 @@ had while the display claimed the new one. The radio layer now watches the
 driver's own stderr for those faults, retries a write that did not take,
 and reports one that keeps failing so the receiver reopens itself.
 
+**Tuner AGC (off by default)**, in the Advanced drawer, hands automatic
+gain to the R820T's own AGC instead of the guarded loop. It is the only way
+to the tuner's VGA stage: librtlsdr fixes the VGA at 16.3 dB under manual
+gain and at 26.5 dB under its AGC. Measured on the 929 MHz paging band, full
+manual gain left the ADC at 0.06 of full scale — four effective bits, and
+weak pages gone — while tuner AGC put the peak at 0.2 with the floor 10 dB
+higher and the pages back. On a strong band it overloads, which the
+`ADC CLIPPING` warning shows; it is the operator's call per band.
+
 **Clip guard (off by default)** is the same loop under a hand-set gain: it
 never exceeds the gain you chose, and walks down under it when the ADC clips.
 It is off by default because a gain set by hand should stay where it was

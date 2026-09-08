@@ -90,6 +90,9 @@ struct Settings {
     /// Off by default: a gain set by hand should stay where it was put.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     clip_guard: Option<bool>,
+    /// Automatic gain via the tuner's own AGC rather than the guarded loop.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    tuner_agc: Option<bool>,
     /// Voice-scan configuration (range, modes, threshold), applied when the
     /// mode is `scan`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -216,6 +219,7 @@ async fn main() -> Result<()> {
         mode: settings.mode.unwrap_or_default(),
         lo_offset: settings.lo_offset.unwrap_or(false),
         clip_guard: settings.clip_guard.unwrap_or(false),
+        tuner_agc: settings.tuner_agc.unwrap_or(false),
         scan: settings.scan.clone(),
     };
 
@@ -519,6 +523,7 @@ async fn post_sdr_scan_control(
 struct SdrFrontendReq {
     lo_offset: Option<bool>,
     clip_guard: Option<bool>,
+    tuner_agc: Option<bool>,
 }
 
 async fn post_sdr_frontend(
@@ -531,12 +536,18 @@ async fn post_sdr_frontend(
     if let Some(on) = req.clip_guard {
         st.update_settings(|s| s.clip_guard = Some(on));
     }
+    if let Some(on) = req.tuner_agc {
+        st.update_settings(|s| s.tuner_agc = Some(on));
+    }
     if let Some(sdr) = st.sdr.lock().expect("sdr").as_ref() {
         if let Some(on) = req.lo_offset {
             sdr.set_lo_offset(on)?;
         }
         if let Some(on) = req.clip_guard {
             sdr.set_clip_guard(on)?;
+        }
+        if let Some(on) = req.tuner_agc {
+            sdr.set_tuner_agc(on)?;
         }
     }
     Ok(Json(serde_json::json!({ "ok": true })))

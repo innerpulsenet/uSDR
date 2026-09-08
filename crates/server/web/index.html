@@ -1666,6 +1666,7 @@
       <div class="ctl">
         <span class="cb"><input type="checkbox" id="chkLoOffset"> LO offset</span>
         <span class="cb"><input type="checkbox" id="chkClipGuard"> clip guard</span>
+        <span class="cb" title="With AGC on: use the R820T's own AGC instead of the clip-guarded loop. It is the only path to the tuner's VGA stage (26.5 dB instead of the 16.3 dB fixed under manual gain), so a quiet UHF band drives the ADC properly and weak signals show; on a strong band it overloads — watch for ADC CLIPPING."><input type="checkbox" id="chkTunerAgc"> tuner AGC (VGA)</span>
       </div>
       <div class="ctl">
         <label for="ppmInput">ppm</label>
@@ -5033,6 +5034,7 @@ function setupControls() {
 
   $('chkLoOffset').addEventListener('change', (e) => setFrontend({ lo_offset: e.target.checked }));
   $('chkClipGuard').addEventListener('change', (e) => setFrontend({ clip_guard: e.target.checked }));
+  $('chkTunerAgc').addEventListener('change', (e) => setFrontend({ tuner_agc: e.target.checked }));
 
   $('btnListen').addEventListener('click', () => audioOn ? stopAudio() : startAudio());
   $('volRange').addEventListener('input', (e) => {
@@ -5902,6 +5904,7 @@ function updateSdrStatus(s) {
       : (Math.abs(s.freq_error_hz) > 2000 ? 'var(--amber)' : '');
   }
   if ($('chkClipGuard')) $('chkClipGuard').checked = !!s.clip_guard;
+  if ($('chkTunerAgc')) $('chkTunerAgc').checked = !!s.tuner_agc;
   // The pager sweep announces itself in the classifier details line: which
   // channel the dwell is on beats a static "sweeping…" string when pages
   // seem to come from the wrong frequency.
@@ -5932,7 +5935,7 @@ function updateSdrStatus(s) {
     $('sdrGainRange').disabled = s.gain_db == null;
     if (s.gain_db != null) $('sdrGainRange').value = s.gain_db;
     $('sdrGainVal').textContent = s.gain_db == null
-      ? (s.gain_now_db != null ? `auto · ${Number(s.gain_now_db).toFixed(0)} dB` : 'auto')
+      ? (s.tuner_agc ? 'tuner AGC' : (s.gain_now_db != null ? `auto · ${Number(s.gain_now_db).toFixed(0)} dB` : 'auto'))
       : s.gain_db + ' dB';
     syncGainUi();
   }

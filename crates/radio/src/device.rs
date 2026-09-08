@@ -74,6 +74,9 @@ pub enum Event {
 pub enum Cmd {
     Tune(f64),
     Gain(f64),
+    /// With automatic gain selected, hand the tuner its own AGC instead of
+    /// the guarded loop. See the handler for why anyone would.
+    TunerAgc(bool),
     Rfgr(f64),
     Ifgr(f64),
     Agc(bool),
@@ -482,7 +485,7 @@ pub fn open(cfg: &DeviceConfig) -> Result<Device> {
             // clipping and back up, a decibel at a time, when the band is
             // quiet.
             if caps.hardware_agc {
-                let _ = dev.set_gain_mode(Rx, 0, false);
+                let _ = set_gain_mode_checked(&dev, false);
             }
             if let GainControl::Overall { min, max } = caps.gain {
                 let start = auto_gain_start(min, max);
@@ -630,6 +633,7 @@ fn run(
     // under a hand-set gain and never exceeds it. Exactly one of the two,
     // or neither, is live in `clip_guard`.
     let mut guard_wanted = false;
+    let mut tuner_agc = false;
     let mut clip_guard = if agc_enabled {
         match caps.gain {
             GainControl::Overall { min, max } => {
@@ -658,7 +662,8 @@ fn run(
                     false
                 }
                 Ok(Cmd::Gain(g)) => {
-                    let ok = apply_overall_gain(&dev, &caps, &mut agc_enabled, g, &log_tx);
+                    let mut leave_hw_agc = agc_enabled || tuner_agc;
+                    let ok = apply_overall_gain(&dev, &caps, &mut leave_hw_agc, g, &log_tx);
                     if ok {
                         agc_enabled = false;
                         let applied = match caps.gain {
@@ -680,6 +685,46 @@ fn run(
                 Ok(Cmd::Ifgr(g)) => {
                     set_and_log(&log_tx, "IFGR", dev.set_gain_element(Rx, 0, "IFGR", g))
                 }
+                Ok(Cmd::TunerAgc(on)) => {
+                    // The R820T's own AGC is the only way to the VGA stage:
+                    // librtlsdr fixes the VGA at 16.3 dB under manual gain
+                    // and at 26.5 dB under its AGC, with LNA and mixer on
+                    // the tuner's detector. At full manual gain a quiet UHF
+                    // band drove the ADC to 0.06 of full scale — four
+                    // effective bits — and weak pages that the tuner AGC had
+                    // shown were gone. It overloads on a strong band, which
+                    // the ADC CLIPPING warning shows; the operator chooses.
+                    tuner_agc = on;
+                    if !agc_enabled {
+                        false
+                    } else if on {
+                        let ok = caps.hardware_agc && set_gain_mode_checked(&dev, true);
+                        if ok {
+                            clip_guard = None;
+                            let _ = log_tx.try_send("tuner AGC on: LNA, mixer and VGA under the tuner's own control".into());
+                        } else {
+                            let _ = log_tx.try_send("tuner AGC unavailable on this device".into());
+                        }
+                        ok
+                    } else {
+                        // Back to the guarded loop from its start gain.
+                        match caps.gain {
+                            GainControl::Overall { min, max } => {
+                                let start = auto_gain_start(min, max);
+                                let mut hw = caps.hardware_agc;
+                                let ok = apply_overall_gain(&dev, &caps, &mut hw, start, &log_tx);
+                                if ok {
+                                    clip_guard = Some(ClipGuard::auto(start, min, max, gain_steps(&caps)));
+                                    let _ = log_tx.try_send(format!(
+                                        "auto gain (clip-guarded) starting at {start:.1} dB"
+                                    ));
+                                }
+                                ok
+                            }
+                            GainControl::Sdrplay { .. } => false,
+                        }
+                    }
+                }
                 Ok(Cmd::ClipGuard(on)) => {
                     guard_wanted = on;
                     // Auto gain keeps its own guard whatever the checkbox says.
@@ -697,7 +742,15 @@ fn run(
                 Ok(Cmd::Agc(on)) => {
                     // See open(): automatic gain is the guarded loop on manual
                     // gain. The tuner's own AGC is never switched on.
-                    if on {
+                    if on && tuner_agc && caps.hardware_agc {
+                        let ok = set_gain_mode_checked(&dev, true);
+                        if ok {
+                            agc_enabled = true;
+                            clip_guard = None;
+                            let _ = log_tx.try_send("tuner AGC on: LNA, mixer and VGA under the tuner's own control".into());
+                        }
+                        ok
+                    } else if on {
                         match caps.gain {
                             GainControl::Overall { min, max } => {
                                 let start = auto_gain_start(min, max);
@@ -902,12 +955,8 @@ fn apply_overall_gain(
     log: &SyncSender<String>,
 ) -> bool {
     if caps.hardware_agc && *agc_enabled {
-        for _ in 0..3 {
-            if dev.set_gain_mode(Rx, 0, false).is_ok() {
-                *agc_enabled = false;
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(10));
+        if set_gain_mode_checked(dev, false) {
+            *agc_enabled = false;
         }
         std::thread::sleep(std::time::Duration::from_millis(15));
     }
@@ -942,6 +991,21 @@ fn auto_gain_start(min: f64, max: f64) -> f64 {
 /// Set the tuner gain, retrying a write the driver reported as taken but
 /// the stderr watcher saw fail. The driver reports success whether or not
 /// the I2C write took; the watcher is what says it did.
+/// Switch the tuner's own AGC on or off, retried like every other tuner
+/// write: the mode change is an I2C write to the same registers and stalls
+/// the same way, and the driver reports it as taken regardless.
+fn set_gain_mode_checked(dev: &soapysdr::Device, automatic: bool) -> bool {
+    for attempt in 0..GAIN_ATTEMPTS {
+        if crate::driver_log::checked(|| dev.set_gain_mode(Rx, 0, automatic).is_ok()) {
+            return true;
+        }
+        if attempt + 1 < GAIN_ATTEMPTS {
+            std::thread::sleep(GAIN_RETRY_DELAY * (attempt + 1));
+        }
+    }
+    false
+}
+
 fn set_gain_checked(dev: &soapysdr::Device, g: f64) -> bool {
     for attempt in 0..GAIN_ATTEMPTS {
         if crate::driver_log::checked(|| dev.set_gain(Rx, 0, g).is_ok()) {

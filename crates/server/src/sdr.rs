@@ -352,6 +352,10 @@ pub struct SdrCfg {
     pub lo_offset: bool,
     #[serde(default)]
     pub clip_guard: bool,
+    /// With automatic gain: the tuner's own AGC (VGA included) rather than
+    /// the clip-guarded loop.
+    #[serde(default)]
+    pub tuner_agc: bool,
     /// Voice-scan configuration, applied when the mode is `scan`.
     #[serde(default)]
     pub scan: Option<crate::scan::ScanCfg>,
@@ -369,6 +373,7 @@ impl Default for SdrCfg {
             mode: SdrMode::default(),
             lo_offset: false,
             clip_guard: false,
+            tuner_agc: false,
             scan: None,
         }
     }
@@ -426,6 +431,9 @@ pub struct SdrStatus {
     /// Whether the automatic clip guard is allowed to move the gain.
     #[serde(default)]
     pub clip_guard: bool,
+    /// Automatic gain uses the tuner's own AGC instead of the guarded loop.
+    #[serde(default)]
+    pub tuner_agc: bool,
     /// Display magnification. 1.0 shows the whole usable span.
     #[serde(default)]
     pub zoom: f64,
@@ -895,6 +903,7 @@ enum SdrCmd {
     Mode(SdrMode),
     LoOffset(bool),
     ClipGuard(bool),
+    TunerAgc(bool),
     /// Offsets from the display centre, in Hz, that a spur check identified as
     /// generated inside the receiver.
     Spurs(Vec<f64>),
@@ -1007,6 +1016,12 @@ impl SdrRuntime {
         self.cmd_tx
             .send(SdrCmd::ClipGuard(on))
             .map_err(|e| anyhow::anyhow!("send clip guard: {e}"))
+    }
+
+    pub fn set_tuner_agc(&self, on: bool) -> Result<()> {
+        self.cmd_tx
+            .send(SdrCmd::TunerAgc(on))
+            .map_err(|e| anyhow::anyhow!("send tuner agc: {e}"))
     }
 
     pub fn switch_device(&self, serial: String) -> Result<()> {
@@ -2531,6 +2546,7 @@ fn run_sdr(
     let mut tuned_freq;
     let mut lo_offset = cfg.lo_offset;
     let mut clip_guard_on = cfg.clip_guard;
+    let mut tuner_agc_on = cfg.tuner_agc;
     let mut inspect_hz = current_freq;
 
     // Keep trying rather than dying on the spot. The dongle is routinely busy
@@ -2602,6 +2618,7 @@ fn run_sdr(
             lo_offset,
             lo_offset_hz: lo_offset_for(current_rate, lo_offset, current_mode),
             clip_guard: clip_guard_on,
+            tuner_agc: tuner_agc_on,
             zoom: current_zoom,
             bandwidth_hz: f64::from(current_mode.bandwidth_hz()),
             spurs_hz: Vec::new(),
@@ -2614,6 +2631,7 @@ fn run_sdr(
     }
 
     let _ = dev.cmd.send(Cmd::ClipGuard(clip_guard_on));
+    let _ = dev.cmd.send(Cmd::TunerAgc(tuner_agc_on));
     tuned_freq = current_freq;
     let rx = dev.iq.subscribe_with_depth(32);
     let mut dev_opt = Some(dev);
@@ -3175,6 +3193,15 @@ fn run_sdr(
                     s.clip_guard = on;
                     let _ = events.send(SdrEvent::Status(s.clone()));
                 }
+                SdrCmd::TunerAgc(on) => {
+                    tuner_agc_on = on;
+                    if let Some(ref dev) = dev_opt {
+                        let _ = dev.cmd.send(Cmd::TunerAgc(on));
+                    }
+                    let mut s = status.lock().unwrap();
+                    s.tuner_agc = on;
+                    let _ = events.send(SdrEvent::Status(s.clone()));
+                }
                 SdrCmd::LoOffset(on) => {
                     if on != lo_offset {
                         lo_offset = on;
@@ -3346,6 +3373,7 @@ fn run_sdr(
         ) {
                 Ok((new_dev, s_serial, s_tuner)) => {
                     let _ = new_dev.cmd.send(Cmd::ClipGuard(clip_guard_on));
+                    let _ = new_dev.cmd.send(Cmd::TunerAgc(tuner_agc_on));
                     // open() tunes as it goes, so the reopened device is
                     // genuinely where it was asked to be.
                     tuned_freq = current_freq;
