@@ -29,6 +29,7 @@ const PAGE = path.join(__dirname, '..', 'index.html');
 // ---------------------------------------------------------------------------
 function makeEl(id) {
   const classes = new Set();
+  const listeners = new Map();
   let _inner = '';
   const el = {
     id,
@@ -57,15 +58,32 @@ function makeEl(id) {
       },
       _classes: classes,
     },
-    addEventListener() {},
-    removeEventListener() {},
+    _listeners: listeners,
+    addEventListener(evt, fn) {
+      if (!listeners.has(evt)) listeners.set(evt, []);
+      listeners.get(evt).push(fn);
+    },
+    removeEventListener(evt, fn) {
+      const list = listeners.get(evt);
+      if (list) {
+        const idx = list.indexOf(fn);
+        if (idx !== -1) list.splice(idx, 1);
+      }
+    },
     appendChild(c) { el.children.push(c); c.parentElement = el; return c; },
     querySelector() { return null; },
     querySelectorAll() { return []; },
     getContext() { return ctx2d(); },
     getBoundingClientRect() { return { width: 800, height: 400, left: 0, top: 0 }; },
     setAttribute() {}, getAttribute() { return null; },
-    focus() {}, blur() {}, click() {}, scrollIntoView() {},
+    focus() {}, blur() {},
+    click() {
+      const list = listeners.get('click');
+      if (list) {
+        for (const fn of list) fn({ target: el, currentTarget: el, preventDefault() {}, stopPropagation() {} });
+      }
+    },
+    scrollIntoView() {},
     width: 800, height: 400, scrollTop: 0, scrollHeight: 0, clientHeight: 400,
   };
   return el;
@@ -637,5 +655,69 @@ test('Quick Memory matrix and DSP controls exist and handle events', () => {
   assert.ok(run(ctx, `document.getElementById('btnDspNotch') !== null`), 'btnDspNotch must exist');
   assert.ok(run(ctx, `document.getElementById('btnDspNr') !== null`), 'btnDspNr must exist');
   assert.ok(run(ctx, `document.getElementById('btnDspSql') !== null`), 'btnDspSql must exist');
+});
+
+test('NFM, AM, Packet, and Pager support passband and demod scope toggles', () => {
+  const ctx = buildContext();
+  run(ctx, `
+    scopeWaveCtx = document.getElementById('scopeWaveCanvas').getContext('2d');
+    scopeSpecCtx = document.getElementById('scopeSpecCanvas').getContext('2d');
+  `);
+
+  // 1. NFM
+  run(ctx, `
+    sdrMode = 'nfm';
+    sdrBandwidthHz = 12500;
+    setScopeChrome('audio');
+    drawAudioScope([], 8000);
+  `);
+  assert.strictEqual(run(ctx, `document.getElementById('scopeTitle').textContent`), 'NFM PASSBAND SPECTRUM');
+  assert.strictEqual(run(ctx, `document.getElementById('scopeModeTag').textContent`), 'PASSBAND (12.5k) ⇄ AUDIO');
+  // Toggle NFM to audio
+  run(ctx, `document.getElementById('scopeModeTag').click(); drawAudioScope([], 8000);`);
+  assert.strictEqual(run(ctx, `document.getElementById('scopeTitle').textContent`), 'NFM AUDIO SCOPE');
+  assert.strictEqual(run(ctx, `document.getElementById('scopeModeTag').textContent`), 'AUDIO (4.0kHz) ⇄ PASSBAND');
+
+  // 2. AM
+  run(ctx, `
+    sdrMode = 'am';
+    sdrBandwidthHz = 6000;
+    setScopeChrome('audio');
+    drawAudioScope([], 12000);
+  `);
+  assert.strictEqual(run(ctx, `document.getElementById('scopeTitle').textContent`), 'AM PASSBAND SPECTRUM');
+  assert.strictEqual(run(ctx, `document.getElementById('scopeModeTag').textContent`), 'PASSBAND (6.0k) ⇄ AUDIO');
+  // Toggle AM to audio
+  run(ctx, `document.getElementById('scopeModeTag').click(); drawAudioScope([], 12000);`);
+  assert.strictEqual(run(ctx, `document.getElementById('scopeTitle').textContent`), 'AM AUDIO SCOPE');
+  assert.strictEqual(run(ctx, `document.getElementById('scopeModeTag').textContent`), 'AUDIO (6.0k) ⇄ PASSBAND');
+
+  // 3. PACKET
+  run(ctx, `
+    sdrMode = 'packet';
+    sdrBandwidthHz = 25000;
+    setScopeChrome('audio');
+    drawAudioScope([], 8000);
+  `);
+  assert.strictEqual(run(ctx, `document.getElementById('scopeTitle').textContent`), 'AFSK AUDIO SCOPE');
+  assert.strictEqual(run(ctx, `document.getElementById('scopeModeTag').textContent`), 'AFSK (4.0kHz) ⇄ PASSBAND');
+  // Toggle Packet to passband
+  run(ctx, `document.getElementById('scopeModeTag').click(); drawAudioScope([], 8000);`);
+  assert.strictEqual(run(ctx, `document.getElementById('scopeTitle').textContent`), 'PACKET PASSBAND SPECTRUM');
+  assert.strictEqual(run(ctx, `document.getElementById('scopeModeTag').textContent`), 'PASSBAND (25k) ⇄ AFSK');
+
+  // 4. PAGER
+  run(ctx, `
+    sdrMode = 'pager';
+    sdrBandwidthHz = 12500;
+    setScopeChrome('audio');
+    drawAudioScope([], 48000);
+  `);
+  assert.strictEqual(run(ctx, `document.getElementById('scopeTitle').textContent`), 'PAGER DISCRIMINATOR');
+  assert.strictEqual(run(ctx, `document.getElementById('scopeModeTag').textContent`), '4FSK DISC ⇄ PASSBAND');
+  // Toggle Pager to passband
+  run(ctx, `document.getElementById('scopeModeTag').click(); drawAudioScope([], 48000);`);
+  assert.strictEqual(run(ctx, `document.getElementById('scopeTitle').textContent`), 'PAGER PASSBAND SPECTRUM');
+  assert.strictEqual(run(ctx, `document.getElementById('scopeModeTag').textContent`), 'PASSBAND (12.5k) ⇄ DISC');
 });
 

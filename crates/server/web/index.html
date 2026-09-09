@@ -1551,6 +1551,11 @@
   .scope-mode-tag.active {
     color: var(--green); border-color: #176036; background: #062312;
     box-shadow: 0 0 6px var(--green-glow);
+    cursor: pointer; user-select: none;
+    transition: background 0.15s, border-color 0.15s, color 0.15s;
+  }
+  .scope-mode-tag.active:hover {
+    color: #85ffb5; border-color: #2bff6a; background: #0a351b;
   }
 
   .scope-panes {
@@ -4732,11 +4737,23 @@ function setupRadioDeck() {
   });
   $('scopeModeTag')?.addEventListener('click', () => {
     if (sdrMode === 'wfm') {
-      scopeWfmMode = (scopeWfmMode === 'passband') ? 'mpx' : 'passband';
-      scopeAxisRate = 0;
-      setScopeChrome(scopeKind);
-      if (sdrLastPwr.length) drawSdrSpectrum(sdrLastPwr);
+      scopeWfmMode = (scopeWfmMode === 'passband' || scopeSubModes.wfm === 'passband') ? 'mpx' : 'passband';
+      scopeSubModes.wfm = scopeWfmMode;
+    } else if (sdrMode === 'nfm') {
+      scopeSubModes.nfm = (scopeSubModes.nfm === 'passband') ? 'audio' : 'passband';
+    } else if (sdrMode === 'am') {
+      scopeSubModes.am = (scopeSubModes.am === 'passband') ? 'audio' : 'passband';
+    } else if (sdrMode === 'packet') {
+      scopeSubModes.packet = (scopeSubModes.packet === 'passband') ? 'audio' : 'passband';
+    } else if (sdrMode === 'pager') {
+      scopeSubModes.pager = (scopeSubModes.pager === 'passband') ? 'disc' : 'passband';
+    } else {
+      return;
     }
+    scopeAxisRate = 0;
+    setScopeChrome(scopeKind);
+    drawAudioScope(scopeLastSamples, scopeLastRateHz);
+    if (sdrLastPwr && sdrLastPwr.length) drawSdrSpectrum(sdrLastPwr);
   });
 
   updateQmemUi();
@@ -5343,6 +5360,17 @@ function drawSdrSpectrum(pwr) {
     ctx.stroke();
     ctx.setLineDash([]);
   }
+
+  const isPb = (
+    (sdrMode === 'wfm' && scopeWfmMode !== 'mpx') ||
+    (sdrMode === 'nfm' && scopeSubModes.nfm === 'passband') ||
+    (sdrMode === 'am' && scopeSubModes.am === 'passband') ||
+    (sdrMode === 'packet' && scopeSubModes.packet === 'passband') ||
+    (sdrMode === 'pager' && scopeSubModes.pager === 'passband')
+  );
+  if (isPb) {
+    drawAudioScope(scopeLastSamples, scopeLastRateHz);
+  }
 }
 
 /// Wipe the waterfall.
@@ -5587,7 +5615,16 @@ let scopeAxisRate = 0;
 let scopeKind = 'audio';
 let scopeSymbolRate = 0;
 let scopeLastKind = null;
-let scopeWfmMode = 'passband'; // 'passband' (200 kHz channel filter passband) or 'mpx' (64 kHz multiplex)
+let scopeLastSamples = [];
+let scopeLastRateHz = 8000;
+const scopeSubModes = {
+  wfm: 'passband',
+  nfm: 'passband',
+  am: 'passband',
+  packet: 'audio',
+  pager: 'disc',
+};
+let scopeWfmMode = 'passband'; // compatibility with tests/external refs
 
 /// Titles change with the instrument, so a pane is never labelled as something
 /// it is not showing.
@@ -5600,6 +5637,16 @@ function setScopeChrome(kind) {
   let modeText = 'DIGITAL PHOSPHOR';
   let trigText = 'AUTO ZERO-CROSS';
 
+  let bw = sdrBandwidthHz;
+  if (!bw) {
+    if (sdrMode === 'wfm') bw = 200000;
+    else if (sdrMode === 'am') bw = 6000;
+    else if (sdrMode === 'packet') bw = 25000;
+    else bw = 12500;
+  }
+  const bwKhz = (bw < 20000 || bw % 1000 !== 0) ? (bw / 1000).toFixed(bw < 10000 ? 1 : (bw % 1000 !== 0 ? 1 : 0)) : (bw / 1000).toFixed(0);
+  const halfBwKhz = (bw / 2000).toFixed(bw < 20000 ? 1 : (bw % 2000 !== 0 ? 1 : 0));
+
   if (sdrMode === 'flex') {
     titleText = 'FLEX 4-FSK / 2-FSK SCOPE';
     modeText = (scopeSymbolRate === 3200 ? '3200 Bd · 4FSK' : '1600 Bd · 2/4FSK') + ' EYE';
@@ -5609,27 +5656,52 @@ function setScopeChrome(kind) {
     modeText = '4FSK / C4FM EYE DIAGRAM';
     trigText = 'SYMBOL CLK LOCK';
   } else if (kind === 'mpx' || sdrMode === 'wfm') {
-    if (scopeWfmMode === 'passband') {
-      titleText = 'WFM PASSBAND SPECTRUM';
-      modeText = 'PASSBAND (200kHz) ⇄ MPX';
-      trigText = '±100kHz IF BW';
-    } else {
+    if (scopeWfmMode === 'mpx' || scopeSubModes.wfm === 'mpx') {
       titleText = 'FM MULTIPLEX SCOPE';
       modeText = 'MPX (64kHz) ⇄ PASSBAND';
       trigText = '19kHz PILOT';
+    } else {
+      titleText = 'WFM PASSBAND SPECTRUM';
+      modeText = 'PASSBAND (200kHz) ⇄ MPX';
+      trigText = '±100kHz IF BW';
     }
-  } else if (sdrMode === 'pager') {
-    titleText = 'PAGER DISCRIMINATOR';
-    modeText = '4FSK DISCRIMINATOR';
-    trigText = '±4.8kHz LEVELS';
-  } else if (sdrMode === 'am') {
-    titleText = 'AM AUDIO SCOPE';
-    modeText = 'AUDIO (6.0kHz)';
-    trigText = 'AUTO ZERO-CROSS';
   } else if (sdrMode === 'nfm') {
-    titleText = 'NFM AUDIO SCOPE';
-    modeText = 'AUDIO (4.0kHz)';
+    if (scopeSubModes.nfm === 'passband') {
+      titleText = 'NFM PASSBAND SPECTRUM';
+      modeText = `PASSBAND (${bwKhz}k) ⇄ AUDIO`;
+    } else {
+      titleText = 'NFM AUDIO SCOPE';
+      modeText = 'AUDIO (4.0kHz) ⇄ PASSBAND';
+    }
     trigText = 'AUTO ZERO-CROSS';
+  } else if (sdrMode === 'am') {
+    if (scopeSubModes.am === 'passband') {
+      titleText = 'AM PASSBAND SPECTRUM';
+      modeText = `PASSBAND (${bwKhz}k) ⇄ AUDIO`;
+    } else {
+      titleText = 'AM AUDIO SCOPE';
+      modeText = `AUDIO (${bwKhz}k) ⇄ PASSBAND`;
+    }
+    trigText = 'AUTO ZERO-CROSS';
+  } else if (sdrMode === 'packet') {
+    if (scopeSubModes.packet === 'passband') {
+      titleText = 'PACKET PASSBAND SPECTRUM';
+      modeText = `PASSBAND (${bwKhz}k) ⇄ AFSK`;
+    } else {
+      titleText = 'AFSK AUDIO SCOPE';
+      modeText = 'AFSK (4.0kHz) ⇄ PASSBAND';
+    }
+    trigText = 'AUTO ZERO-CROSS';
+  } else if (sdrMode === 'pager') {
+    if (scopeSubModes.pager === 'passband') {
+      titleText = 'PAGER PASSBAND SPECTRUM';
+      modeText = `PASSBAND (${bwKhz}k) ⇄ DISC`;
+      trigText = `±${halfBwKhz}kHz IF BW`;
+    } else {
+      titleText = 'PAGER DISCRIMINATOR';
+      modeText = '4FSK DISC ⇄ PASSBAND';
+      trigText = '±4.8kHz LEVELS';
+    }
   }
 
   if (title && title.textContent !== titleText) title.textContent = titleText;
@@ -5644,6 +5716,8 @@ function setScopeChrome(kind) {
 }
 
 function drawScope(scope, rateHz, kind, symbolRate) {
+  scopeLastSamples = scope || [];
+  if (rateHz) scopeLastRateHz = rateHz;
   scopeKind = kind || 'audio';
   scopeSymbolRate = symbolRate || 0;
   setScopeChrome(scopeKind);
@@ -6026,8 +6100,26 @@ function drawAudioScope(scope, rateHz) {
   if (!scopeWaveCtx || !scopeSpecCtx) return;
   const samples = scope && scope.length ? scope : [];
 
-  const isPassband = (sdrMode === 'wfm' && scopeWfmMode === 'passband');
-  const bw = sdrBandwidthHz || 200000;
+  if (sdrMode === 'wfm') {
+    if (scopeWfmMode === 'mpx' || scopeSubModes.wfm === 'mpx') {
+      scopeWfmMode = 'mpx';
+      scopeSubModes.wfm = 'mpx';
+    }
+  }
+  const isPassband = (
+    (sdrMode === 'wfm' && scopeWfmMode !== 'mpx') ||
+    (sdrMode === 'nfm' && scopeSubModes.nfm === 'passband') ||
+    (sdrMode === 'am' && scopeSubModes.am === 'passband') ||
+    (sdrMode === 'packet' && scopeSubModes.packet === 'passband') ||
+    (sdrMode === 'pager' && scopeSubModes.pager === 'passband')
+  );
+  let bw = sdrBandwidthHz;
+  if (!bw) {
+    if (sdrMode === 'wfm') bw = 200000;
+    else if (sdrMode === 'am') bw = 6000;
+    else if (sdrMode === 'packet') bw = 25000;
+    else bw = 12500;
+  }
 
   let maxDisplayHz = rateHz ? (rateHz / 2) : 4000;
   if (sdrMode === 'wfm') {
@@ -6036,9 +6128,14 @@ function drawAudioScope(scope, rateHz) {
     maxDisplayHz = rateHz ? (rateHz / 2) : 6000;
   } else if (sdrMode === 'nfm') {
     maxDisplayHz = rateHz ? (rateHz / 2) : 4000;
+  } else if (sdrMode === 'packet') {
+    maxDisplayHz = rateHz ? (rateHz / 2) : 4000;
+  } else if (sdrMode === 'pager') {
+    maxDisplayHz = rateHz ? (rateHz / 2) : 24000;
   }
 
-  const axisKey = isPassband ? `passband_${bw}` : `${rateHz}_${maxDisplayHz}_${sdrMode}_${scopeWfmMode}`;
+  const subMode = scopeSubModes[sdrMode] || (sdrMode === 'wfm' ? scopeWfmMode : 'default');
+  const axisKey = isPassband ? `passband_${sdrMode}_${bw}` : `${rateHz}_${maxDisplayHz}_${sdrMode}_${subMode}`;
   if (axisKey !== scopeAxisRate) {
     scopeAxisRate = axisKey;
     const ax = $('scopeAxis');
@@ -6378,7 +6475,7 @@ function drawAudioScope(scope, rateHz) {
 
     // Subcarrier markers
     const top = maxDisplayHz;
-    const marks = (scopeKind === 'mpx' && scopeWfmMode === 'mpx')
+    const marks = (scopeKind === 'mpx' && (scopeWfmMode === 'mpx' || scopeSubModes.wfm === 'mpx'))
       ? [[19000, 'PILOT'], [38000, 'STEREO'], [57000, 'RDS']]
       : (sdrMode === 'packet' ? [[1200, 'MARK'], [2200, 'SPACE']]
       : (sdrMode === 'pager' ? [[1600, '+1'], [4800, '+3'], [-4800, '-3'], [-1600, '-1']]
