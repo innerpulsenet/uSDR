@@ -596,21 +596,22 @@ test('Realistic DOM environment with strict element checking boots without error
   });
 });
 
-test('WFM scope defaults to 15 kHz audio passband and toggles to MPX mode', () => {
+test('WFM scope defaults to 200 kHz passband and toggles to MPX mode', () => {
   const ctx = buildContext();
   run(ctx, `
     scopeWaveCtx = document.getElementById('scopeWaveCanvas').getContext('2d');
     scopeSpecCtx = document.getElementById('scopeSpecCanvas').getContext('2d');
     sdrMode = 'wfm';
-    scopeWfmMode = 'audio';
+    scopeWfmMode = 'passband';
+    sdrBandwidthHz = 200000;
     setScopeChrome('mpx');
     drawAudioScope([], 128000);
   `);
-  assert.strictEqual(run(ctx, `document.getElementById('scopeTitle').textContent`), 'WFM BROADCAST AUDIO');
-  assert.strictEqual(run(ctx, `document.getElementById('scopeModeTag').textContent`), 'AUDIO (15kHz) ⇄ MPX');
-  assert.strictEqual(run(ctx, `document.getElementById('scopeTrigTag').textContent`), '15kHz AUDIO LPF');
-  const axAudio = run(ctx, `document.getElementById('scopeAxis').textContent`);
-  assert.ok(axAudio.includes('15kHz'), `axis should display 15kHz in audio mode, got ${axAudio}`);
+  assert.strictEqual(run(ctx, `document.getElementById('scopeTitle').textContent`), 'WFM PASSBAND SPECTRUM');
+  assert.strictEqual(run(ctx, `document.getElementById('scopeModeTag').textContent`), 'PASSBAND (200kHz) ⇄ MPX');
+  assert.strictEqual(run(ctx, `document.getElementById('scopeTrigTag').textContent`), '±100kHz IF BW');
+  const axPb = run(ctx, `document.getElementById('scopeAxis').textContent`);
+  assert.ok(axPb.includes('100kHz') && axPb.includes('0 (CTR)'), `axis should display passband centered on 0 (CTR), got ${axPb}`);
 
   // Toggle to MPX
   run(ctx, `
@@ -619,7 +620,7 @@ test('WFM scope defaults to 15 kHz audio passband and toggles to MPX mode', () =
     drawAudioScope([], 128000);
   `);
   assert.strictEqual(run(ctx, `document.getElementById('scopeTitle').textContent`), 'FM MULTIPLEX SCOPE');
-  assert.strictEqual(run(ctx, `document.getElementById('scopeModeTag').textContent`), 'MPX (64kHz) ⇄ AUDIO');
+  assert.strictEqual(run(ctx, `document.getElementById('scopeModeTag').textContent`), 'MPX (64kHz) ⇄ PASSBAND');
   const axMpx = run(ctx, `document.getElementById('scopeAxis').textContent`);
   assert.ok(axMpx.includes('64kHz'), `axis should display 64kHz in mpx mode, got ${axMpx}`);
 });

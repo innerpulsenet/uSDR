@@ -4732,7 +4732,7 @@ function setupRadioDeck() {
   });
   $('scopeModeTag')?.addEventListener('click', () => {
     if (sdrMode === 'wfm') {
-      scopeWfmMode = (scopeWfmMode === 'audio') ? 'mpx' : 'audio';
+      scopeWfmMode = (scopeWfmMode === 'passband') ? 'mpx' : 'passband';
       scopeAxisRate = 0;
       setScopeChrome(scopeKind);
       if (sdrLastPwr.length) drawSdrSpectrum(sdrLastPwr);
@@ -5587,7 +5587,7 @@ let scopeAxisRate = 0;
 let scopeKind = 'audio';
 let scopeSymbolRate = 0;
 let scopeLastKind = null;
-let scopeWfmMode = 'audio'; // 'audio' (15 kHz broadcast audio filter passband) or 'mpx' (64 kHz multiplex)
+let scopeWfmMode = 'passband'; // 'passband' (200 kHz channel filter passband) or 'mpx' (64 kHz multiplex)
 
 /// Titles change with the instrument, so a pane is never labelled as something
 /// it is not showing.
@@ -5609,13 +5609,13 @@ function setScopeChrome(kind) {
     modeText = '4FSK / C4FM EYE DIAGRAM';
     trigText = 'SYMBOL CLK LOCK';
   } else if (kind === 'mpx' || sdrMode === 'wfm') {
-    if (scopeWfmMode === 'audio') {
-      titleText = 'WFM BROADCAST AUDIO';
-      modeText = 'AUDIO (15kHz) ⇄ MPX';
-      trigText = '15kHz AUDIO LPF';
+    if (scopeWfmMode === 'passband') {
+      titleText = 'WFM PASSBAND SPECTRUM';
+      modeText = 'PASSBAND (200kHz) ⇄ MPX';
+      trigText = '±100kHz IF BW';
     } else {
       titleText = 'FM MULTIPLEX SCOPE';
-      modeText = 'MPX (64kHz) ⇄ AUDIO';
+      modeText = 'MPX (64kHz) ⇄ PASSBAND';
       trigText = '19kHz PILOT';
     }
   } else if (sdrMode === 'pager') {
@@ -6026,27 +6026,37 @@ function drawAudioScope(scope, rateHz) {
   if (!scopeWaveCtx || !scopeSpecCtx) return;
   const samples = scope && scope.length ? scope : [];
 
+  const isPassband = (sdrMode === 'wfm' && scopeWfmMode === 'passband');
+  const bw = sdrBandwidthHz || 200000;
+
   let maxDisplayHz = rateHz ? (rateHz / 2) : 4000;
   if (sdrMode === 'wfm') {
-    maxDisplayHz = (scopeWfmMode === 'audio') ? 15000 : (rateHz ? rateHz / 2 : 64000);
+    maxDisplayHz = (rateHz ? rateHz / 2 : 64000);
   } else if (sdrMode === 'am') {
     maxDisplayHz = rateHz ? (rateHz / 2) : 6000;
   } else if (sdrMode === 'nfm') {
     maxDisplayHz = rateHz ? (rateHz / 2) : 4000;
   }
 
-  const axisKey = `${rateHz}_${maxDisplayHz}_${sdrMode}_${scopeWfmMode}`;
+  const axisKey = isPassband ? `passband_${bw}` : `${rateHz}_${maxDisplayHz}_${sdrMode}_${scopeWfmMode}`;
   if (axisKey !== scopeAxisRate) {
     scopeAxisRate = axisKey;
     const ax = $('scopeAxis');
     if (ax) {
-      const topKhz = maxDisplayHz / 1000;
-      ax.innerHTML = [0, 0.25, 0.5, 0.75, 1].map(function (f, i) {
-        const v = topKhz * f;
-        const t = i === 4 ? v.toFixed(v < 10 ? 1 : 0) + 'kHz'
-                          : (v === 0 ? '0' : v.toFixed(v < 10 ? 1 : 0));
-        return '<span>' + t + '</span>';
-      }).join('');
+      if (isPassband) {
+        const halfKhz = bw / 2000;
+        const k1 = halfKhz.toFixed(halfKhz < 10 ? 1 : 0);
+        const k05 = (halfKhz / 2).toFixed((halfKhz / 2) < 10 ? 1 : 0);
+        ax.innerHTML = `<span>-${k1}k</span><span>-${k05}k</span><span>0 (CTR)</span><span>+${k05}k</span><span>+${k1}kHz</span>`;
+      } else {
+        const topKhz = maxDisplayHz / 1000;
+        ax.innerHTML = [0, 0.25, 0.5, 0.75, 1].map(function (f, i) {
+          const v = topKhz * f;
+          const t = i === 4 ? v.toFixed(v < 10 ? 1 : 0) + 'kHz'
+                            : (v === 0 ? '0' : v.toFixed(v < 10 ? 1 : 0));
+          return '<span>' + t + '</span>';
+        }).join('');
+      }
     }
   }
 
@@ -6195,7 +6205,115 @@ function drawAudioScope(scope, rateHz) {
   for (let i = 1; i < 3; i++) { const y = Math.round(specH * i / 3) + 0.5; sc.moveTo(0, y); sc.lineTo(SW, y); }
   sc.stroke();
 
-  if (samples.length >= SCOPE_N) {
+  if (isPassband && sdrLastPwr && sdrLastPwr.length >= 16) {
+    const n = sdrLastPwr.length;
+    const loHz = sdrCenterHz - sdrRateHz / 2;
+    const halfBw = bw / 2;
+    const pbLo = sdrInspectHz - halfBw;
+    const pbHi = sdrInspectHz + halfBw;
+    const binLo = Math.max(0, Math.min(n - 1, Math.round(((pbLo - loHz) / sdrRateHz) * (n - 1))));
+    const binHi = Math.max(0, Math.min(n - 1, Math.round(((pbHi - loHz) / sdrRateHz) * (n - 1))));
+    const sliceLen = Math.max(1, binHi - binLo + 1);
+    const pwrSrc = (sdrSmoothPwr && sdrSmoothPwr.length === n) ? sdrSmoothPwr : sdrLastPwr;
+
+    const N_PTS = Math.max(256, Math.min(SW, 512));
+    const pts = new Float32Array(N_PTS);
+    for (let i = 0; i < N_PTS; i++) {
+      const t = (i / (N_PTS - 1)) * (sliceLen - 1);
+      const i0 = Math.floor(t);
+      const i1 = Math.min(sliceLen - 1, i0 + 1);
+      const frac = t - i0;
+      const sf = 0.5 - 0.5 * Math.cos(Math.PI * frac);
+      pts[i] = pwrSrc[binLo + i0] * (1 - sf) + pwrSrc[binLo + i1] * sf;
+    }
+
+    const FLOOR = sdrMinDb, CEIL = sdrMaxDb;
+    const dbRange = (CEIL - FLOOR) || 1;
+
+    // Carrier center mark
+    sc.strokeStyle = 'rgba(43, 255, 106, 0.45)';
+    sc.setLineDash([3, 3]);
+    sc.beginPath();
+    sc.moveTo(Math.round(SW / 2) + 0.5, 0);
+    sc.lineTo(Math.round(SW / 2) + 0.5, specH);
+    sc.stroke();
+    sc.setLineDash([]);
+
+    // Area fill
+    sc.beginPath();
+    sc.moveTo(0, specH);
+    for (let i = 0; i < N_PTS; i++) {
+      const db = Math.max(FLOOR, Math.min(CEIL, pts[i]));
+      const x = (i / (N_PTS - 1)) * SW;
+      const y = specH - ((db - FLOOR) / dbRange) * specH;
+      sc.lineTo(x, y);
+    }
+    sc.lineTo(SW, specH);
+    sc.closePath();
+
+    if (!window.scopeSpecGradient || window.scopeSpecGradH !== specH) {
+      const g = sc.createLinearGradient(0, 0, 0, specH);
+      g.addColorStop(0, 'rgba(56, 189, 248, 0.65)');
+      g.addColorStop(0.5, 'rgba(14, 116, 144, 0.35)');
+      g.addColorStop(1, 'rgba(8, 47, 73, 0.08)');
+      window.scopeSpecGradient = g;
+      window.scopeSpecGradH = specH;
+    }
+    sc.fillStyle = window.scopeSpecGradient;
+    sc.fill();
+
+    // Dual stroke phosphor trace
+    sc.strokeStyle = 'rgba(56, 189, 248, 0.35)';
+    sc.lineWidth = 2.8;
+    sc.beginPath();
+    for (let i = 0; i < N_PTS; i++) {
+      const db = Math.max(FLOOR, Math.min(CEIL, pts[i]));
+      const x = (i / (N_PTS - 1)) * SW;
+      const y = specH - ((db - FLOOR) / dbRange) * specH;
+      i ? sc.lineTo(x, y) : sc.moveTo(x, y);
+    }
+    sc.stroke();
+
+    sc.strokeStyle = '#dcf4ff';
+    sc.lineWidth = 1.1;
+    sc.beginPath();
+    for (let i = 0; i < N_PTS; i++) {
+      const db = Math.max(FLOOR, Math.min(CEIL, pts[i]));
+      const x = (i / (N_PTS - 1)) * SW;
+      const y = specH - ((db - FLOOR) / dbRange) * specH;
+      i ? sc.lineTo(x, y) : sc.moveTo(x, y);
+    }
+    sc.stroke();
+
+    // High-resolution waterfall line (SW pixels wide)
+    if (scopeWfCanvas.width !== SW || scopeWfCanvas.height !== 1) {
+      scopeWfCanvas.width = SW;
+      scopeWfCanvas.height = 1;
+    }
+    const img = scopeWfCtx.createImageData(SW, 1);
+    const lut = sdrColorLut || buildSdrLut(sdrPalette);
+    for (let i = 0; i < SW; i++) {
+      const t = (i / (SW - 1)) * (N_PTS - 1);
+      const i0 = Math.floor(t);
+      const i1 = Math.min(N_PTS - 1, i0 + 1);
+      const frac = t - i0;
+      const val = pts[i0] * (1 - frac) + pts[i1] * frac;
+      const db = Math.max(FLOOR, Math.min(CEIL, val));
+      const norm = (db - FLOOR) / dbRange;
+      const li = Math.min(255, Math.max(0, Math.floor(norm * 255))) * 4;
+      const pi = i * 4;
+      img.data[pi] = lut[li];
+      img.data[pi + 1] = lut[li + 1];
+      img.data[pi + 2] = lut[li + 2];
+      img.data[pi + 3] = 255;
+    }
+    scopeWfCtx.putImageData(img, 0, 0);
+
+    if (SW > 0 && wfH > 1) {
+      sc.drawImage(scopeSpecCanvas, 0, specH, SW, wfH - 1, 0, specH + 1, SW, wfH - 1);
+      sc.drawImage(scopeWfCanvas, 0, 0, SW, 1, 0, specH, SW, 1);
+    }
+  } else if (samples.length >= SCOPE_N) {
     const off = samples.length - SCOPE_N;
     for (let i = 0; i < SCOPE_N; i++) {
       const w = 0.5 - 0.5 * Math.cos((2 * Math.PI * i) / (SCOPE_N - 1));
@@ -6280,16 +6398,22 @@ function drawAudioScope(scope, rateHz) {
       sc.fillText(label, Math.min(x + 2, SW - 32), 8);
     }
 
-    // Mini audio waterfall strip
-    if (scopeWfCanvas.width !== displayBins || scopeWfCanvas.height !== 1) {
-      scopeWfCanvas.width = displayBins; scopeWfCanvas.height = 1;
+    // Mini audio waterfall strip (smoothly interpolated to SW width - no chunky blocks!)
+    if (scopeWfCanvas.width !== SW || scopeWfCanvas.height !== 1) {
+      scopeWfCanvas.width = SW; scopeWfCanvas.height = 1;
     }
-    const img = scopeWfCtx.createImageData(displayBins, 1);
+    const img = scopeWfCtx.createImageData(SW, 1);
     const lut = sdrColorLut || buildSdrLut(sdrPalette);
-    for (let i = 0; i < displayBins; i++) {
-      const db = Math.max(FLOOR, Math.min(CEIL, dbFor(scopeMag[i])));
+    for (let i = 0; i < SW; i++) {
+      const t = (displayBins > 1) ? (i / (SW - 1)) * (displayBins - 1) : 0;
+      const i0 = Math.floor(t);
+      const i1 = Math.min(displayBins - 1, i0 + 1);
+      const frac = t - i0;
+      const m0 = scopeMag[i0], m1 = scopeMag[i1];
+      const m = m0 * (1 - frac) + m1 * frac;
+      const db = Math.max(FLOOR, Math.min(CEIL, dbFor(m)));
       const norm = (db - FLOOR) / (CEIL - FLOOR);
-      const li = Math.min(255, Math.floor(norm * 255)) * 4;
+      const li = Math.min(255, Math.max(0, Math.floor(norm * 255))) * 4;
       const pi = i * 4;
       img.data[pi] = lut[li]; img.data[pi + 1] = lut[li + 1]; img.data[pi + 2] = lut[li + 2]; img.data[pi + 3] = 255;
     }
@@ -6297,8 +6421,7 @@ function drawAudioScope(scope, rateHz) {
 
     if (SW > 0 && wfH > 1) {
       sc.drawImage(scopeSpecCanvas, 0, specH, SW, wfH - 1, 0, specH + 1, SW, wfH - 1);
-      sc.imageSmoothingEnabled = false;
-      sc.drawImage(scopeWfCanvas, 0, 0, displayBins, 1, 0, specH, SW, 1);
+      sc.drawImage(scopeWfCanvas, 0, 0, SW, 1, 0, specH, SW, 1);
     }
   }
 }
