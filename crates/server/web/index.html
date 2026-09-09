@@ -132,48 +132,53 @@
   .chassis-screw.bottom-left { bottom: -5px; left: 26px; }
   .chassis-screw.bottom-right { bottom: -5px; right: 26px; }
 
-  /* ---------- Brand plate: model badge, engraved legends ---------- */
+  /* ---------- Brand plate: model badge, engraved legends ----------
+     One line, sized by the model badge: the telemetry strip that used to sit
+     here now lives on the chassis nameplate under the instruments, so the
+     header no longer pads itself out around a taller centre element. */
   .rig-brand {
     display: flex; align-items: center; justify-content: space-between;
-    flex-wrap: wrap; row-gap: 6px;
-    gap: 14px; padding: 4px 6px 8px;
-    min-height: 46px;
+    flex-wrap: wrap; row-gap: 4px;
+    gap: 14px; padding: 1px 6px 5px;
+    min-height: 32px;
     border-bottom: 1px solid var(--panel-split);
     box-shadow: 0 1px 0 rgba(255,255,255,0.045);
-    margin-bottom: 8px;
-  }
-  /* Below ~1120 px the engraved telemetry strip is the first thing to go: the
-     model badge and the status cluster are the information that matters. */
-  @media (max-width: 1120px) {
-    .brand-center-telemetry { display: none; }
+    margin-bottom: 7px;
   }
   .brand-crest {
     display: flex; align-items: center; justify-content: center;
     opacity: 0.9;
   }
   .brand-title {
-    display: flex; flex-direction: column; gap: 4px;
+    display: flex; flex-direction: column; gap: 3px;
   }
   .rig-brand .mark {
-    font: 800 18px/1 var(--sans); letter-spacing: 0.16em; color: var(--ink-1);
+    font: 800 15px/1 var(--sans); letter-spacing: 0.14em; color: var(--ink-1);
     text-shadow: 0 1px 0 #000;
   }
   .rig-brand .sub {
-    font: 700 8.5px/1 var(--mono); letter-spacing: 0.2em; color: var(--ink-2); text-transform: uppercase;
+    font: 700 8px/1 var(--mono); letter-spacing: 0.18em; color: var(--ink-2); text-transform: uppercase;
     text-shadow: 0 1px 0 #000;
   }
-  .brand-center-telemetry {
-    display: flex; align-items: center; justify-content: center;
-    flex: 1; max-width: 520px; margin: 0 12px;
-  }
-  /* Engraved function strip: a top/bottom rule, not a web pill. */
+  /* Engraved function strip. */
   .brand-chassis-bezel {
-    display: flex; align-items: center; gap: 8px;
-    padding: 4px 14px;
-    border-top: 1px solid rgba(255,255,255,0.05);
-    border-bottom: 1px solid var(--panel-split);
+    display: flex; align-items: center; flex-wrap: wrap; row-gap: 4px;
+    gap: 7px;
+    padding: 0;
     font: 700 8.5px/1 var(--mono); letter-spacing: 0.1em;
     text-shadow: 0 1px 0 #000;
+  }
+  /* Chassis nameplate in the instrument column: a flat sub-assembly holding
+     the model's silkscreen telemetry. It stretches to fill the column so the
+     panel has no empty pocket beside the panadapter. */
+  .bay-plate {
+    display: flex; flex-direction: column; justify-content: center;
+    flex: 1 1 auto;
+    background: var(--panel-face);
+    border: 1px solid var(--panel-split);
+    border-radius: var(--radius-assembly);
+    padding: 9px 9px 10px;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.05), 0 1px 0 rgba(0,0,0,0.5);
   }
   .brand-led-pip {
     width: 6px; height: 6px; border-radius: 50%;
@@ -258,7 +263,7 @@
     display: grid;
     grid-template-columns: 220px minmax(0, 1fr) 300px;
     gap: 8px;
-    align-items: start;
+    align-items: stretch;
     margin-bottom: 8px;
   }
   /* Control column: AF/RF front end over the selected-channel readout. */
@@ -1501,7 +1506,7 @@
     <div class="rig-brand">
       <div style="display:flex; align-items:center; gap:10px;">
         <div class="brand-crest" aria-hidden="true">
-          <svg width="24" height="24" viewBox="0 0 26 26">
+          <svg width="20" height="20" viewBox="0 0 26 26">
             <circle cx="13" cy="13" r="11" fill="#09121a" stroke="#1f364a" stroke-width="1.5"/>
             <path d="M5 13 Q9 6 13 13 T21 13" fill="none" stroke="#38bdf8" stroke-width="1.8" stroke-linecap="round"/>
             <circle cx="13" cy="13" r="2.2" fill="#2bff6a"/>
@@ -1510,22 +1515,6 @@
         <div class="brand-title">
           <span class="mark">uSDR-1000</span>
           <span class="sub">HF / VHF / UHF · ALL-MODE SDR RECEIVER</span>
-        </div>
-      </div>
-      <div class="brand-center-telemetry" aria-hidden="true">
-        <div class="brand-chassis-bezel">
-          <span class="brand-led-pip on"></span>
-          <span class="brand-metric-label">TUNER</span>
-          <span class="brand-metric-val" id="headerTunerBadge">R820T</span>
-          <span class="brand-divider">/</span>
-          <span class="brand-metric-label">RATE</span>
-          <span class="brand-metric-val" id="headerRateBadge">2.40M</span>
-          <span class="brand-divider">/</span>
-          <span class="brand-metric-label">IF</span>
-          <span class="brand-metric-val">ZERO-IF</span>
-          <span class="brand-divider">/</span>
-          <span class="brand-metric-label">DSP</span>
-          <span class="brand-metric-val" style="color:#2bff6a">ONLINE</span>
         </div>
       </div>
       <div class="brand-status-cluster">
@@ -2234,6 +2223,26 @@
                 <circle cx="80" cy="80" r="4.5" fill="#04070a"/>
               </svg>
               <div class="vfo-step-status-pill" id="jogStepBadge">6.25 kHz · FLYWHEEL</div>
+            </div>
+          </div>
+
+          <!-- Chassis nameplate: the tuner/rate/IF/DSP legend a real rig
+               silkscreens on the case. It lives under the instruments rather
+               than in the header, where it only made the top strip taller. -->
+          <div class="bay-plate" aria-hidden="true">
+            <div class="brand-chassis-bezel">
+              <span class="brand-led-pip on"></span>
+              <span class="brand-metric-label">TUNER</span>
+              <span class="brand-metric-val" id="headerTunerBadge">R820T</span>
+              <span class="brand-divider">/</span>
+              <span class="brand-metric-label">RATE</span>
+              <span class="brand-metric-val" id="headerRateBadge">2.40M</span>
+              <span class="brand-divider">/</span>
+              <span class="brand-metric-label">IF</span>
+              <span class="brand-metric-val">ZERO-IF</span>
+              <span class="brand-divider">/</span>
+              <span class="brand-metric-label">DSP</span>
+              <span class="brand-metric-val" style="color:#2bff6a">ONLINE</span>
             </div>
           </div>
         </div>

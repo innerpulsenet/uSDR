@@ -221,6 +221,7 @@ for (const vp of viewports) {
       header: '.rig-brand',
       frontend: '.bay-frontend',
       meter: '.bay-meter',
+      rightcol: '.panel-right',
       vfo: '.vfo-container',
       modekeys: '.mode-keypad',
       bandkeys: '.band-matrix',
