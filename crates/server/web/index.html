@@ -72,21 +72,11 @@
     --radius-key: 2px;
     --radius-well: 3px;
 
-    /* Brushed-metal keycaps. Fine horizontal mill marks over a turned
-       aluminium ramp — the same material on every faceplate key. */
-    --key-metal:
-      repeating-linear-gradient(180deg, rgba(210,222,235,0.18) 0px, rgba(210,222,235,0.04) 1px, rgba(6,10,16,0.24) 1px, rgba(6,10,16,0.06) 2px),
-      linear-gradient(180deg, #6a7b8e 0%, #3e4c5c 42%, #252e3a 100%);
-    --key-metal-hover:
-      repeating-linear-gradient(180deg, rgba(220,232,245,0.24) 0px, rgba(220,232,245,0.06) 1px, rgba(6,10,16,0.18) 1px, rgba(6,10,16,0.04) 2px),
-      linear-gradient(180deg, #7a8b9e 0%, #4a596a 42%, #2c3642 100%);
-    --key-metal-on:
-      repeating-linear-gradient(180deg, rgba(160,190,215,0.10) 0px, rgba(160,190,215,0.02) 1px, rgba(0,0,0,0.32) 1px, rgba(0,0,0,0.12) 2px),
-      linear-gradient(180deg, #2a3848 0%, #141c24 100%);
-    --key-metal-edge:
-      inset 0 1px 0 rgba(255,255,255,0.36),
-      inset 0 -1px 0 rgba(0,0,0,0.58),
-      0 1px 2px rgba(0,0,0,0.72);
+    /* SVG keycaps: chamfered bezel, mill-mark pattern, specular. */
+    --key-metal: url("data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%20120%2032'%20preserveAspectRatio='none'%3E%20%3Cdefs%3E%20%3ClinearGradient%20id='b'%20x1='0'%20y1='0'%20x2='0'%20y2='1'%3E%20%3Cstop%20offset='0'%20stop-color='%23d7e3ef'/%3E%20%3Cstop%20offset='.07'%20stop-color='%239aafc2'/%3E%20%3Cstop%20offset='.16'%20stop-color='%23536274'/%3E%20%3Cstop%20offset='.88'%20stop-color='%231b232d'/%3E%20%3Cstop%20offset='1'%20stop-color='%23070b10'/%3E%20%3C/linearGradient%3E%20%3ClinearGradient%20id='f'%20x1='0'%20y1='0'%20x2='0'%20y2='1'%3E%20%3Cstop%20offset='0'%20stop-color='%23748697'/%3E%20%3Cstop%20offset='.28'%20stop-color='%23445262'/%3E%20%3Cstop%20offset='.62'%20stop-color='%232c3642'/%3E%20%3Cstop%20offset='1'%20stop-color='%23141b23'/%3E%20%3C/linearGradient%3E%20%3ClinearGradient%20id='s'%20x1='0'%20y1='0'%20x2='1'%20y2='.35'%3E%20%3Cstop%20offset='0'%20stop-color='%23fff'%20stop-opacity='.28'/%3E%20%3Cstop%20offset='.4'%20stop-color='%23fff'%20stop-opacity='.04'/%3E%20%3Cstop%20offset='1'%20stop-color='%23000'%20stop-opacity='.18'/%3E%20%3C/linearGradient%3E%20%3Cpattern%20id='m'%20width='120'%20height='2.2'%20patternUnits='userSpaceOnUse'%3E%20%3Crect%20width='120'%20height='1.05'%20fill='%23fff'%20opacity='.13'/%3E%20%3Crect%20y='1.05'%20width='120'%20height='1.15'%20fill='%23000'%20opacity='.2'/%3E%20%3C/pattern%3E%20%3C/defs%3E%20%3Crect%20x='0.5'%20y='0.5'%20width='119'%20height='31'%20rx='3.2'%20fill='url%28%23b%29'%20stroke='%2305080c'%20stroke-width='1'/%3E%20%3Crect%20x='2.5'%20y='2.7'%20width='115'%20height='24.8'%20rx='1.8'%20fill='url%28%23f%29'/%3E%20%3Crect%20x='2.5'%20y='2.7'%20width='115'%20height='24.8'%20rx='1.8'%20fill='url%28%23m%29'/%3E%20%3Crect%20x='2.5'%20y='2.7'%20width='115'%20height='24.8'%20rx='1.8'%20fill='url%28%23s%29'/%3E%20%3Cpath%20d='M5%204.4%20H115'%20stroke='%23fff'%20stroke-opacity='.32'%20stroke-width='1.1'%20stroke-linecap='round'/%3E%20%3Cpath%20d='M5%2028.2%20H115'%20stroke='%23000'%20stroke-opacity='.45'%20stroke-width='1'/%3E%20%3C/svg%3E") center / 100% 100% no-repeat;
+    --key-metal-hover: url("data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%20120%2032'%20preserveAspectRatio='none'%3E%20%3Cdefs%3E%20%3ClinearGradient%20id='b'%20x1='0'%20y1='0'%20x2='0'%20y2='1'%3E%20%3Cstop%20offset='0'%20stop-color='%23e8f0f8'/%3E%20%3Cstop%20offset='.07'%20stop-color='%23adc0d2'/%3E%20%3Cstop%20offset='.16'%20stop-color='%23627384'/%3E%20%3Cstop%20offset='.88'%20stop-color='%2324303c'/%3E%20%3Cstop%20offset='1'%20stop-color='%230a1016'/%3E%20%3C/linearGradient%3E%20%3ClinearGradient%20id='f'%20x1='0'%20y1='0'%20x2='0'%20y2='1'%3E%20%3Cstop%20offset='0'%20stop-color='%238a9cad'/%3E%20%3Cstop%20offset='.28'%20stop-color='%23536274'/%3E%20%3Cstop%20offset='.62'%20stop-color='%23364250'/%3E%20%3Cstop%20offset='1'%20stop-color='%231a232c'/%3E%20%3C/linearGradient%3E%20%3ClinearGradient%20id='s'%20x1='0'%20y1='0'%20x2='1'%20y2='.35'%3E%20%3Cstop%20offset='0'%20stop-color='%23fff'%20stop-opacity='.34'/%3E%20%3Cstop%20offset='.4'%20stop-color='%23fff'%20stop-opacity='.06'/%3E%20%3Cstop%20offset='1'%20stop-color='%23000'%20stop-opacity='.14'/%3E%20%3C/linearGradient%3E%20%3Cpattern%20id='m'%20width='120'%20height='2.2'%20patternUnits='userSpaceOnUse'%3E%20%3Crect%20width='120'%20height='1.05'%20fill='%23fff'%20opacity='.16'/%3E%20%3Crect%20y='1.05'%20width='120'%20height='1.15'%20fill='%23000'%20opacity='.16'/%3E%20%3C/pattern%3E%20%3C/defs%3E%20%3Crect%20x='0.5'%20y='0.5'%20width='119'%20height='31'%20rx='3.2'%20fill='url%28%23b%29'%20stroke='%2305080c'%20stroke-width='1'/%3E%20%3Crect%20x='2.5'%20y='2.7'%20width='115'%20height='24.8'%20rx='1.8'%20fill='url%28%23f%29'/%3E%20%3Crect%20x='2.5'%20y='2.7'%20width='115'%20height='24.8'%20rx='1.8'%20fill='url%28%23m%29'/%3E%20%3Crect%20x='2.5'%20y='2.7'%20width='115'%20height='24.8'%20rx='1.8'%20fill='url%28%23s%29'/%3E%20%3Cpath%20d='M5%204.4%20H115'%20stroke='%23fff'%20stroke-opacity='.4'%20stroke-width='1.1'%20stroke-linecap='round'/%3E%20%3Cpath%20d='M5%2028.2%20H115'%20stroke='%23000'%20stroke-opacity='.4'%20stroke-width='1'/%3E%20%3C/svg%3E") center / 100% 100% no-repeat;
+    --key-metal-on: url("data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%20120%2032'%20preserveAspectRatio='none'%3E%20%3Cdefs%3E%20%3ClinearGradient%20id='b'%20x1='0'%20y1='0'%20x2='0'%20y2='1'%3E%20%3Cstop%20offset='0'%20stop-color='%238aa0b4'/%3E%20%3Cstop%20offset='.08'%20stop-color='%234a5c6e'/%3E%20%3Cstop%20offset='.2'%20stop-color='%23243240'/%3E%20%3Cstop%20offset='.88'%20stop-color='%230e151c'/%3E%20%3Cstop%20offset='1'%20stop-color='%2305080c'/%3E%20%3C/linearGradient%3E%20%3ClinearGradient%20id='f'%20x1='0'%20y1='0'%20x2='0'%20y2='1'%3E%20%3Cstop%20offset='0'%20stop-color='%233a4c5c'/%3E%20%3Cstop%20offset='.4'%20stop-color='%231c2834'/%3E%20%3Cstop%20offset='1'%20stop-color='%230a1016'/%3E%20%3C/linearGradient%3E%20%3ClinearGradient%20id='s'%20x1='0'%20y1='0'%20x2='1'%20y2='.35'%3E%20%3Cstop%20offset='0'%20stop-color='%239fd4ff'%20stop-opacity='.16'/%3E%20%3Cstop%20offset='.5'%20stop-color='%23fff'%20stop-opacity='.03'/%3E%20%3Cstop%20offset='1'%20stop-color='%23000'%20stop-opacity='.28'/%3E%20%3C/linearGradient%3E%20%3Cpattern%20id='m'%20width='120'%20height='2.2'%20patternUnits='userSpaceOnUse'%3E%20%3Crect%20width='120'%20height='1.05'%20fill='%239fd4ff'%20opacity='.07'/%3E%20%3Crect%20y='1.05'%20width='120'%20height='1.15'%20fill='%23000'%20opacity='.28'/%3E%20%3C/pattern%3E%20%3C/defs%3E%20%3Crect%20x='0.5'%20y='0.5'%20width='119'%20height='31'%20rx='3.2'%20fill='url%28%23b%29'%20stroke='%230a3050'%20stroke-width='1'/%3E%20%3Crect%20x='2.5'%20y='2.7'%20width='115'%20height='24.8'%20rx='1.8'%20fill='url%28%23f%29'/%3E%20%3Crect%20x='2.5'%20y='2.7'%20width='115'%20height='24.8'%20rx='1.8'%20fill='url%28%23m%29'/%3E%20%3Crect%20x='2.5'%20y='2.7'%20width='115'%20height='24.8'%20rx='1.8'%20fill='url%28%23s%29'/%3E%20%3Cpath%20d='M5%204.4%20H115'%20stroke='%23cfe8ff'%20stroke-opacity='.18'%20stroke-width='1.1'%20stroke-linecap='round'/%3E%20%3Crect%20x='3'%20y='27.4'%20width='114'%20height='2.2'%20rx='1'%20fill='%234cc4ff'%20opacity='.7'/%3E%20%3C/svg%3E") center / 100% 100% no-repeat;
+    --key-metal-edge: 0 1px 3px rgba(0,0,0,0.72);
   }
 
   * { box-sizing: border-box; }
@@ -957,6 +947,12 @@
   }
   .dsp-key.palette-trigger {
     grid-column: 1 / -1;
+  }
+  /* SVG face is the bevel; don't double it with a CSS border. */
+  .af-listen-btn, .af-aux-btn, .vfo-sub-btn, .modebtn, .band-btn, .dsp-key,
+  .fader-agc-btn, .fader-reset-btn {
+    border: 0;
+    background-color: #151c24;
   }
   .dsp-tally {
     width: 14px; height: 2px; border-radius: 1px;
