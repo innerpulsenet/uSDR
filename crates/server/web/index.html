@@ -133,9 +133,9 @@
   .chassis-screw.bottom-right { bottom: -5px; right: 26px; }
 
   /* ---------- Brand plate: model badge, engraved legends ----------
-     One line, sized by the model badge: the telemetry strip that used to sit
-     here now lives on the chassis nameplate under the instruments, so the
-     header no longer pads itself out around a taller centre element. */
+     One line, sized by the model badge. The middle of the strip carries the
+     live receive status, each value under its own engraved label; the
+     chassis telemetry lives on the nameplate under the instruments. */
   .rig-brand {
     display: flex; align-items: center; justify-content: space-between;
     flex-wrap: wrap; row-gap: 4px;
@@ -144,6 +144,9 @@
     border-bottom: 1px solid var(--panel-split);
     box-shadow: 0 1px 0 rgba(255,255,255,0.045);
     margin-bottom: 7px;
+  }
+  .brand-ident {
+    display: flex; align-items: center; gap: 10px;
   }
   .brand-crest {
     display: flex; align-items: center; justify-content: center;
@@ -160,40 +163,68 @@
     font: 700 8px/1 var(--mono); letter-spacing: 0.18em; color: var(--ink-2); text-transform: uppercase;
     text-shadow: 0 1px 0 #000;
   }
-  /* Engraved function strip. */
-  .brand-chassis-bezel {
-    display: flex; align-items: center; flex-wrap: wrap; row-gap: 4px;
+  /* Live receive status, centred in the strip: every item is labelled. */
+  .brand-status-strip {
+    display: flex; align-items: center; justify-content: center;
+    flex: 1 1 auto; min-width: 0;
     gap: 7px;
-    padding: 0;
-    font: 700 8.5px/1 var(--mono); letter-spacing: 0.1em;
+    font: 700 8.5px/1 var(--mono); letter-spacing: 0.08em;
     text-shadow: 0 1px 0 #000;
   }
   /* Chassis nameplate in the instrument column: a flat sub-assembly holding
-     the model's silkscreen telemetry. It stretches to fill the column so the
-     panel has no empty pocket beside the panadapter. */
+     the model's silkscreen telemetry as a label/value spec block. It
+     stretches to fill the column so the panel has no empty pocket beside the
+     panadapter. */
   .bay-plate {
-    display: flex; flex-direction: column; justify-content: center;
+    display: flex; flex-direction: column; justify-content: center; gap: 7px;
     flex: 1 1 auto;
     background: var(--panel-face);
     border: 1px solid var(--panel-split);
     border-radius: var(--radius-assembly);
-    padding: 9px 9px 10px;
+    padding: 8px 9px 10px;
     box-shadow: inset 0 1px 0 rgba(255,255,255,0.05), 0 1px 0 rgba(0,0,0,0.5);
+  }
+  .plate-head {
+    font: 800 8.5px/1 var(--mono); letter-spacing: 0.14em; color: var(--ink-2);
+    text-transform: uppercase; text-shadow: 0 1px 0 #000;
+    border-bottom: 1px solid var(--panel-split);
+    box-shadow: 0 1px 0 rgba(255,255,255,0.035);
+    padding-bottom: 5px;
+  }
+  .plate-grid {
+    display: grid; grid-template-columns: auto minmax(0, 1fr);
+    row-gap: 6px; column-gap: 12px; align-items: baseline;
+  }
+  .plate-label {
+    font: 700 8.5px/1 var(--mono); letter-spacing: 0.12em; color: var(--ink-2);
+    text-transform: uppercase; text-shadow: 0 1px 0 #000;
+  }
+  .plate-val {
+    font: 800 10px/1 var(--mono); color: var(--ink-1);
+    font-variant-numeric: tabular-nums;
+    text-align: right;
+  }
+  .plate-val-led {
+    display: flex; align-items: center; justify-content: flex-end; gap: 5px;
+    color: var(--led-rx);
   }
   .brand-led-pip {
     width: 6px; height: 6px; border-radius: 50%;
     background: #16202a; border: 1px solid #0a1016;
     box-shadow: inset 0 1px 1px rgba(0,0,0,0.8);
+    flex: 0 0 auto;
   }
   .brand-led-pip.on {
     background: var(--led-rx); border-color: #1d6b3d;
     box-shadow: 0 0 6px var(--green-glow), inset 0 1px 1px rgba(255,255,255,0.5);
   }
   .brand-metric-label {
-    color: var(--ink-2); text-transform: uppercase; font-size: 8px;
+    color: var(--ink-2); text-transform: uppercase; font-size: 8.5px;
+    letter-spacing: 0.12em;
   }
   .brand-metric-val {
     color: var(--ink-1); font-weight: 800;
+    font-variant-numeric: tabular-nums;
   }
   .brand-divider {
     color: #26313c; margin: 0 1px;
@@ -999,8 +1030,9 @@
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: center;
     text-shadow: 0 1px 0 #000;
   }
-  #badgeSpan { width: 70px; }
-  #badgeProto { width: 150px; }
+  /* The protocol badge keeps a floor so the strip does not jitter between
+     IDLE, P25, DMR and the like; the span value lives under a label now. */
+  #badgeProto { min-width: 46px; text-align: left; }
   /* A detected signal is the one badge that lights: give it a lit window. */
   .badge.blue {
     background: #0b2740; color: #bfe4ff; border: 1px solid #1d4f76; border-radius: 2px;
@@ -1504,7 +1536,7 @@
     <div class="chassis-screw bottom-right" aria-hidden="true"></div>
 
     <div class="rig-brand">
-      <div style="display:flex; align-items:center; gap:10px;">
+      <div class="brand-ident">
         <div class="brand-crest" aria-hidden="true">
           <svg width="20" height="20" viewBox="0 0 26 26">
             <circle cx="13" cy="13" r="11" fill="#09121a" stroke="#1f364a" stroke-width="1.5"/>
@@ -1517,10 +1549,18 @@
           <span class="sub">HF / VHF / UHF · ALL-MODE SDR RECEIVER</span>
         </div>
       </div>
-      <div class="brand-status-cluster">
-        <span class="badge" id="badgeSpan">2.048M</span>
-        <span class="badge" id="badgeProto">IDLE</span>
+      <!-- Live receive status: every value carries its own engraved label, so
+           nothing in the strip is a bare number. -->
+      <div class="brand-status-strip">
+        <span class="brand-metric-label">SPAN</span>
+        <span class="brand-metric-val" id="badgeSpan" title="Displayed span: the window the panadapter shows. Equal to the sample rate unless the LO is offset.">2.048M</span>
+        <span class="brand-divider">/</span>
+        <span class="brand-metric-label">PROTO</span>
+        <span class="badge" id="badgeProto" title="Protocol the classifier hears on the selected channel">IDLE</span>
+        <span class="brand-divider">/</span>
         <span class="badge health-badge" id="badgeHealth" title="Sample stream health: dropped/lagged blocks and lost samples since start">STREAM —</span>
+      </div>
+      <div class="brand-status-cluster">
         <div class="conn" id="conn">
           <span class="conn-beacon" id="connBeacon"></span>
           <span id="connText">connecting…</span>
@@ -2230,19 +2270,16 @@
                silkscreens on the case. It lives under the instruments rather
                than in the header, where it only made the top strip taller. -->
           <div class="bay-plate" aria-hidden="true">
-            <div class="brand-chassis-bezel">
-              <span class="brand-led-pip on"></span>
-              <span class="brand-metric-label">TUNER</span>
-              <span class="brand-metric-val" id="headerTunerBadge">R820T</span>
-              <span class="brand-divider">/</span>
-              <span class="brand-metric-label">RATE</span>
-              <span class="brand-metric-val" id="headerRateBadge">2.40M</span>
-              <span class="brand-divider">/</span>
-              <span class="brand-metric-label">IF</span>
-              <span class="brand-metric-val">ZERO-IF</span>
-              <span class="brand-divider">/</span>
-              <span class="brand-metric-label">DSP</span>
-              <span class="brand-metric-val" style="color:#2bff6a">ONLINE</span>
+            <div class="plate-head">CHASSIS</div>
+            <div class="plate-grid">
+              <span class="plate-label">TUNER</span>
+              <span class="plate-val" id="headerTunerBadge">R820T</span>
+              <span class="plate-label">RATE</span>
+              <span class="plate-val" id="headerRateBadge">2.40M</span>
+              <span class="plate-label">IF</span>
+              <span class="plate-val">ZERO-IF</span>
+              <span class="plate-label">DSP</span>
+              <span class="plate-val plate-val-led"><span class="brand-led-pip on"></span>ONLINE</span>
             </div>
           </div>
         </div>
@@ -3899,10 +3936,10 @@ function updateDspReadout() {
   }
   const spanBadge = $('badgeSpan');
   if (spanBadge) {
+    // Immediate feedback from the rate control; the next status frame replaces
+    // it with the true window (which an off-centre LO makes narrower).
     const sel = $('sdrRateSel');
-    const curRate = sel ? Number(sel.value) : sdrRateHz;
-    const rateM = (curRate / 1e6).toFixed(curRate >= 1e6 ? (curRate % 1e6 === 0 ? 1 : 2) : 3);
-    spanBadge.textContent = `${rateM}M`;
+    spanBadge.textContent = fmtSpanM(sel ? Number(sel.value) : sdrRateHz);
   }
 }
 
@@ -4263,6 +4300,15 @@ function tickClock() {
 // ---------- span labelling ----------
 
 function fmtMhz(hz, places) { return (hz / 1e6).toFixed(places === undefined ? 4 : places); }
+
+// A span in MHz with only the digits that mean something: 2.048M, 1.548M,
+// 250k. Used by both the SPAN and RATE readouts so the same rate never shows
+// as two different numbers.
+function fmtSpanM(hz) {
+  if (!(hz > 0)) return '—';
+  if (hz < 1e6) return `${Math.round(hz / 1e3)}k`;
+  return `${(hz / 1e6).toFixed(3).replace(/0+$/, '').replace(/\.$/, '')}M`;
+}
 
 // The axis only changes when the window does, but paintSdrFft called this at
 // 25 fps, rebuilding nine DOM spans each time for identical output.
@@ -6744,9 +6790,11 @@ function updateSdrStatus(s) {
   drawSpecScale();
   updateBandPresetUi();
   if ($('sdrRateSel')) $('sdrRateSel').value = String(Math.round(s.rate_hz));
-  if ($('badgeSpan')) $('badgeSpan').textContent = (s.rate_hz / 1e6).toFixed(3).replace(/0+$/, '').replace(/\.$/, '') + 'M';
+  // SPAN is the window the panadapter shows (the sample rate minus whatever an
+  // off-centre LO hides); RATE on the nameplate is the hardware sample rate.
+  if ($('badgeSpan')) $('badgeSpan').textContent = fmtSpanM(shown);
   if ($('headerTunerBadge') && s.tuner) $('headerTunerBadge').textContent = s.tuner.replace('Rafael Micro ', '');
-  if ($('headerRateBadge') && s.rate_hz) $('headerRateBadge').textContent = `${(s.rate_hz / 1e6).toFixed(2)}M`;
+  if ($('headerRateBadge') && s.rate_hz) $('headerRateBadge').textContent = fmtSpanM(s.rate_hz);
   syncSpanKnobUi();
   if ($('sdrRadioSel') && s.serial) $('sdrRadioSel').value = s.serial;
   if (s.mode && s.mode !== sdrMode) applyModeUi(s.mode);
