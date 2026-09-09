@@ -238,6 +238,9 @@ impl SdrMode {
             // slice. (The channel itself runs at span/round(span/96 kHz),
             // which is why this is a decimation and not a passthrough.)
             SdrMode::Pager => 48_000.0,
+            // AM voice/broadcast channel: 12 kS/s delivers a 6 kHz Nyquist
+            // audio spectrum that matches the AM IF filter passband (6.0 kHz).
+            SdrMode::Am => 12_000.0,
             _ => 8_000.0,
         }
     }

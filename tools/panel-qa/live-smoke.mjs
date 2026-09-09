@@ -153,13 +153,22 @@ await evalJs(`document.body.click()`);
 await sleep(400);
 check('palette popup closes on outside click', (await evalJs(`document.getElementById('paletteMenu').style.display`)) === 'none');
 
-await evalJs(`document.getElementById('btnListen').click()`);
-await sleep(600);
-check('MONITOR toggles audio monitor',
+check('initial state plays audio with MUTE active',
   (await evalJs(`document.getElementById('btnListen').classList.contains('on')`)) === true
-  && (await evalJs(`document.getElementById('listenBtnLabel').textContent`)) === 'MONITOR',
+  && (await evalJs(`document.getElementById('listenBtnLabel').textContent`)) === 'MUTE',
   await evalJs(`document.getElementById('listenBtnLabel').textContent + ' on=' + document.getElementById('btnListen').classList.contains('on')`));
 await evalJs(`document.getElementById('btnListen').click()`);
+await sleep(400);
+check('clicking MUTE silences audio and sets MUTED',
+  (await evalJs(`document.getElementById('btnListen').classList.contains('on')`)) === false
+  && (await evalJs(`document.getElementById('listenBtnLabel').textContent`)) === 'MUTED',
+  await evalJs(`document.getElementById('listenBtnLabel').textContent + ' on=' + document.getElementById('btnListen').classList.contains('on')`));
+await evalJs(`document.getElementById('btnListen').click()`);
+await sleep(400);
+check('clicking MUTED restores audio and sets MUTE',
+  (await evalJs(`document.getElementById('btnListen').classList.contains('on')`)) === true
+  && (await evalJs(`document.getElementById('listenBtnLabel').textContent`)) === 'MUTE',
+  await evalJs(`document.getElementById('listenBtnLabel').textContent + ' on=' + document.getElementById('btnListen').classList.contains('on')`));
 
 await evalJs(`(() => {
   const d = document.querySelector('#freqReadout .fd[data-i="6"]');

@@ -29,11 +29,16 @@ const PAGE = path.join(__dirname, '..', 'index.html');
 // ---------------------------------------------------------------------------
 function makeEl(id) {
   const classes = new Set();
+  let _inner = '';
   const el = {
     id,
     tagName: 'DIV',
     textContent: '',
-    innerHTML: '',
+    get innerHTML() { return _inner; },
+    set innerHTML(v) {
+      _inner = String(v);
+      el.textContent = _inner.replace(/<[^>]*>/g, '');
+    },
     title: '',
     value: '',
     checked: false,
@@ -104,6 +109,12 @@ function buildContext() {
     return el;
   });
 
+  const qmemBtns = Array.from({ length: 8 }, (_, i) => {
+    const el = makeEl('qmem-' + i);
+    el.classList.add('qmem-btn');
+    return el;
+  });
+
   const document = {
     getElementById(id) {
       if (!byId.has(id)) byId.set(id, makeEl(id));
@@ -111,6 +122,7 @@ function buildContext() {
     },
     querySelectorAll(sel) {
       if (sel === '.band-btn') return bandBtns;
+      if (sel === '.qmem-btn') return qmemBtns;
       return [];
     },
     querySelector() { return null; },
@@ -460,20 +472,18 @@ test('Main VFO flywheel setup generates 72 knurling teeth', () => {
   assert.strictEqual(knurls, 72, 'Main VFO flywheel must have 72 precision knurling teeth');
 });
 
-test('Aux row LISTEN/LO OFFSET buttons and VFO telemetry bar sync correctly', () => {
+test('LISTEN/MUTE and LO OFFSET buttons and VFO telemetry bar sync correctly', () => {
   const ctx = buildContext();
-  // Markup ships the stable MONITOR legend; start/stopAudio must never rename it.
-  run(ctx, `document.getElementById('listenBtnLabel').textContent = 'MONITOR';`);
   run(ctx, `
     startAudio();
   `);
-  assert.strictEqual(run(ctx, `document.getElementById('listenBtnLabel').textContent`), 'MONITOR');
+  assert.strictEqual(run(ctx, `document.getElementById('listenBtnLabel').textContent`), 'MUTE');
   assert.strictEqual(run(ctx, `document.getElementById('btnListen').classList.contains('on')`), true);
 
   run(ctx, `
     stopAudio();
   `);
-  assert.strictEqual(run(ctx, `document.getElementById('listenBtnLabel').textContent`), 'MONITOR');
+  assert.strictEqual(run(ctx, `document.getElementById('listenBtnLabel').textContent`), 'MUTED');
   assert.strictEqual(run(ctx, `document.getElementById('btnListen').classList.contains('on')`), false);
 
   run(ctx, `
@@ -584,5 +594,47 @@ test('Realistic DOM environment with strict element checking boots without error
   assert.doesNotThrow(() => {
     vm.runInContext(m[1], ctx, { filename: 'index.html inline script' });
   });
+});
+
+test('WFM scope defaults to 15 kHz audio passband and toggles to MPX mode', () => {
+  const ctx = buildContext();
+  run(ctx, `
+    scopeWaveCtx = document.getElementById('scopeWaveCanvas').getContext('2d');
+    scopeSpecCtx = document.getElementById('scopeSpecCanvas').getContext('2d');
+    sdrMode = 'wfm';
+    scopeWfmMode = 'audio';
+    setScopeChrome('mpx');
+    drawAudioScope([], 128000);
+  `);
+  assert.strictEqual(run(ctx, `document.getElementById('scopeTitle').textContent`), 'WFM BROADCAST AUDIO');
+  assert.strictEqual(run(ctx, `document.getElementById('scopeModeTag').textContent`), 'AUDIO (15kHz) ⇄ MPX');
+  assert.strictEqual(run(ctx, `document.getElementById('scopeTrigTag').textContent`), '15kHz AUDIO LPF');
+  const axAudio = run(ctx, `document.getElementById('scopeAxis').textContent`);
+  assert.ok(axAudio.includes('15kHz'), `axis should display 15kHz in audio mode, got ${axAudio}`);
+
+  // Toggle to MPX
+  run(ctx, `
+    scopeWfmMode = 'mpx';
+    setScopeChrome('mpx');
+    drawAudioScope([], 128000);
+  `);
+  assert.strictEqual(run(ctx, `document.getElementById('scopeTitle').textContent`), 'FM MULTIPLEX SCOPE');
+  assert.strictEqual(run(ctx, `document.getElementById('scopeModeTag').textContent`), 'MPX (64kHz) ⇄ AUDIO');
+  const axMpx = run(ctx, `document.getElementById('scopeAxis').textContent`);
+  assert.ok(axMpx.includes('64kHz'), `axis should display 64kHz in mpx mode, got ${axMpx}`);
+});
+
+test('Quick Memory matrix and DSP controls exist and handle events', () => {
+  const ctx = buildContext();
+  run(ctx, `
+    setupRadioDeck();
+  `);
+  const qmemButtons = run(ctx, `document.querySelectorAll('.qmem-btn').length`);
+  assert.strictEqual(qmemButtons, 8, 'Must have 8 Quick Memory buttons M1-M8');
+
+  // Check DSP buttons
+  assert.ok(run(ctx, `document.getElementById('btnDspNotch') !== null`), 'btnDspNotch must exist');
+  assert.ok(run(ctx, `document.getElementById('btnDspNr') !== null`), 'btnDspNr must exist');
+  assert.ok(run(ctx, `document.getElementById('btnDspSql') !== null`), 'btnDspSql must exist');
 });
 

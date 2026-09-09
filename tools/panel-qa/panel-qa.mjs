@@ -233,6 +233,8 @@ for (const vp of viewports) {
       modekeys: '.mode-keypad',
       bandkeys: '.band-matrix',
       dspkeys: '.dsp-keypad',
+      scopes: '.scope-panes',
+      spectrum: '#sdrCanvasWrap',
     };
     for (const [name, sel] of Object.entries(CROPS)) {
       const box = await send('Runtime.evaluate', {

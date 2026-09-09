@@ -61,17 +61,38 @@ test('runSpurCheck finally writes #keySpurLabel, not key.textContent', () => {
   assert.match(fn, /keyLbl\.textContent|keySpurLabel/);
 });
 
-test('LISTEN / MONITOR key does not rename itself to MUTE in markup or startAudio/stopAudio', () => {
-  const { script } = readPage();
-  // The visible label id is listenBtnLabel; it must stay MONITOR / LISTEN, never MUTE.
-  assert.doesNotMatch(script, /listenBtnLabel\)\.textContent\s*=\s*['"]MUTE['"]/);
+test('LISTEN / MUTE key initializes with MUTE default in markup and top cluster', () => {
+  const { markup } = readPage();
+  assert.match(markup, /id="btnListen"[^>]*title="[^"]*Mute[^"]*"/);
+  assert.match(markup, /id="listenBtnLabel">MUTE<\/span>/);
 });
 
-test('startAudio/stopAudio keep the LISTEN label stable (no MUTE rename via alias)', () => {
+test('startAudio/stopAudio toggle between MUTE and MUTED', () => {
   const { script } = readPage();
   const start = script.indexOf('function startAudio');
   const stop = script.indexOf('function stopAudio', start);
   assert.ok(start !== -1 && stop !== -1, 'startAudio/stopAudio must exist');
-  const body = script.slice(start, stop);
-  assert.doesNotMatch(body, /textContent\s*=\s*['"]MUTE['"]/);
+  const body = script.slice(start, script.indexOf('function onAudioFrame', stop));
+  assert.match(body, /listenBtnLabel[\s\S]*?['"]MUTE['"]/);
+  assert.match(body, /listenBtnLabel[\s\S]*?['"]MUTED['"]/);
 });
+
+test('toggleDockLayout calls resizeSdrCanvases and does not reference undefined resizeAllCanvases', () => {
+  const { script } = readPage();
+  const at = script.indexOf('function toggleDockLayout()');
+  assert.ok(at !== -1, 'toggleDockLayout must exist');
+  const body = script.slice(at, script.indexOf('const dlb =', at));
+  assert.match(body, /resizeSdrCanvases\(/);
+  assert.doesNotMatch(body, /resizeAllCanvases/);
+});
+
+test('drawSdrWaterfallRow auto-resizes canvas backing store on layout change', () => {
+  const { script } = readPage();
+  const at = script.indexOf('function drawSdrWaterfallRow(');
+  assert.ok(at !== -1, 'drawSdrWaterfallRow must exist');
+  const body = script.slice(at, script.indexOf('function drawWaterfallHud', at));
+  assert.match(body, /targetW[\s\S]*?targetH/);
+  assert.match(body, /sdrWfCanvas\.width\s*!==\s*targetW/);
+  assert.match(body, /resizeSdrCanvases\(\)/);
+});
+

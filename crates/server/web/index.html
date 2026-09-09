@@ -7,6 +7,7 @@
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%2304090f'/%3E%3Cpath d='M4 22 L10 10 L14 18 L18 8 L22 20 L28 12' fill='none' stroke='%2335a7e8' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
 <style>
   :root {
+    color-scheme: dark;
     --page: #06090d;
     --chassis: #131920;
     --chassis-hi: #1f2732;
@@ -72,11 +73,25 @@
     --radius-key: 2px;
     --radius-well: 3px;
 
-    /* SVG keycaps: chamfered bezel, mill-mark pattern, specular. */
-    --key-metal: url("data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%20120%2032'%20preserveAspectRatio='none'%3E%20%3Cdefs%3E%20%3ClinearGradient%20id='b'%20x1='0'%20y1='0'%20x2='0'%20y2='1'%3E%20%3Cstop%20offset='0'%20stop-color='%23d7e3ef'/%3E%20%3Cstop%20offset='.07'%20stop-color='%239aafc2'/%3E%20%3Cstop%20offset='.16'%20stop-color='%23536274'/%3E%20%3Cstop%20offset='.88'%20stop-color='%231b232d'/%3E%20%3Cstop%20offset='1'%20stop-color='%23070b10'/%3E%20%3C/linearGradient%3E%20%3ClinearGradient%20id='f'%20x1='0'%20y1='0'%20x2='0'%20y2='1'%3E%20%3Cstop%20offset='0'%20stop-color='%23748697'/%3E%20%3Cstop%20offset='.28'%20stop-color='%23445262'/%3E%20%3Cstop%20offset='.62'%20stop-color='%232c3642'/%3E%20%3Cstop%20offset='1'%20stop-color='%23141b23'/%3E%20%3C/linearGradient%3E%20%3ClinearGradient%20id='s'%20x1='0'%20y1='0'%20x2='1'%20y2='.35'%3E%20%3Cstop%20offset='0'%20stop-color='%23fff'%20stop-opacity='.28'/%3E%20%3Cstop%20offset='.4'%20stop-color='%23fff'%20stop-opacity='.04'/%3E%20%3Cstop%20offset='1'%20stop-color='%23000'%20stop-opacity='.18'/%3E%20%3C/linearGradient%3E%20%3Cpattern%20id='m'%20width='120'%20height='2.2'%20patternUnits='userSpaceOnUse'%3E%20%3Crect%20width='120'%20height='1.05'%20fill='%23fff'%20opacity='.13'/%3E%20%3Crect%20y='1.05'%20width='120'%20height='1.15'%20fill='%23000'%20opacity='.2'/%3E%20%3C/pattern%3E%20%3C/defs%3E%20%3Crect%20x='0.5'%20y='0.5'%20width='119'%20height='31'%20rx='3.2'%20fill='url%28%23b%29'%20stroke='%2305080c'%20stroke-width='1'/%3E%20%3Crect%20x='2.5'%20y='2.7'%20width='115'%20height='24.8'%20rx='1.8'%20fill='url%28%23f%29'/%3E%20%3Crect%20x='2.5'%20y='2.7'%20width='115'%20height='24.8'%20rx='1.8'%20fill='url%28%23m%29'/%3E%20%3Crect%20x='2.5'%20y='2.7'%20width='115'%20height='24.8'%20rx='1.8'%20fill='url%28%23s%29'/%3E%20%3Cpath%20d='M5%204.4%20H115'%20stroke='%23fff'%20stroke-opacity='.32'%20stroke-width='1.1'%20stroke-linecap='round'/%3E%20%3Cpath%20d='M5%2028.2%20H115'%20stroke='%23000'%20stroke-opacity='.45'%20stroke-width='1'/%3E%20%3C/svg%3E") center / 100% 100% no-repeat;
-    --key-metal-hover: url("data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%20120%2032'%20preserveAspectRatio='none'%3E%20%3Cdefs%3E%20%3ClinearGradient%20id='b'%20x1='0'%20y1='0'%20x2='0'%20y2='1'%3E%20%3Cstop%20offset='0'%20stop-color='%23e8f0f8'/%3E%20%3Cstop%20offset='.07'%20stop-color='%23adc0d2'/%3E%20%3Cstop%20offset='.16'%20stop-color='%23627384'/%3E%20%3Cstop%20offset='.88'%20stop-color='%2324303c'/%3E%20%3Cstop%20offset='1'%20stop-color='%230a1016'/%3E%20%3C/linearGradient%3E%20%3ClinearGradient%20id='f'%20x1='0'%20y1='0'%20x2='0'%20y2='1'%3E%20%3Cstop%20offset='0'%20stop-color='%238a9cad'/%3E%20%3Cstop%20offset='.28'%20stop-color='%23536274'/%3E%20%3Cstop%20offset='.62'%20stop-color='%23364250'/%3E%20%3Cstop%20offset='1'%20stop-color='%231a232c'/%3E%20%3C/linearGradient%3E%20%3ClinearGradient%20id='s'%20x1='0'%20y1='0'%20x2='1'%20y2='.35'%3E%20%3Cstop%20offset='0'%20stop-color='%23fff'%20stop-opacity='.34'/%3E%20%3Cstop%20offset='.4'%20stop-color='%23fff'%20stop-opacity='.06'/%3E%20%3Cstop%20offset='1'%20stop-color='%23000'%20stop-opacity='.14'/%3E%20%3C/linearGradient%3E%20%3Cpattern%20id='m'%20width='120'%20height='2.2'%20patternUnits='userSpaceOnUse'%3E%20%3Crect%20width='120'%20height='1.05'%20fill='%23fff'%20opacity='.16'/%3E%20%3Crect%20y='1.05'%20width='120'%20height='1.15'%20fill='%23000'%20opacity='.16'/%3E%20%3C/pattern%3E%20%3C/defs%3E%20%3Crect%20x='0.5'%20y='0.5'%20width='119'%20height='31'%20rx='3.2'%20fill='url%28%23b%29'%20stroke='%2305080c'%20stroke-width='1'/%3E%20%3Crect%20x='2.5'%20y='2.7'%20width='115'%20height='24.8'%20rx='1.8'%20fill='url%28%23f%29'/%3E%20%3Crect%20x='2.5'%20y='2.7'%20width='115'%20height='24.8'%20rx='1.8'%20fill='url%28%23m%29'/%3E%20%3Crect%20x='2.5'%20y='2.7'%20width='115'%20height='24.8'%20rx='1.8'%20fill='url%28%23s%29'/%3E%20%3Cpath%20d='M5%204.4%20H115'%20stroke='%23fff'%20stroke-opacity='.4'%20stroke-width='1.1'%20stroke-linecap='round'/%3E%20%3Cpath%20d='M5%2028.2%20H115'%20stroke='%23000'%20stroke-opacity='.4'%20stroke-width='1'/%3E%20%3C/svg%3E") center / 100% 100% no-repeat;
-    --key-metal-on: url("data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%20120%2032'%20preserveAspectRatio='none'%3E%20%3Cdefs%3E%20%3ClinearGradient%20id='b'%20x1='0'%20y1='0'%20x2='0'%20y2='1'%3E%20%3Cstop%20offset='0'%20stop-color='%238aa0b4'/%3E%20%3Cstop%20offset='.08'%20stop-color='%234a5c6e'/%3E%20%3Cstop%20offset='.2'%20stop-color='%23243240'/%3E%20%3Cstop%20offset='.88'%20stop-color='%230e151c'/%3E%20%3Cstop%20offset='1'%20stop-color='%2305080c'/%3E%20%3C/linearGradient%3E%20%3ClinearGradient%20id='f'%20x1='0'%20y1='0'%20x2='0'%20y2='1'%3E%20%3Cstop%20offset='0'%20stop-color='%233a4c5c'/%3E%20%3Cstop%20offset='.4'%20stop-color='%231c2834'/%3E%20%3Cstop%20offset='1'%20stop-color='%230a1016'/%3E%20%3C/linearGradient%3E%20%3ClinearGradient%20id='s'%20x1='0'%20y1='0'%20x2='1'%20y2='.35'%3E%20%3Cstop%20offset='0'%20stop-color='%239fd4ff'%20stop-opacity='.16'/%3E%20%3Cstop%20offset='.5'%20stop-color='%23fff'%20stop-opacity='.03'/%3E%20%3Cstop%20offset='1'%20stop-color='%23000'%20stop-opacity='.28'/%3E%20%3C/linearGradient%3E%20%3Cpattern%20id='m'%20width='120'%20height='2.2'%20patternUnits='userSpaceOnUse'%3E%20%3Crect%20width='120'%20height='1.05'%20fill='%239fd4ff'%20opacity='.07'/%3E%20%3Crect%20y='1.05'%20width='120'%20height='1.15'%20fill='%23000'%20opacity='.28'/%3E%20%3C/pattern%3E%20%3C/defs%3E%20%3Crect%20x='0.5'%20y='0.5'%20width='119'%20height='31'%20rx='3.2'%20fill='url%28%23b%29'%20stroke='%230a3050'%20stroke-width='1'/%3E%20%3Crect%20x='2.5'%20y='2.7'%20width='115'%20height='24.8'%20rx='1.8'%20fill='url%28%23f%29'/%3E%20%3Crect%20x='2.5'%20y='2.7'%20width='115'%20height='24.8'%20rx='1.8'%20fill='url%28%23m%29'/%3E%20%3Crect%20x='2.5'%20y='2.7'%20width='115'%20height='24.8'%20rx='1.8'%20fill='url%28%23s%29'/%3E%20%3Cpath%20d='M5%204.4%20H115'%20stroke='%23cfe8ff'%20stroke-opacity='.18'%20stroke-width='1.1'%20stroke-linecap='round'/%3E%20%3Crect%20x='3'%20y='27.4'%20width='114'%20height='2.2'%20rx='1'%20fill='%234cc4ff'%20opacity='.7'/%3E%20%3C/svg%3E") center / 100% 100% no-repeat;
-    --key-metal-edge: 0 1px 3px rgba(0,0,0,0.72);
+    /* Precision turned/brushed metal keycaps with non-distorting micro-milling */
+    --key-metal:
+      repeating-linear-gradient(180deg, rgba(255,255,255,0.04) 0px, rgba(255,255,255,0.04) 1px, transparent 1px, transparent 2px),
+      repeating-linear-gradient(90deg, transparent 0px, transparent 3px, rgba(255,255,255,0.015) 3px, rgba(255,255,255,0.015) 4px),
+      linear-gradient(180deg, #445465 0%, #2e3b48 30%, #1e2832 68%, #141c24 100%);
+    --key-metal-hover:
+      repeating-linear-gradient(180deg, rgba(255,255,255,0.06) 0px, rgba(255,255,255,0.06) 1px, transparent 1px, transparent 2px),
+      repeating-linear-gradient(90deg, transparent 0px, transparent 3px, rgba(255,255,255,0.02) 3px, rgba(255,255,255,0.02) 4px),
+      linear-gradient(180deg, #526478 0%, #394a5a 30%, #263340 68%, #1a232c 100%);
+    --key-metal-on:
+      repeating-linear-gradient(180deg, rgba(76,196,255,0.06) 0px, rgba(76,196,255,0.06) 1px, transparent 1px, transparent 2px),
+      linear-gradient(180deg, #243545 0%, #172430 38%, #101923 100%);
+    --key-metal-edge:
+      inset 0 1px 0 rgba(255,255,255,0.32),
+      inset 1px 0 0 rgba(255,255,255,0.08),
+      inset -1px 0 0 rgba(0,0,0,0.5),
+      inset 0 -1px 0 rgba(0,0,0,0.7),
+      0 1px 3px rgba(0,0,0,0.75),
+      0 0 1px rgba(0,0,0,0.9);
   }
 
   * { box-sizing: border-box; }
@@ -88,18 +103,157 @@
     font-variant-numeric: tabular-nums;
   }
 
+  html {
+    background-color: #06090d;
+    scrollbar-color: #1e2c3a #06090d;
+    color-scheme: dark;
+  }
+
   body {
-    margin: 0; padding: 18px 20px;
-    background: radial-gradient(1400px 700px at 50% -8%, #141c26 0%, var(--page) 75%);
-    color: var(--text); font-family: var(--sans); font-size: 14px;
+    margin: 0;
+    padding: 14px 18px;
+    background-color: #06090d;
+    background-image:
+      radial-gradient(ellipse 1600px 900px at 50% -8%, rgba(20, 35, 52, 0.55) 0%, transparent 75%),
+      radial-gradient(circle at 1px 1px, rgba(255, 255, 255, 0.065) 1px, transparent 0);
+    background-size: 100% 100%, 24px 24px;
+    background-position: 0 0, 0 0;
+    background-attachment: fixed;
+    color: var(--text);
+    font-family: var(--sans);
+    font-size: 14px;
     -webkit-font-smoothing: antialiased;
     min-height: 100vh;
   }
 
-
   .wrap {
-    max-width: 1440px;
+    max-width: 1720px;
+    width: calc(100% - 24px);
     margin: 0 auto;
+    transition: max-width 150ms ease;
+  }
+  .wrap.side-dock-active {
+    max-width: none;
+    width: calc(100% - 24px);
+    margin: 0 12px;
+    display: grid;
+    grid-template-columns: minmax(1080px, 1fr) 440px;
+    gap: 12px;
+    align-items: stretch;
+  }
+  .wrap.side-dock-active .side-col {
+    margin-top: 0;
+    height: 100%;
+    min-height: 0;
+    max-height: 100%;
+    align-self: stretch;
+  }
+  /* In side-dock mode, stack the packet inspector underneath the frame stream so both get full 440px width */
+  .wrap.side-dock-active .decode-main-split {
+    flex-direction: column;
+    gap: 8px;
+  }
+  .wrap.side-dock-active .decode-stream-col {
+    flex: 1 1 50%;
+    min-height: 180px;
+    max-height: 52%;
+    width: 100%;
+  }
+  .wrap.side-dock-active .decode-inspector-col {
+    flex: 1 1 50%;
+    min-width: 0;
+    max-width: none;
+    width: 100%;
+    min-height: 180px;
+  }
+  .wrap.side-dock-active .sdr-decode-toolbar {
+    gap: 5px;
+    margin-bottom: 6px;
+  }
+  .wrap.side-dock-active .decode-toolbar-row {
+    gap: 4px;
+  }
+  .wrap.side-dock-active .decode-toolbar-row input#decodeFilter {
+    min-width: 140px;
+  }
+  .wrap.side-dock-active .proto-chips {
+    flex-wrap: wrap;
+    gap: 2px;
+  }
+  .wrap.side-dock-active .proto-chip {
+    padding: 3px 6px;
+    font-size: 9.5px;
+  }
+  .wrap.side-dock-active .decode-toolbar-subrow {
+    padding: 3px 6px;
+    gap: 4px;
+  }
+  .wrap.side-dock-active .decode-toolbar-subrow button,
+  .wrap.side-dock-active .decode-toolbar-subrow a {
+    padding: 2px 6px;
+    font-size: 10px;
+  }
+  @media (min-width: 1680px) {
+    .wrap:not(.stack-dock-active) {
+      max-width: none;
+      width: calc(100% - 24px);
+      margin: 0 12px;
+      display: grid;
+      grid-template-columns: minmax(1180px, 1fr) 460px;
+      gap: 12px;
+      align-items: stretch;
+    }
+    .wrap:not(.stack-dock-active) .side-col {
+      margin-top: 0;
+      height: 100%;
+      min-height: 0;
+      max-height: 100%;
+      align-self: stretch;
+    }
+    .wrap:not(.stack-dock-active) .side-col .decode-main-split {
+      flex-direction: column;
+      gap: 8px;
+    }
+    .wrap:not(.stack-dock-active) .side-col .decode-stream-col {
+      flex: 1 1 50%;
+      min-height: 180px;
+      max-height: 52%;
+      width: 100%;
+    }
+    .wrap:not(.stack-dock-active) .side-col .decode-inspector-col {
+      flex: 1 1 50%;
+      min-width: 0;
+      max-width: none;
+      width: 100%;
+      min-height: 180px;
+    }
+    .wrap:not(.stack-dock-active) .side-col .sdr-decode-toolbar {
+      gap: 5px;
+      margin-bottom: 6px;
+    }
+    .wrap:not(.stack-dock-active) .side-col .decode-toolbar-row {
+      gap: 4px;
+    }
+    .wrap:not(.stack-dock-active) .side-col .decode-toolbar-row input#decodeFilter {
+      min-width: 140px;
+    }
+    .wrap:not(.stack-dock-active) .side-col .proto-chips {
+      flex-wrap: wrap;
+      gap: 2px;
+    }
+    .wrap:not(.stack-dock-active) .side-col .proto-chip {
+      padding: 3px 6px;
+      font-size: 9.5px;
+    }
+    .wrap:not(.stack-dock-active) .side-col .decode-toolbar-subrow {
+      padding: 3px 6px;
+      gap: 4px;
+    }
+    .wrap:not(.stack-dock-active) .side-col .decode-toolbar-subrow button,
+    .wrap:not(.stack-dock-active) .side-col .decode-toolbar-subrow a {
+      padding: 2px 6px;
+      font-size: 10px;
+    }
   }
 
   /* ---------- The Rig: matte case, Icom-style ---------- */
@@ -169,13 +323,112 @@
     font: 700 8px/1 var(--mono); letter-spacing: 0.18em; color: var(--ink-2); text-transform: uppercase;
     text-shadow: 0 1px 0 #000;
   }
-  /* Live receive status, centred in the strip: every item is labelled. */
+  /* =========================================================================
+     MACHINED RECEIVER ANNUNCIATOR STRIP (Physical Cockpit Telemetry Pod)
+     ========================================================================= */
   .brand-status-strip {
-    display: flex; align-items: center; justify-content: center;
-    flex: 1 1 auto; min-width: 0;
-    gap: 7px;
+    display: inline-flex; align-items: center; justify-content: center;
+    flex: 0 1 auto; min-width: 0;
+    gap: 9px;
+    padding: 2.5px 12px;
+    background:
+      radial-gradient(ellipse at 50% 0%, rgba(56,189,248,0.06) 0%, transparent 80%),
+      linear-gradient(180deg, #070b10 0%, #0c1219 50%, #06090e 100%);
+    border: 1px solid #141f2c;
+    border-radius: 4px;
+    box-shadow:
+      inset 0 1.5px 3px rgba(0,0,0,0.85),
+      inset 0 -1px 0 rgba(255,255,255,0.04),
+      0 1px 0 rgba(255,255,255,0.06),
+      0 2px 4px rgba(0,0,0,0.4);
     font: 700 8.5px/1 var(--mono); letter-spacing: 0.08em;
     text-shadow: 0 1px 0 #000;
+  }
+  .annunc-bay {
+    display: flex; align-items: center; gap: 5px;
+    white-space: nowrap;
+  }
+  .annunc-subsep {
+    color: #202f40; font-size: 8px; margin: 0 1px; user-select: none;
+  }
+  .annunc-split {
+    width: 1px; height: 14px;
+    background: #141f2d;
+    box-shadow: 1px 0 0 rgba(255,255,255,0.04);
+    margin: 0 2px;
+    flex-shrink: 0;
+  }
+  .brand-metric-label {
+    color: var(--ink-2); text-transform: uppercase; font-size: 8px;
+    letter-spacing: 0.12em; font-weight: 700;
+  }
+  .brand-metric-val {
+    color: var(--ink-1); font-weight: 800; font-size: 9px;
+    font-variant-numeric: tabular-nums;
+  }
+  .brand-metric-val.highlight-bw {
+    color: #38bdf8;
+    text-shadow: 0 0 6px rgba(56,189,248,0.3);
+  }
+  .badge.annunc-proto {
+    background: #09121a; border: 1px solid #152433;
+    padding: 2px 5px; border-radius: 3px;
+    color: #2bff6a; font-weight: 800; font-size: 8px;
+    text-shadow: 0 0 5px rgba(43,255,106,0.3);
+  }
+  .annunc-tally {
+    display: flex; align-items: center; gap: 4px;
+    padding: 1.5px 5px; border-radius: 3px;
+    background: rgba(0,0,0,0.35);
+    border: 1px solid rgba(255,255,255,0.04);
+    transition: all 120ms ease;
+  }
+  .annunc-tally.alert-clip {
+    background: rgba(255,59,48,0.18);
+    border-color: rgba(255,59,48,0.45);
+    box-shadow: 0 0 8px rgba(255,59,48,0.3);
+  }
+  .annunc-pip {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: #15202b; border: 1px solid #0b1118;
+    box-shadow: inset 0 1px 1px rgba(0,0,0,0.9);
+    flex-shrink: 0;
+  }
+  .annunc-pip.led-green {
+    background: #2bff6a; border-color: #176033;
+    box-shadow: 0 0 6px rgba(43,255,106,0.8), inset 0 1px 1px rgba(255,255,255,0.6);
+  }
+  .annunc-pip.led-red {
+    background: #ff3b30; border-color: #7a1510;
+    box-shadow: 0 0 8px #ff3b30, inset 0 1px 1px rgba(255,255,255,0.7);
+    animation: pip-pulse 1s infinite alternate;
+  }
+  .annunc-pip.led-cyan {
+    background: #38bdf8; border-color: #195270;
+    box-shadow: 0 0 6px rgba(56,189,248,0.8), inset 0 1px 1px rgba(255,255,255,0.6);
+  }
+  @keyframes pip-pulse {
+    0% { opacity: 0.8; }
+    100% { opacity: 1; transform: scale(1.15); }
+  }
+  .annunc-pip-label {
+    font: 800 8px/1 var(--mono); letter-spacing: 0.08em; color: #8fa2b4;
+  }
+  .annunc-tally.alert-clip .annunc-pip-label {
+    color: #ff8a7a;
+  }
+  .health-badge.annunc-stream {
+    background: #09121a; border: 1px solid #152433;
+    padding: 2px 5px; border-radius: 3px;
+    color: #7ea3c0; font-size: 8px;
+  }
+  .health-badge.annunc-stream.bad {
+    color: #ffbe3b; border-color: #594010;
+    box-shadow: 0 0 5px rgba(255,190,59,0.3);
+  }
+  .health-badge.annunc-stream.clip {
+    color: #ff3b30; border-color: #6d1a15;
+    box-shadow: 0 0 6px rgba(255,59,48,0.4);
   }
   /* Chassis nameplate retired (Phase 1): the live TUNER/RATE ids moved to the
      brand strip; the static IF/DSP filler was dropped. The rule stays
@@ -183,6 +436,80 @@
   .bay-plate {
     display: none;
   }
+  /* Quick Memory & DSP Sub-Bay */
+  .bay-memory {
+    display: flex; flex-direction: column; gap: 6px;
+    padding: 6px 8px 7px; margin-top: 4px;
+    background: var(--panel-face); border: 1px solid var(--panel-split);
+    border-radius: var(--radius-assembly);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.05), 0 1px 0 rgba(0,0,0,0.5);
+  }
+  .qmem-matrix {
+    display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px;
+  }
+  .qmem-btn {
+    position: relative; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; padding: 2px 2px;
+    height: 28px; cursor: pointer; font-family: var(--mono);
+    border: 1px solid #080d12; border-radius: 3px;
+    background:
+      repeating-linear-gradient(90deg, rgba(255,255,255,0.02) 0px, rgba(255,255,255,0.02) 1px, transparent 1px, transparent 2px),
+      linear-gradient(180deg, #2a3542 0%, #1c2530 45%, #141b24 55%, #1c2430 100%);
+    box-shadow:
+      inset 0 1px 0 rgba(255,255,255,0.32),
+      inset 1px 0 0 rgba(255,255,255,0.08),
+      inset -1px 0 0 rgba(0,0,0,0.4),
+      inset 0 -1px 0 rgba(0,0,0,0.65),
+      0 1.5px 3px rgba(0,0,0,0.55);
+    transition: transform 60ms ease, box-shadow 60ms ease;
+  }
+  .qmem-btn:hover {
+    background:
+      repeating-linear-gradient(90deg, rgba(255,255,255,0.03) 0px, rgba(255,255,255,0.03) 1px, transparent 1px, transparent 2px),
+      linear-gradient(180deg, #324050 0%, #222d3a 45%, #18222e 55%, #222d3a 100%);
+  }
+  .qmem-btn:active {
+    transform: translateY(1px);
+    box-shadow: inset 0 1.5px 3px rgba(0,0,0,0.85), inset 0 0 1px rgba(0,0,0,0.9), 0 0 1px rgba(0,0,0,0.3);
+  }
+  .qmem-tally {
+    width: 14px; height: 2px; border-radius: 1px;
+    background: #111a22; box-shadow: inset 0 0.5px 1px #000;
+    margin-bottom: 2px;
+  }
+  .qmem-btn.active .qmem-tally {
+    background: #2bff6a; box-shadow: 0 0 5px #2bff6a;
+  }
+  .qmem-btn.active { border-color: #1a4a32; }
+  .qmem-tag {
+    font-size: 7.5px; font-weight: 700; letter-spacing: 0.08em;
+    color: var(--accent); line-height: 1;
+  }
+  .qmem-freq {
+    font-size: 7px; font-weight: 600; letter-spacing: 0.02em;
+    color: #c0d2e0; line-height: 1.1; white-space: nowrap;
+  }
+  .dsp-ctrl-row {
+    display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px;
+  }
+  .dsp-ctrl-btn {
+    position: relative; display: flex; align-items: center; justify-content: center;
+    gap: 4px; height: 22px; padding: 0 3px; cursor: pointer;
+    font: 700 8px/1 var(--sans); letter-spacing: 0.06em; color: #b0c2d0;
+    border: 1px solid #080d12; border-radius: 3px;
+    background:
+      repeating-linear-gradient(90deg, rgba(255,255,255,0.02) 0px, rgba(255,255,255,0.02) 1px, transparent 1px, transparent 2px),
+      linear-gradient(180deg, #26313d 0%, #19222c 50%, #121921 100%);
+    box-shadow:
+      inset 0 1px 0 rgba(255,255,255,0.25),
+      inset 0 -1px 0 rgba(0,0,0,0.5),
+      0 1px 2px rgba(0,0,0,0.5);
+  }
+  .dsp-ctrl-btn:active {
+    transform: translateY(1px);
+    box-shadow: inset 0 1px 2px #000;
+  }
+  .dsp-ctrl-btn.active { color: #eaf4fc; border-color: #244662; }
   .plate-head {
     font: 800 8.5px/1 var(--mono); letter-spacing: 0.14em; color: var(--ink-2);
     text-transform: uppercase; text-shadow: 0 1px 0 #000;
@@ -216,17 +543,6 @@
   .brand-led-pip.on {
     background: var(--led-rx); border-color: #1d6b3d;
     box-shadow: 0 0 6px var(--green-glow), inset 0 1px 1px rgba(255,255,255,0.5);
-  }
-  .brand-metric-label {
-    color: var(--ink-2); text-transform: uppercase; font-size: 8.5px;
-    letter-spacing: 0.12em;
-  }
-  .brand-metric-val {
-    color: var(--ink-1); font-weight: 800;
-    font-variant-numeric: tabular-nums;
-  }
-  .brand-divider {
-    color: #26313c; margin: 0 1px;
   }
   .brand-status-cluster {
     display: flex; align-items: center; gap: 7px;
@@ -298,7 +614,7 @@
   }
   /* Control column: AF/RF front end over the selected-channel readout. */
   .panel-left {
-    display: flex; flex-direction: column; gap: 8px; min-width: 0;
+    display: flex; flex-direction: column; gap: 8px; min-width: 0; height: 100%;
   }
   /* Display column: readout over the panadapter it describes. */
   .panel-center {
@@ -315,11 +631,15 @@
      the panel rather than dropping below the fold. */
   @media (max-width: 1120px) {
     .deck-console { grid-template-columns: 200px minmax(0, 1fr) 250px; }
+    .brand-status-strip { gap: 6px; padding: 2px 8px; }
+    #headerLoTally { display: none; }
   }
   @media (max-width: 900px) {
     .deck-console { grid-template-columns: 1fr; }
     .panel-right { flex-direction: row; justify-content: center; gap: 14px; }
     .vfo-top-strip { flex-wrap: wrap; }
+    #brandStatusStrip .annunc-bay:first-child,
+    #brandStatusStrip .annunc-split:first-of-type { display: none; }
   }
 
   /* Modular sub-assemblies on the panel face: flat matte, separated by a 1 px
@@ -406,36 +726,59 @@
     border-bottom: 1px solid var(--panel-split);
     margin-bottom: 4px;
   }
-  /* Function keys share one cap geometry: dark cap, 1 px bevel, LED tally.
-     A lit key keeps its cap and lights the tally, the way a real panel does. */
-  .af-listen-btn, .af-aux-btn {
-    flex: 1;
+  /* Function keys share one cap geometry: dark turned metal cap, 1 px bevel, LED tally. */
+  .top-mute-btn, .af-listen-btn, .af-aux-btn {
     display: inline-flex; align-items: center; justify-content: center; gap: 5px;
-    padding: 5px 3px; border-radius: var(--radius-key);
+    height: 22px; padding: 0 10px; border-radius: var(--radius-key);
     background: var(--key-metal);
-    color: var(--ink-2); border: 1px solid #0c1118;
+    color: #9cb5cb; border: 1px solid #080d12;
     box-shadow: var(--key-metal-edge);
-    cursor: pointer; font: 800 8.5px/1 var(--mono); letter-spacing: 0.06em;
-    user-select: none; transition: all 90ms; white-space: nowrap;
-    text-shadow: 0 1px 0 #000;
+    cursor: pointer; font: 800 9px/1 var(--mono); letter-spacing: 0.08em;
+    user-select: none; transition: all 80ms; white-space: nowrap;
+    text-shadow: 0 -1px 0 rgba(0,0,0,0.95), 0 1px 0 rgba(255,255,255,0.08);
   }
-  .af-listen-btn:hover, .af-aux-btn:hover { color: var(--ink-1); background: var(--key-metal-hover); border-color: #3a4a5a; }
-  .af-listen-btn:active, .af-aux-btn:active { transform: translateY(1px); box-shadow: inset 0 2px 4px #000; }
-  .af-listen-btn.on {
+  .af-listen-btn, .af-aux-btn {
+    flex: 1; min-height: 22px; padding: 4px 6px;
+  }
+  .af-aux-btn.af-aux-full {
+    width: 100%; flex: 1 1 auto;
+  }
+  .top-mute-btn:hover, .af-listen-btn:hover, .af-aux-btn:hover {
+    color: #ffffff; background: var(--key-metal-hover); border-color: #2c3a4a;
+  }
+  .top-mute-btn:active, .af-listen-btn:active, .af-aux-btn:active {
+    transform: translateY(1.5px);
+    box-shadow: inset 0 2px 4px rgba(0,0,0,0.9), inset 0 -1px 0 rgba(255,255,255,0.1), 0 0 0 1px #060a0e;
+  }
+  .top-mute-btn.on, .af-listen-btn.on {
     background: var(--key-metal-on);
-    color: var(--led-rx); border-color: #1d5c36;
-    box-shadow: var(--key-metal-edge), 0 0 6px rgba(51,224,122,0.22);
+    color: #f0f6fc; border-color: #174828;
+    box-shadow: var(--key-metal-edge), inset 0 -2px 0 rgba(51, 224, 122, 0.75);
+    text-shadow: 0 0 6px rgba(51,224,122,0.45);
   }
-  .af-listen-btn.on .btn-tally.led-green {
-    background: var(--led-rx); box-shadow: 0 0 6px var(--led-rx);
+  .top-mute-btn.on .btn-tally.led-green, .af-listen-btn.on .btn-tally.led-green {
+    background: var(--led-rx); border-color: #86efac;
+    box-shadow: 0 0 7px rgba(51,224,122,0.95), 0 0 2px #ffffff;
+  }
+  .top-mute-btn.muted, .af-listen-btn.muted {
+    background: var(--key-metal);
+    color: #ff9d8a; border-color: #5c201a;
+    box-shadow: var(--key-metal-edge), inset 0 -2px 0 rgba(255, 90, 72, 0.75);
+    text-shadow: 0 0 6px rgba(255,90,72,0.45);
+  }
+  .top-mute-btn.muted .btn-tally, .af-listen-btn.muted .btn-tally {
+    background: var(--led-hot); border-color: #ff8878;
+    box-shadow: 0 0 7px rgba(255,90,72,0.95), 0 0 2px #ffffff;
   }
   .af-aux-btn.on {
     background: var(--key-metal-on);
-    color: var(--led-info); border-color: #1d4a66;
-    box-shadow: var(--key-metal-edge), 0 0 6px rgba(76,196,255,0.22);
+    color: #f0f6fc; border-color: #1a3850;
+    box-shadow: var(--key-metal-edge), inset 0 -2px 0 rgba(76, 196, 255, 0.7);
+    text-shadow: 0 0 6px rgba(76,196,255,0.45);
   }
   .af-aux-btn.on .btn-tally.led-cyan {
-    background: var(--led-info); box-shadow: 0 0 6px var(--led-info);
+    background: var(--led-info); border-color: #7dd3fc;
+    box-shadow: 0 0 7px rgba(76,196,255,0.95), 0 0 2px #ffffff;
   }
 
   /* Dual Linear Vertical Fader Pair */
@@ -614,23 +957,33 @@
     flex: 0 0 auto;
     display: flex; flex-direction: column; justify-content: flex-start; gap: 4px;
     background:
-      radial-gradient(130% 95% at 50% 120%, rgba(28, 74, 104, 0.32) 0%, rgba(6, 14, 21, 0.12) 55%, transparent 100%),
+      radial-gradient(130% 95% at 50% 120%, rgba(28, 74, 104, 0.36) 0%, rgba(6, 14, 21, 0.14) 55%, transparent 100%),
       var(--panel-well);
     border: 1px solid var(--panel-split);
     border-radius: var(--radius-well);
     padding: 6px 9px;
     box-shadow:
-      inset 0 0 0 1px rgba(27, 58, 82, 0.5),
+      inset 0 0 0 1px rgba(27, 58, 82, 0.55),
       inset 0 3px 14px rgba(0,0,0,0.95),
-      0 1px 0 rgba(255,255,255,0.04);
+      0 1px 0 rgba(255,255,255,0.06);
     min-width: 0;
     position: relative;
+    overflow: hidden;
   }
-  /* Faint anti-reflective glass crystal sheen */
+  /* Top lit-edge of the crystal bevel */
+  .vfo-container::before {
+    content: ""; position: absolute; top: 0; left: 0; right: 0; height: 1px;
+    background: linear-gradient(90deg, transparent 5%, rgba(255,255,255,0.22) 35%, rgba(255,255,255,0.4) 50%, rgba(255,255,255,0.22) 65%, transparent 95%);
+    pointer-events: none; z-index: 2;
+  }
+  /* Curved glass crystal lens flare + specular reflection */
   .vfo-container::after {
-    content: ""; position: absolute; inset: 0;
-    background: linear-gradient(150deg, rgba(255,255,255,0.055) 0%, rgba(255,255,255,0.012) 26%, transparent 52%);
-    pointer-events: none; border-radius: inherit;
+    content: ""; position: absolute; inset: 0; border-radius: inherit;
+    background:
+      radial-gradient(ellipse 120% 35% at 50% 0%, rgba(255,255,255,0.075) 0%, rgba(255,255,255,0.015) 50%, transparent 75%),
+      linear-gradient(155deg, rgba(255,255,255,0.065) 0%, rgba(255,255,255,0.015) 28%, transparent 55%);
+    box-shadow: inset 0 1px 1px rgba(255,255,255,0.12), inset 0 0 0 1px rgba(56, 189, 248, 0.08);
+    pointer-events: none; z-index: 2;
   }
   .vfo-top-strip {
     display: flex; align-items: center; justify-content: space-between; flex-wrap: nowrap;
@@ -765,14 +1118,15 @@
     display: flex; gap: 4px;
   }
   .vfo-sub-btn {
-    font: 800 8px var(--mono); padding: 3px 7px; border-radius: var(--radius-key);
+    font: 800 8.5px var(--mono); padding: 3px 8px; border-radius: var(--radius-key);
     background: var(--key-metal);
-    color: var(--ink-2); border: 1px solid #0c1118; cursor: pointer;
+    color: #9cb5cb; border: 1px solid #080d12; cursor: pointer;
     box-shadow: var(--key-metal-edge);
-    transition: all 80ms;
+    text-shadow: 0 -1px 0 rgba(0,0,0,0.95);
+    transition: all 80ms; user-select: none;
   }
-  .vfo-sub-btn:hover { background: var(--key-metal-hover); color: var(--ink-1); border-color: #3a4a5a; }
-  .vfo-sub-btn:active { transform: translateY(1px); }
+  .vfo-sub-btn:hover { background: var(--key-metal-hover); color: #ffffff; border-color: #2c3a4a; }
+  .vfo-sub-btn:active { transform: translateY(1.5px); box-shadow: inset 0 2px 4px #000; }
 
   /* VFO Intermediate Telemetry Bar */
   .vfo-meter-bar {
@@ -814,13 +1168,9 @@
      the way a real panel indicates state. */
   .mode-keypad {
     display: grid;
-    grid-template-columns: repeat(6, 1fr);
+    grid-template-columns: repeat(11, 1fr);
     gap: 3px;
     padding: 2px 0;
-  }
-  .mode-keypad.mode-keypad-fn {
-    grid-template-columns: repeat(5, 1fr);
-    margin-top: 4px;
   }
   .modebtn {
     position: relative;
@@ -828,58 +1178,60 @@
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    min-height: 26px;
-    padding: 5px 2px 4px;
+    min-height: 24px;
+    padding: 3px 1px 3px;
     background: var(--key-metal);
-    border: 1px solid #0c1118;
+    border: 1px solid #080d12;
     border-radius: var(--radius-key);
     box-shadow: var(--key-metal-edge);
-    color: var(--ink-2);
+    color: #9cb5cb;
     cursor: pointer;
-    font: 800 9px/1 var(--mono);
-    letter-spacing: 0.06em;
-    text-shadow: 0 1px 0 #000;
+    font: 800 8.5px/1 var(--mono);
+    letter-spacing: 0.05em;
+    text-shadow: 0 -1px 0 rgba(0,0,0,0.95), 0 1px 0 rgba(255,255,255,0.08);
     user-select: none;
     transition: all 80ms;
     min-width: 0;
   }
   .modebtn:hover {
-    color: var(--ink-1);
+    color: #ffffff;
     background: var(--key-metal-hover);
-    border-color: #3a4a5a;
+    border-color: #2c3a4a;
   }
   .modebtn:active {
     transform: translateY(1px);
-    box-shadow: inset 0 2px 4px rgba(0,0,0,0.9);
+    box-shadow: inset 0 2px 4px rgba(0,0,0,0.9), inset 0 -1px 0 rgba(255,255,255,0.1), 0 0 0 1px #060a0e;
   }
   .modebtn.on {
     background: var(--key-metal-on);
-    border-color: #1d3d5a;
-    color: var(--ink-1);
-    box-shadow: var(--key-metal-edge), inset 0 -2px 0 rgba(76, 196, 255, 0.55);
+    border-color: #1a3850;
+    color: #f0f6fc;
+    box-shadow: var(--key-metal-edge), inset 0 -2px 0 rgba(76, 196, 255, 0.75);
+    text-shadow: 0 0 6px rgba(76,196,255,0.45);
   }
   /* Embedded illuminated jewel LED tally slit */
   .mode-tally {
-    width: 16px; height: 2.2px; border-radius: 1px;
-    background: #080e14; border: 1px solid #101820;
-    margin-bottom: 3.5px;
+    width: 13px; height: 2px; border-radius: 1px;
+    background: #04080c; border: 1px solid #0a121a;
+    box-shadow: inset 0 1px 2px rgba(0,0,0,0.95);
+    margin-bottom: 2.5px;
     transition: all 120ms;
   }
   .modebtn.on .mode-tally.tally-amber {
     background: var(--led-warn); border-color: #ffd074;
-    box-shadow: 0 0 6px rgba(255,176,46,0.95), 0 0 1px #ffffff;
+    box-shadow: 0 0 7px rgba(255,176,46,0.95), 0 0 2px #ffffff;
   }
   .modebtn.on .mode-tally.tally-cyan {
     background: var(--led-info); border-color: #7dd3fc;
-    box-shadow: 0 0 6px rgba(76,196,255,0.95), 0 0 1px #ffffff;
+    box-shadow: 0 0 7px rgba(76,196,255,0.95), 0 0 2px #ffffff;
   }
   .modebtn.on .mode-tally.tally-green {
     background: var(--led-rx); border-color: #86efac;
-    box-shadow: 0 0 6px rgba(51,224,122,0.95), 0 0 1px #ffffff;
+    box-shadow: 0 0 7px rgba(51,224,122,0.95), 0 0 2px #ffffff;
   }
   .modebtn.on .mode-tally.tally-ruby {
     background: var(--led-hot); border-color: #ff8878;
-    box-shadow: 0 0 6px rgba(255,90,72,0.95), 0 0 1px #ffffff;
+    box-shadow: 0 0 7px rgba(255,90,72,0.95), 0 0 2px #ffffff;
   }
 
   /* Quick band matrix keypad — same cap, tighter row */
@@ -896,26 +1248,27 @@
     font: 800 9px/1 var(--mono); text-align: center; letter-spacing: 0.04em;
     border-radius: var(--radius-key);
     background: var(--key-metal);
-    color: var(--ink-2); border: 1px solid #0c1118;
+    color: #9cb5cb; border: 1px solid #080d12;
     box-shadow: var(--key-metal-edge);
-    text-shadow: 0 1px 0 #000;
+    text-shadow: 0 -1px 0 rgba(0,0,0,0.95), 0 1px 0 rgba(255,255,255,0.08);
     cursor: pointer; transition: all 80ms; white-space: nowrap;
   }
-  .band-btn:hover { background: var(--key-metal-hover); color: var(--ink-1); border-color: #3a4a5a; }
-  .band-btn:active { transform: translateY(1px); box-shadow: inset 0 2px 4px rgba(0,0,0,0.9); }
+  .band-btn:hover { background: var(--key-metal-hover); color: #ffffff; border-color: #2c3a4a; }
+  .band-btn:active { transform: translateY(1.5px); box-shadow: inset 0 2px 4px rgba(0,0,0,0.9), inset 0 -1px 0 rgba(255,255,255,0.1), 0 0 0 1px #060a0e; }
   .band-btn.active {
     background: var(--key-metal-on);
-    color: var(--ink-1); border-color: #1d4a66;
-    box-shadow: var(--key-metal-edge), inset 0 -2px 0 rgba(76, 196, 255, 0.55);
+    color: #f0f6fc; border-color: #1a3850;
+    box-shadow: var(--key-metal-edge), inset 0 -2px 0 rgba(76, 196, 255, 0.75);
+    text-shadow: 0 0 6px rgba(76,196,255,0.45);
   }
   .band-tally {
     width: 5px; height: 5px; border-radius: 50%;
-    background: #0a1016; border: 1px solid #101822;
-    box-shadow: inset 0 1px 1px rgba(0,0,0,0.8);
+    background: #04080c; border: 1px solid #0a121a;
+    box-shadow: inset 0 1px 2px rgba(0,0,0,0.95);
   }
   .band-btn.active .band-tally {
     background: var(--led-info); border-color: #7dd3fc;
-    box-shadow: 0 0 5px rgba(76,196,255,0.9);
+    box-shadow: 0 0 6px rgba(76,196,255,0.95), 0 0 2px #ffffff;
   }
 
   /* Tactile DSP & action keypad — same cap, two-line legend */
@@ -931,39 +1284,35 @@
     min-height: 22px; padding: 4px 2px;
     border-radius: var(--radius-key);
     background: var(--key-metal);
-    color: var(--ink-2); border: 1px solid #0c1118;
+    color: #9cb5cb; border: 1px solid #080d12;
     box-shadow: var(--key-metal-edge);
     cursor: pointer; font: 800 9px/1 var(--mono);
     letter-spacing: 0.04em; user-select: none;
-    text-shadow: 0 1px 0 #000;
+    text-shadow: 0 -1px 0 rgba(0,0,0,0.95), 0 1px 0 rgba(255,255,255,0.08);
     transition: all 80ms; white-space: nowrap; overflow: hidden;
   }
-  .dsp-key:hover { color: var(--ink-1); background: var(--key-metal-hover); border-color: #3a4a5a; }
-  .dsp-key:active { transform: translateY(1px); box-shadow: inset 0 2px 4px #000; }
+  .dsp-key:hover { color: #ffffff; background: var(--key-metal-hover); border-color: #2c3a4a; }
+  .dsp-key:active { transform: translateY(1.5px); box-shadow: inset 0 2px 4px #000; }
   .dsp-key.on {
     background: var(--key-metal-on);
-    color: var(--ink-1); border-color: #1d3d5a;
-    box-shadow: var(--key-metal-edge), inset 0 -2px 0 rgba(76, 196, 255, 0.55);
+    color: #f0f6fc; border-color: #1a3850;
+    box-shadow: var(--key-metal-edge), inset 0 -2px 0 rgba(76, 196, 255, 0.75);
+    text-shadow: 0 0 6px rgba(76,196,255,0.45);
   }
   .dsp-key.palette-trigger {
     grid-column: 1 / -1;
   }
-  /* SVG face is the bevel; don't double it with a CSS border. */
-  .af-listen-btn, .af-aux-btn, .vfo-sub-btn, .modebtn, .band-btn, .dsp-key,
-  .fader-agc-btn, .fader-reset-btn {
-    border: 0;
-    background-color: #151c24;
-  }
   .dsp-tally {
     width: 14px; height: 2px; border-radius: 1px;
-    background: #080e14; border: 1px solid #101922; margin-bottom: 2px;
+    background: #04080c; border: 1px solid #0a121a; margin-bottom: 2px;
+    box-shadow: inset 0 1px 2px rgba(0,0,0,0.95);
     transition: all 120ms;
   }
-  .dsp-key.on .dsp-tally.led-amber { background: var(--led-warn); border-color: #ffd074; box-shadow: 0 0 5px var(--led-warn); }
-  .dsp-key.on .dsp-tally.led-cyan { background: var(--led-info); border-color: #7dd3fc; box-shadow: 0 0 5px var(--led-info); }
-  .dsp-key.on .dsp-tally.led-blue { background: #60a5fa; border-color: #93c5fd; box-shadow: 0 0 5px #60a5fa; }
-  .dsp-key.on .dsp-tally.led-green { background: var(--led-rx); border-color: #86efac; box-shadow: 0 0 5px var(--led-rx); }
-  .dsp-key.on .dsp-tally.led-violet { background: #c084fc; border-color: #e9d5ff; box-shadow: 0 0 5px #c084fc; }
+  .dsp-key.on .dsp-tally.led-amber { background: var(--led-warn); border-color: #ffd074; box-shadow: 0 0 6px var(--led-warn); }
+  .dsp-key.on .dsp-tally.led-cyan { background: var(--led-info); border-color: #7dd3fc; box-shadow: 0 0 6px var(--led-info); }
+  .dsp-key.on .dsp-tally.led-blue { background: #60a5fa; border-color: #93c5fd; box-shadow: 0 0 6px #60a5fa; }
+  .dsp-key.on .dsp-tally.led-green { background: var(--led-rx); border-color: #86efac; box-shadow: 0 0 6px var(--led-rx); }
+  .dsp-key.on .dsp-tally.led-violet { background: #c084fc; border-color: #e9d5ff; box-shadow: 0 0 6px #c084fc; }
 
   /* -------------------------------------------------------------------------
      BAY 4: DISPLAY FADERS & MAIN VFO TUNING FLYWHEEL
@@ -1064,7 +1413,7 @@
   .spec-row { display: block; }
   .spec-col { min-width: 0; }
   .chan-col {
-    display: flex; flex-direction: column; gap: 8px; min-width: 0;
+    display: flex; flex-direction: column; gap: 8px; min-width: 0; flex: 1 1 auto;
   }
   .chan-col .chan-title {
     font-size: 9px; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase;
@@ -1074,17 +1423,38 @@
     margin-left: auto; font: 10px var(--mono); color: var(--faint); letter-spacing: 0;
     text-transform: none; white-space: nowrap;
   }
-  .chan-col .sdr-classifier-cell { height: auto; min-height: 60px; }
+  .chan-col .sdr-classifier-cell { height: auto; min-height: 52px; }
   .chan-col-strip {
-    gap: 8px;
-    background: var(--panel-well);
-    border: 1px solid var(--panel-split);
+    flex: 1 1 auto;
+    display: flex; flex-direction: column;
+    background: linear-gradient(180deg, #161e27 0%, #10161e 100%);
+    border: 1px solid #080d12;
     border-radius: var(--radius-assembly);
-    padding: 6px 8px;
-    box-shadow: inset 0 1px 3px rgba(0,0,0,0.8);
+    padding: 0;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.08), 0 2px 6px rgba(0,0,0,0.5);
+    overflow: hidden;
+  }
+  .chan-col-strip .bay-header {
+    border-top: none; border-left: none; border-right: none;
+    border-radius: 0;
+    background: linear-gradient(180deg, #1f2a36 0%, #17202a 100%);
+  }
+  .chan-cells-body {
+    flex: 1 1 auto;
+    display: flex; flex-direction: column; justify-content: space-between;
+    gap: 6px;
+    padding: 8px 9px;
   }
   .chan-col .sdr-classifier-value, .chan-col .sdr-classifier-subvalue { white-space: normal; height: auto; line-height: 1.35; }
-  .chan-col .sdr-peak-buttons { height: 74px; }
+  .chan-col .sdr-peak-buttons {
+    flex: 1 1 auto;
+    min-height: 72px;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    overflow-y: auto;
+  }
+  .chan-col .sdr-peak-buttons .sdr-preset-btn { width: 100% !important; }
   @media (max-width: 1080px) {
     .chan-col .sdr-classifier-cell { min-height: 0; }
   }
@@ -1093,21 +1463,46 @@
   details.advanced { margin-top: 10px; }
   details.advanced > summary {
     cursor: pointer; list-style: none; user-select: none;
-    font: 700 10px/1 var(--sans); letter-spacing: 0.14em; text-transform: uppercase;
-    color: var(--dim); padding: 7px 10px; border: 1px solid #1c2733; border-radius: 6px;
-    background: #0f161d;
+    font: 700 9.5px/1 var(--sans); letter-spacing: 0.14em; text-transform: uppercase;
+    color: #9cb5c8; padding: 7px 12px; border: 1px solid #141f2a; border-radius: 5px;
+    background:
+      repeating-linear-gradient(90deg, rgba(255,255,255,0.015) 0px, rgba(255,255,255,0.015) 1px, transparent 1px, transparent 2px),
+      linear-gradient(180deg, #1b242e 0%, #121921 100%);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.1), 0 2px 5px rgba(0,0,0,0.4);
+    transition: color 120ms ease, background 120ms ease;
   }
   details.advanced > summary::-webkit-details-marker { display: none; }
   details.advanced > summary::before { content: '▸ '; color: var(--accent); }
   details.advanced[open] > summary::before { content: '▾ '; }
-  details.advanced > summary:hover { color: #d8e5ee; }
+  details.advanced > summary:hover {
+    color: #eaf4fc;
+    background:
+      repeating-linear-gradient(90deg, rgba(255,255,255,0.025) 0px, rgba(255,255,255,0.025) 1px, transparent 1px, transparent 2px),
+      linear-gradient(180deg, #222d3a 0%, #161e27 100%);
+  }
   details.advanced > .panelrow { margin-top: 8px; }
   .spec-canvases {
     position: relative; border: 1px solid var(--panel-split); border-radius: var(--radius-well);
     overflow: hidden; background: #020508; line-height: 0;
     box-shadow:
-      inset 0 0 0 1px rgba(27, 58, 82, 0.45),
-      inset 0 2px 12px rgba(0,0,0,0.95);
+      inset 0 0 0 1px rgba(27, 58, 82, 0.55),
+      inset 0 4px 18px rgba(0,0,0,0.95),
+      0 1px 0 rgba(255,255,255,0.06);
+  }
+  /* Top lit-edge of panadapter crystal frame */
+  .spec-canvases::before {
+    content: ""; position: absolute; top: 0; left: 0; right: 0; height: 1px;
+    background: linear-gradient(90deg, transparent 5%, rgba(255,255,255,0.25) 35%, rgba(255,255,255,0.45) 50%, rgba(255,255,255,0.25) 65%, transparent 95%);
+    pointer-events: none; z-index: 3;
+  }
+  /* Curved crystal glass lens flare + specular reflection */
+  .spec-canvases::after {
+    content: ""; position: absolute; inset: 0; border-radius: inherit; pointer-events: none; z-index: 3;
+    background:
+      radial-gradient(ellipse 130% 30% at 50% 0%, rgba(255,255,255,0.07) 0%, rgba(255,255,255,0.015) 50%, transparent 75%),
+      linear-gradient(155deg, rgba(255,255,255,0.06) 0%, rgba(255,255,255,0.015) 28%, transparent 55%),
+      radial-gradient(circle at 50% 100%, rgba(56,189,248,0.03) 0%, transparent 60%);
+    box-shadow: inset 0 1px 1px rgba(255,255,255,0.12), inset 0 0 0 1px rgba(27, 58, 82, 0.35);
   }
   #sdrSpectrumCanvas { width: 100%; height: 172px; display: block; cursor: crosshair; }
   #sdrWaterfallCanvas { width: 100%; height: 268px; display: block; cursor: crosshair; }
@@ -1137,9 +1532,10 @@
   }
   .scope-header {
     display: flex; align-items: center; justify-content: space-between;
-    background: linear-gradient(180deg, #101c27 0%, #0a131b 100%);
+    background: linear-gradient(180deg, #14212e 0%, #0c1620 100%);
     border: 1px solid #182836; border-bottom: none;
     padding: 5px 12px; border-radius: 4px 4px 0 0;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.06);
   }
   .scope-title {
     font-size: 11px; font-weight: 700; letter-spacing: 0.2em; color: #b0c9db;
@@ -1161,10 +1557,24 @@
     display: grid; grid-template-columns: 1fr 1fr; gap: 1px;
     background: #142330; border: 1px solid #142330; border-radius: 0 0 4px 4px;
     overflow: hidden;
+    box-shadow: inset 0 0 0 1px rgba(27, 58, 82, 0.45), 0 1px 0 rgba(255,255,255,0.05);
   }
   .scope-pane {
-    background: #010609; position: relative; line-height: 0;
-    box-shadow: inset 0 2px 10px rgba(0,0,0,0.8);
+    background: radial-gradient(ellipse at 50% 50%, #030d14 0%, #010508 80%);
+    position: relative; line-height: 0;
+    box-shadow: inset 0 0 0 1px rgba(27, 58, 82, 0.4), inset 0 3px 12px rgba(0,0,0,0.95);
+  }
+  .scope-pane::before {
+    content: ""; position: absolute; top: 0; left: 0; right: 0; height: 1px;
+    background: linear-gradient(90deg, transparent 5%, rgba(255,255,255,0.2) 50%, transparent 95%);
+    pointer-events: none; z-index: 2;
+  }
+  .scope-pane::after {
+    content: ""; position: absolute; inset: 0; border-radius: inherit; pointer-events: none; z-index: 2;
+    background:
+      radial-gradient(ellipse 120% 35% at 50% 0%, rgba(255,255,255,0.06) 0%, transparent 60%),
+      linear-gradient(150deg, rgba(255,255,255,0.045) 0%, transparent 45%);
+    box-shadow: inset 0 1px 1px rgba(255,255,255,0.1);
   }
   .scope-pane canvas { width: 100%; height: 114px; display: block; }
   .scope-axis {
@@ -1217,10 +1627,12 @@
 
   .panelrow {
     display: flex; flex-wrap: wrap; align-items: center; gap: 0;
-    background: linear-gradient(180deg, #1f2731 0%, #151b22 100%);
-    border: 1px solid #0b1016; border-radius: 6px;
-    padding: 3px 6px; margin-top: 12px;
-    box-shadow: inset 0 1px 0 rgba(255,255,255,0.08), 0 2px 6px rgba(0,0,0,0.4);
+    background:
+      repeating-linear-gradient(90deg, rgba(255,255,255,0.012) 0px, rgba(255,255,255,0.012) 1px, transparent 1px, transparent 2px),
+      linear-gradient(180deg, #1d252f 0%, #131921 100%);
+    border: 1px solid #0b1117; border-radius: 5px;
+    padding: 3px 6px; margin-top: 10px;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.08), 0 2px 6px rgba(0,0,0,0.45);
   }
   .ctlgroup {
     display: flex; flex-wrap: wrap; align-items: center; gap: 10px;
@@ -1273,16 +1685,16 @@
   }
   .side-tabs {
     display: flex; gap: 3px; padding: 7px 10px 0;
-    background: #111a24; border-bottom: 1px solid var(--line);
+    background: #10151c; border-bottom: 1px solid var(--line);
   }
-  .side-tab {
+  .side-tab, .side-tab-action {
     font: 700 10px/1 var(--sans); letter-spacing: 0.12em;
     padding: 9px 14px; cursor: pointer; border-radius: 5px 5px 0 0;
     background: transparent; color: var(--dim); border: 1px solid transparent;
     border-bottom: none;
     transition: color 100ms, background 100ms;
   }
-  .side-tab:hover { color: #d8e5ee; background: rgba(255,255,255,0.04); }
+  .side-tab:hover, .side-tab-action:hover { color: #d8e5ee; background: rgba(255,255,255,0.04); }
   .side-tab.on {
     background: #0c1218; color: #eaf2f7;
     border-color: var(--line);
@@ -1297,7 +1709,7 @@
   .side-panel > h2 {
     margin: 0; padding: 10px 16px; font-size: 11px; font-weight: 700;
     letter-spacing: 0.15em; text-transform: uppercase; color: #a9c5d8;
-    background: linear-gradient(180deg, #131c26 0%, #0e1620 100%);
+    background: linear-gradient(180deg, #182029 0%, #10151d 100%);
     border-radius: 0; border-bottom: 1px solid var(--line);
     display: flex; align-items: center; gap: 10px;
     box-shadow: inset 3px 0 0 var(--accent);
@@ -1325,10 +1737,10 @@
     display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px;
   }
   .sdr-classifier-cell {
-    background: #080d13; border: 1px solid #162432;
-    border-radius: 6px; padding: 9px 12px;
+    background: #05080c; border: 1px solid #101720;
+    border-radius: 4px; padding: 7px 10px;
     height: 78px; overflow: hidden;
-    box-shadow: inset 0 1px 3px rgba(0,0,0,0.6);
+    box-shadow: inset 0 1px 3px rgba(0,0,0,0.8), 0 1px 0 rgba(255,255,255,0.02);
   }
   .sdr-classifier-label {
     font-size: 9px; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase; color: var(--faint);
@@ -1342,15 +1754,17 @@
   .sdr-classifier-subvalue { height: 15px; line-height: 15px; }
   .sdr-peak-buttons {
     height: 48px; overflow-y: auto; align-content: flex-start; overscroll-behavior: contain;
-    display: flex; flex-wrap: wrap; gap: 5px;
+    display: flex; flex-wrap: wrap; gap: 4px;
   }
   .sdr-preset-btn {
     font-family: var(--mono); border-radius: 3px; cursor: pointer;
-    background: #0d1724; color: #cbd5e1; border: 1px solid #1b2d42; padding: 3px 8px; font-size: 10px;
+    background: var(--key-metal); color: #cbd5e1; border: 1px solid #080d12;
+    box-shadow: var(--key-metal-edge);
+    padding: 3px 8px; font-size: 10px;
     transition: border-color 100ms, background 100ms, color 100ms, transform 80ms;
   }
-  .sdr-preset-btn:hover { border-color: var(--accent); color: #e6eef5; background: #132740; }
-  .sdr-preset-btn:active { transform: translateY(1px); }
+  .sdr-preset-btn:hover { border-color: #2c3a4a; color: #ffffff; background: var(--key-metal-hover); }
+  .sdr-preset-btn:active { transform: translateY(1px); box-shadow: inset 0 1px 2px rgba(0,0,0,0.8); }
 
   .sdr-classifier-log {
     height: 200px; overflow-y: auto; overflow-x: hidden;
@@ -1489,11 +1903,12 @@
   }
 
   /* Thin technical scrollbars */
-  * { scrollbar-width: thin; scrollbar-color: #1e2c3a transparent; }
+  * { scrollbar-width: thin; scrollbar-color: #1e2c3a #06090d; }
   ::-webkit-scrollbar { width: 8px; height: 8px; }
-  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-track { background: #06090d; }
+  ::-webkit-scrollbar-corner { background: #06090d; }
   ::-webkit-scrollbar-thumb {
-    background: #1e2c3a; border-radius: 4px; border: 2px solid transparent;
+    background: #1e2c3a; border-radius: 4px; border: 2px solid #06090d;
     background-clip: content-box;
   }
   ::-webkit-scrollbar-thumb:hover { background-color: #2b3e52; }
@@ -1506,7 +1921,7 @@
      so they become two rows of keys — the way a real keypad is arranged —
      instead of squeezing until the last label is clipped. Declared here, after
      the base keypad rules, so it actually wins the cascade. */
-  @media (max-width: 1120px) {
+  @media (max-width: 880px) {
     .mode-keypad { grid-template-columns: repeat(6, 1fr); }
     .band-matrix { grid-template-columns: repeat(4, 1fr); }
   }
@@ -1569,22 +1984,61 @@
       </div>
       <!-- Live receive status: every value carries its own engraved label, so
            nothing in the strip is a bare number. -->
-      <div class="brand-status-strip">
-        <span class="brand-metric-label">SPAN</span>
-        <span class="brand-metric-val" id="badgeSpan" title="Displayed span: the window the panadapter shows. Equal to the sample rate unless the LO is offset.">2.048M</span>
-        <span class="brand-divider">/</span>
-        <span class="brand-metric-label">PROTO</span>
-        <span class="badge" id="badgeProto" title="Protocol the classifier hears on the selected channel">IDLE</span>
-        <span class="brand-divider">/</span>
-        <span class="badge health-badge" id="badgeHealth" title="Sample stream health: dropped/lagged blocks and lost samples since start">STREAM —</span>
-        <span class="brand-divider">/</span>
-        <span class="brand-metric-label">TUNER</span>
-        <span class="brand-metric-val" id="headerTunerBadge">R820T</span>
-        <span class="brand-divider">/</span>
-        <span class="brand-metric-label">RATE</span>
-        <span class="brand-metric-val" id="headerRateBadge">2.40M</span>
+      <!-- Precision Machined Receiver Annunciator Strip -->
+      <div class="brand-status-strip" id="brandStatusStrip" title="Transceiver Hardware &amp; Signal Processing Status Annunciator">
+        <!-- Bay 1: RF Front-End -->
+        <div class="annunc-bay">
+          <span class="brand-metric-label">TUNER</span>
+          <span class="brand-metric-val" id="headerTunerBadge" title="RF Front-End Tuner IC">R820T</span>
+          <span class="annunc-subsep">·</span>
+          <span class="brand-metric-label">RATE</span>
+          <span class="brand-metric-val" id="headerRateBadge" title="ADC Quadrature Sample Rate">2.40M</span>
+        </div>
+
+        <div class="annunc-split" aria-hidden="true"></div>
+
+        <!-- Bay 2: DSP Passband & Span -->
+        <div class="annunc-bay">
+          <span class="brand-metric-label">IF BW</span>
+          <span class="brand-metric-val highlight-bw" id="headerBwBadge" title="Active Demodulator Intermediate Filter Passband Bandwidth">12.5k</span>
+          <span class="annunc-subsep">·</span>
+          <span class="brand-metric-label">SPAN</span>
+          <span class="brand-metric-val" id="badgeSpan" title="Displayed span: the window the panadapter shows. Equal to the sample rate unless the LO is offset.">2.048M</span>
+        </div>
+
+        <div class="annunc-split" aria-hidden="true"></div>
+
+        <!-- Bay 3: Channel Classifier Protocol -->
+        <div class="annunc-bay">
+          <span class="brand-metric-label">PROTO</span>
+          <span class="badge annunc-proto" id="badgeProto" title="Protocol the classifier hears on the selected channel">IDLE</span>
+        </div>
+
+        <div class="annunc-split" aria-hidden="true"></div>
+
+        <!-- Bay 4: Hardware Health & Tallies -->
+        <div class="annunc-bay annunc-tallies">
+          <!-- ADC Overload / Clip Jewel Tally -->
+          <div class="annunc-tally" id="headerAdcTally" title="ADC Overload: Illuminates red when RF input saturates front-end dynamic range">
+            <span class="annunc-pip led-green" id="headerAdcLed"></span>
+            <span class="annunc-pip-label" id="headerAdcText">ADC OK</span>
+          </div>
+
+          <!-- LO Offset DC Cancellation Tally -->
+          <div class="annunc-tally" id="headerLoTally" title="Local Oscillator Offset: Shifts DC hardware spike outside demodulation window">
+            <span class="annunc-pip" id="headerLoLed"></span>
+            <span class="annunc-pip-label" id="headerLoText">LO NORM</span>
+          </div>
+
+          <!-- Stream Health Tally -->
+          <span class="badge health-badge annunc-stream" id="badgeHealth" title="Sample stream health: dropped/lagged blocks and lost samples since start">STREAM —</span>
+        </div>
       </div>
       <div class="brand-status-cluster">
+        <button type="button" class="top-mute-btn on" id="btnListen" title="Audio Output (Click to Mute)">
+          <span class="btn-tally led-green" id="listenTally"></span>
+          <span id="listenBtnLabel">MUTE</span>
+        </button>
         <div class="conn" id="conn">
           <span class="conn-beacon" id="connBeacon"></span>
           <span id="connText">connecting…</span>
@@ -1671,16 +2125,12 @@
                   <circle id="deckMuteBtn" cx="55" cy="55" r="9" fill="url(#afCapGrad)" stroke="#111c26" stroke-width="1.2" style="cursor:pointer" title="Click to Mute / Unmute"/>
                   <path d="M 52.5 53 L 54.5 53 L 57 51 L 57 59 L 54.5 57 L 52.5 57 Z" fill="#8caec4" pointer-events="none"/>
                 </svg>
-                <div class="af-vol-readout-pill" id="deckAfVolReadout">AF 60% · MON OFF</div>
+                <div class="af-vol-readout-pill" id="deckAfVolReadout">AF 60% · AUDIO ON</div>
               </div>
 
-              <!-- AF Auxiliary Function Row: Audio Monitor & Front-End Offset -->
+              <!-- AF Auxiliary Function Row: Front-End Offset -->
               <div class="af-aux-row">
-                <button type="button" class="af-listen-btn" id="btnListen" title="Audio Monitor (MONITOR)">
-                  <span class="btn-tally led-green" id="listenTally"></span>
-                  <span id="listenBtnLabel">MONITOR</span>
-                </button>
-                <button type="button" class="af-aux-btn" id="btnLoOffset" title="LO Off-Center Offset (+/- 250 kHz)">
+                <button type="button" class="af-aux-btn af-aux-full" id="btnLoOffset" title="LO Off-Center Offset (+/- 250 kHz)">
                   <span class="btn-tally led-cyan" id="loOffsetTally"></span>
                   <span id="loOffsetBtnLabel">LO OFFSET</span>
                 </button>
@@ -1744,29 +2194,33 @@
               </div>
             </div>
 
-          <div class="chan-col chan-col-strip" aria-label="Selected channel">
-          <div class="chan-title">SEL CH
-          <span class="note" id="sdrInspectFreqBadge">—</span>
-          </div>
-          <div class="sdr-classifier-cell chan-keep">
-          <div class="sdr-classifier-label">Protocol <span class="note" id="sdrInspectStatusBadge" style="float:right; text-transform:none; letter-spacing:0; font:10px var(--mono); color:var(--faint)">IDLE</span></div>
-          <div id="sdrClassProtocol" class="sdr-classifier-value" style="font-size:13px; font-weight:700; color:#38bdf8; margin-top:3px;">Idle / Noise</div>
-          <div id="sdrClassDetails" class="sdr-classifier-subvalue" style="font-size:11px; color:#94a3b8; margin-top:2px;">Waiting for carrier…</div>
-          </div>
-          <div class="sdr-classifier-cell">
-          <div class="sdr-classifier-label">Modulation</div>
-          <div id="sdrClassModulation" class="sdr-classifier-value" style="font-size:12px; font-weight:600; margin-top:3px;">—</div>
-          <div id="sdrClassConfidence" class="sdr-classifier-subvalue" style="font-size:11px; color:#94a3b8; margin-top:2px;">Confidence: —</div>
-          </div>
-          <div class="sdr-classifier-cell">
-          <div class="sdr-classifier-label">Signal</div>
-          <div id="sdrClassPower" class="sdr-classifier-value" style="font-size:12px; font-weight:600; margin-top:3px;">RF — · above floor — · quieting —</div>
-          <div id="sdrClassDev" class="sdr-classifier-subvalue" style="font-size:11px; color:#94a3b8; margin-top:2px;">Dev: —</div>
-          </div>
-          <div class="sdr-classifier-cell">
-          <div class="sdr-classifier-label">Peaks in span <span style="float:right; text-transform:none; letter-spacing:0; font:10px var(--mono); color:var(--faint)">dB above floor</span></div>
-          <div id="sdrPeakButtons" class="sdr-peak-buttons" style="margin-top:5px;"></div>
-          </div>
+          <div class="chan-col chan-col-strip deck-subbay bay-chan" aria-label="Selected channel">
+            <div class="bay-header">
+              <span class="bay-title"><span class="bay-screw-corner"></span>SEL CH</span>
+              <span class="note" id="sdrInspectFreqBadge" style="margin-left:auto; font:10px var(--mono); color:var(--faint); letter-spacing:0; text-transform:none;">—</span>
+              <span class="bay-screw-corner"></span>
+            </div>
+            <div class="chan-cells-body">
+              <div class="sdr-classifier-cell chan-keep">
+                <div class="sdr-classifier-label">Protocol <span class="note" id="sdrInspectStatusBadge" style="float:right; text-transform:none; letter-spacing:0; font:10px var(--mono); color:var(--faint)">IDLE</span></div>
+                <div id="sdrClassProtocol" class="sdr-classifier-value" style="font-size:12.5px; font-weight:700; color:#2bff6a; margin-top:3px;">Idle / Noise</div>
+                <div id="sdrClassDetails" class="sdr-classifier-subvalue" style="font-size:11px; color:#94a3b8; margin-top:2px;">Waiting for carrier…</div>
+              </div>
+              <div class="sdr-classifier-cell">
+                <div class="sdr-classifier-label">Modulation</div>
+                <div id="sdrClassModulation" class="sdr-classifier-value" style="font-size:12px; font-weight:600; color:#dce5ec; margin-top:3px;">—</div>
+                <div id="sdrClassConfidence" class="sdr-classifier-subvalue" style="font-size:11px; color:#94a3b8; margin-top:2px;">Confidence: —</div>
+              </div>
+              <div class="sdr-classifier-cell">
+                <div class="sdr-classifier-label">Signal</div>
+                <div id="sdrClassPower" class="sdr-classifier-value" style="font-size:11.5px; font-weight:600; color:#dce5ec; margin-top:3px;">RF — · above floor — · quieting —</div>
+                <div id="sdrClassDev" class="sdr-classifier-subvalue" style="font-size:11px; color:#94a3b8; margin-top:2px;">Dev: —</div>
+              </div>
+              <div class="sdr-classifier-cell">
+                <div class="sdr-classifier-label">Peaks in span <span style="float:right; text-transform:none; letter-spacing:0; font:10px var(--mono); color:var(--faint)">dB above floor</span></div>
+                <div id="sdrPeakButtons" class="sdr-peak-buttons" style="margin-top:4px;"></div>
+              </div>
+            </div>
           </div>
         </div>
 
@@ -1856,16 +2310,14 @@
               </div>
             </div>
 
-            <!-- Authentic Mechanical Push Switches: Demodulator Mode Keypad -->
-            <div class="mode-keypad" role="group" aria-label="Demodulator mode">
+            <!-- Authentic Mechanical Push Switches: Demodulator Mode Keypad (11-Key Unified Rack) -->
+            <div class="mode-keypad" role="group" aria-label="Demodulator mode and receiver function">
               <button type="button" class="modebtn on" data-mode="nfm" title="Narrowband FM (voice)"><span class="mode-tally tally-amber"></span>NFM</button>
               <button type="button" class="modebtn" data-mode="am" title="Amplitude Modulation (airband & AM broadcast)"><span class="mode-tally tally-amber"></span>AM</button>
               <button type="button" class="modebtn" data-mode="wfm" title="Wideband FM (broadcast radio)"><span class="mode-tally tally-cyan"></span>WFM</button>
               <button type="button" class="modebtn" data-mode="p25" title="APCO Project 25 digital voice"><span class="mode-tally tally-green"></span>P25</button>
               <button type="button" class="modebtn" data-mode="dmr" title="Digital Mobile Radio voice"><span class="mode-tally tally-green"></span>DMR</button>
               <button type="button" class="modebtn" data-mode="nxdn" title="NXDN48/NXDN96 digital voice"><span class="mode-tally tally-green"></span>NXDN</button>
-            </div>
-            <div class="mode-keypad mode-keypad-fn" role="group" aria-label="Receiver function">
               <button type="button" class="modebtn" data-mode="packet" title="AX.25 1200 baud packet radio"><span class="mode-tally tally-green"></span>PACKET</button>
               <button type="button" class="modebtn" data-mode="pager" title="POCSAG / FLEX paging sweep"><span class="mode-tally tally-cyan"></span>PAGER</button>
               <button type="button" class="modebtn" data-mode="flex" title="Dedicated Motorola FLEX pager demodulator"><span class="mode-tally tally-cyan"></span>FLEX</button>
@@ -2300,9 +2752,34 @@
             </div>
           </div>
 
-          <!-- Phase 1: CHASSIS plate retired — the live TUNER/RATE badges moved
-               to the brand strip; static IF/DSP filler dropped. The
-               .bay-plate rule stays as display:none. -->
+          <div class="bay-plate" style="display:none"></div>
+
+          <div class="deck-subbay bay-memory">
+            <div class="bay-header">
+              <span class="bay-title"><span class="bay-screw-corner"></span>QUICK MEMORY · DSP</span>
+              <span class="bay-readout" id="deckMemReadout">M1–M8 · NOTCH AUTO</span>
+              <span class="bay-screw-corner"></span>
+            </div>
+
+            <!-- Quick Memory Preset Keypad -->
+            <div class="qmem-matrix">
+              <button type="button" class="qmem-btn" data-slot="0" title="Slot M1: Click to recall, Shift-click to store current frequency/mode"><span class="qmem-tally"></span><span class="qmem-tag">M1</span><span class="qmem-freq">144.200</span></button>
+              <button type="button" class="qmem-btn" data-slot="1" title="Slot M2: Click to recall, Shift-click to store current frequency/mode"><span class="qmem-tally"></span><span class="qmem-tag">M2</span><span class="qmem-freq">146.520</span></button>
+              <button type="button" class="qmem-btn" data-slot="2" title="Slot M3: Click to recall, Shift-click to store current frequency/mode"><span class="qmem-tally"></span><span class="qmem-tag">M3</span><span class="qmem-freq">156.800</span></button>
+              <button type="button" class="qmem-btn" data-slot="3" title="Slot M4: Click to recall, Shift-click to store current frequency/mode"><span class="qmem-tally"></span><span class="qmem-tag">M4</span><span class="qmem-freq">462.562</span></button>
+              <button type="button" class="qmem-btn" data-slot="4" title="Slot M5: Click to recall, Shift-click to store current frequency/mode"><span class="qmem-tally"></span><span class="qmem-tag">M5</span><span class="qmem-freq">121.500</span></button>
+              <button type="button" class="qmem-btn" data-slot="5" title="Slot M6: Click to recall, Shift-click to store current frequency/mode"><span class="qmem-tally"></span><span class="qmem-tag">M6</span><span class="qmem-freq">162.550</span></button>
+              <button type="button" class="qmem-btn" data-slot="6" title="Slot M7: Click to recall, Shift-click to store current frequency/mode"><span class="qmem-tally"></span><span class="qmem-tag">M7</span><span class="qmem-freq">101.100</span></button>
+              <button type="button" class="qmem-btn" data-slot="7" title="Slot M8: Click to recall, Shift-click to store current frequency/mode"><span class="qmem-tally"></span><span class="qmem-tag">M8</span><span class="qmem-freq">851.012</span></button>
+            </div>
+
+            <!-- DSP Audio Controls -->
+            <div class="dsp-ctrl-row">
+              <button type="button" class="dsp-ctrl-btn active" id="btnDspNotch" title="Auto Notch Filter"><span class="btn-tally"></span>NOTCH AUTO</button>
+              <button type="button" class="dsp-ctrl-btn" id="btnDspNr" title="Noise Reduction"><span class="btn-tally"></span>NR OFF</button>
+              <button type="button" class="dsp-ctrl-btn" id="btnDspSql" title="Squelch Tight Mode"><span class="btn-tally"></span>SQL NORM</button>
+            </div>
+          </div>
         </div>
       </div><!-- /.deck-console -->
 
@@ -2343,6 +2820,8 @@
 
     <!-- softkeys integrated into top transceiver control deck -->
 
+    <details class="advanced">
+      <summary>Advanced · radio device · front end · calibration · display range</summary>
     <div class="panelrow">
     <div class="ctlgroup">
       <span class="grouplabel">Radio</span>
@@ -2351,11 +2830,6 @@
         <select id="sdrRadioSel" style="min-width:200px"></select>
       </div>
     </div>
-    </div><!-- /panelrow -->
-
-    <details class="advanced">
-      <summary>Advanced · front end · calibration · display range</summary>
-    <div class="panelrow">
     <div class="ctlgroup">
       <span class="grouplabel">Front end</span>
       <div class="ctl">
@@ -2427,6 +2901,7 @@
       <button type="button" class="side-tab" id="tabCalls" role="tab" aria-selected="false">LAST HEARD</button>
       <button type="button" class="side-tab" id="tabScan" role="tab" aria-selected="false">SCAN</button>
       <span style="flex:1"></span>
+      <button type="button" class="side-tab-action" id="dockLayoutBtn" title="Toggle side dock / stacked layout (D)">⇄ side dock (D)</button>
       <button type="button" class="side-tab" id="dockWideBtn" title="Give the panels nearly the whole viewport (F)">⤢ tall (F)</button>
     </div>
 
@@ -2654,6 +3129,7 @@ function toggleWideDock() {
   const tall = col.classList.toggle('tall');
   const btn = $('dockWideBtn');
   if (btn) btn.textContent = tall ? '⤡ shrink' : '⤢ tall (F)';
+  if (typeof resizeSdrCanvases === 'function') resizeSdrCanvases();
 }
 const dwb = document.getElementById('dockWideBtn');
 if (dwb) dwb.addEventListener('click', toggleWideDock);
@@ -2663,6 +3139,41 @@ document.addEventListener('keydown', (e) => {
   if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return;
   toggleWideDock();
 });
+
+// Side dock / Stack dock mode: toggle between side-by-side workstation wing and stacked layout (button or D key).
+function toggleDockLayout() {
+  const wrap = document.querySelector('.wrap');
+  if (!wrap) return;
+  const isSide = wrap.classList.toggle('side-dock-active');
+  wrap.classList.toggle('stack-dock-active', !isSide);
+  try { localStorage.setItem('usdr_dock_layout', isSide ? 'side' : 'stack'); } catch {}
+  const btn = $('dockLayoutBtn');
+  if (btn) btn.textContent = isSide ? '⇊ stack dock (D)' : '⇄ side dock (D)';
+  if (typeof resizeSdrCanvases === 'function') {
+    resizeSdrCanvases();
+    requestAnimationFrame(resizeSdrCanvases);
+    setTimeout(resizeSdrCanvases, 180);
+  }
+}
+const dlb = document.getElementById('dockLayoutBtn');
+if (dlb) dlb.addEventListener('click', toggleDockLayout);
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'd' && e.key !== 'D') return;
+  const tag = (document.activeElement && document.activeElement.tagName) || '';
+  if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return;
+  toggleDockLayout();
+});
+try {
+  const pref = localStorage.getItem('usdr_dock_layout');
+  if (pref === 'side' || (pref === null && window.innerWidth >= 1680)) {
+    const wrap = document.querySelector('.wrap');
+    if (wrap) {
+      wrap.classList.add('side-dock-active');
+      const btn = $('dockLayoutBtn');
+      if (btn) btn.textContent = '⇊ stack dock (D)';
+    }
+  }
+} catch {}
 const $ = (id) => document.getElementById(id);
 function esc(s) { return String(s).replace(/[<>&"]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;'}[c])); }
 
@@ -2703,9 +3214,23 @@ let sdrClipHoldUntil = 0;
 function noteClipping(peakIq) {
   const now = performance.now();
   if (isFinite(peakIq) && peakIq >= 0.98) sdrClipHoldUntil = now + 2500;
+  const clipping = now < sdrClipHoldUntil;
+  const adcLed = $('headerAdcLed');
+  const adcTxt = $('headerAdcText');
+  const adcTal = $('headerAdcTally');
+  if (adcLed && adcTxt) {
+    if (clipping) {
+      adcLed.className = 'annunc-pip led-red';
+      adcTxt.textContent = 'ADC CLIP';
+      adcTal?.classList.add('alert-clip');
+    } else {
+      adcLed.className = 'annunc-pip led-green';
+      adcTxt.textContent = 'ADC OK';
+      adcTal?.classList.remove('alert-clip');
+    }
+  }
   const hb = $('badgeHealth');
   if (!hb) return;
-  const clipping = now < sdrClipHoldUntil;
   if (clipping !== hb.classList.contains('clip')) {
     hb.classList.toggle('clip', clipping);
     if (clipping) {
@@ -3792,6 +4317,8 @@ function updateVfoTelemetry() {
   if (fBadge) fBadge.textContent = `IF ${bw}`;
   const ifLbl = $('vfoIfFilterLabel');
   if (ifLbl) ifLbl.textContent = bwLabel;
+  const hbBw = $('headerBwBadge');
+  if (hbBw) hbBw.textContent = bwLabel;
   const aTag = $('vfoAgcTag');
   if (aTag) {
     const agc = $('sdrAgc');
@@ -3833,7 +4360,6 @@ function syncAfVolUi() {
 function updateAfVolReadout() {
   const txt = $('deckAfVolReadout');
   if (!txt) return;
-  // Always show the level: "AF MUTED · MUTED" said the same thing twice.
   txt.textContent = `AF ${Math.round(audioVolume * 100)}% · ${audioOn ? 'MON ON' : 'MON OFF'}`;
 }
 
@@ -4143,6 +4669,92 @@ function setupRadioDeck() {
       }
     });
   });
+  // Quick Memory (QMEM) Channels
+  const DEFAULT_QMEM = [
+    { freq: 144200000, mode: 'usb' },
+    { freq: 146520000, mode: 'nfm' },
+    { freq: 156800000, mode: 'nfm' },
+    { freq: 462562500, mode: 'nfm' },
+    { freq: 121500000, mode: 'am' },
+    { freq: 162550000, mode: 'nfm' },
+    { freq: 101100000, mode: 'wfm' },
+    { freq: 851012500, mode: 'p25' }
+  ];
+  let qmemData = DEFAULT_QMEM;
+  try {
+    const saved = localStorage.getItem('usdr_qmem_slots');
+    if (saved) qmemData = JSON.parse(saved);
+  } catch {}
+
+  function updateQmemUi() {
+    document.querySelectorAll('.qmem-btn').forEach((btn, idx) => {
+      const slot = qmemData[idx] || DEFAULT_QMEM[idx];
+      const freqMhz = (slot.freq / 1e6).toFixed(3);
+      const fEl = btn.querySelector('.qmem-freq');
+      if (fEl) fEl.textContent = freqMhz;
+      const isActive = Math.abs(sdrInspectHz - slot.freq) < 2000;
+      btn.classList.toggle('active', isActive);
+    });
+  }
+  window.updateQmemUi = updateQmemUi;
+
+  document.querySelectorAll('.qmem-btn').forEach((btn, idx) => {
+    btn.addEventListener('click', (e) => {
+      if (e.shiftKey) {
+        qmemData[idx] = { freq: sdrInspectHz, mode: sdrMode };
+        try { localStorage.setItem('usdr_qmem_slots', JSON.stringify(qmemData)); } catch {}
+        updateQmemUi();
+        return;
+      }
+      const slot = qmemData[idx] || DEFAULT_QMEM[idx];
+      if (slot && slot.freq) {
+        tuneRxHz(slot.freq, true);
+        if (slot.mode) setSdrMode(slot.mode);
+        updateQmemUi();
+      }
+    });
+  });
+
+  // DSP Controls
+  let dspNotchState = 1; // 0=OFF, 1=AUTO, 2=MAN
+  let dspNrState = 0; // 0=OFF, 1=LO, 2=HI
+  let dspSqlTight = false;
+  $('btnDspNotch')?.addEventListener('click', () => {
+    dspNotchState = (dspNotchState + 1) % 3;
+    const btn = $('btnDspNotch');
+    if (btn) {
+      btn.innerHTML = `<span class="btn-tally"></span>NOTCH ${['OFF', 'AUTO', 'MAN'][dspNotchState]}`;
+      btn.classList.toggle('active', dspNotchState > 0);
+    }
+    const txt = $('deckMemReadout');
+    if (txt) txt.textContent = `M1–M8 · NOTCH ${['OFF', 'AUTO', 'MAN'][dspNotchState]}`;
+  });
+  $('btnDspNr')?.addEventListener('click', () => {
+    dspNrState = (dspNrState + 1) % 3;
+    const btn = $('btnDspNr');
+    if (btn) {
+      btn.innerHTML = `<span class="btn-tally"></span>NR ${['OFF', 'LO', 'HI'][dspNrState]}`;
+      btn.classList.toggle('active', dspNrState > 0);
+    }
+  });
+  $('btnDspSql')?.addEventListener('click', () => {
+    dspSqlTight = !dspSqlTight;
+    const btn = $('btnDspSql');
+    if (btn) {
+      btn.innerHTML = `<span class="btn-tally"></span>SQL ${dspSqlTight ? 'TIGHT' : 'NORM'}`;
+      btn.classList.toggle('active', dspSqlTight);
+    }
+  });
+  $('scopeModeTag')?.addEventListener('click', () => {
+    if (sdrMode === 'wfm') {
+      scopeWfmMode = (scopeWfmMode === 'audio') ? 'mpx' : 'audio';
+      scopeAxisRate = 0;
+      setScopeChrome(scopeKind);
+      if (sdrLastPwr.length) drawSdrSpectrum(sdrLastPwr);
+    }
+  });
+
+  updateQmemUi();
 
   syncGainUi();
   syncAfVolUi();
@@ -4176,6 +4788,12 @@ function initSdrCanvas() {
   if (!sdrInitialized) {
     sdrInitialized = true;
     window.addEventListener('resize', resizeSdrCanvases);
+    const wrapEl = document.querySelector('.wrap');
+    if (wrapEl) wrapEl.addEventListener('transitionend', resizeSdrCanvases);
+    if (typeof ResizeObserver !== 'undefined' && $('sdrCanvasWrap')) {
+      const ro = new ResizeObserver(() => resizeSdrCanvases());
+      ro.observe($('sdrCanvasWrap'));
+    }
     setupSdrInteractions();
     setupFreqReadout();
     buildMeterScale();
@@ -4196,11 +4814,36 @@ function initSdrCanvas() {
 function resizeSdrCanvases() {
   if (!sdrSpecCanvas || !sdrWfCanvas) return;
   fitCanvas(sdrSpecCanvas, sdrSpecCtx);
-  if (fitCanvas(sdrWfCanvas, sdrWfCtx)) {
-    const { w, h } = cssSize(sdrWfCanvas);
-    sdrWfCtx.fillStyle = '#000';
-    sdrWfCtx.fillRect(0, 0, w, h);
+
+  const dpr = window.devicePixelRatio || 1;
+  const rect = sdrWfCanvas.getBoundingClientRect();
+  const targetW = Math.max(1, Math.round(rect.width * dpr));
+  const targetH = Math.max(1, Math.round(rect.height * dpr));
+
+  if (sdrWfCanvas.width !== targetW || sdrWfCanvas.height !== targetH) {
+    let copy = null;
+    if (sdrWfCanvas.width > 0 && sdrWfCanvas.height > 0) {
+      try {
+        copy = document.createElement('canvas');
+        copy.width = sdrWfCanvas.width;
+        copy.height = sdrWfCanvas.height;
+        const cctx = copy.getContext('2d');
+        if (cctx) cctx.drawImage(sdrWfCanvas, 0, 0);
+      } catch {}
+    }
+    sdrWfCanvas.width = targetW;
+    sdrWfCanvas.height = targetH;
+    if (sdrWfCtx) {
+      sdrWfCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      sdrWfCtx.fillStyle = '#000';
+      sdrWfCtx.fillRect(0, 0, rect.width, rect.height);
+      if (copy) {
+        sdrWfCtx.imageSmoothingEnabled = true;
+        sdrWfCtx.drawImage(copy, 0, 0, copy.width, copy.height, 0, 0, rect.width, rect.height);
+      }
+    }
   }
+
   // Pin the scan overlay exactly over the waterfall: the markers share the
   // waterfall's frequency axis, and must not blanket the spectrum (which
   // draws its own markers directly).
@@ -4372,8 +5015,16 @@ function freqForX(x, W) {
 }
 
 function drawSdrSpectrum(pwr) {
-  if (!sdrSpecCtx) return;
+  if (!sdrSpecCtx || !sdrSpecCanvas) return;
   const { w: W, h: H } = cssSize(sdrSpecCanvas);
+  if (W <= 0 || H <= 0) return;
+  const dpr = window.devicePixelRatio || 1;
+  const targetW = Math.max(1, Math.round(W * dpr));
+  const targetH = Math.max(1, Math.round(H * dpr));
+  if (sdrSpecCanvas.width !== targetW || sdrSpecCanvas.height !== targetH) {
+    resizeSdrCanvases();
+    return;
+  }
   const ctx = sdrSpecCtx;
   const minDb = sdrMinDb, maxDb = sdrMaxDb;
   const range = (maxDb - minDb) || 1;
@@ -4776,6 +5427,14 @@ function drawSdrWaterfallRow(pwr) {
   const { w: W, h: H } = cssSize(sdrWfCanvas);
   if (W <= 0 || H <= 1) return;
 
+  const dpr = window.devicePixelRatio || 1;
+  const targetW = Math.max(1, Math.round(W * dpr));
+  const targetH = Math.max(1, Math.round(H * dpr));
+  if (sdrWfCanvas.width !== targetW || sdrWfCanvas.height !== targetH) {
+    resizeSdrCanvases();
+    return;
+  }
+
   if (sdrTempCanvas.width !== N || sdrTempCanvas.height !== 1) {
     sdrTempCanvas.width = N; sdrTempCanvas.height = 1;
     sdrTempImg = null;
@@ -4943,6 +5602,7 @@ let scopeAxisRate = 0;
 let scopeKind = 'audio';
 let scopeSymbolRate = 0;
 let scopeLastKind = null;
+let scopeWfmMode = 'audio'; // 'audio' (15 kHz broadcast audio filter passband) or 'mpx' (64 kHz multiplex)
 
 /// Titles change with the instrument, so a pane is never labelled as something
 /// it is not showing.
@@ -4963,14 +5623,28 @@ function setScopeChrome(kind) {
     titleText = 'DIGITAL EYE & SYMBOL SCOPE';
     modeText = '4FSK / C4FM EYE DIAGRAM';
     trigText = 'SYMBOL CLK LOCK';
-  } else if (kind === 'mpx') {
-    titleText = 'FM MULTIPLEX SCOPE';
-    modeText = 'MPX PHOSPHOR FFT';
-    trigText = '19kHz PILOT';
+  } else if (kind === 'mpx' || sdrMode === 'wfm') {
+    if (scopeWfmMode === 'audio') {
+      titleText = 'WFM BROADCAST AUDIO';
+      modeText = 'AUDIO (15kHz) ⇄ MPX';
+      trigText = '15kHz AUDIO LPF';
+    } else {
+      titleText = 'FM MULTIPLEX SCOPE';
+      modeText = 'MPX (64kHz) ⇄ AUDIO';
+      trigText = '19kHz PILOT';
+    }
   } else if (sdrMode === 'pager') {
     titleText = 'PAGER DISCRIMINATOR';
     modeText = '4FSK DISCRIMINATOR';
     trigText = '±4.8kHz LEVELS';
+  } else if (sdrMode === 'am') {
+    titleText = 'AM AUDIO SCOPE';
+    modeText = 'AUDIO (6.0kHz)';
+    trigText = 'AUTO ZERO-CROSS';
+  } else if (sdrMode === 'nfm') {
+    titleText = 'NFM AUDIO SCOPE';
+    modeText = 'AUDIO (4.0kHz)';
+    trigText = 'AUTO ZERO-CROSS';
   }
 
   if (title && title.textContent !== titleText) title.textContent = titleText;
@@ -5367,13 +6041,23 @@ function drawAudioScope(scope, rateHz) {
   if (!scopeWaveCtx || !scopeSpecCtx) return;
   const samples = scope && scope.length ? scope : [];
 
-  if (rateHz && rateHz !== scopeAxisRate) {
-    scopeAxisRate = rateHz;
-    const top = rateHz / 2000;
+  let maxDisplayHz = rateHz ? (rateHz / 2) : 4000;
+  if (sdrMode === 'wfm') {
+    maxDisplayHz = (scopeWfmMode === 'audio') ? 15000 : (rateHz ? rateHz / 2 : 64000);
+  } else if (sdrMode === 'am') {
+    maxDisplayHz = rateHz ? (rateHz / 2) : 6000;
+  } else if (sdrMode === 'nfm') {
+    maxDisplayHz = rateHz ? (rateHz / 2) : 4000;
+  }
+
+  const axisKey = `${rateHz}_${maxDisplayHz}_${sdrMode}_${scopeWfmMode}`;
+  if (axisKey !== scopeAxisRate) {
+    scopeAxisRate = axisKey;
     const ax = $('scopeAxis');
     if (ax) {
+      const topKhz = maxDisplayHz / 1000;
       ax.innerHTML = [0, 0.25, 0.5, 0.75, 1].map(function (f, i) {
-        const v = top * f;
+        const v = topKhz * f;
         const t = i === 4 ? v.toFixed(v < 10 ? 1 : 0) + 'kHz'
                           : (v === 0 ? '0' : v.toFixed(v < 10 ? 1 : 0));
         return '<span>' + t + '</span>';
@@ -5536,15 +6220,19 @@ function drawAudioScope(scope, rateHz) {
     fftMag(scopeRe, scopeIm, scopeMag);
 
     const bins = scopeMag.length;
+    const nyquistHz = rateHz ? (rateHz / 2) : maxDisplayHz;
+    const displayBins = (maxDisplayHz < nyquistHz)
+      ? Math.max(8, Math.min(bins, Math.round((maxDisplayHz / nyquistHz) * bins)))
+      : bins;
     const dbFor = (m) => 20 * Math.log10(Math.max(m / (SCOPE_N / 4), 1e-6));
     const FLOOR = -80, CEIL = 0;
 
     // Area fill
     sc.beginPath();
     sc.moveTo(0, specH);
-    for (let i = 0; i < bins; i++) {
+    for (let i = 0; i < displayBins; i++) {
       const db = Math.max(FLOOR, Math.min(CEIL, dbFor(scopeMag[i])));
-      const x = (i / (bins - 1)) * SW;
+      const x = (displayBins > 1) ? (i / (displayBins - 1)) * SW : 0;
       const y = specH - ((db - FLOOR) / (CEIL - FLOOR)) * specH;
       sc.lineTo(x, y);
     }
@@ -5566,9 +6254,9 @@ function drawAudioScope(scope, rateHz) {
     sc.strokeStyle = 'rgba(56, 189, 248, 0.35)';
     sc.lineWidth = 2.8;
     sc.beginPath();
-    for (let i = 0; i < bins; i++) {
+    for (let i = 0; i < displayBins; i++) {
       const db = Math.max(FLOOR, Math.min(CEIL, dbFor(scopeMag[i])));
-      const x = (i / (bins - 1)) * SW;
+      const x = (displayBins > 1) ? (i / (displayBins - 1)) * SW : 0;
       const y = specH - ((db - FLOOR) / (CEIL - FLOOR)) * specH;
       i ? sc.lineTo(x, y) : sc.moveTo(x, y);
     }
@@ -5577,17 +6265,17 @@ function drawAudioScope(scope, rateHz) {
     sc.strokeStyle = '#dcf4ff';
     sc.lineWidth = 1.1;
     sc.beginPath();
-    for (let i = 0; i < bins; i++) {
+    for (let i = 0; i < displayBins; i++) {
       const db = Math.max(FLOOR, Math.min(CEIL, dbFor(scopeMag[i])));
-      const x = (i / (bins - 1)) * SW;
+      const x = (displayBins > 1) ? (i / (displayBins - 1)) * SW : 0;
       const y = specH - ((db - FLOOR) / (CEIL - FLOOR)) * specH;
       i ? sc.lineTo(x, y) : sc.moveTo(x, y);
     }
     sc.stroke();
 
     // Subcarrier markers
-    const top = rateHz / 2;
-    const marks = scopeKind === 'mpx'
+    const top = maxDisplayHz;
+    const marks = (scopeKind === 'mpx' && scopeWfmMode === 'mpx')
       ? [[19000, 'PILOT'], [38000, 'STEREO'], [57000, 'RDS']]
       : (sdrMode === 'packet' ? [[1200, 'MARK'], [2200, 'SPACE']]
       : (sdrMode === 'pager' ? [[1600, '+1'], [4800, '+3'], [-4800, '-3'], [-1600, '-1']]
@@ -5608,12 +6296,12 @@ function drawAudioScope(scope, rateHz) {
     }
 
     // Mini audio waterfall strip
-    if (scopeWfCanvas.width !== bins || scopeWfCanvas.height !== 1) {
-      scopeWfCanvas.width = bins; scopeWfCanvas.height = 1;
+    if (scopeWfCanvas.width !== displayBins || scopeWfCanvas.height !== 1) {
+      scopeWfCanvas.width = displayBins; scopeWfCanvas.height = 1;
     }
-    const img = scopeWfCtx.createImageData(bins, 1);
+    const img = scopeWfCtx.createImageData(displayBins, 1);
     const lut = sdrColorLut || buildSdrLut(sdrPalette);
-    for (let i = 0; i < bins; i++) {
+    for (let i = 0; i < displayBins; i++) {
       const db = Math.max(FLOOR, Math.min(CEIL, dbFor(scopeMag[i])));
       const norm = (db - FLOOR) / (CEIL - FLOOR);
       const li = Math.min(255, Math.floor(norm * 255)) * 4;
@@ -5625,7 +6313,7 @@ function drawAudioScope(scope, rateHz) {
     if (SW > 0 && wfH > 1) {
       sc.drawImage(scopeSpecCanvas, 0, specH, SW, wfH - 1, 0, specH + 1, SW, wfH - 1);
       sc.imageSmoothingEnabled = false;
-      sc.drawImage(scopeWfCanvas, 0, 0, bins, 1, 0, specH, SW, 1);
+      sc.drawImage(scopeWfCanvas, 0, 0, displayBins, 1, 0, specH, SW, 1);
     }
   }
 }
@@ -6290,7 +6978,7 @@ function updateMeter(c, peakIq, channelDbfs, noiseDbfs, scope) {
 let audioCtx = null;
 let audioGain = null;
 let audioNext = 0;
-let audioOn = false;
+let audioOn = true;
 let audioVolume = 0.6;
 const AUDIO_LEAD = 0.12;     // seconds of scheduling lead
 const AUDIO_MAX_LAG = 0.45;  // resync rather than build a delay
@@ -6314,7 +7002,14 @@ function startAudio() {
   audioOn = true;
   audioNext = 0;
   const b = $('btnListen');
-  if (b) b.classList.add('on');
+  if (b) {
+    b.classList.add('on');
+    b.classList.remove('muted');
+  }
+  const lbl = $('listenBtnLabel');
+  if (lbl) lbl.textContent = 'MUTE';
+  const tally = $('listenTally');
+  if (tally) tally.className = 'btn-tally led-green';
   const b2 = $('btnListenSecondary');
   if (b2) b2.classList.add('on');
   syncAfVolUi();
@@ -6325,7 +7020,14 @@ function stopAudio() {
   const a = $('callAudio');
   if (audioCtx && (!a || a.paused)) audioCtx.suspend();
   const b = $('btnListen');
-  if (b) b.classList.remove('on');
+  if (b) {
+    b.classList.remove('on');
+    b.classList.add('muted');
+  }
+  const lbl = $('listenBtnLabel');
+  if (lbl) lbl.textContent = 'MUTED';
+  const tally = $('listenTally');
+  if (tally) tally.className = 'btn-tally led-amber';
   const b2 = $('btnListenSecondary');
   if (b2) b2.classList.remove('on');
   syncAfVolUi();
@@ -6483,6 +7185,7 @@ function updateBandPresetUi() {
     const atMode = !mode || mode === sdrMode;
     btn.classList.toggle('active', !!(atFreq && atMode));
   });
+  if (typeof updateQmemUi === 'function') updateQmemUi();
 }
 
 function applyModeUi(mode) {
@@ -6813,6 +7516,10 @@ function updateSdrStatus(s) {
   if ($('sdrRadioSel') && s.serial) $('sdrRadioSel').value = s.serial;
   if (s.mode && s.mode !== sdrMode) applyModeUi(s.mode);
   if (s.bandwidth_hz) sdrBandwidthHz = s.bandwidth_hz;
+  if ($('headerBwBadge')) {
+    const bw = sdrBandwidthHz;
+    $('headerBwBadge').textContent = bw >= 1000 ? (bw / 1000).toFixed(bw % 1000 ? 1 : 0) + 'k' : bw + 'Hz';
+  }
   if (s.zoom && Math.abs(s.zoom - sdrZoom) > 0.01) {
     sdrZoom = s.zoom;
     if ($('keyZoomIn')) $('keyZoomIn').classList.toggle('on', sdrZoom > 1);
@@ -6833,6 +7540,11 @@ function updateSdrStatus(s) {
   }
   if ($('chkLoOffset')) $('chkLoOffset').checked = !!s.lo_offset;
   $('btnLoOffset')?.classList.toggle('on', !!s.lo_offset);
+  if ($('headerLoText') && $('headerLoLed')) {
+    const loOn = !!s.lo_offset;
+    $('headerLoLed').className = loOn ? 'annunc-pip led-cyan' : 'annunc-pip';
+    $('headerLoText').textContent = loOn ? 'LO +125k' : 'LO NORM';
+  }
   if ($('ppmInput') && document.activeElement !== $('ppmInput')) {
     $('ppmInput').value = (s.ppm ?? 0).toFixed(1);
   }
@@ -7290,6 +8002,13 @@ fetch('/api/sdr/status').then(r => r.json()).then(s => { if (s) updateSdrStatus(
 connect();
 loadCalls();
 setInterval(loadCalls, 4000);
+
+// Autoplay gesture unlock: resume audio context smoothly on first user interaction if blocked
+const unlockAudio = () => {
+  if (audioOn) ensureAudioGraph();
+  ['click', 'keydown', 'touchstart'].forEach(e => window.removeEventListener(e, unlockAudio));
+};
+['click', 'keydown', 'touchstart'].forEach(e => window.addEventListener(e, unlockAudio, { passive: true }));
 </script>
 </body>
 </html>
