@@ -13,7 +13,7 @@
 //   4. Band-preset highlighting must follow acknowledged receiver state, not
 //      the last click: tuning away clears it, being on it lights it.
 //
-// Run: node --test crates/server/web/tests/
+// Run: node --test crates/server/web/tests/*.test.js
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert');

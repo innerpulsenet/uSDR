@@ -29,6 +29,48 @@
     --violet: #a855f7;
     --mono: ui-monospace, "SF Mono", "Cascadia Code", "JetBrains Mono", Menlo, monospace;
     --sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+
+    /* =====================================================================
+       PANEL MATERIAL SYSTEM
+       Four surfaces, one ink scale, four LED states — the way a real Icom /
+       Yaesu faceplate is built. Depth comes from 1 px light/dark edges, never
+       from drop shadows on the panel face. Everything below is referenced by
+       the faceplate rules; the legacy tokens above stay for the rest of the
+       page and are not removed.
+       ===================================================================== */
+    --panel-case: #0e1319;          /* outer case, matte */
+    --panel-case-lo: #141a21;       /* case gradient foot */
+    --panel-face: #161c23;          /* flat panel face */
+    --panel-face-hi: #1c232b;       /* raised sub-assembly */
+    --panel-well: #04070b;          /* recessed glass well (LCD, meter, scope) */
+    --panel-well-edge: #1b3a52;     /* 1 px inner glow inside a well */
+    --panel-bezel: #2a323b;         /* brushed bezel ring */
+    --panel-bezel-lo: #1b2229;
+    --panel-bevel: #3a444f;         /* 1 px top edge highlight */
+    --panel-split: #0a0f14;         /* 1 px separation between assemblies */
+
+    /* Engraved legends. Contrast measured against --panel-face:
+       12.0:1 / 6.6:1 / 2.4:1. --ink-off is decoration only, never information. */
+    --ink-1: #cfd9e2;
+    --ink-2: #8fa3b5;
+    --ink-off: #4a5a6a;
+
+    /* Indicator LEDs. State only; a lit key keeps its dark cap. */
+    --led-rx: #33e07a;
+    --led-warn: #ffb02e;
+    --led-info: #4cc4ff;
+    --led-hot: #ff5a48;
+
+    /* LCD ink. --lcd-digit-off is deliberately below AA: it is an unlit digit. */
+    --lcd-digit: #f2f7fb;
+    --lcd-digit-off: #22323f;
+    --lcd-unit: #7fb6d6;
+    --lcd-legend: #5b7f99;
+
+    --radius-panel: 12px;
+    --radius-assembly: 6px;
+    --radius-key: 2px;
+    --radius-well: 3px;
   }
 
   * { box-sizing: border-box; }
@@ -54,100 +96,111 @@
     margin: 0 auto;
   }
 
-  /* ---------- The Rig (Skeuomorphic Chassis) ---------- */
+  /* ---------- The Rig: matte case, Icom-style ---------- */
 
   .rig {
     position: relative;
-    background: linear-gradient(180deg, #202732 0%, #151b23 10%, #0d1218 100%);
-    border: 1px solid #05080c;
-    border-radius: 12px;
-    padding: 14px 16px 18px;
+    background: linear-gradient(180deg, #171d24 0%, #12181f 24%, var(--panel-case) 100%);
+    border: 1px solid #05080b;
+    border-radius: var(--radius-panel);
+    padding: 12px 14px 16px;
     box-shadow:
-      0 30px 80px rgba(0,0,0,0.85),
-      0 8px 24px rgba(0,0,0,0.6),
-      inset 0 1px 0 rgba(255,255,255,0.14),
-      inset 0 0 0 1px rgba(255,255,255,0.03);
+      0 24px 60px rgba(0,0,0,0.8),
+      0 6px 18px rgba(0,0,0,0.55),
+      inset 0 1px 0 rgba(255,255,255,0.10);
   }
 
-  /* Authentic flush socket-head hex fasteners */
+  /* Case hardware, not panel hardware. A real Icom/Yaesu faceplate has no
+     exposed fasteners: the screws hold the top and bottom cover halves, so
+     they sit on the case edge, half proud of the panel. */
   .chassis-screw {
-    position: absolute; width: 14px; height: 14px; border-radius: 50%;
-    background: radial-gradient(circle at 35% 35%, #5a6878 0%, #2b3440 60%, #131920 100%);
-    box-shadow: inset 0 1px 1.5px rgba(255,255,255,0.35), 0 2px 4px rgba(0,0,0,0.8);
-    border: 1px solid #080c10;
+    position: absolute; width: 10px; height: 10px; border-radius: 50%;
+    background: radial-gradient(circle at 35% 35%, #46525f 0%, #232b34 60%, #0e1319 100%);
+    box-shadow: inset 0 1px 1px rgba(255,255,255,0.28), 0 1px 2px rgba(0,0,0,0.8);
+    border: 1px solid #05080c;
     pointer-events: none; z-index: 10;
     display: flex; align-items: center; justify-content: center;
   }
   .chassis-screw::after {
-    content: ""; width: 6.5px; height: 6.5px;
-    background: #090e14;
+    content: ""; width: 4.5px; height: 4.5px;
+    background: #070b10;
     clip-path: polygon(50% 0%, 93% 25%, 93% 75%, 50% 100%, 7% 75%, 7% 25%);
-    box-shadow: inset 0 1px 2px rgba(0,0,0,0.9), 0 0 1px rgba(255,255,255,0.25);
+    box-shadow: inset 0 1px 1.5px rgba(0,0,0,0.9);
   }
-  .chassis-screw.top-left { top: 9px; left: 10px; }
-  .chassis-screw.top-right { top: 9px; right: 10px; }
-  .chassis-screw.bottom-left { bottom: 9px; left: 10px; }
-  .chassis-screw.bottom-right { bottom: 9px; right: 10px; }
+  .chassis-screw.top-left { top: -5px; left: 26px; }
+  .chassis-screw.top-right { top: -5px; right: 26px; }
+  .chassis-screw.bottom-left { bottom: -5px; left: 26px; }
+  .chassis-screw.bottom-right { bottom: -5px; right: 26px; }
 
-  /* Generic Functional Industrial Header */
+  /* ---------- Brand plate: model badge, engraved legends ---------- */
   .rig-brand {
     display: flex; align-items: center; justify-content: space-between;
-    gap: 12px; padding: 2px 8px 10px;
-    border-bottom: 1px solid rgba(255,255,255,0.04);
-    margin-bottom: 7px;
+    flex-wrap: wrap; row-gap: 6px;
+    gap: 14px; padding: 4px 6px 8px;
+    min-height: 46px;
+    border-bottom: 1px solid var(--panel-split);
+    box-shadow: 0 1px 0 rgba(255,255,255,0.045);
+    margin-bottom: 8px;
+  }
+  /* Below ~1120 px the engraved telemetry strip is the first thing to go: the
+     model badge and the status cluster are the information that matters. */
+  @media (max-width: 1120px) {
+    .brand-center-telemetry { display: none; }
   }
   .brand-crest {
     display: flex; align-items: center; justify-content: center;
+    opacity: 0.9;
   }
   .brand-title {
-    display: flex; flex-direction: column;
+    display: flex; flex-direction: column; gap: 4px;
   }
   .rig-brand .mark {
-    font: 900 14.5px/1 var(--sans); letter-spacing: 0.12em; color: #f1f7fa;
-    text-shadow: 0 1px 3px rgba(0,0,0,0.9), 0 0 10px rgba(56, 189, 248, 0.25);
+    font: 800 18px/1 var(--sans); letter-spacing: 0.16em; color: var(--ink-1);
+    text-shadow: 0 1px 0 #000;
   }
   .rig-brand .sub {
-    font: 700 8px var(--mono); letter-spacing: 0.22em; color: #5a758c; text-transform: uppercase;
-    margin-top: 2px;
+    font: 700 8.5px/1 var(--mono); letter-spacing: 0.2em; color: var(--ink-2); text-transform: uppercase;
+    text-shadow: 0 1px 0 #000;
   }
   .brand-center-telemetry {
     display: flex; align-items: center; justify-content: center;
-    flex: 1; max-width: 480px; margin: 0 12px;
+    flex: 1; max-width: 520px; margin: 0 12px;
   }
+  /* Engraved function strip: a top/bottom rule, not a web pill. */
   .brand-chassis-bezel {
-    display: flex; align-items: center; gap: 7px;
-    background: linear-gradient(180deg, #070d14 0%, #03060a 100%);
-    border: 1px solid #142230;
-    border-radius: 4px;
-    padding: 3px 12px;
-    box-shadow: inset 0 1px 3px rgba(0,0,0,0.8), 0 1px 0 rgba(255,255,255,0.05);
-    font: 700 8.5px/1 var(--mono); letter-spacing: 0.08em;
+    display: flex; align-items: center; gap: 8px;
+    padding: 4px 14px;
+    border-top: 1px solid rgba(255,255,255,0.05);
+    border-bottom: 1px solid var(--panel-split);
+    font: 700 8.5px/1 var(--mono); letter-spacing: 0.1em;
+    text-shadow: 0 1px 0 #000;
   }
   .brand-led-pip {
-    width: 5px; height: 5px; border-radius: 50%;
-    background: #1a2836;
+    width: 6px; height: 6px; border-radius: 50%;
+    background: #16202a; border: 1px solid #0a1016;
+    box-shadow: inset 0 1px 1px rgba(0,0,0,0.8);
   }
   .brand-led-pip.on {
-    background: #2bff6a; box-shadow: 0 0 6px rgba(43,255,106,0.9);
+    background: var(--led-rx); border-color: #1d6b3d;
+    box-shadow: 0 0 6px var(--green-glow), inset 0 1px 1px rgba(255,255,255,0.5);
   }
   .brand-metric-label {
-    color: #4b667e; text-transform: uppercase; font-size: 7.5px;
+    color: var(--ink-2); text-transform: uppercase; font-size: 8px;
   }
   .brand-metric-val {
-    color: #93b5cf; font-weight: 800;
+    color: var(--ink-1); font-weight: 800;
   }
   .brand-divider {
-    color: #172738; margin: 0 1px;
+    color: #26313c; margin: 0 1px;
   }
   .brand-status-cluster {
     display: flex; align-items: center; gap: 7px;
   }
   .rig-brand .conn {
-    font: 700 10.5px/1 var(--mono); color: var(--dim);
+    font: 700 10px/1 var(--mono); color: var(--ink-2);
     display: flex; align-items: center; gap: 6px;
-    background: rgba(6, 12, 18, 0.75); padding: 4px 9px; border-radius: 4px;
-    border: 1px solid #182532;
-    box-shadow: inset 0 1px 2px rgba(0,0,0,0.6);
+    padding: 4px 4px;
+    white-space: nowrap;
   }
   .conn-beacon {
     width: 6.5px; height: 6.5px; border-radius: 50%;
@@ -155,12 +208,12 @@
     box-shadow: 0 0 0 rgba(43, 255, 106, 0);
   }
   .conn-beacon.connected {
-    background: var(--green);
+    background: var(--led-rx);
     box-shadow: 0 0 7px var(--green-glow);
     animation: pulseBeacon 2.4s infinite;
   }
   .conn-beacon.reconnecting {
-    background: var(--amber);
+    background: var(--led-warn);
     box-shadow: 0 0 7px var(--amber-glow);
     animation: pulseBeacon 1.2s infinite;
   }
@@ -169,22 +222,25 @@
     50% { transform: scale(1.15); opacity: 1; }
     100% { transform: scale(0.95); opacity: 0.8; }
   }
+  /* The clock is a panel readout, so it gets LCD ink in a recessed window. */
   .header-clock {
-    font: 700 13px/1 var(--mono); color: #dce6ee; letter-spacing: 0.05em;
-    background: #081018; padding: 4px 8px; border-radius: 3px; border: 1px solid #14202c;
-    box-shadow: inset 0 1px 2px rgba(0,0,0,0.6);
+    font: 700 13px/1 var(--mono); color: var(--lcd-digit); letter-spacing: 0.06em;
+    background: var(--panel-well); padding: 5px 9px; border-radius: var(--radius-well);
+    border: 1px solid var(--panel-split);
+    box-shadow: inset 0 1px 3px rgba(0,0,0,0.8);
+    text-shadow: 0 0 6px rgba(127, 182, 214, 0.35);
   }
 
-  /* Screen (Lower Chassis Well) */
+  /* Panel face: the matte plate the control assemblies are mounted on. The
+     glass wells (LCD readout, spectrum, meter) are recessed into it. */
   .screen {
-    background: var(--lcd);
-    border: 1px solid #000;
-    border-radius: 7px;
+    background: var(--panel-face);
+    border: 1px solid var(--panel-split);
+    border-radius: 4px;
     padding: 10px 12px 12px;
     box-shadow:
-      inset 0 0 0 1px rgba(80, 160, 220, 0.1),
-      inset 0 3px 18px rgba(0,0,0,0.9),
-      0 1px 0 rgba(255,255,255,0.06);
+      inset 0 1px 0 rgba(255,255,255,0.045),
+      0 1px 0 rgba(255,255,255,0.03);
     font-family: var(--mono);
   }
 
@@ -203,26 +259,34 @@
     .deck-console {
       grid-template-columns: 195px 315px 1fr;
     }
+    /* The tuning bay becomes a full-width row. Keep the two faders and the
+       flywheel grouped in the middle: spread across a meter of panel they
+       looked detached from their own readouts. The bay header still owns the
+       whole first line, or the title collides with its own readout. */
     .bay-tuning {
       grid-column: 1 / -1;
-      display: flex; flex-direction: row; justify-content: space-around;
+      display: flex; flex-direction: row; flex-wrap: wrap;
+      justify-content: center; align-items: flex-start; gap: 22px;
     }
+    .bay-tuning .bay-header { flex: 1 1 100%; }
+    .bay-tuning .fader-vert-wrap { flex: 0 0 auto; }
   }
   @media (max-width: 860px) {
     .deck-console { grid-template-columns: 1fr; }
     .bay-tuning { flex-direction: column; }
   }
 
-  /* Modular Sub-Assembly Bay Housings */
+  /* Modular sub-assemblies on the panel face: flat matte, separated by a 1 px
+     split and a hairline top bevel — no inner glow, no drop shadow. */
   .deck-bay {
     position: relative;
-    background: linear-gradient(180deg, #131a23 0%, #0c1219 45%, #080d12 100%);
-    border: 1px solid #182432;
-    border-radius: 6px;
+    background: var(--panel-face);
+    border: 1px solid var(--panel-split);
+    border-radius: var(--radius-assembly);
     padding: 6px 8px 7px;
     box-shadow:
-      inset 0 2px 7px rgba(0,0,0,0.8),
-      0 1px 0 rgba(255,255,255,0.06);
+      inset 0 1px 0 rgba(255,255,255,0.05),
+      0 1px 0 rgba(0,0,0,0.5);
     display: flex;
     flex-direction: column;
     justify-content: flex-start;
@@ -231,32 +295,40 @@
   }
   .deck-bay::before {
     content: ""; position: absolute; top: 0; left: 0; right: 0; height: 1px;
-    background: linear-gradient(90deg, transparent, rgba(255,255,255,0.09) 50%, transparent);
+    background: linear-gradient(90deg, transparent, rgba(255,255,255,0.07) 50%, transparent);
     pointer-events: none;
   }
   .bay-header {
     display: flex; align-items: center; justify-content: space-between;
-    border-bottom: 1px solid rgba(24, 38, 52, 0.65);
-    padding-bottom: 3px;
+    border-bottom: 1px solid var(--panel-split);
+    box-shadow: 0 1px 0 rgba(255,255,255,0.035);
+    padding-bottom: 4px;
     margin-bottom: 2px;
   }
   .bay-title {
     font: 800 8.5px/1 var(--mono);
     letter-spacing: 0.14em;
-    color: #63849f;
+    color: var(--ink-2);
     text-transform: uppercase;
-    text-shadow: 0 1px 2px rgba(0,0,0,0.8);
+    text-shadow: 0 1px 0 #000;
     display: flex; align-items: center; gap: 5px;
   }
+  .bay-readout {
+    font: 700 8px/1 var(--mono);
+    letter-spacing: 0.06em;
+    color: var(--lcd-unit);
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+  }
   .bay-screw-corner {
-    width: 6.5px; height: 6.5px; border-radius: 50%;
-    background: #17212b; border: 1px solid #090e14;
-    box-shadow: inset 0 0.5px 1px rgba(255,255,255,0.25);
+    width: 5px; height: 5px; border-radius: 50%;
+    background: #141b22; border: 1px solid #080c11;
+    box-shadow: inset 0 0.5px 1px rgba(255,255,255,0.18);
     position: relative;
   }
   .bay-screw-corner::after {
-    content: ""; position: absolute; top: 1.5px; left: 2.5px; width: 1.2px; height: 3.5px;
-    background: #06090e; transform: rotate(45deg);
+    content: ""; position: absolute; top: 1px; left: 1.8px; width: 1px; height: 2.6px;
+    background: #05080c; transform: rotate(45deg);
   }
 
   /* -------------------------------------------------------------------------
@@ -277,42 +349,47 @@
     filter: drop-shadow(0 3px 6px rgba(0,0,0,0.7));
   }
   .af-vol-readout-pill {
-    font: 700 8px/1 var(--mono); color: #d0e0ed; letter-spacing: 0.06em;
-    background: #060b10; padding: 2px 7px; border-radius: 3px;
-    border: 1px solid #14202c; margin-top: 2px; text-align: center;
-    box-shadow: inset 0 1px 2px rgba(0,0,0,0.6);
+    font: 700 8.5px/1 var(--mono); color: var(--lcd-digit); letter-spacing: 0.06em;
+    background: var(--panel-well); padding: 3px 8px; border-radius: var(--radius-well);
+    border: 1px solid var(--panel-split); margin-top: 3px; text-align: center;
+    box-shadow: inset 0 1px 3px rgba(0,0,0,0.8);
   }
   .af-aux-row {
     display: flex; align-items: center; justify-content: space-between;
-    gap: 5px; width: 100%; padding: 2px 0 3px;
-    border-bottom: 1px solid rgba(22, 34, 46, 0.6);
-    margin-bottom: 3px;
+    gap: 5px; width: 100%; padding: 3px 0 4px;
+    border-bottom: 1px solid var(--panel-split);
+    margin-bottom: 4px;
   }
+  /* Function keys share one cap geometry: dark cap, 1 px bevel, LED tally.
+     A lit key keeps its cap and lights the tally, the way a real panel does. */
   .af-listen-btn, .af-aux-btn {
     flex: 1;
-    display: inline-flex; align-items: center; justify-content: center; gap: 4px;
-    padding: 3.5px 2px; border-radius: 3px;
-    background: linear-gradient(180deg, #18232f 0%, #0d141c 100%);
-    color: #8da4b5; border: 1px solid #1a2837;
-    box-shadow: inset 0 1px 0 rgba(255,255,255,0.1), 0 1px 2px rgba(0,0,0,0.5);
-    cursor: pointer; font: 800 7.5px/1 var(--mono); letter-spacing: 0.05em;
+    display: inline-flex; align-items: center; justify-content: center; gap: 5px;
+    padding: 5px 3px; border-radius: var(--radius-key);
+    background: linear-gradient(180deg, #232b34 0%, #161d25 100%);
+    color: var(--ink-2); border: 1px solid var(--panel-split);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.10), 0 1px 2px rgba(0,0,0,0.6);
+    cursor: pointer; font: 800 8.5px/1 var(--mono); letter-spacing: 0.06em;
     user-select: none; transition: all 90ms; white-space: nowrap;
+    text-shadow: 0 1px 0 #000;
   }
-  .af-listen-btn:hover, .af-aux-btn:hover { color: #fff; border-color: #2b4560; }
-  .af-listen-btn:active, .af-aux-btn:active { transform: translateY(1px); }
+  .af-listen-btn:hover, .af-aux-btn:hover { color: var(--ink-1); border-color: #2b3b4a; }
+  .af-listen-btn:active, .af-aux-btn:active { transform: translateY(1px); box-shadow: inset 0 2px 4px #000; }
   .af-listen-btn.on {
-    background: #0f271c; color: #2bff6a; border-color: #2bff6a;
-    box-shadow: 0 0 6px rgba(43,255,106,0.3);
+    background: linear-gradient(180deg, #121c17 0%, #0b1410 100%);
+    color: var(--led-rx); border-color: #1d5c36;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.06), 0 0 6px rgba(51,224,122,0.22);
   }
   .af-listen-btn.on .btn-tally.led-green {
-    background: #2bff6a; box-shadow: 0 0 6px #2bff6a;
+    background: var(--led-rx); box-shadow: 0 0 6px var(--led-rx);
   }
   .af-aux-btn.on {
-    background: #0d2533; color: #38bdf8; border-color: #38bdf8;
-    box-shadow: 0 0 6px rgba(56,189,248,0.3);
+    background: linear-gradient(180deg, #0f1e28 0%, #0a141c 100%);
+    color: var(--led-info); border-color: #1d4a66;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.06), 0 0 6px rgba(76,196,255,0.22);
   }
   .af-aux-btn.on .btn-tally.led-cyan {
-    background: #38bdf8; box-shadow: 0 0 6px #38bdf8;
+    background: var(--led-info); box-shadow: 0 0 6px var(--led-info);
   }
 
   /* Dual Linear Vertical Fader Pair */
@@ -326,29 +403,30 @@
     flex: 1; display: flex; flex-direction: column; align-items: center;
   }
   .fader-title {
-    font: 800 7.5px/1 var(--mono); letter-spacing: 0.1em; color: #5a7b97;
-    margin-bottom: 3px; text-align: center; text-transform: uppercase;
+    font: 800 8.5px/1 var(--mono); letter-spacing: 0.1em; color: var(--ink-2);
+    margin-bottom: 4px; text-align: center; text-transform: uppercase;
+    text-shadow: 0 1px 0 #000;
   }
   .fader-assembly {
     display: flex; align-items: center; gap: 4px;
   }
   .fader-scale {
     display: flex; flex-direction: column; justify-content: space-between;
-    height: 72px; font: 700 6.5px/1 var(--mono); color: #486277;
+    height: 72px; font: 700 8.5px/1 var(--mono); color: var(--ink-2);
     user-select: none; text-align: right;
   }
   .fader-scale span {
     display: flex; align-items: center; justify-content: flex-end; gap: 2px;
   }
   .fader-scale span::after {
-    content: ""; width: 3px; height: 1px; background: #223444;
+    content: ""; width: 3px; height: 1px; background: #2a3a4a;
   }
   .fader-well {
     position: relative;
     width: 26px; height: 72px;
     background: #05080c;
-    border: 1px solid #131c26;
-    border-radius: 4px;
+    border: 1px solid var(--panel-split);
+    border-radius: var(--radius-well);
     box-shadow:
       inset 0 2px 7px rgba(0,0,0,0.95),
       inset 0 0 0 1px rgba(0,0,0,0.8),
@@ -395,32 +473,38 @@
     width: 100%; margin-top: 4px; padding: 0 2px;
   }
   .fader-val {
-    font: 700 8px/1 var(--mono); color: #d0e0ed; white-space: nowrap;
-    background: #060b10; padding: 2px 4px; border-radius: 2px; border: 1px solid #14202c;
+    font: 700 8.5px/1 var(--mono); color: var(--lcd-digit); white-space: nowrap;
+    background: var(--panel-well); padding: 3px 5px; border-radius: var(--radius-well);
+    border: 1px solid var(--panel-split);
+    box-shadow: inset 0 1px 2px rgba(0,0,0,0.7);
   }
   .fader-sublabel {
-    font: 700 7px/1 var(--mono); color: #496377; letter-spacing: 0.05em; text-transform: uppercase;
+    font: 700 8.5px/1 var(--mono); color: var(--ink-2); letter-spacing: 0.06em; text-transform: uppercase;
+    text-shadow: 0 1px 0 #000;
   }
   .fader-agc-btn, .fader-reset-btn {
-    font: 800 7.5px/1 var(--mono);
-    padding: 2px 5px; border-radius: 2px;
-    background: linear-gradient(180deg, #18232f 0%, #0d141c 100%);
-    color: #7997af; border: 1px solid #1a2837;
+    font: 800 8px/1 var(--mono);
+    padding: 3px 6px; border-radius: var(--radius-key);
+    background: linear-gradient(180deg, #232b34 0%, #161d25 100%);
+    color: var(--ink-2); border: 1px solid var(--panel-split);
     box-shadow: inset 0 1px 0 rgba(255,255,255,0.1), 0 1px 2px rgba(0,0,0,0.5);
     cursor: pointer; display: flex; align-items: center; gap: 3px;
     transition: all 90ms;
   }
-  .fader-agc-btn:hover, .fader-reset-btn:hover { color: #fff; border-color: #2b4560; }
+  .fader-agc-btn:hover, .fader-reset-btn:hover { color: var(--ink-1); border-color: #2b3b4a; }
   .fader-agc-btn:active, .fader-reset-btn:active { transform: translateY(1px); }
   .fader-agc-btn.on {
-    background: #0e2030; color: #ffb830; border-color: #ffb830;
-    box-shadow: 0 0 6px rgba(255,184,48,0.3);
+    background: linear-gradient(180deg, #2a2110 0%, #1a1409 100%);
+    color: var(--led-warn); border-color: #6a4a12;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.06), 0 0 6px rgba(255,176,46,0.22);
   }
   .btn-tally {
-    width: 4.5px; height: 4.5px; border-radius: 50%; background: #1a2632;
+    width: 5px; height: 5px; border-radius: 50%; background: #1a2632;
+    border: 1px solid #0a1016;
+    box-shadow: inset 0 1px 1px rgba(0,0,0,0.8);
   }
   .fader-agc-btn.on .btn-tally.led-amber {
-    background: #ffb830; box-shadow: 0 0 5px #ffb830;
+    background: var(--led-warn); box-shadow: 0 0 5px var(--led-warn);
   }
 
   /* -------------------------------------------------------------------------
@@ -428,14 +512,22 @@
      ------------------------------------------------------------------------- */
   .meter-housing {
     position: relative;
-    background: radial-gradient(circle at 50% 120%, #0e1e2d 0%, #050d14 60%, #020508 100%);
-    border: 1px solid #14202b;
-    border-radius: 5px;
+    background: radial-gradient(circle at 50% 120%, #0d1c2a 0%, #050c13 58%, #020508 100%);
+    border: 1px solid var(--panel-split);
+    border-radius: var(--radius-well);
     padding: 4px 4px 6px;
     box-shadow:
+      inset 0 0 0 1px rgba(27, 58, 82, 0.45),
       inset 0 3px 12px rgba(0,0,0,0.95),
       0 1px 0 rgba(255,255,255,0.05);
     display: flex; flex-direction: column; justify-content: space-between;
+  }
+  /* Glass cover: a specular sweep over the dial, above the needle but
+     transparent to the pointer. */
+  .meter-housing::after {
+    content: ""; position: absolute; inset: 0; border-radius: inherit;
+    background: linear-gradient(155deg, rgba(255,255,255,0.07) 0%, rgba(255,255,255,0.015) 30%, transparent 55%);
+    pointer-events: none;
   }
   .smeter-svg {
     width: 100%; height: auto; display: block;
@@ -444,22 +536,22 @@
   .meter-readouts {
     display: flex; align-items: center; justify-content: space-between;
     padding: 4px 6px 0;
-    border-top: 1px solid rgba(22, 36, 50, 0.55);
+    border-top: 1px solid var(--panel-split);
     margin-top: 3px;
   }
   .meter-num {
-    font: 700 9.5px var(--mono); color: #8cb2cc;
+    font: 700 10px var(--mono); color: #a9c5d8;
     white-space: nowrap; overflow: hidden;
   }
   .meter-clip-badge {
     font: 800 8.5px var(--mono); letter-spacing: 0.1em;
-    padding: 1px 6px; border-radius: 2px;
-    background: #141c24; color: #435566; border: 1px solid #1e2832;
+    padding: 2px 7px; border-radius: var(--radius-key);
+    background: #10161c; color: var(--ink-off); border: 1px solid var(--panel-split);
     transition: background 100ms, color 100ms, box-shadow 100ms;
   }
   .meter-clip-badge.active {
-    background: #b91c1c; color: #fff; border-color: #ef4444;
-    box-shadow: 0 0 8px rgba(239, 68, 68, 0.7);
+    background: #8f1414; color: #fff; border-color: var(--led-hot);
+    box-shadow: 0 0 8px rgba(255, 90, 72, 0.7);
   }
 
   /* -------------------------------------------------------------------------
@@ -469,17 +561,21 @@
     display: flex; flex-direction: column; gap: 6px;
   }
 
-  /* Crisp Recessed OLED/VFD VFO Readout Window */
+  /* Recessed LCD window: a glass well with a backlight bloom and a specular
+     sweep. The sheen lives in ::after with pointer-events: none so the digits
+     stay clickable and the canvases keep their pixel mapping. */
   .vfo-container {
     flex: 1;
     display: flex; flex-direction: column; justify-content: space-between;
-    background: linear-gradient(180deg, #050b12 0%, #020407 100%);
-    border: 1px solid #132232;
-    border-radius: 5px;
-    padding: 5px 8px;
+    background:
+      radial-gradient(130% 95% at 50% 120%, rgba(28, 74, 104, 0.32) 0%, rgba(6, 14, 21, 0.12) 55%, transparent 100%),
+      var(--panel-well);
+    border: 1px solid var(--panel-split);
+    border-radius: var(--radius-well);
+    padding: 6px 9px;
     box-shadow:
-      inset 0 3px 12px rgba(0,0,0,0.95),
-      inset 0 0 0 1px rgba(56,189,248,0.06),
+      inset 0 0 0 1px rgba(27, 58, 82, 0.5),
+      inset 0 3px 14px rgba(0,0,0,0.95),
       0 1px 0 rgba(255,255,255,0.04);
     min-width: 0;
     position: relative;
@@ -487,100 +583,109 @@
   /* Faint anti-reflective glass crystal sheen */
   .vfo-container::after {
     content: ""; position: absolute; inset: 0;
-    background: linear-gradient(135deg, rgba(255,255,255,0.04) 0%, transparent 45%);
-    pointer-events: none; border-radius: 4px;
+    background: linear-gradient(150deg, rgba(255,255,255,0.055) 0%, rgba(255,255,255,0.012) 26%, transparent 52%);
+    pointer-events: none; border-radius: inherit;
   }
   .vfo-top-strip {
     display: flex; align-items: center; justify-content: space-between;
-    border-bottom: 1px solid rgba(18, 32, 46, 0.65);
-    padding-bottom: 3px;
+    border-bottom: 1px solid rgba(27, 58, 82, 0.5);
+    padding-bottom: 4px;
   }
   .vfo-badges-left, .vfo-badges-right {
-    display: flex; align-items: center; gap: 4px;
+    display: flex; align-items: center; gap: 4px; flex-wrap: wrap; row-gap: 2px;
   }
   .vfo-badge-main {
     font-size: 8px; font-weight: 800; letter-spacing: 0.12em;
     padding: 1.5px 5.5px; border-radius: 2px;
-    background: #0f273d; color: #38bdf8; border: 1px solid #1f486c;
+    background: #0c2338; color: var(--led-info); border: 1px solid #1c4a6d;
   }
   .vfo-tag-rx {
     font-size: 8px; font-weight: 800; letter-spacing: 0.1em;
     padding: 1px 5px; border-radius: 2px;
-    background: rgba(43,255,106,0.12); color: #2bff6a; border: 1px solid rgba(43,255,106,0.3);
+    background: rgba(51, 224, 122, 0.12); color: var(--led-rx); border: 1px solid rgba(51, 224, 122, 0.32);
   }
   .vfo-tag-mode {
     font-size: 8px; font-weight: 800; letter-spacing: 0.08em;
     padding: 1px 5px; border-radius: 2px;
-    background: #152230; color: #7dd3fc; border: 1px solid #1f364c;
+    background: #10202e; color: #8fd3f5; border: 1px solid #1d3f58;
   }
   .vfo-tag-filter {
-    font: 700 8px var(--mono); color: #8faec4;
+    font: 700 8px var(--mono); color: var(--ink-2);
   }
   .vfo-telemetry-tag {
-    font: 700 7.5px var(--mono); color: #4e6a82; letter-spacing: 0.06em;
-    padding: 1px 4px; border-radius: 2px; background: #070e15; border: 1px solid #121c26;
+    font: 700 7.5px var(--mono); color: #54758d; letter-spacing: 0.06em;
+    padding: 1px 4px; border-radius: 2px; background: #060d14; border: 1px solid #101a24;
+    white-space: nowrap;
   }
   .vfo-utc-clock {
-    font: 700 8px var(--mono); color: #dce6ee; letter-spacing: 0.06em;
-    padding-left: 2px;
+    font: 700 8px var(--mono); color: var(--ink-1); letter-spacing: 0.06em;
+    padding-left: 2px; white-space: nowrap;
   }
 
   .vfo-freq-hero {
     display: flex; align-items: center; justify-content: space-between;
-    gap: 8px; padding: 2px 0;
+    flex-wrap: wrap; gap: 8px; row-gap: 4px; padding: 2px 0;
   }
   .vfo-center-tools {
     display: flex; align-items: center; gap: 6px;
   }
   .vfo-passband-meter {
-    background: #04090e; border: 1px solid #0f1c28; border-radius: 4px;
+    background: #03070b; border: 1px solid #0f1c28; border-radius: 3px;
     padding: 2px 5px; display: flex; align-items: center; justify-content: center;
-    box-shadow: inset 0 1px 2px rgba(0,0,0,0.6);
+    box-shadow: inset 0 1px 3px rgba(0,0,0,0.7);
   }
   .freq {
     display: flex; align-items: baseline; justify-content: flex-start;
     gap: 0; cursor: default; user-select: none; line-height: 1;
   }
+  /* Nine fixed-width digits. The width must never change, or a live digit
+     would shift the whole readout as it counts. It scales with the viewport
+     so the hero cannot push the bay into horizontal overflow. */
   .fd {
-    font-size: 34px; font-weight: 700; color: #ffffff; letter-spacing: -0.01em;
-    display: inline-block; width: 20px; text-align: center;
+    font-size: clamp(34px, 3.2vw, 46px); font-weight: 700; color: var(--lcd-digit);
+    letter-spacing: -0.01em;
+    display: inline-block; width: clamp(20px, 1.9vw, 27px); text-align: center;
     padding: 0 1px; border-radius: 3px; cursor: ns-resize;
-    text-shadow: 0 0 10px rgba(56, 189, 248, 0.45);
+    text-shadow: 0 0 12px rgba(127, 182, 214, 0.42);
     transition: background 90ms, color 90ms;
   }
-  .fd.lead { color: #243647; text-shadow: none; }
-  .fd:hover { background: rgba(56, 189, 248, 0.22); color: #fff; }
-  .fd.sel { background: rgba(56, 189, 248, 0.35); color: #fff; box-shadow: inset 0 -2px 0 var(--accent); }
-  .fdot { font-size: 34px; font-weight: 700; color: #5a7588; padding: 0 1px; }
-  .fdot.lead { color: #243647; }
-  .funit { font-size: 13px; color: var(--accent); font-weight: 700; margin-left: 5px; align-self: flex-end; padding-bottom: 4px; }
+  .fd.lead { color: var(--lcd-digit-off); text-shadow: none; }
+  .fd:hover { background: rgba(56, 189, 248, 0.18); color: #fff; }
+  .fd.sel { background: rgba(56, 189, 248, 0.3); color: #fff; box-shadow: inset 0 -2px 0 var(--accent); }
+  .fdot { font-size: clamp(34px, 3.2vw, 46px); font-weight: 700; color: #4d6479; padding: 0 1px; }
+  .fdot.lead { color: var(--lcd-digit-off); }
+  .funit {
+    font-size: clamp(12px, 1vw, 15px); color: var(--lcd-unit); font-weight: 700;
+    letter-spacing: 0.06em; margin-left: 6px; align-self: flex-end; padding-bottom: 5px;
+    text-shadow: 0 0 8px rgba(127, 182, 214, 0.3);
+  }
 
   .vfo-step-pill {
     display: inline-flex; align-items: center;
-    background: linear-gradient(180deg, #0e1a26 0%, #060d14 100%);
-    border: 1px solid #1c3247;
-    border-radius: 4px;
+    background: linear-gradient(180deg, #121a23 0%, #0a1017 100%);
+    border: 1px solid #1c2a38;
+    border-radius: var(--radius-key);
     padding: 2px 4px 2px 6px;
     gap: 5px;
-    box-shadow: inset 0 1px 0 rgba(255,255,255,0.06), 0 1px 3px rgba(0,0,0,0.5);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.07), 0 1px 2px rgba(0,0,0,0.6);
     flex-shrink: 0; cursor: pointer;
     transition: border-color 140ms, box-shadow 140ms;
   }
   .vfo-step-pill:hover {
-    border-color: #38bdf8;
-    box-shadow: 0 0 8px rgba(56, 189, 248, 0.25);
+    border-color: var(--accent);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.07), 0 0 8px rgba(56, 189, 248, 0.25);
   }
   .vfo-step-badge {
     font: 900 8px var(--mono); letter-spacing: 0.12em;
-    color: #38bdf8; background: #091a29; padding: 1px 4px; border-radius: 2px;
-    border: 1px solid #163650; user-select: none;
+    color: var(--led-info); background: #08192a; padding: 1px 4px; border-radius: 2px;
+    border: 1px solid #143048; user-select: none;
   }
   .vfo-step-select {
     appearance: none; -webkit-appearance: none;
-    background: transparent; border: none; color: #38bdf8;
+    background: transparent; border: none; color: var(--led-info);
     font-family: var(--mono); font-size: 10.5px; font-weight: 700;
-    padding: 1px 15px 1px 2px; cursor: pointer; outline: none;
-    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='6' viewBox='0 0 8 6'%3E%3Cpath d='M1 1.5 L4 4.5 L7 1.5' fill='none' stroke='%2338bdf8' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+    padding: 1px 13px 1px 2px; cursor: pointer; outline: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='10' viewBox='0 0 8 10'%3E%3Cpath d='M1 3.5 L4 1 L7 3.5' fill='none' stroke='%234cc4ff' stroke-width='1.4' stroke-linecap='round'/%3E%3Cpath d='M1 6.5 L4 9 L7 6.5' fill='none' stroke='%234cc4ff' stroke-width='1.4' stroke-linecap='round'/%3E%3C/svg%3E");
     background-repeat: no-repeat; background-position: right 1px center;
   }
   .vfo-step-select option {
@@ -590,51 +695,55 @@
   /* Sub VFO Standby Line */
   .vfo-sub-line {
     display: flex; align-items: center; justify-content: space-between;
-    padding: 3px 6px; border-radius: 4px;
-    background: #04080d; border: 1px solid #0e1822;
+    flex-wrap: wrap; row-gap: 3px;
+    padding: 3px 6px; border-radius: var(--radius-key);
+    background: #050a10; border: 1px solid var(--panel-split);
   }
   .vfo-sub-readout {
-    display: flex; align-items: center; gap: 7px;
+    display: flex; align-items: center; gap: 7px; flex-wrap: wrap; row-gap: 2px;
   }
   .sub-vfo-badge {
     font: 800 7.5px var(--mono); letter-spacing: 0.1em;
-    padding: 1px 4px; border-radius: 2px; background: #101822; color: #6d8fa8;
+    padding: 1px 4px; border-radius: 2px; background: #0e151c; color: var(--ink-2);
+    white-space: nowrap;
   }
   .sub-vfo-freq {
     font: 700 12px var(--mono); color: #a4c4db; letter-spacing: 0.04em;
+    white-space: nowrap;
   }
   .sub-vfo-status {
-    font: 600 8px var(--mono); color: #4e6a82; letter-spacing: 0.05em;
+    font: 600 8px var(--mono); color: #54758d; letter-spacing: 0.05em;
+    white-space: nowrap;
   }
   .vfo-sub-btns {
     display: flex; gap: 4px;
   }
   .vfo-sub-btn {
-    font: 800 8px var(--mono); padding: 2px 6px; border-radius: 2px;
-    background: linear-gradient(180deg, #111a24 0%, #090f16 100%);
-    color: #7da5c2; border: 1px solid #162432; cursor: pointer;
-    box-shadow: inset 0 1px 0 rgba(255,255,255,0.08), 0 1px 2px rgba(0,0,0,0.4);
+    font: 800 8px var(--mono); padding: 3px 7px; border-radius: var(--radius-key);
+    background: linear-gradient(180deg, #1b232c 0%, #121820 100%);
+    color: var(--ink-2); border: 1px solid var(--panel-split); cursor: pointer;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.09), 0 1px 2px rgba(0,0,0,0.5);
     transition: all 80ms;
   }
-  .vfo-sub-btn:hover { background: #182b3d; color: #fff; border-color: #274563; }
+  .vfo-sub-btn:hover { background: #222c36; color: var(--ink-1); border-color: #2a3a4a; }
   .vfo-sub-btn:active { transform: translateY(1px); }
 
   /* VFO Intermediate Telemetry Bar */
   .vfo-meter-bar {
     display: flex; align-items: center; justify-content: space-between;
-    padding: 2px 6px; border-radius: 3px;
-    background: #03060a; border: 1px solid #0d151e;
+    padding: 3px 6px; border-radius: var(--radius-key);
+    background: #03070b; border: 1px solid var(--panel-split);
     margin: 1px 0;
   }
   .vfo-meter-seg {
     display: flex; align-items: center; gap: 4px;
-    font: 700 8px/1 var(--mono); letter-spacing: 0.05em;
+    font: 700 8.5px/1 var(--mono); letter-spacing: 0.05em;
   }
   .vfo-seg-label {
-    color: #4b667e; font-size: 7px; text-transform: uppercase;
+    color: var(--ink-2); font-size: 8px; text-transform: uppercase;
   }
   .vfo-seg-val {
-    color: #93b5cf;
+    color: #a9c5d8; font-size: 9px;
   }
   .vfo-cal-seg {
     cursor: pointer;
@@ -653,7 +762,10 @@
     transform: translateY(1px);
   }
 
-  /* Authentic Mechanical Push Switches: Demodulator Mode Keypad */
+  /* Mechanical push switches. One cap geometry for every key block on the
+     panel (mode, band, DSP, function): same radius, material, travel and
+     legend scale. A lit key keeps its dark cap and lights its LED tally —
+     the way a real panel indicates state. */
   .mode-keypad {
     display: grid;
     grid-template-columns: repeat(11, 1fr);
@@ -666,40 +778,39 @@
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    padding: 6.5px 2px 5px;
-    background: linear-gradient(180deg, #243242 0%, #17212b 20%, #0f151c 65%, #0a0e13 100%);
-    border: 1px solid #080d12;
-    border-radius: 3.5px;
+    min-height: 26px;
+    padding: 5px 2px 4px;
+    background: linear-gradient(180deg, #232b34 0%, #161d25 100%);
+    border: 1px solid var(--panel-split);
+    border-radius: var(--radius-key);
     box-shadow:
-      inset 0 1px 0 rgba(255,255,255,0.18),
-      inset 0 -1px 0 rgba(0,0,0,0.65),
-      0 2px 4px rgba(0,0,0,0.65);
-    color: #8da4b5;
+      inset 0 1px 0 rgba(255,255,255,0.10),
+      0 1px 2px rgba(0,0,0,0.6);
+    color: var(--ink-2);
     cursor: pointer;
     font: 800 9px/1 var(--mono);
     letter-spacing: 0.06em;
+    text-shadow: 0 1px 0 #000;
     user-select: none;
     transition: all 80ms;
     min-width: 0;
   }
   .modebtn:hover {
-    color: #ffffff;
-    background: linear-gradient(180deg, #2e3e50 0%, #1e2a36 20%, #131b24 65%, #0d1319 100%);
-    border-color: #1b2e40;
+    color: var(--ink-1);
+    background: linear-gradient(180deg, #2a333d 0%, #1a222a 100%);
+    border-color: #2b3b4a;
   }
   .modebtn:active {
-    transform: translateY(1.5px);
-    box-shadow:
-      inset 0 2px 4px rgba(0,0,0,0.9),
-      0 0 1px rgba(0,0,0,0.5);
+    transform: translateY(1px);
+    box-shadow: inset 0 2px 4px rgba(0,0,0,0.9);
   }
   .modebtn.on {
-    background: linear-gradient(180deg, #162636 0%, #0d1620 100%);
-    border-color: #223f59;
-    color: #ffffff;
+    background: linear-gradient(180deg, #101821 0%, #0a1017 100%);
+    border-color: #1d3d5a;
+    color: var(--ink-1);
     box-shadow:
       inset 0 1.5px 3px rgba(0,0,0,0.85),
-      0 0 8px rgba(56,189,248,0.25);
+      inset 0 -2px 0 rgba(76, 196, 255, 0.55);
   }
   /* Embedded illuminated jewel LED tally slit */
   .mode-tally {
@@ -709,23 +820,23 @@
     transition: all 120ms;
   }
   .modebtn.on .mode-tally.tally-amber {
-    background: #ffb830; border-color: #ffd074;
-    box-shadow: 0 0 6px rgba(255,184,48,0.95), 0 0 1px #ffffff;
+    background: var(--led-warn); border-color: #ffd074;
+    box-shadow: 0 0 6px rgba(255,176,46,0.95), 0 0 1px #ffffff;
   }
   .modebtn.on .mode-tally.tally-cyan {
-    background: #38bdf8; border-color: #7dd3fc;
-    box-shadow: 0 0 6px rgba(56,189,248,0.95), 0 0 1px #ffffff;
+    background: var(--led-info); border-color: #7dd3fc;
+    box-shadow: 0 0 6px rgba(76,196,255,0.95), 0 0 1px #ffffff;
   }
   .modebtn.on .mode-tally.tally-green {
-    background: #2bff6a; border-color: #86efac;
-    box-shadow: 0 0 6px rgba(43,255,106,0.95), 0 0 1px #ffffff;
+    background: var(--led-rx); border-color: #86efac;
+    box-shadow: 0 0 6px rgba(51,224,122,0.95), 0 0 1px #ffffff;
   }
   .modebtn.on .mode-tally.tally-ruby {
-    background: #ff4a36; border-color: #ff8878;
-    box-shadow: 0 0 6px rgba(255,74,54,0.95), 0 0 1px #ffffff;
+    background: var(--led-hot); border-color: #ff8878;
+    box-shadow: 0 0 6px rgba(255,90,72,0.95), 0 0 1px #ffffff;
   }
 
-  /* Quick Band Matrix Keypad */
+  /* Quick band matrix keypad — same cap, tighter row */
   .band-matrix {
     display: grid;
     grid-template-columns: repeat(8, 1fr);
@@ -735,29 +846,33 @@
   .band-btn {
     position: relative;
     display: inline-flex; align-items: center; justify-content: center; gap: 4px;
-    padding: 5px 0; font: 700 8px var(--mono); text-align: center;
-    border-radius: 3px;
-    background: linear-gradient(180deg, #16202c 0%, #0c1218 100%);
-    color: #6a8ba3; border: 1px solid #131c26;
-    box-shadow: inset 0 1px 0 rgba(255,255,255,0.08), 0 1px 2px rgba(0,0,0,0.5);
+    min-height: 22px; padding: 4px 0;
+    font: 800 9px/1 var(--mono); text-align: center; letter-spacing: 0.04em;
+    border-radius: var(--radius-key);
+    background: linear-gradient(180deg, #232b34 0%, #161d25 100%);
+    color: var(--ink-2); border: 1px solid var(--panel-split);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.10), 0 1px 2px rgba(0,0,0,0.6);
+    text-shadow: 0 1px 0 #000;
     cursor: pointer; transition: all 80ms; white-space: nowrap;
   }
-  .band-btn:hover { background: #192a3a; color: #c0d8ec; border-color: #21384e; }
-  .band-btn:active { transform: translateY(1px); }
+  .band-btn:hover { background: linear-gradient(180deg, #2a333d 0%, #1a222a 100%); color: var(--ink-1); border-color: #2b3b4a; }
+  .band-btn:active { transform: translateY(1px); box-shadow: inset 0 2px 4px rgba(0,0,0,0.9); }
   .band-btn.active {
-    background: #0d2235; color: #38bdf8; border-color: #205075;
-    box-shadow: inset 0 1px 0 rgba(56,189,248,0.25), 0 0 6px rgba(56,189,248,0.2);
+    background: linear-gradient(180deg, #0f1e2a 0%, #0a141c 100%);
+    color: var(--ink-1); border-color: #1d4a66;
+    box-shadow: inset 0 1px 3px rgba(0,0,0,0.8), inset 0 -2px 0 rgba(76, 196, 255, 0.55);
   }
   .band-tally {
-    width: 4px; height: 4px; border-radius: 50%;
-    background: #060b10; border: 1px solid #101822;
+    width: 5px; height: 5px; border-radius: 50%;
+    background: #0a1016; border: 1px solid #101822;
+    box-shadow: inset 0 1px 1px rgba(0,0,0,0.8);
   }
   .band-btn.active .band-tally {
-    background: #38bdf8; border-color: #7dd3fc;
-    box-shadow: 0 0 5px rgba(56,189,248,0.9);
+    background: var(--led-info); border-color: #7dd3fc;
+    box-shadow: 0 0 5px rgba(76,196,255,0.9);
   }
 
-  /* Tactile DSP & Action Keypad */
+  /* Tactile DSP & action keypad — same cap, two-line legend */
   .dsp-keypad {
     display: grid;
     grid-template-columns: repeat(4, 1fr);
@@ -767,35 +882,37 @@
   .dsp-key {
     position: relative;
     display: inline-flex; flex-direction: column; align-items: center; justify-content: center;
-    padding: 4px 2px; border-radius: 3px;
-    background: linear-gradient(180deg, #212c38 0%, #141c24 30%, #0d1218 100%);
-    color: #7e9bb2; border: 1px solid #090e14;
+    min-height: 22px; padding: 4px 2px;
+    border-radius: var(--radius-key);
+    background: linear-gradient(180deg, #232b34 0%, #161d25 100%);
+    color: var(--ink-2); border: 1px solid var(--panel-split);
     box-shadow:
-      inset 0 1px 0 rgba(255,255,255,0.15),
-      inset 0 -1px 0 rgba(0,0,0,0.6),
-      0 1.5px 3px rgba(0,0,0,0.6);
-    cursor: pointer; font: 800 8px/1 var(--mono);
+      inset 0 1px 0 rgba(255,255,255,0.10),
+      0 1px 2px rgba(0,0,0,0.6);
+    cursor: pointer; font: 800 9px/1 var(--mono);
     letter-spacing: 0.04em; user-select: none;
+    text-shadow: 0 1px 0 #000;
     transition: all 80ms; white-space: nowrap; overflow: hidden;
   }
-  .dsp-key:hover { color: #fff; background: #283748; border-color: #1e3042; }
-  .dsp-key:active { transform: translateY(1.5px); box-shadow: inset 0 2px 4px #000; }
+  .dsp-key:hover { color: var(--ink-1); background: linear-gradient(180deg, #2a333d 0%, #1a222a 100%); border-color: #2b3b4a; }
+  .dsp-key:active { transform: translateY(1px); box-shadow: inset 0 2px 4px #000; }
   .dsp-key.on {
-    background: #0f1c28; color: #ffffff; border-color: #1d3d5a;
-    box-shadow: inset 0 1px 3px #000, 0 0 6px rgba(56,189,248,0.2);
+    background: linear-gradient(180deg, #101821 0%, #0a1017 100%);
+    color: var(--ink-1); border-color: #1d3d5a;
+    box-shadow: inset 0 1px 3px #000, inset 0 -2px 0 rgba(76, 196, 255, 0.55);
   }
   .dsp-key.palette-trigger {
-    grid-column: span 2;
+    grid-column: 1 / -1;
   }
   .dsp-tally {
     width: 14px; height: 2px; border-radius: 1px;
-    background: #060b10; border: 1px solid #101922; margin-bottom: 2px;
+    background: #080e14; border: 1px solid #101922; margin-bottom: 2px;
     transition: all 120ms;
   }
-  .dsp-key.on .dsp-tally.led-amber { background: #ffb830; border-color: #ffd074; box-shadow: 0 0 5px #ffb830; }
-  .dsp-key.on .dsp-tally.led-cyan { background: #38bdf8; border-color: #7dd3fc; box-shadow: 0 0 5px #38bdf8; }
+  .dsp-key.on .dsp-tally.led-amber { background: var(--led-warn); border-color: #ffd074; box-shadow: 0 0 5px var(--led-warn); }
+  .dsp-key.on .dsp-tally.led-cyan { background: var(--led-info); border-color: #7dd3fc; box-shadow: 0 0 5px var(--led-info); }
   .dsp-key.on .dsp-tally.led-blue { background: #60a5fa; border-color: #93c5fd; box-shadow: 0 0 5px #60a5fa; }
-  .dsp-key.on .dsp-tally.led-green { background: #2bff6a; border-color: #86efac; box-shadow: 0 0 5px #2bff6a; }
+  .dsp-key.on .dsp-tally.led-green { background: var(--led-rx); border-color: #86efac; box-shadow: 0 0 5px var(--led-rx); }
   .dsp-key.on .dsp-tally.led-violet { background: #c084fc; border-color: #e9d5ff; box-shadow: 0 0 5px #c084fc; }
 
   /* -------------------------------------------------------------------------
@@ -856,24 +973,34 @@
     width: 100%; height: 11px; border-radius: 2px; border: 1px solid rgba(255,255,255,0.15);
   }
 
-  /* Badges utility */
+  /* Panel indicators: engraved silkscreen labels, not web chips. Flat, hairline
+     border, no glow — the only thing that lights up is a real LED. */
+  /* Panel indicators: silkscreen labels, not web chips. No box, no background,
+     no glow — the only thing that lights up is a real LED. */
   .badge {
-    font-size: 10px; font-weight: 700; letter-spacing: 0.05em;
-    padding: 3px 8px; border-radius: 3px;
-    background: #0b141d; color: #9ab6c9; border: 1px solid #182836;
+    font: 700 10px/1 var(--mono); letter-spacing: 0.1em;
+    padding: 5px 4px;
+    background: transparent; color: var(--ink-2); border: none;
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: center;
-    box-shadow: inset 0 1px 2px rgba(0,0,0,0.5);
+    text-shadow: 0 1px 0 #000;
   }
   #badgeSpan { width: 70px; }
   #badgeProto { width: 150px; }
-  .badge.blue { background: #134975; color: #fff; border-color: #2b7bc4; box-shadow: 0 0 8px rgba(43,123,196,0.3); }
-  .badge.live { background: #0b3a20; color: var(--green); border-color: #1a6d3f; box-shadow: 0 0 8px var(--green-glow); }
+  /* A detected signal is the one badge that lights: give it a lit window. */
+  .badge.blue {
+    background: #0b2740; color: #bfe4ff; border: 1px solid #1d4f76; border-radius: 2px;
+    box-shadow: 0 0 8px rgba(56,189,248,0.18);
+  }
+  .badge.live {
+    background: #082315; color: var(--led-rx); border: 1px solid #175c34; border-radius: 2px;
+    box-shadow: 0 0 8px var(--green-glow);
+  }
 
   /* ---------- Spectrum & Waterfall Viewport ---------- */
 
   .spec-edge {
     display: flex; justify-content: space-between;
-    font-size: 10px; color: var(--dim); padding: 0 4px 4px;
+    font-size: 10px; color: var(--ink-2); padding: 0 4px 4px;
     height: 16px; white-space: nowrap; font-weight: 600;
   }
   .spec-edge span { width: 100px; }
@@ -921,9 +1048,11 @@
   details.advanced > summary:hover { color: #d8e5ee; }
   details.advanced > .panelrow { margin-top: 8px; }
   .spec-canvases {
-    position: relative; border: 1px solid #162432; border-radius: 4px;
+    position: relative; border: 1px solid var(--panel-split); border-radius: var(--radius-well);
     overflow: hidden; background: #020508; line-height: 0;
-    box-shadow: inset 0 2px 10px rgba(0,0,0,0.9);
+    box-shadow:
+      inset 0 0 0 1px rgba(27, 58, 82, 0.45),
+      inset 0 2px 12px rgba(0,0,0,0.95);
   }
   #sdrSpectrumCanvas { width: 100%; height: 172px; display: block; cursor: crosshair; }
   #sdrWaterfallCanvas { width: 100%; height: 268px; display: block; cursor: crosshair; }
@@ -936,7 +1065,7 @@
   }
   .spec-scale {
     display: flex; justify-content: space-between;
-    font-size: 10px; color: var(--dim); padding: 4px 2px 0;
+    font-size: 10px; color: var(--ink-2); padding: 4px 2px 0;
     height: 18px; white-space: nowrap; overflow: hidden;
   }
   .spec-scale span { flex: 1; text-align: center; }
@@ -1312,6 +1441,14 @@
   @media (max-width: 1080px) {
     .side-col { height: 360px; }
   }
+  /* Narrow panels: the 11 mode keys and 8 band keys stop fitting on one row,
+     so they become two rows of keys — the way a real keypad is arranged —
+     instead of squeezing until the last label is clipped. Declared here, after
+     the base keypad rules, so it actually wins the cascade. */
+  @media (max-width: 1120px) {
+    .mode-keypad { grid-template-columns: repeat(6, 1fr); }
+    .band-matrix { grid-template-columns: repeat(4, 1fr); }
+  }
   @media (max-width: 900px) {
     .ctlgroup { border-right: none; border-bottom: 1px solid #232a31; width: 100%; }
     .ctlgroup > .grouplabel { writing-mode: horizontal-tb; transform: none; }
@@ -1320,8 +1457,21 @@
   @media (max-width: 760px) {
     .vfo-container { flex-direction: column; align-items: stretch; }
     .fd, .fdot { font-size: 32px; }
+    .fd { width: 19px; }
+    .vfo-freq-hero { justify-content: center; }
     .scope-panes { grid-template-columns: 1fr; }
     .softkeys { grid-template-columns: repeat(4, 1fr); }
+  }
+  /* Motion is decoration on a faceplate: LEDs blink, keys travel, the LCD
+     fades in. Operators who ask for reduced motion get the same panel with
+     the animation removed. The needle ballistics are driven by rAF, not CSS,
+     and are left alone — they are the instrument, not the decoration. */
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+    }
   }
 </style>
 </head>
@@ -1345,8 +1495,8 @@
           </svg>
         </div>
         <div class="brand-title">
-          <span class="mark">COMMUNICATIONS RECEIVER</span>
-          <span class="sub">PRECISION SDR-1000 TRANSCEIVER PROCESSOR · ALL-MODE DSP</span>
+          <span class="mark">uSDR-1000</span>
+          <span class="sub">HF / VHF / UHF · ALL-MODE SDR RECEIVER</span>
         </div>
       </div>
       <div class="brand-center-telemetry" aria-hidden="true">
@@ -1426,17 +1576,17 @@
               <g id="deckAfVolTicks">
                 <path d="M 22.5 87.5 A 46 46 0 1 1 87.5 87.5" fill="none" stroke="#1d2e3f" stroke-width="1.2"/>
                 <line x1="22.5" y1="87.5" x2="19.0" y2="91.0" stroke="#7e9eb8" stroke-width="1.5"/>
-                <text x="14" y="96" font-family="var(--mono)" font-weight="700" font-size="6.5" fill="#6d8da8" text-anchor="middle">0</text>
+                <text x="14" y="96" font-family="var(--mono)" font-weight="700" font-size="8" fill="#6d8da8" text-anchor="middle">0</text>
                 <line x1="12.0" y1="55.0" x2="7.5" y2="55.0" stroke="#7e9eb8" stroke-width="1.5"/>
-                <text x="3" y="57" font-family="var(--mono)" font-weight="700" font-size="6.5" fill="#6d8da8" text-anchor="middle">2</text>
+                <text x="3" y="57" font-family="var(--mono)" font-weight="700" font-size="8" fill="#6d8da8" text-anchor="middle">2</text>
                 <line x1="33.0" y1="23.0" x2="30.0" y2="18.5" stroke="#7e9eb8" stroke-width="1.5"/>
-                <text x="27" y="14" font-family="var(--mono)" font-weight="700" font-size="6.5" fill="#6d8da8" text-anchor="middle">4</text>
+                <text x="27" y="14" font-family="var(--mono)" font-weight="700" font-size="8" fill="#6d8da8" text-anchor="middle">4</text>
                 <line x1="77.0" y1="23.0" x2="80.0" y2="18.5" stroke="#7e9eb8" stroke-width="1.5"/>
-                <text x="83" y="14" font-family="var(--mono)" font-weight="700" font-size="6.5" fill="#6d8da8" text-anchor="middle">6</text>
+                <text x="83" y="14" font-family="var(--mono)" font-weight="700" font-size="8" fill="#6d8da8" text-anchor="middle">6</text>
                 <line x1="98.0" y1="55.0" x2="102.5" y2="55.0" stroke="#7e9eb8" stroke-width="1.5"/>
-                <text x="107" y="57" font-family="var(--mono)" font-weight="700" font-size="6.5" fill="#6d8da8" text-anchor="middle">8</text>
+                <text x="107" y="57" font-family="var(--mono)" font-weight="700" font-size="8" fill="#6d8da8" text-anchor="middle">8</text>
                 <line x1="87.5" y1="87.5" x2="91.0" y2="91.0" stroke="#7e9eb8" stroke-width="1.5"/>
-                <text x="96" y="96" font-family="var(--mono)" font-weight="700" font-size="6.5" fill="#6d8da8" text-anchor="middle">10</text>
+                <text x="96" y="96" font-family="var(--mono)" font-weight="700" font-size="8" fill="#6d8da8" text-anchor="middle">10</text>
               </g>
               <!-- Turned Outer Knob Body -->
               <circle cx="55" cy="55" r="39" fill="url(#afKnobOuterGrad)" stroke="#060c12" stroke-width="1.4"/>
@@ -1581,35 +1731,35 @@
                 <path d="M 62.01 76.30 A 168.00 168.00 0 0 1 156.98 37.51" fill="none" stroke="#38bdf8" stroke-width="1.8"/>
                 <path d="M 156.98 37.51 A 168.00 168.00 0 0 1 277.99 76.30" fill="none" stroke="#ff382a" stroke-width="1.8"/>
                 <text x="36.2" y="75.8" font-family="var(--sans)" font-weight="900" font-size="16" fill="#38bdf8" text-anchor="middle" dominant-baseline="central" filter="url(#softGlow)">S</text>
-                <text x="296.0" y="54.9" font-family="var(--mono)" font-weight="900" font-size="8.5" fill="#ff4a36" text-anchor="middle" dominant-baseline="central">dB</text>
+                <text x="322.0" y="44.0" font-family="var(--mono)" font-weight="900" font-size="10" fill="#ff4a36" text-anchor="middle" dominant-baseline="central">dB</text>
                 <line x1="62.0" y1="76.3" x2="57.2" y2="70.6" stroke="#38bdf8" stroke-width="1.4"/>
-                <text x="49.2" y="61.0" font-family="var(--mono)" font-weight="700" font-size="8.5" fill="#a2dcfc" text-anchor="middle" dominant-baseline="central">1</text>
+                <text x="49.2" y="61.0" font-family="var(--mono)" font-weight="700" font-size="10" fill="#a2dcfc" text-anchor="middle" dominant-baseline="central">1</text>
                 <line x1="72.3" y1="68.3" x2="70.0" y2="65.1" stroke="#1a5072" stroke-width="0.9"/>
                 <line x1="83.2" y1="61.2" x2="79.3" y2="54.7" stroke="#38bdf8" stroke-width="1.4"/>
-                <text x="72.9" y="44.0" font-family="var(--mono)" font-weight="700" font-size="8.5" fill="#a2dcfc" text-anchor="middle" dominant-baseline="central">3</text>
+                <text x="72.9" y="44.0" font-family="var(--mono)" font-weight="700" font-size="10" fill="#a2dcfc" text-anchor="middle" dominant-baseline="central">3</text>
                 <line x1="94.6" y1="54.9" x2="92.8" y2="51.3" stroke="#1a5072" stroke-width="0.9"/>
                 <line x1="106.5" y1="49.5" x2="103.6" y2="42.5" stroke="#38bdf8" stroke-width="1.4"/>
-                <text x="98.9" y="31.0" font-family="var(--mono)" font-weight="700" font-size="8.5" fill="#a2dcfc" text-anchor="middle" dominant-baseline="central">5</text>
+                <text x="98.9" y="31.0" font-family="var(--mono)" font-weight="700" font-size="10" fill="#a2dcfc" text-anchor="middle" dominant-baseline="central">5</text>
                 <line x1="118.7" y1="45.0" x2="117.5" y2="41.2" stroke="#1a5072" stroke-width="0.9"/>
                 <line x1="131.3" y1="41.5" x2="129.5" y2="34.2" stroke="#38bdf8" stroke-width="1.4"/>
-                <text x="126.6" y="22.1" font-family="var(--mono)" font-weight="700" font-size="8.5" fill="#a2dcfc" text-anchor="middle" dominant-baseline="central">7</text>
+                <text x="126.6" y="22.1" font-family="var(--mono)" font-weight="700" font-size="10" fill="#a2dcfc" text-anchor="middle" dominant-baseline="central">7</text>
                 <line x1="144.0" y1="39.0" x2="143.4" y2="35.1" stroke="#1a5072" stroke-width="0.9"/>
                 <line x1="157.0" y1="37.5" x2="156.2" y2="28.0" stroke="#ff4a36" stroke-width="1.9"/>
-                <text x="155.4" y="17.6" font-family="var(--mono)" font-weight="700" font-size="8.5" fill="#ff705a" text-anchor="middle" dominant-baseline="central">9</text>
+                <text x="155.4" y="17.6" font-family="var(--mono)" font-weight="700" font-size="10" fill="#ff705a" text-anchor="middle" dominant-baseline="central">9</text>
                 <line x1="178.7" y1="37.2" x2="178.9" y2="33.2" stroke="#ff4a36" stroke-width="0.9"/>
                 <line x1="200.2" y1="39.7" x2="202.0" y2="30.4" stroke="#ff4a36" stroke-width="1.9"/>
-                <text x="203.8" y="20.1" font-family="var(--mono)" font-weight="700" font-size="8.5" fill="#ff705a" text-anchor="middle" dominant-baseline="central">+20</text>
+                <text x="203.8" y="20.1" font-family="var(--mono)" font-weight="700" font-size="10" fill="#ff705a" text-anchor="middle" dominant-baseline="central">+20</text>
                 <line x1="221.3" y1="45.0" x2="222.5" y2="41.2" stroke="#ff4a36" stroke-width="0.9"/>
                 <line x1="241.5" y1="53.0" x2="245.5" y2="44.4" stroke="#ff4a36" stroke-width="1.9"/>
-                <text x="250.0" y="34.9" font-family="var(--mono)" font-weight="700" font-size="8.5" fill="#ff705a" text-anchor="middle" dominant-baseline="central">+40</text>
+                <text x="250.0" y="34.9" font-family="var(--mono)" font-weight="700" font-size="10" fill="#ff705a" text-anchor="middle" dominant-baseline="central">+40</text>
                 <line x1="260.5" y1="63.5" x2="262.6" y2="60.1" stroke="#ff4a36" stroke-width="0.9"/>
                 <line x1="278.0" y1="76.3" x2="284.1" y2="69.0" stroke="#ff4a36" stroke-width="1.9"/>
-                <text x="290.8" y="61.0" font-family="var(--mono)" font-weight="700" font-size="8.5" fill="#ff705a" text-anchor="middle" dominant-baseline="central">+60</text>
+                <text x="290.8" y="61.0" font-family="var(--mono)" font-weight="700" font-size="10" fill="#ff705a" text-anchor="middle" dominant-baseline="central">+60</text>
 
                 <!-- PO Scale -->
                 <path d="M 79.29 86.79 A 149.00 149.00 0 0 1 260.71 86.79" fill="none" stroke="#1d425c" stroke-width="1.1"/>
-                <text x="66.3" y="93.8" font-family="var(--sans)" font-weight="900" font-size="8.5" fill="#38bdf8" text-anchor="middle" dominant-baseline="central">PO</text>
-                <text x="271.7" y="92.0" font-family="var(--sans)" font-weight="900" font-size="8.5" fill="#38bdf8" text-anchor="middle" dominant-baseline="central">W</text>
+                <text x="66.3" y="93.8" font-family="var(--sans)" font-weight="900" font-size="10" fill="#38bdf8" text-anchor="middle" dominant-baseline="central">PO</text>
+                <text x="271.7" y="92.0" font-family="var(--sans)" font-weight="900" font-size="10" fill="#38bdf8" text-anchor="middle" dominant-baseline="central">W</text>
                 <line x1="79.3" y1="86.8" x2="75.9" y2="82.4" stroke="#29658f" stroke-width="1.2"/>
                 <text x="72.9" y="78.5" font-family="var(--mono)" font-weight="700" font-size="7.5" fill="#9cd9fa" text-anchor="middle" dominant-baseline="central">0</text>
                 <line x1="101.2" y1="72.8" x2="98.7" y2="68.0" stroke="#29658f" stroke-width="1.2"/>
@@ -1627,8 +1777,8 @@
 
                 <!-- IC Scale -->
                 <path d="M 93.35 97.54 A 132.00 132.00 0 0 1 248.52 98.89" fill="none" stroke="#1d425c" stroke-width="1.1"/>
-                <text x="81.8" y="103.5" font-family="var(--sans)" font-weight="900" font-size="8" fill="#38bdf8" text-anchor="middle" dominant-baseline="central">IC</text>
-                <text x="258.2" y="103.5" font-family="var(--sans)" font-weight="900" font-size="8" fill="#38bdf8" text-anchor="middle" dominant-baseline="central">A</text>
+                <text x="81.8" y="103.5" font-family="var(--sans)" font-weight="900" font-size="9" fill="#38bdf8" text-anchor="middle" dominant-baseline="central">IC</text>
+                <text x="258.2" y="103.5" font-family="var(--sans)" font-weight="900" font-size="9" fill="#38bdf8" text-anchor="middle" dominant-baseline="central">A</text>
                 <line x1="93.3" y1="97.5" x2="90.7" y2="93.9" stroke="#29658f" stroke-width="1.1"/>
                 <text x="88.4" y="90.6" font-family="var(--mono)" font-weight="700" font-size="7" fill="#9cd9fa" text-anchor="middle" dominant-baseline="central">0</text>
                 <line x1="113.2" y1="85.9" x2="111.2" y2="81.8" stroke="#29658f" stroke-width="1.1"/>
@@ -1667,22 +1817,22 @@
                 <text x="105.5" y="125.3" font-family="var(--sans)" font-weight="900" font-size="7" fill="#38bdf8" text-anchor="middle" dominant-baseline="central">COMP</text>
                 <text x="228.8" y="121.0" font-family="var(--sans)" font-weight="900" font-size="7" fill="#38bdf8" text-anchor="middle" dominant-baseline="central">dB</text>
                 <line x1="117.2" y1="118.9" x2="115.2" y2="115.6" stroke="#29658f" stroke-width="1"/>
-                <text x="113.6" y="112.9" font-family="var(--mono)" font-weight="700" font-size="6.5" fill="#9cd9fa" text-anchor="middle" dominant-baseline="central">0</text>
+                <text x="113.6" y="112.9" font-family="var(--mono)" font-weight="700" font-size="8" fill="#9cd9fa" text-anchor="middle" dominant-baseline="central">0</text>
                 <line x1="138.8" y1="108.9" x2="137.6" y2="105.3" stroke="#29658f" stroke-width="1"/>
-                <text x="136.6" y="102.3" font-family="var(--mono)" font-weight="700" font-size="6.5" fill="#9cd9fa" text-anchor="middle" dominant-baseline="central">5</text>
+                <text x="136.6" y="102.3" font-family="var(--mono)" font-weight="700" font-size="8" fill="#9cd9fa" text-anchor="middle" dominant-baseline="central">5</text>
                 <line x1="161.2" y1="104.4" x2="160.9" y2="100.6" stroke="#29658f" stroke-width="1"/>
-                <text x="160.6" y="97.4" font-family="var(--mono)" font-weight="700" font-size="6.5" fill="#9cd9fa" text-anchor="middle" dominant-baseline="central">10</text>
+                <text x="160.6" y="97.4" font-family="var(--mono)" font-weight="700" font-size="8" fill="#9cd9fa" text-anchor="middle" dominant-baseline="central">10</text>
                 <line x1="184.1" y1="105.0" x2="184.6" y2="101.2" stroke="#29658f" stroke-width="1"/>
-                <text x="185.0" y="98.1" font-family="var(--mono)" font-weight="700" font-size="6.5" fill="#9cd9fa" text-anchor="middle" dominant-baseline="central">15</text>
+                <text x="185.0" y="98.1" font-family="var(--mono)" font-weight="700" font-size="8" fill="#9cd9fa" text-anchor="middle" dominant-baseline="central">15</text>
                 <line x1="203.7" y1="109.8" x2="205.0" y2="106.2" stroke="#29658f" stroke-width="1"/>
-                <text x="206.1" y="103.2" font-family="var(--mono)" font-weight="700" font-size="6.5" fill="#9cd9fa" text-anchor="middle" dominant-baseline="central">20</text>
+                <text x="206.1" y="103.2" font-family="var(--mono)" font-weight="700" font-size="8" fill="#9cd9fa" text-anchor="middle" dominant-baseline="central">20</text>
                 <line x1="221.3" y1="118.0" x2="223.2" y2="114.7" stroke="#29658f" stroke-width="1"/>
-                <text x="224.8" y="111.9" font-family="var(--mono)" font-weight="700" font-size="6.5" fill="#9cd9fa" text-anchor="middle" dominant-baseline="central">30</text>
+                <text x="224.8" y="111.9" font-family="var(--mono)" font-weight="700" font-size="8" fill="#9cd9fa" text-anchor="middle" dominant-baseline="central">30</text>
 
                 <!-- Dynamic AGC Sub-Scale (Authentic Moving AGC Meter) -->
                 <g id="meterAgcGroup">
                   <text x="110" y="132.5" font-family="var(--sans)" font-weight="900" font-size="7.5" fill="#38bdf8" text-anchor="middle" dominant-baseline="central" filter="url(#softGlow)">AGC</text>
-                  <text x="228" y="132.5" font-family="var(--mono)" font-weight="700" font-size="6.5" fill="#5a7d9a" text-anchor="middle" dominant-baseline="central">dB</text>
+                  <text x="228" y="132.5" font-family="var(--mono)" font-weight="700" font-size="8" fill="#5a7d9a" text-anchor="middle" dominant-baseline="central">dB</text>
                   <path d="M 132.3 127.7 A 86.00 86.00 0 0 1 207.7 127.7" fill="none" stroke="#0b1722" stroke-width="4.5" stroke-linecap="round"/>
                   <path d="M 132.3 127.7 A 86.00 86.00 0 0 1 207.7 127.7" fill="none" stroke="#183248" stroke-width="1.2" stroke-linecap="round"/>
                   <path id="meterAgcArc" d="M 132.3 127.7 A 86.00 86.00 0 0 1 133.0 127.5" fill="none" stroke="url(#agcArcGrad)" stroke-width="3.2" stroke-linecap="round" filter="url(#softGlow)"/>
@@ -1719,6 +1869,13 @@
                 <!-- Metal Pivot Hub -->
                 <circle cx="170" cy="205" r="19" fill="url(#hubGrad)" stroke="#090e14" stroke-width="1.5"/>
                 <circle cx="170" cy="205" r="13" fill="none" stroke="#2c3e52" stroke-width="1.2"/>
+                <!-- The real pivot sits below the dial face (y=205, outside the
+                     viewBox), so the bearing is drawn where it crosses the glass.
+                     Without it the needle appeared to come from nowhere. -->
+                <circle cx="170" cy="160" r="12.5" fill="url(#hubGrad)" stroke="#090e14" stroke-width="1.4"/>
+                <circle cx="170" cy="160" r="7.5" fill="none" stroke="#2c3e52" stroke-width="1"/>
+                <circle cx="170" cy="160" r="3.2" fill="#0b131a" stroke="#3d5266" stroke-width="0.8"/>
+                <circle cx="166.5" cy="156.5" r="1.6" fill="rgba(255,255,255,0.35)"/>
                 <circle cx="170" cy="205" r="6.5" fill="#0b1219" stroke="#1c2834" stroke-width="1"/>
                 <circle cx="170" cy="205" r="2" fill="#38bdf8" opacity="0.6"/>
 
@@ -1761,6 +1918,14 @@
             <button type="button" class="dsp-key" id="keySpur" title="Spur Check & Auto Notch">
               <span class="dsp-tally led-violet"></span>
               <span id="keySpurLabel">SPUR</span>
+            </button>
+            <button type="button" class="dsp-key" id="keyZoomOut" title="Zoom Out (halve the display magnification)">
+              <span class="dsp-tally led-cyan"></span>
+              <span id="keyZoomOutLabel">ZOOM −</span>
+            </button>
+            <button type="button" class="dsp-key" id="keyZoomIn" title="Zoom In (double the display magnification)">
+              <span class="dsp-tally led-cyan"></span>
+              <span id="keyZoomInLabel">ZOOM +</span>
             </button>
             <button type="button" class="dsp-key palette-trigger" id="keyPalette" title="Waterfall & Spectrum Palette">
               <span class="dsp-tally led-amber"></span>
@@ -1875,10 +2040,10 @@
             <button type="button" class="band-btn" data-freq="121500000" data-mode="am"><span class="band-tally"></span>AIR 118</button>
             <button type="button" class="band-btn" data-freq="144200000" data-mode="nfm"><span class="band-tally"></span>2M 144</button>
             <button type="button" class="band-btn active" data-freq="156800000" data-mode="nfm"><span class="band-tally"></span>MAR 156</button>
-            <button type="button" class="band-btn" data-freq="222000000" data-mode="nfm"><span class="band-tally"></span>1.25M</button>
+            <button type="button" class="band-btn" data-freq="222000000" data-mode="nfm"><span class="band-tally"></span>220 222</button>
             <button type="button" class="band-btn" data-freq="432100000" data-mode="nfm"><span class="band-tally"></span>70C 430</button>
-            <button type="button" class="band-btn" data-freq="929612500" data-mode="pager"><span class="band-tally"></span>PAGER</button>
-            <button type="button" class="band-btn" data-freq="851012500" data-mode="p25"><span class="band-tally"></span>TRUNK</button>
+            <button type="button" class="band-btn" data-freq="929612500" data-mode="pager"><span class="band-tally"></span>PGR 929</button>
+            <button type="button" class="band-btn" data-freq="851012500" data-mode="p25"><span class="band-tally"></span>TRK 851</button>
             <button type="button" class="band-btn" data-freq="98100000" data-mode="wfm"><span class="band-tally"></span>WFM 88</button>
           </div>
         </div>
@@ -1887,6 +2052,7 @@
         <div class="deck-bay bay-tuning">
           <div class="bay-header">
             <span class="bay-title"><span class="bay-screw-corner"></span>DISPLAY &amp; MAIN TUNING</span>
+            <span class="bay-readout" id="deckSpanReadout">SPAN 2.05M · ZOOM 1.0x</span>
             <span class="bay-screw-corner"></span>
           </div>
 
@@ -3279,7 +3445,7 @@ let flywheelRaf = 0;
 let jogAngle = 0;
 
 function setupVfoFlywheel() {
-  const wrap = $('vfoFlywheelWrap') || $('jogDialWrap');
+  const wrap = $('vfoFlywheelWrap');
   const spinner = $('vfoFlywheelSpinner');
   const knurlGroup = $('vfoKnurlGroup');
   if (!wrap || !spinner) return;
@@ -3549,7 +3715,6 @@ function syncGainUi() {
   if (fVal) fVal.textContent = isAgc ? 'auto' : `${Math.round(val)} dB`;
   const agcBtn = $('faderAgcBtn');
   if (agcBtn) agcBtn.classList.toggle('on', isAgc);
-  if ($('deckRfGainPointer')) setKnobPointer('deckRfGainPointer', 74, 76, isAgc ? 0.75 : frac);
   updateAfVolReadout();
   updateVfoTelemetry();
 }
@@ -3566,8 +3731,8 @@ function syncAfVolUi() {
 function updateAfVolReadout() {
   const txt = $('deckAfVolReadout');
   if (!txt) return;
-  const volStr = !audioOn ? 'MUTED' : `${Math.round(audioVolume * 100)}%`;
-  txt.textContent = `AF ${volStr} · ${!audioOn ? 'MUTED' : 'ACTIVE'}`;
+  // Always show the level: "AF MUTED · MUTED" said the same thing twice.
+  txt.textContent = `AF ${Math.round(audioVolume * 100)}% · ${audioOn ? 'ACTIVE' : 'MUTED'}`;
 }
 
 function syncSquelchUi() {
@@ -4052,15 +4217,16 @@ function openFreqEntry() {
 
 function tickClock() {
   const now = new Date();
+  // One time source, one format: the panel clock and the LCD clock are the
+  // same UTC reading. Two clocks in different formats read as two different
+  // things and there is only one.
+  const h = String(now.getUTCHours()).padStart(2, '0');
+  const m = String(now.getUTCMinutes()).padStart(2, '0');
+  const s = String(now.getUTCSeconds()).padStart(2, '0');
   const el = $('scrClock');
-  if (el) el.textContent = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
+  if (el) el.textContent = `${h}:${m}:${s}`;
   const utcEl = $('vfoUtcClock');
-  if (utcEl) {
-    const h = String(now.getUTCHours()).padStart(2, '0');
-    const m = String(now.getUTCMinutes()).padStart(2, '0');
-    const s = String(now.getUTCSeconds()).padStart(2, '0');
-    utcEl.textContent = `${h}:${m}:${s} UTC`;
-  }
+  if (utcEl) utcEl.textContent = `${h}:${m}:${s} UTC`;
 }
 
 // ---------- span labelling ----------
@@ -6171,8 +6337,10 @@ async function applySpurNotch() {
 
 
 function updateSnapHint() {
-  const el = $('freqHint');
-  if (el) el.textContent = 'click to tune · scroll digit · spin flywheel · double-click to type';
+  // The tuning gestures belong on the readout's tooltip, not on the faceplate:
+  // a real panel has no instructions printed on the LCD.
+  const readout = $('freqReadout');
+  if (readout) readout.title = 'click to tune · scroll digit · spin flywheel · double-click to type';
   const label = snapLabel();
   const eff = $('snapEffective');
   if (eff) {
@@ -6233,6 +6401,10 @@ function applyModeUi(mode) {
   updateSnapHint();
   document.querySelectorAll('.modebtn').forEach(b =>
     b.classList.toggle('on', b.dataset.mode === mode));
+  // The mode badge is part of the same acknowledgment: a key press must show
+  // on the readout immediately, not on the next status frame (which never
+  // arrives when the radio is absent).
+  updateVfoTelemetry();
   // WFM has no narrowband protocols in it, so the classifier is not run and
   // its panels would otherwise sit on stale readings.
   if (mode === 'wfm' && $('sdrClassProtocol')) {
