@@ -158,6 +158,13 @@ const MEASURE = `(() => {
     heroDigitBox: digits.length ? box(digits[0]) : null,
     meter: box(q('.meter-housing')), smeterSvg: box(q('#smeterSvg')),
     flywheel: box(q('.vfo-flywheel-container')),
+    // Operator-polish Phase 0 baseline voids (additive; harness-shape unchanged).
+    bayPlate: box(q('.bay-plate')),
+    vfoContainer: box(q('.vfo-container')),
+    errH: q('#err') ? q('#err').offsetHeight : null,
+    sideColGap: (() => { const r = q('.rig'), s = q('.side-col');
+      if (!r || !s) return null;
+      return Math.round(s.getBoundingClientRect().top - r.getBoundingClientRect().bottom); })(),
     keySystems: {
       mode: qa('.modebtn').slice(0, 1).map(b => ({ box: box(b), css: css(b) }))[0] || null,
       band: qa('.band-btn').slice(0, 1).map(b => ({ box: box(b), css: css(b) }))[0] || null,
@@ -258,6 +265,7 @@ for (const vp of viewports) {
     bays: (m.bays || []).map(b => ({ cls: b.cls.replace(/deck-bay ?/, ''), w: b.box.w, h: b.box.h })),
     hero: m.hero, heroDigit: m.heroDigit, heroDigitBox: m.heroDigitBox, heroDigits: m.heroDigits,
     meter: m.smeterSvg, flywheel: m.flywheel,
+    bayPlate: m.bayPlate, vfoContainer: m.vfoContainer, errH: m.errH, sideColGap: m.sideColGap,
     keySystems: m.keySystems, keyCounts: m.keyCounts,
     smallTextUnder9px: m.smallTextUnder9px,
     lowContrast,
@@ -286,6 +294,8 @@ if (jsonOnly) {
       + ` | dsp ${r.keySystems.dsp?.box?.w}x${r.keySystems.dsp?.box?.h}@${r.keySystems.dsp?.css?.font}`);
     console.log(`   meter ${r.meter?.w}x${r.meter?.h}  smallText<9px=${r.smallTextUnder9px}`
       + `  lowContrast=${r.lowContrast.length ? r.lowContrast.map(l => `${l.t}:${l.ratio}`).join(' ') : 'none'}`);
+    console.log(`   voids bayPlate=${r.bayPlate?.w}x${r.bayPlate?.h} vfo=${r.vfoContainer?.w}x${r.vfoContainer?.h}`
+      + ` hero=${r.hero?.w}x${r.hero?.h} errH=${r.errH} sideColGap=${r.sideColGap}`);
     if (r.screenshot) console.log(`   shot ${r.screenshot}`);
     console.log('');
   }

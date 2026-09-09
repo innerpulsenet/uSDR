@@ -12,18 +12,19 @@ since the voice scanner arrived, to sweep a band for voice on its own.
 
 ## What it does
 
-The interface is laid out like an IC-7300 front panel: status strip, S/Po
-meter, a large tuning readout, spectrum over waterfall, and an audio scope,
-all on one LCD-style screen.
+The interface follows IC-7300 grammar — centred display, main dial right,
+S-meter — plus a FlexRadio-style log dock beside the case. There is no Po or
+SWR: this is RX-only.
 
 - **Spectrum and waterfall** over spans from 200 kHz to 3.2 MHz, using the
   `HAM` black → navy → blue → cyan → white waterfall ramp, with peak hold,
   trace fill, and auto or manual dB range.
 - **Tuning.** The big readout is the frequency being *received*, the way a
   radio's is — not the centre of the span. Everything sets it: clicking
-  anywhere on the spectrum or waterfall, scrolling a digit, the arrow keys,
-  double-clicking to type, scrolling the display, or clicking a peak marker or
-  a logged decode.
+  anywhere on the spectrum or waterfall, double-clicking the spectrum (tunes RX
+  and inspects that frequency, same as a click, recentred), scrolling a digit, the arrow keys,
+  double-clicking the readout to type, scrolling the display, or clicking
+  a peak marker or a logged decode.
 
   Tuning **snaps to the channel raster the mode implies**, so pointing at a
   signal lands on the frequency it is actually allocated to:
@@ -144,9 +145,22 @@ all on one LCD-style screen.
 
   The passband drawn on the spectrum and the audio scope's frequency axis both
   follow the mode's real channel width.
+- **Front panel controls.** One visible control per setting; the face copy is
+  canonical. `MONITOR` on the AF bay is the audio switch and volume is the AF
+  knob. `SQL MARK` on the face draws a spectrum threshold line only; `SCAN SQL`
+  in the scan dock is the scanner gate. The `SPAN` fader is the face span
+  control; the ADC rate `<select>` lives under Advanced. The VFO badge reads
+  `IF` for the channel filter width. The memory row (was
+  band presets) with `M.IN` / `M→V` / `CLR` stores a single RX frequency
+  locally — not TX split. Demod keys (`NFM` `AM` `WFM` `P25` `DMR` `NXDN`)
+  pick the detector; function keys (`PACKET` `PAGER` `FLEX` `AUTO` `SCAN`)
+  pick what the receiver does with it.
 - **Listening.** Demodulated audio is streamed to the browser as raw PCM over
-  the same WebSocket and played through Web Audio. Press LISTEN to start it —
-  browsers only allow audio to begin inside a user gesture. Analog audio is
+  the same WebSocket and played through Web Audio. Press MONITOR to start it —
+  browsers only allow audio to begin inside a user gesture. The face key keeps
+  its legend and shows state on its LED; it never renames to MUTE, and the AF
+  knob pointer always shows volume. Advanced keeps a LISTEN mirror of the same
+  switch. Analog audio is
   gated on FM quieting, measured in a 4–8 kHz band of the discriminator
   output: a carrier of about 9 dB or better opens the gate at once, a weaker
   one after 1.5 s, and an empty channel is silent rather than static.
@@ -423,7 +437,7 @@ The full engine test suite passes unchanged (`cargo test -p scannerd-engine --re
 
 `SCAN` is a scanner in the classic sense: you give it a frequency range and a
 set of voice modes (AM, NFM, P25, DMR), and it sweeps that range on its own,
-stopping to hold whatever it can actually decode, playing it when LISTEN is
+stopping to hold whatever it can actually decode, playing it when MONITOR is
 on, and filing each call into Last Heard with its frequency and mode.
 
 What it does not do is step the channel raster. An RTL-SDR's tuner faults

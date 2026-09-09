@@ -155,8 +155,10 @@ check('palette popup closes on outside click', (await evalJs(`document.getElemen
 
 await evalJs(`document.getElementById('btnListen').click()`);
 await sleep(600);
-check('LISTEN toggles audio monitor', (await evalJs(`document.getElementById('listenBtnLabel').textContent`)) === 'MUTE',
-  await evalJs(`document.getElementById('listenBtnLabel').textContent`));
+check('MONITOR toggles audio monitor',
+  (await evalJs(`document.getElementById('btnListen').classList.contains('on')`)) === true
+  && (await evalJs(`document.getElementById('listenBtnLabel').textContent`)) === 'MONITOR',
+  await evalJs(`document.getElementById('listenBtnLabel').textContent + ' on=' + document.getElementById('btnListen').classList.contains('on')`));
 await evalJs(`document.getElementById('btnListen').click()`);
 
 await evalJs(`(() => {

@@ -392,7 +392,7 @@ test('standalone AF Gain knob syncs volume and readout correctly', () => {
   `);
   const readout = run(ctx, `document.getElementById('deckAfVolReadout').textContent`);
   assert.ok(readout.includes('75%'), `readout should display 75%: ${readout}`);
-  assert.ok(readout.includes('ACTIVE'), `readout should indicate active state: ${readout}`);
+  assert.ok(readout.includes('MON ON'), `readout should indicate monitor on: ${readout}`);
 
   // Test mute
   run(ctx, `
@@ -400,7 +400,7 @@ test('standalone AF Gain knob syncs volume and readout correctly', () => {
     syncAfVolUi();
   `);
   const mutedReadout = run(ctx, `document.getElementById('deckAfVolReadout').textContent`);
-  assert.ok(mutedReadout.includes('MUTED'), `readout should indicate muted: ${mutedReadout}`);
+  assert.ok(mutedReadout.includes('MON OFF'), `readout should indicate monitor off: ${mutedReadout}`);
 });
 
 test('linear faders for RF Gain, Squelch, SPAN and Zoom sync accurately', () => {
@@ -439,7 +439,7 @@ test('linear faders for RF Gain, Squelch, SPAN and Zoom sync accurately', () => 
     document.getElementById('sdrRateSel').value = '2048000';
     syncSpanKnobUi();
   `);
-  assert.strictEqual(run(ctx, `document.getElementById('faderSpanVal').textContent`), '2.05M');
+  assert.strictEqual(run(ctx, `document.getElementById('faderSpanVal').textContent`), '2.048M');
 
   // 4. FFT Zoom Fader
   run(ctx, `
@@ -462,16 +462,18 @@ test('Main VFO flywheel setup generates 72 knurling teeth', () => {
 
 test('Aux row LISTEN/LO OFFSET buttons and VFO telemetry bar sync correctly', () => {
   const ctx = buildContext();
+  // Markup ships the stable MONITOR legend; start/stopAudio must never rename it.
+  run(ctx, `document.getElementById('listenBtnLabel').textContent = 'MONITOR';`);
   run(ctx, `
     startAudio();
   `);
-  assert.strictEqual(run(ctx, `document.getElementById('listenBtnLabel').textContent`), 'MUTE');
+  assert.strictEqual(run(ctx, `document.getElementById('listenBtnLabel').textContent`), 'MONITOR');
   assert.strictEqual(run(ctx, `document.getElementById('btnListen').classList.contains('on')`), true);
 
   run(ctx, `
     stopAudio();
   `);
-  assert.strictEqual(run(ctx, `document.getElementById('listenBtnLabel').textContent`), 'LISTEN');
+  assert.strictEqual(run(ctx, `document.getElementById('listenBtnLabel').textContent`), 'MONITOR');
   assert.strictEqual(run(ctx, `document.getElementById('btnListen').classList.contains('on')`), false);
 
   run(ctx, `

@@ -171,18 +171,11 @@
     font: 700 8.5px/1 var(--mono); letter-spacing: 0.08em;
     text-shadow: 0 1px 0 #000;
   }
-  /* Chassis nameplate in the instrument column: a flat sub-assembly holding
-     the model's silkscreen telemetry as a label/value spec block. It
-     stretches to fill the column so the panel has no empty pocket beside the
-     panadapter. */
+  /* Chassis nameplate retired (Phase 1): the live TUNER/RATE ids moved to the
+     brand strip; the static IF/DSP filler was dropped. The rule stays
+     so any lingering reference hides instead of stretching the column. */
   .bay-plate {
-    display: flex; flex-direction: column; justify-content: center; gap: 7px;
-    flex: 1 1 auto;
-    background: var(--panel-face);
-    border: 1px solid var(--panel-split);
-    border-radius: var(--radius-assembly);
-    padding: 8px 9px 10px;
-    box-shadow: inset 0 1px 0 rgba(255,255,255,0.05), 0 1px 0 rgba(0,0,0,0.5);
+    display: none;
   }
   .plate-head {
     font: 800 8.5px/1 var(--mono); letter-spacing: 0.14em; color: var(--ink-2);
@@ -320,6 +313,7 @@
   @media (max-width: 900px) {
     .deck-console { grid-template-columns: 1fr; }
     .panel-right { flex-direction: row; justify-content: center; gap: 14px; }
+    .vfo-top-strip { flex-wrap: wrap; }
   }
 
   /* Modular sub-assemblies on the panel face: flat matte, separated by a 1 px
@@ -611,8 +605,8 @@
      sweep. The sheen lives in ::after with pointer-events: none so the digits
      stay clickable and the canvases keep their pixel mapping. */
   .vfo-container {
-    flex: 1;
-    display: flex; flex-direction: column; justify-content: space-between;
+    flex: 0 0 auto;
+    display: flex; flex-direction: column; justify-content: flex-start; gap: 4px;
     background:
       radial-gradient(130% 95% at 50% 120%, rgba(28, 74, 104, 0.32) 0%, rgba(6, 14, 21, 0.12) 55%, transparent 100%),
       var(--panel-well);
@@ -633,7 +627,7 @@
     pointer-events: none; border-radius: inherit;
   }
   .vfo-top-strip {
-    display: flex; align-items: center; justify-content: space-between;
+    display: flex; align-items: center; justify-content: space-between; flex-wrap: nowrap;
     border-bottom: 1px solid rgba(27, 58, 82, 0.5);
     padding-bottom: 4px;
   }
@@ -669,8 +663,8 @@
   }
 
   .vfo-freq-hero {
-    display: flex; align-items: center; justify-content: space-between;
-    flex-wrap: wrap; gap: 8px; row-gap: 4px; padding: 2px 0;
+    display: flex; align-items: center; justify-content: flex-start;
+    flex-wrap: nowrap; gap: 12px; padding: 2px 0;
   }
   .vfo-center-tools {
     display: flex; align-items: center; gap: 6px;
@@ -814,9 +808,13 @@
      the way a real panel indicates state. */
   .mode-keypad {
     display: grid;
-    grid-template-columns: repeat(11, 1fr);
+    grid-template-columns: repeat(6, 1fr);
     gap: 3px;
     padding: 2px 0;
+  }
+  .mode-keypad.mode-keypad-fn {
+    grid-template-columns: repeat(5, 1fr);
+    margin-top: 4px;
   }
   .modebtn {
     position: relative;
@@ -1071,6 +1069,25 @@
     text-transform: none; white-space: nowrap;
   }
   .chan-col .sdr-classifier-cell { height: auto; min-height: 60px; }
+  /* Phase 1: collapse to one selected-channel strip. Every id stays in the
+     DOM; the extra classifier cells are CSS-hidden (JS never writes
+     style.display on them) while SEL CH + #sdrClassProtocol stay visible.
+     #sdrPeakButtons stays in the DOM, hidden on the face (peaks live on). */
+  /* Stretch the selected-channel well to the leftover left-column height so
+     the space beside the waterfall is a recessed readout, not a hole. */
+  .chan-col-strip {
+    gap: 4px;
+    flex: 1 1 auto;
+    background: var(--panel-well);
+    border: 1px solid var(--panel-split);
+    border-radius: var(--radius-assembly);
+    padding: 6px 8px;
+    box-shadow: inset 0 1px 3px rgba(0,0,0,0.8);
+  }
+  .chan-col-strip .chan-title { text-transform: uppercase; }
+  .chan-col-strip .sdr-classifier-cell { display: none; }
+  .chan-col-strip .sdr-classifier-cell.chan-keep { display: block; min-height: 0; }
+  .chan-col-strip #sdrPeakButtons { display: none; }
   .chan-col .sdr-classifier-value, .chan-col .sdr-classifier-subvalue { white-space: normal; height: auto; line-height: 1.35; }
   .chan-col .sdr-peak-buttons { height: 74px; }
   @media (max-width: 1080px) {
@@ -1117,7 +1134,12 @@
 
   /* ---------- Audio & Data Scopes (Digital Phosphor CRT) ---------- */
 
-  .scr-scope { margin-top: 10px; }
+  .scr-scope { margin-top: 4px; width: 100%; }
+  .vfo-legend {
+    font-size: 8.5px; font-weight: 700; letter-spacing: 0.08em;
+    color: var(--ink-2); text-transform: uppercase; text-shadow: 0 1px 0 #000;
+    padding: 2px 0 0; text-align: center;
+  }
   .scope-header {
     display: flex; align-items: center; justify-content: space-between;
     background: linear-gradient(180deg, #101c27 0%, #0a131b 100%);
@@ -1232,26 +1254,27 @@
 
   #err {
     margin: 12px 0 0; padding: 6px 12px; border-radius: 6px;
-    height: 30px; line-height: 18px; overflow: hidden;
+    min-height: 0; height: auto; line-height: 18px; overflow: hidden;
     background: #230e0e; border: 1px solid #5b2020; color: #ffb4a8;
     font: 12px var(--mono);
     white-space: nowrap; text-overflow: ellipsis;
   }
-  #err:empty { background: transparent; border-color: transparent; }
+  #err:empty { display: none; }
 
   /* ---------- Side Telemetry Dock (Mission Control) ---------- */
 
   .side-col {
-    display: flex; flex-direction: column; min-height: 0;
-    margin-top: 16px;
-    /* Spacious height so the operator can scroll through dozens of frames at once */
-    height: 600px;
-    border: 1px solid var(--line); border-radius: 8px;
-    background: #0c1218; overflow: hidden;
+    display: flex; flex-direction: column;
+    margin-top: 8px;
+    /* Phase 1: dock reads as case furniture, not a second page: case
+       background/border language, natural height with scroll guardrails. */
+    height: auto; min-height: 420px; max-height: 70vh;
+    border: 1px solid #05080b; border-radius: var(--radius-panel);
+    background: var(--panel-case); overflow: hidden;
     box-shadow: 0 12px 36px rgba(0,0,0,0.5);
   }
   @media (min-height: 850px) {
-    .side-col { height: min(720px, calc(100vh - 360px)); }
+    .side-col { max-height: min(70vh, calc(100vh - 120px)); }
   }
   .side-tabs {
     display: flex; gap: 3px; padding: 7px 10px 0;
@@ -1559,6 +1582,12 @@
         <span class="badge" id="badgeProto" title="Protocol the classifier hears on the selected channel">IDLE</span>
         <span class="brand-divider">/</span>
         <span class="badge health-badge" id="badgeHealth" title="Sample stream health: dropped/lagged blocks and lost samples since start">STREAM —</span>
+        <span class="brand-divider">/</span>
+        <span class="brand-metric-label">TUNER</span>
+        <span class="brand-metric-val" id="headerTunerBadge">R820T</span>
+        <span class="brand-divider">/</span>
+        <span class="brand-metric-label">RATE</span>
+        <span class="brand-metric-val" id="headerRateBadge">2.40M</span>
       </div>
       <div class="brand-status-cluster">
         <div class="conn" id="conn">
@@ -1580,7 +1609,7 @@
         <div class="panel-left">
             <div class="deck-bay bay-frontend">
               <div class="bay-header">
-                <span class="bay-title"><span class="bay-screw-corner"></span>AF / RF FRONT-END</span>
+                <span class="bay-title"><span class="bay-screw-corner"></span>AF / RF</span>
                 <span class="bay-screw-corner"></span>
               </div>
 
@@ -1647,14 +1676,14 @@
                   <circle id="deckMuteBtn" cx="55" cy="55" r="9" fill="url(#afCapGrad)" stroke="#111c26" stroke-width="1.2" style="cursor:pointer" title="Click to Mute / Unmute"/>
                   <path d="M 52.5 53 L 54.5 53 L 57 51 L 57 59 L 54.5 57 L 52.5 57 Z" fill="#8caec4" pointer-events="none"/>
                 </svg>
-                <div class="af-vol-readout-pill" id="deckAfVolReadout">AF 60% · ACTIVE</div>
+                <div class="af-vol-readout-pill" id="deckAfVolReadout">AF 60% · MON OFF</div>
               </div>
 
               <!-- AF Auxiliary Function Row: Audio Monitor & Front-End Offset -->
               <div class="af-aux-row">
-                <button type="button" class="af-listen-btn" id="btnListen" title="Audio Monitor (LISTEN / MUTE)">
+                <button type="button" class="af-listen-btn" id="btnListen" title="Audio Monitor (MONITOR)">
                   <span class="btn-tally led-green" id="listenTally"></span>
-                  <span id="listenBtnLabel">LISTEN</span>
+                  <span id="listenBtnLabel">MONITOR</span>
                 </button>
                 <button type="button" class="af-aux-btn" id="btnLoOffset" title="LO Off-Center Offset (+/- 250 kHz)">
                   <span class="btn-tally led-cyan" id="loOffsetTally"></span>
@@ -1694,7 +1723,7 @@
 
                 <!-- Squelch Vertical Linear Fader -->
                 <div class="fader-vert-wrap" id="faderSqlWrap">
-                  <span class="fader-title">SQUELCH</span>
+                  <span class="fader-title">SQL MARK</span>
                   <div class="fader-assembly">
                     <div class="fader-scale">
                       <span>-20</span>
@@ -1720,11 +1749,11 @@
               </div>
             </div>
 
-          <div class="chan-col" aria-label="Selected channel">
-          <div class="chan-title">Selected channel
+          <div class="chan-col chan-col-strip" aria-label="Selected channel">
+          <div class="chan-title">SEL CH
           <span class="note" id="sdrInspectFreqBadge">—</span>
           </div>
-          <div class="sdr-classifier-cell">
+          <div class="sdr-classifier-cell chan-keep">
           <div class="sdr-classifier-label">Protocol <span class="note" id="sdrInspectStatusBadge" style="float:right; text-transform:none; letter-spacing:0; font:10px var(--mono); color:var(--faint)">IDLE</span></div>
           <div id="sdrClassProtocol" class="sdr-classifier-value" style="font-size:13px; font-weight:700; color:#38bdf8; margin-top:3px;">Idle / Noise</div>
           <div id="sdrClassDetails" class="sdr-classifier-subvalue" style="font-size:11px; color:#94a3b8; margin-top:2px;">Waiting for carrier…</div>
@@ -1752,7 +1781,7 @@
         <div class="panel-center">
           <div class="deck-bay bay-vfo bay-vfo-console">
             <div class="bay-header">
-              <span class="bay-title"><span class="bay-screw-corner"></span>PRIMARY VFO &amp; DEMODULATOR</span>
+              <span class="bay-title"><span class="bay-screw-corner"></span>VFO</span>
               <span class="bay-screw-corner"></span>
             </div>
 
@@ -1764,13 +1793,10 @@
                   <span class="vfo-badge-main">VFO-A</span>
                   <span class="vfo-tag-rx">● RX</span>
                   <span class="vfo-tag-mode" id="vfoModeBadge">NFM</span>
-                  <span class="vfo-tag-filter" id="vfoFilterBadge">BW 12.5k · SHARP</span>
+                  <span class="vfo-tag-filter" id="vfoFilterBadge">IF 12.5k · SHARP</span>
                 </div>
                 <div class="vfo-badges-right">
-                  <span class="vfo-telemetry-tag">ANT 1</span>
-                  <span class="vfo-telemetry-tag">PRE 1</span>
-                  <span class="vfo-telemetry-tag">ATT 0dB</span>
-                  <span class="vfo-telemetry-tag" id="vfoAgcTag">AGC MID</span>
+                  <span class="vfo-telemetry-tag" id="vfoAgcTag">AGC</span>
                   <span class="vfo-utc-clock" id="vfoUtcClock">00:00:00 UTC</span>
                 </div>
               </div>
@@ -1795,12 +1821,12 @@
                   <div class="vfo-step-pill" title="Tuning step (TS / STEP)">
                     <span class="vfo-step-badge">TS</span>
                     <select class="vfo-step-select" id="snapSel" title="Tuning raster step">
-                      <option value="auto" id="snapOptAuto">AUTO (6.25k)</option>
+                      <option value="auto" id="snapOptAuto" selected>AUTO (6.25k)</option>
                       <option value="100">100 Hz</option>
                       <option value="1000">1 kHz</option>
                       <option value="2500">2.5 kHz</option>
                       <option value="5000">5 kHz</option>
-                      <option value="6250" selected>6.25 kHz</option>
+                      <option value="6250">6.25 kHz</option>
                       <option value="12500">12.5 kHz</option>
                       <option value="25000">25 kHz</option>
                       <option value="100000">100 kHz</option>
@@ -1815,22 +1841,22 @@
               <div class="vfo-meter-bar">
                 <div class="vfo-meter-seg"><span class="vfo-seg-label">CH PWR</span><span class="vfo-seg-val" id="vfoChPwrVal">-61.3 dBFS</span></div>
                 <div class="vfo-meter-seg"><span class="vfo-seg-label">SNR</span><span class="vfo-seg-val" id="vfoSnrVal">2.2 dB</span></div>
-                <div class="vfo-meter-seg"><span class="vfo-seg-label">SQL GATE</span><span class="vfo-seg-val" id="vfoSqlGateVal" style="color:#2bff6a">OPEN</span></div>
+                <div class="vfo-meter-seg"><span class="vfo-seg-label">MARK</span><span class="vfo-seg-val" id="vfoSqlGateVal" style="color:#2bff6a">OPEN</span></div>
                 <div class="vfo-meter-seg vfo-cal-seg" id="vfoCalSeg" title="Carrier Frequency Error · Click to calibrate PPM against tuned carrier"><span class="vfo-seg-label">ERR</span><span class="vfo-seg-val" id="vfoFreqErrVal">—</span></div>
                 <div class="vfo-meter-seg"><span class="vfo-seg-label">NOTCH</span><span class="vfo-seg-val" id="vfoNotchVal">AUTO</span></div>
               </div>
 
-              <!-- Secondary Sub-VFO / Standby Line -->
+              <!-- Memory store / recall (RX-only; was VFO-B/SPLIT) -->
               <div class="vfo-sub-line">
                 <div class="vfo-sub-readout">
-                  <span class="sub-vfo-badge">VFO-B SUB</span>
-                  <span class="sub-vfo-freq" id="subFreqReadout">0144.200.00 MHz</span>
-                  <span class="sub-vfo-status">STANDBY · SPLIT OFF</span>
+                  <span class="sub-vfo-badge">MEM</span>
+                  <span class="sub-vfo-freq" id="subFreqReadout">----.---.-- MHz</span>
+                  <span class="sub-vfo-status" id="subVfoStatus">EMPTY</span>
                 </div>
                 <div class="vfo-sub-btns">
-                  <button type="button" class="vfo-sub-btn" id="btnVfoSwap" title="Swap VFO A and B (A/B)">A / B</button>
-                  <button type="button" class="vfo-sub-btn" id="btnVfoSync" title="Copy VFO A to B (A=B)">A = B</button>
-                  <button type="button" class="vfo-sub-btn" id="btnVfoSplit" title="Toggle Split TX/RX">SPLIT</button>
+                  <button type="button" class="vfo-sub-btn" id="btnVfoSwap" title="Recall memory to VFO (M→V)">M→V</button>
+                  <button type="button" class="vfo-sub-btn" id="btnVfoSync" title="Store VFO into memory (M.IN)">M.IN</button>
+                  <button type="button" class="vfo-sub-btn" id="btnVfoSplit" title="Clear memory">CLR</button>
                 </div>
               </div>
             </div>
@@ -1843,6 +1869,8 @@
               <button type="button" class="modebtn" data-mode="p25" title="APCO Project 25 digital voice"><span class="mode-tally tally-green"></span>P25</button>
               <button type="button" class="modebtn" data-mode="dmr" title="Digital Mobile Radio voice"><span class="mode-tally tally-green"></span>DMR</button>
               <button type="button" class="modebtn" data-mode="nxdn" title="NXDN48/NXDN96 digital voice"><span class="mode-tally tally-green"></span>NXDN</button>
+            </div>
+            <div class="mode-keypad mode-keypad-fn" role="group" aria-label="Receiver function">
               <button type="button" class="modebtn" data-mode="packet" title="AX.25 1200 baud packet radio"><span class="mode-tally tally-green"></span>PACKET</button>
               <button type="button" class="modebtn" data-mode="pager" title="POCSAG / FLEX paging sweep"><span class="mode-tally tally-cyan"></span>PAGER</button>
               <button type="button" class="modebtn" data-mode="flex" title="Dedicated Motorola FLEX pager demodulator"><span class="mode-tally tally-cyan"></span>FLEX</button>
@@ -1851,7 +1879,7 @@
             </div>
 
             <!-- Quick Band Presets Matrix -->
-            <div class="band-matrix" role="group" aria-label="Band presets">
+            <div class="band-matrix" role="group" aria-label="Memory presets">
               <button type="button" class="band-btn" data-freq="121500000" data-mode="am"><span class="band-tally"></span>AIR 118</button>
               <button type="button" class="band-btn" data-freq="144200000" data-mode="nfm"><span class="band-tally"></span>2M 144</button>
               <button type="button" class="band-btn active" data-freq="156800000" data-mode="nfm"><span class="band-tally"></span>MAR 156</button>
@@ -1862,6 +1890,8 @@
               <button type="button" class="band-btn" data-freq="98100000" data-mode="wfm"><span class="band-tally"></span>WFM 88</button>
             </div>
           </div>
+
+          <div class="vfo-legend" aria-hidden="true">CLICK TUNE · SCROLL DIGIT · FLYWHEEL · DBL TYPE</div>
 
           <div class="spec-row">
                 <div class="spec-col">
@@ -1878,13 +1908,37 @@
                 <div class="spec-scale" id="specScale"></div>
                 </div>
           </div>
+
+          <div class="scr-scope">
+            <div class="scope-header">
+              <div class="scope-title" id="scopeTitle">AUDIO SCOPE</div>
+              <div class="scope-badges">
+                <span class="scope-mode-tag active" id="scopeModeTag">DIGITAL PHOSPHOR</span>
+                <span class="scope-trig-tag" id="scopeTrigTag">AUTO ZERO-CROSS</span>
+              </div>
+            </div>
+            <div class="scope-panes">
+              <div class="scope-pane">
+                <canvas id="scopeSpecCanvas"></canvas>
+                <div class="scope-axis" id="scopeAxis">
+                  <span>0</span><span>1.0</span><span>2.0</span><span>3.0</span><span>4.0kHz</span>
+                </div>
+              </div>
+              <div class="scope-pane">
+                <canvas id="scopeWaveCanvas"></canvas>
+                <div class="scope-axis">
+                  <span id="scopeLevel">LEVEL: —</span><span id="scopeTime">8ms/Div</span>
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
 
         <!-- RIGHT COLUMN: instruments and the main tuning dial. -->
         <div class="panel-right">
           <div class="deck-bay bay-meter">
             <div class="bay-header">
-              <span class="bay-title"><span class="bay-screw-corner"></span>ANALOG MULTI-METER</span>
+              <span class="bay-title"><span class="bay-screw-corner"></span>S METER</span>
               <span class="bay-screw-corner"></span>
             </div>
 
@@ -1961,7 +2015,8 @@
                   <line x1="278.0" y1="76.3" x2="284.1" y2="69.0" stroke="#ff4a36" stroke-width="1.9"/>
                   <text x="290.8" y="61.0" font-family="var(--mono)" font-weight="700" font-size="10" fill="#ff705a" text-anchor="middle" dominant-baseline="central">+60</text>
 
-                  <!-- PO Scale -->
+                  <!-- PO Scale (RX-only: dimmed display) -->
+                  <g opacity="0.18">
                   <path d="M 79.29 86.79 A 149.00 149.00 0 0 1 260.71 86.79" fill="none" stroke="#1d425c" stroke-width="1.1"/>
                   <text x="66.3" y="93.8" font-family="var(--sans)" font-weight="900" font-size="10" fill="#38bdf8" text-anchor="middle" dominant-baseline="central">PO</text>
                   <text x="271.7" y="92.0" font-family="var(--sans)" font-weight="900" font-size="10" fill="#38bdf8" text-anchor="middle" dominant-baseline="central">W</text>
@@ -1979,8 +2034,10 @@
                   <text x="243.6" y="63.5" font-family="var(--mono)" font-weight="700" font-size="7.5" fill="#9cd9fa" text-anchor="middle" dominant-baseline="central">200</text>
                   <line x1="260.7" y1="86.8" x2="264.1" y2="82.4" stroke="#29658f" stroke-width="1.2"/>
                   <text x="267.1" y="78.5" font-family="var(--mono)" font-weight="700" font-size="7.5" fill="#9cd9fa" text-anchor="middle" dominant-baseline="central">250</text>
+                  </g>
 
-                  <!-- IC Scale -->
+                  <!-- IC Scale (RX-only: dimmed display) -->
+                  <g opacity="0.18">
                   <path d="M 93.35 97.54 A 132.00 132.00 0 0 1 248.52 98.89" fill="none" stroke="#1d425c" stroke-width="1.1"/>
                   <text x="81.8" y="103.5" font-family="var(--sans)" font-weight="900" font-size="9" fill="#38bdf8" text-anchor="middle" dominant-baseline="central">IC</text>
                   <text x="258.2" y="103.5" font-family="var(--sans)" font-weight="900" font-size="9" fill="#38bdf8" text-anchor="middle" dominant-baseline="central">A</text>
@@ -2002,8 +2059,10 @@
                   <text x="239.2" y="82.7" font-family="var(--mono)" font-weight="700" font-size="7" fill="#9cd9fa" text-anchor="middle" dominant-baseline="central">15</text>
                   <line x1="248.5" y1="98.9" x2="251.2" y2="95.3" stroke="#29658f" stroke-width="1.1"/>
                   <text x="253.6" y="92.1" font-family="var(--mono)" font-weight="700" font-size="7" fill="#9cd9fa" text-anchor="middle" dominant-baseline="central">20</text>
+                  </g>
 
-                  <!-- SWR Scale -->
+                  <!-- SWR Scale (RX-only: dimmed display) -->
+                  <g opacity="0.18">
                   <path d="M 105.98 108.27 A 116.00 116.00 0 0 1 234.02 108.27" fill="none" stroke="#1d425c" stroke-width="1.1"/>
                   <text x="94.2" y="114.6" font-family="var(--sans)" font-weight="900" font-size="7.5" fill="#38bdf8" text-anchor="middle" dominant-baseline="central">SWR</text>
                   <line x1="106.0" y1="108.3" x2="103.5" y2="104.5" stroke="#29658f" stroke-width="1.1"/>
@@ -2016,8 +2075,10 @@
                   <text x="189.4" y="82.3" font-family="var(--mono)" font-weight="700" font-size="7.5" fill="#ff705a" text-anchor="middle" dominant-baseline="central">3</text>
                   <line x1="232.3" y1="107.2" x2="234.7" y2="103.4" stroke="#ff4a36" stroke-width="1.4"/>
                   <text x="236.7" y="100.3" font-family="var(--mono)" font-weight="700" font-size="7.5" fill="#ff705a" text-anchor="middle" dominant-baseline="central">∞</text>
+                  </g>
 
-                  <!-- COMP Scale -->
+                  <!-- COMP Scale (RX-only: dimmed display) -->
+                  <g opacity="0.18">
                   <path d="M 117.23 118.88 A 101.00 101.00 0 0 1 221.26 117.98" fill="none" stroke="#1d425c" stroke-width="1.1"/>
                   <text x="105.5" y="125.3" font-family="var(--sans)" font-weight="900" font-size="7" fill="#38bdf8" text-anchor="middle" dominant-baseline="central">COMP</text>
                   <text x="228.8" y="121.0" font-family="var(--sans)" font-weight="900" font-size="7" fill="#38bdf8" text-anchor="middle" dominant-baseline="central">dB</text>
@@ -2033,6 +2094,7 @@
                   <text x="206.1" y="103.2" font-family="var(--mono)" font-weight="700" font-size="8" fill="#9cd9fa" text-anchor="middle" dominant-baseline="central">20</text>
                   <line x1="221.3" y1="118.0" x2="223.2" y2="114.7" stroke="#29658f" stroke-width="1"/>
                   <text x="224.8" y="111.9" font-family="var(--mono)" font-weight="700" font-size="8" fill="#9cd9fa" text-anchor="middle" dominant-baseline="central">30</text>
+                  </g>
 
                   <!-- Dynamic AGC Sub-Scale (Authentic Moving AGC Meter) -->
                   <g id="meterAgcGroup">
@@ -2106,7 +2168,7 @@
               </button>
               <button type="button" class="dsp-key on" id="keyAuto" title="Auto Dynamic Range">
                 <span class="dsp-tally led-cyan"></span>
-                <span id="keyAutoLabel">AUTO</span>
+                <span id="keyAutoLabel">RNG</span>
               </button>
               <button type="button" class="dsp-key on" id="keyFill" title="Spectrum Area Fill">
                 <span class="dsp-tally led-blue"></span>
@@ -2141,8 +2203,8 @@
 
           <div class="deck-bay bay-tuning">
             <div class="bay-header">
-              <span class="bay-title"><span class="bay-screw-corner"></span>DISPLAY &amp; MAIN TUNING</span>
-              <span class="bay-readout" id="deckSpanReadout">SPAN 2.05M · ZOOM 1.0x</span>
+              <span class="bay-title"><span class="bay-screw-corner"></span>SPAN / ZOOM / DIAL</span>
+              <span class="bay-readout" id="deckSpanReadout">SPAN 2.048M · ZOOM 1.0x</span>
               <span class="bay-screw-corner"></span>
             </div>
 
@@ -2150,7 +2212,7 @@
             <div class="fader-pair" style="border-bottom: 1px solid rgba(22, 34, 46, 0.6); padding-bottom: 5px; margin-bottom: 5px;">
               <!-- SPAN Rate Linear Stepped Fader -->
               <div class="fader-vert-wrap" id="faderSpanWrap">
-                <span class="fader-title">SPAN RATE</span>
+                <span class="fader-title">SPAN</span>
                 <div class="fader-assembly">
                   <div class="fader-scale">
                     <span>3.2M</span>
@@ -2169,7 +2231,7 @@
                   </div>
                 </div>
                 <div class="fader-footer">
-                  <span class="fader-sublabel">BW</span>
+                  <span class="fader-sublabel">RATE</span>
                   <span class="fader-val" id="faderSpanVal">2.048M</span>
                 </div>
               </div>
@@ -2266,22 +2328,9 @@
             </div>
           </div>
 
-          <!-- Chassis nameplate: the tuner/rate/IF/DSP legend a real rig
-               silkscreens on the case. It lives under the instruments rather
-               than in the header, where it only made the top strip taller. -->
-          <div class="bay-plate" aria-hidden="true">
-            <div class="plate-head">CHASSIS</div>
-            <div class="plate-grid">
-              <span class="plate-label">TUNER</span>
-              <span class="plate-val" id="headerTunerBadge">R820T</span>
-              <span class="plate-label">RATE</span>
-              <span class="plate-val" id="headerRateBadge">2.40M</span>
-              <span class="plate-label">IF</span>
-              <span class="plate-val">ZERO-IF</span>
-              <span class="plate-label">DSP</span>
-              <span class="plate-val plate-val-led"><span class="brand-led-pip on"></span>ONLINE</span>
-            </div>
-          </div>
+          <!-- Phase 1: CHASSIS plate retired — the live TUNER/RATE badges moved
+               to the brand strip; static IF/DSP filler dropped. The
+               .bay-plate rule stays as display:none. -->
         </div>
       </div><!-- /.deck-console -->
 
@@ -2294,29 +2343,6 @@
         <div class="palette-grid" id="paletteList"></div>
       </div>
 
-      <div class="scr-scope">
-        <div class="scope-header">
-          <div class="scope-title" id="scopeTitle">AUDIO SCOPE</div>
-          <div class="scope-badges">
-            <span class="scope-mode-tag active" id="scopeModeTag">DIGITAL PHOSPHOR</span>
-            <span class="scope-trig-tag" id="scopeTrigTag">AUTO ZERO-CROSS</span>
-          </div>
-        </div>
-        <div class="scope-panes">
-          <div class="scope-pane">
-            <canvas id="scopeSpecCanvas"></canvas>
-            <div class="scope-axis" id="scopeAxis">
-              <span>0</span><span>1.0</span><span>2.0</span><span>3.0</span><span>4.0kHz</span>
-            </div>
-          </div>
-          <div class="scope-pane">
-            <canvas id="scopeWaveCanvas"></canvas>
-            <div class="scope-axis">
-              <span id="scopeLevel">LEVEL: —</span><span id="scopeTime">8ms/Div</span>
-            </div>
-          </div>
-        </div>
-      </div>
     </div>
 
     <!-- softkeys integrated into top transceiver control deck -->
@@ -2327,32 +2353,6 @@
       <div class="ctl">
         <label for="sdrRadioSel">Device</label>
         <select id="sdrRadioSel" style="min-width:200px"></select>
-      </div>
-      <div class="ctl">
-        <label for="sdrRateSel">Span</label>
-        <select id="sdrRateSel">
-          <option value="250000">250 kHz</option>
-          <option value="1024000">1.024 MHz</option>
-          <option value="1536000">1.536 MHz</option>
-          <option value="2048000" selected>2.048 MHz</option>
-          <option value="2400000">2.4 MHz</option>
-          <option value="3200000">3.2 MHz</option>
-        </select>
-      </div>
-      <div class="ctl">
-        <label>Gain</label>
-        <span class="cb" title="Automatic gain: a clip-guarded loop on manual gain. Walks the gain down within two seconds of ADC clipping and back up, a dB at a time, when the band is quiet. Never the tuner's own AGC, which overloads on a strong band."><input type="checkbox" id="sdrAgc" checked> AGC</span>
-        <input type="range" id="sdrGainRange" min="0" max="50" step="1" value="40" disabled>
-        <span class="val" id="sdrGainVal">auto</span>
-      </div>
-    </div>
-
-    <div class="ctlgroup">
-      <span class="grouplabel">Audio</span>
-      <div class="ctl">
-        <button type="button" class="softkey" id="btnListenSecondary" style="padding:6px 15px">LISTEN</button>
-        <input type="range" id="volRange" min="0" max="100" step="1" value="60" title="volume">
-        <span class="val" id="volVal">60%</span>
       </div>
     </div>
     </div><!-- /panelrow -->
@@ -2388,6 +2388,36 @@
       </div>
     </div>
 
+    <div class="ctlgroup">
+      <span class="grouplabel">Span</span>
+      <div class="ctl">
+        <label for="sdrRateSel">Span</label>
+        <select id="sdrRateSel">
+          <option value="250000">250 kHz</option>
+          <option value="1024000">1.024 MHz</option>
+          <option value="1536000">1.536 MHz</option>
+          <option value="2048000" selected>2.048 MHz</option>
+          <option value="2400000">2.4 MHz</option>
+          <option value="3200000">3.2 MHz</option>
+        </select>
+      </div>
+      <div class="ctl">
+        <label>Gain</label>
+        <span class="cb" title="Automatic gain: a clip-guarded loop on manual gain. Walks the gain down within two seconds of ADC clipping and back up, a dB at a time, when the band is quiet. Never the tuner's own AGC, which overloads on a strong band."><input type="checkbox" id="sdrAgc" checked> AGC</span>
+        <input type="range" id="sdrGainRange" min="0" max="50" step="1" value="40" disabled>
+        <span class="val" id="sdrGainVal">auto</span>
+      </div>
+    </div>
+
+    <div class="ctlgroup">
+      <span class="grouplabel">Audio</span>
+      <div class="ctl">
+        <button type="button" class="softkey" id="btnListenSecondary" style="padding:6px 15px">LISTEN</button>
+        <input type="range" id="volRange" min="0" max="100" step="1" value="60" title="volume">
+        <span class="val" id="volVal">60%</span>
+      </div>
+    </div>
+
     </div>
     </details>
   </div>
@@ -2401,7 +2431,7 @@
       <button type="button" class="side-tab" id="tabCalls" role="tab" aria-selected="false">LAST HEARD</button>
       <button type="button" class="side-tab" id="tabScan" role="tab" aria-selected="false">SCAN</button>
       <span style="flex:1"></span>
-      <button type="button" class="side-tab" id="dockWideBtn" title="Give the panels nearly the whole viewport (F)">⤢ tall</button>
+      <button type="button" class="side-tab" id="dockWideBtn" title="Give the panels nearly the whole viewport (F)">⤢ tall (F)</button>
     </div>
 
     <section class="panel side-panel on" id="panelClassifier">
@@ -2453,7 +2483,7 @@
         <label><input type="checkbox" id="scanModeDmr" checked> DMR</label>
       </div>
       <div style="display:flex; gap:10px; align-items:baseline; margin-bottom:6px; font-size:11px; color:var(--dim)">
-        <label style="flex:1">squelch
+        <label style="flex:1">SCAN SQL
           <input type="range" id="scanThreshold" min="4" max="20" step="0.5" value="8" style="width:110px; vertical-align:middle">
           <span id="scanThresholdVal" style="font:11px var(--mono); color:var(--text)">8 dB</span>
         </label>
@@ -2627,7 +2657,7 @@ function toggleWideDock() {
   if (!col) return;
   const tall = col.classList.toggle('tall');
   const btn = $('dockWideBtn');
-  if (btn) btn.textContent = tall ? '⤡ shrink' : '⤢ tall';
+  if (btn) btn.textContent = tall ? '⤡ shrink' : '⤢ tall (F)';
 }
 const dwb = document.getElementById('dockWideBtn');
 if (dwb) dwb.addEventListener('click', toggleWideDock);
@@ -3734,20 +3764,23 @@ function makeFaderDraggable(trackId, onFractionChange) {
   }, { passive: false });
 }
 
-let subVfoHz = 144200000;
-let isVfoSplit = false;
+let subVfoHz = 0;
 
 function updateSubVfoUi() {
   const el = $('subFreqReadout');
   if (el) {
-    const mhz = (subVfoHz / 1e6).toFixed(5);
-    const parts = mhz.split('.');
-    const intPart = parts[0].padStart(4, '0');
-    const dec = parts[1] || '00000';
-    el.textContent = `${intPart}.${dec.slice(0, 3)}.${dec.slice(3, 5)} MHz`;
+    if (!subVfoHz) {
+      el.textContent = '----.---.-- MHz';
+    } else {
+      const mhz = (subVfoHz / 1e6).toFixed(5);
+      const parts = mhz.split('.');
+      const intPart = parts[0].padStart(4, '0');
+      const dec = parts[1] || '00000';
+      el.textContent = `${intPart}.${dec.slice(0, 3)}.${dec.slice(3, 5)} MHz`;
+    }
   }
-  const splitBtn = $('btnVfoSplit');
-  if (splitBtn) splitBtn.classList.toggle('active', isVfoSplit);
+  const st = $('subVfoStatus');
+  if (st) st.textContent = subVfoHz ? 'STORED' : 'EMPTY';
 }
 
 function updateVfoTelemetry() {
@@ -3760,13 +3793,18 @@ function updateVfoTelemetry() {
   else if (sdrMode === 'packet' || sdrMode === 'flex') { bw = '25.0k · SHARP'; bwLabel = '25.0k'; }
   else if (sdrMode === 'pager') { bw = '12.5k · SHARP'; bwLabel = '12.5k'; }
   const fBadge = $('vfoFilterBadge');
-  if (fBadge) fBadge.textContent = `BW ${bw}`;
+  if (fBadge) fBadge.textContent = `IF ${bw}`;
   const ifLbl = $('vfoIfFilterLabel');
   if (ifLbl) ifLbl.textContent = bwLabel;
   const aTag = $('vfoAgcTag');
   if (aTag) {
     const agc = $('sdrAgc');
-    aTag.textContent = (agc && agc.checked) ? 'AGC MID' : 'AGC OFF';
+    if (agc && agc.checked) {
+      aTag.textContent = 'AGC';
+    } else {
+      const gv = Math.round(Number($('sdrGainRange').value) || 0);
+      aTag.textContent = `MAN ${gv}dB`;
+    }
   }
 }
 
@@ -3788,7 +3826,7 @@ function syncGainUi() {
 }
 
 function syncAfVolUi() {
-  const arcFrac = audioOn ? audioVolume : 0;
+  const arcFrac = audioVolume;  // always real volume, not parked at 0 when monitor off
   setKnobPointer('deckAfVolPointer', 55, 55, arcFrac);
   setKnobPointer('deckAfVolKnurls', 55, 55, arcFrac);
   updateAfVolReadout();
@@ -3800,7 +3838,7 @@ function updateAfVolReadout() {
   const txt = $('deckAfVolReadout');
   if (!txt) return;
   // Always show the level: "AF MUTED · MUTED" said the same thing twice.
-  txt.textContent = `AF ${Math.round(audioVolume * 100)}% · ${audioOn ? 'ACTIVE' : 'MUTED'}`;
+  txt.textContent = `AF ${Math.round(audioVolume * 100)}% · ${audioOn ? 'MON ON' : 'MON OFF'}`;
 }
 
 function syncSquelchUi() {
@@ -3827,8 +3865,7 @@ function syncSpanKnobUi() {
   const cap = $('faderSpanCap');
   if (cap) cap.style.bottom = `${(frac * 100).toFixed(1)}%`;
   const val = $('faderSpanVal');
-  const rateM = (curRate / 1e6).toFixed(curRate >= 1e6 ? (curRate % 1e6 === 0 ? 1 : 2) : 3);
-  if (val) val.textContent = `${rateM}M`;
+  if (val) val.textContent = fmtSpanM(curRate);
   updateDspReadout();
 }
 
@@ -3924,9 +3961,8 @@ function updateDspReadout() {
   if (txt) {
     const sel = $('sdrRateSel');
     const curRate = sel ? Number(sel.value) : sdrRateHz;
-    const rateM = (curRate / 1e6).toFixed(curRate >= 1e6 ? (curRate % 1e6 === 0 ? 1 : 2) : 3);
     const zStr = (sdrZoom && sdrZoom > 1.05) ? `${sdrZoom.toFixed(1)}x` : '1.0x';
-    txt.textContent = `SPAN ${rateM}M · ZOOM ${zStr}`;
+    txt.textContent = `SPAN ${fmtSpanM(curRate)} · ZOOM ${zStr}`;
   }
   const badge = $('jogStepBadge');
   if (badge) {
@@ -4084,19 +4120,16 @@ function setupRadioDeck() {
     syncZoomUi();
   });
 
-  // 3. Sub-VFO & Quick Band Keys (Bay 3)
+  // 3. Memory store/recall & Quick Band Keys (Bay 3)
   $('btnVfoSwap')?.addEventListener('click', () => {
-    const temp = sdrInspectHz;
-    tuneRxHz(subVfoHz, true);
-    subVfoHz = temp;
-    updateSubVfoUi();
+    if (subVfoHz) tuneRxHz(subVfoHz, true);
   });
   $('btnVfoSync')?.addEventListener('click', () => {
     subVfoHz = sdrInspectHz;
     updateSubVfoUi();
   });
   $('btnVfoSplit')?.addEventListener('click', () => {
-    isVfoSplit = !isVfoSplit;
+    subVfoHz = 0;
     updateSubVfoUi();
   });
 
@@ -5736,7 +5769,7 @@ function setupSdrInteractions() {
       const { hz } = pointerFreq(e, cv);
       // Snap to the mode's channel raster like any other click, so pointing
       // at a signal lands on its allocated frequency.
-      tuneSdrHz(snapHz(hz, e.altKey));
+      tuneRxHz(snapHz(hz, e.altKey), true);
     });
 
     // Wheel over the spectrum walks the centre frequency by a tenth of a span,
@@ -6285,17 +6318,9 @@ function startAudio() {
   audioOn = true;
   audioNext = 0;
   const b = $('btnListen');
-  if (b) {
-    b.classList.add('on');
-    const lbl = $('listenBtnLabel');
-    if (lbl) lbl.textContent = 'MUTE';
-    else b.textContent = 'MUTE';
-  }
+  if (b) b.classList.add('on');
   const b2 = $('btnListenSecondary');
-  if (b2) {
-    b2.classList.add('on');
-    b2.textContent = 'MUTE';
-  }
+  if (b2) b2.classList.add('on');
   syncAfVolUi();
 }
 
@@ -6304,17 +6329,9 @@ function stopAudio() {
   const a = $('callAudio');
   if (audioCtx && (!a || a.paused)) audioCtx.suspend();
   const b = $('btnListen');
-  if (b) {
-    b.classList.remove('on');
-    const lbl = $('listenBtnLabel');
-    if (lbl) lbl.textContent = 'LISTEN';
-    else b.textContent = 'LISTEN';
-  }
+  if (b) b.classList.remove('on');
   const b2 = $('btnListenSecondary');
-  if (b2) {
-    b2.classList.remove('on');
-    b2.textContent = 'LISTEN';
-  }
+  if (b2) b2.classList.remove('on');
   syncAfVolUi();
 }
 
@@ -6398,8 +6415,8 @@ async function runSpurCheck() {
     await applySpurNotch();
   } finally {
     spurChecking = false;
-    key.textContent = sdrSpurOffsets.length ? `NOTCH ${sdrSpurOffsets.length}` : 'SPUR CHK';
-    key.classList.toggle('on', sdrSpurOffsets.length > 0);
+    if (keyLbl) keyLbl.textContent = sdrSpurOffsets.length ? `NOTCH ${sdrSpurOffsets.length}` : 'SPUR';
+    key?.classList.toggle('on', sdrSpurOffsets.length > 0);
     if (sdrLastPwr.length) drawSdrSpectrum(sdrLastPwr);
   }
 }
@@ -6434,6 +6451,7 @@ function updateSnapHint() {
   if (optAuto) optAuto.textContent = 'AUTO (' + fmtStepHz(modeSnapStepHz()) + ')';
   const sel = $('snapSel');
   if (sel) {
+    sel.value = snapOverrideHz ? String(snapOverrideHz) : 'auto';
     sel.style.color = snapOverrideHz ? 'var(--amber)' : '#38bdf8';
     const badge = sel.parentElement ? sel.parentElement.querySelector('.vfo-step-badge') : null;
     if (badge) {
