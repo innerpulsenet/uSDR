@@ -71,6 +71,22 @@
     --radius-assembly: 6px;
     --radius-key: 2px;
     --radius-well: 3px;
+
+    /* Brushed-metal keycaps. Fine horizontal mill marks over a turned
+       aluminium ramp — the same material on every faceplate key. */
+    --key-metal:
+      repeating-linear-gradient(180deg, rgba(210,222,235,0.18) 0px, rgba(210,222,235,0.04) 1px, rgba(6,10,16,0.24) 1px, rgba(6,10,16,0.06) 2px),
+      linear-gradient(180deg, #6a7b8e 0%, #3e4c5c 42%, #252e3a 100%);
+    --key-metal-hover:
+      repeating-linear-gradient(180deg, rgba(220,232,245,0.24) 0px, rgba(220,232,245,0.06) 1px, rgba(6,10,16,0.18) 1px, rgba(6,10,16,0.04) 2px),
+      linear-gradient(180deg, #7a8b9e 0%, #4a596a 42%, #2c3642 100%);
+    --key-metal-on:
+      repeating-linear-gradient(180deg, rgba(160,190,215,0.10) 0px, rgba(160,190,215,0.02) 1px, rgba(0,0,0,0.32) 1px, rgba(0,0,0,0.12) 2px),
+      linear-gradient(180deg, #2a3848 0%, #141c24 100%);
+    --key-metal-edge:
+      inset 0 1px 0 rgba(255,255,255,0.36),
+      inset 0 -1px 0 rgba(0,0,0,0.58),
+      0 1px 2px rgba(0,0,0,0.72);
   }
 
   * { box-sizing: border-box; }
@@ -406,27 +422,27 @@
     flex: 1;
     display: inline-flex; align-items: center; justify-content: center; gap: 5px;
     padding: 5px 3px; border-radius: var(--radius-key);
-    background: linear-gradient(180deg, #232b34 0%, #161d25 100%);
-    color: var(--ink-2); border: 1px solid var(--panel-split);
-    box-shadow: inset 0 1px 0 rgba(255,255,255,0.10), 0 1px 2px rgba(0,0,0,0.6);
+    background: var(--key-metal);
+    color: var(--ink-2); border: 1px solid #0c1118;
+    box-shadow: var(--key-metal-edge);
     cursor: pointer; font: 800 8.5px/1 var(--mono); letter-spacing: 0.06em;
     user-select: none; transition: all 90ms; white-space: nowrap;
     text-shadow: 0 1px 0 #000;
   }
-  .af-listen-btn:hover, .af-aux-btn:hover { color: var(--ink-1); border-color: #2b3b4a; }
+  .af-listen-btn:hover, .af-aux-btn:hover { color: var(--ink-1); background: var(--key-metal-hover); border-color: #3a4a5a; }
   .af-listen-btn:active, .af-aux-btn:active { transform: translateY(1px); box-shadow: inset 0 2px 4px #000; }
   .af-listen-btn.on {
-    background: linear-gradient(180deg, #121c17 0%, #0b1410 100%);
+    background: var(--key-metal-on);
     color: var(--led-rx); border-color: #1d5c36;
-    box-shadow: inset 0 1px 0 rgba(255,255,255,0.06), 0 0 6px rgba(51,224,122,0.22);
+    box-shadow: var(--key-metal-edge), 0 0 6px rgba(51,224,122,0.22);
   }
   .af-listen-btn.on .btn-tally.led-green {
     background: var(--led-rx); box-shadow: 0 0 6px var(--led-rx);
   }
   .af-aux-btn.on {
-    background: linear-gradient(180deg, #0f1e28 0%, #0a141c 100%);
+    background: var(--key-metal-on);
     color: var(--led-info); border-color: #1d4a66;
-    box-shadow: inset 0 1px 0 rgba(255,255,255,0.06), 0 0 6px rgba(76,196,255,0.22);
+    box-shadow: var(--key-metal-edge), 0 0 6px rgba(76,196,255,0.22);
   }
   .af-aux-btn.on .btn-tally.led-cyan {
     background: var(--led-info); box-shadow: 0 0 6px var(--led-info);
@@ -525,18 +541,18 @@
   .fader-agc-btn, .fader-reset-btn {
     font: 800 8px/1 var(--mono);
     padding: 3px 6px; border-radius: var(--radius-key);
-    background: linear-gradient(180deg, #232b34 0%, #161d25 100%);
-    color: var(--ink-2); border: 1px solid var(--panel-split);
-    box-shadow: inset 0 1px 0 rgba(255,255,255,0.1), 0 1px 2px rgba(0,0,0,0.5);
+    background: var(--key-metal);
+    color: var(--ink-2); border: 1px solid #0c1118;
+    box-shadow: var(--key-metal-edge);
     cursor: pointer; display: flex; align-items: center; gap: 3px;
     transition: all 90ms;
   }
-  .fader-agc-btn:hover, .fader-reset-btn:hover { color: var(--ink-1); border-color: #2b3b4a; }
+  .fader-agc-btn:hover, .fader-reset-btn:hover { color: var(--ink-1); background: var(--key-metal-hover); border-color: #3a4a5a; }
   .fader-agc-btn:active, .fader-reset-btn:active { transform: translateY(1px); }
   .fader-agc-btn.on {
-    background: linear-gradient(180deg, #2a2110 0%, #1a1409 100%);
+    background: var(--key-metal-on);
     color: var(--led-warn); border-color: #6a4a12;
-    box-shadow: inset 0 1px 0 rgba(255,255,255,0.06), 0 0 6px rgba(255,176,46,0.22);
+    box-shadow: var(--key-metal-edge), 0 0 6px rgba(255,176,46,0.22);
   }
   .btn-tally {
     width: 5px; height: 5px; border-radius: 50%; background: #1a2632;
@@ -760,12 +776,12 @@
   }
   .vfo-sub-btn {
     font: 800 8px var(--mono); padding: 3px 7px; border-radius: var(--radius-key);
-    background: linear-gradient(180deg, #1b232c 0%, #121820 100%);
-    color: var(--ink-2); border: 1px solid var(--panel-split); cursor: pointer;
-    box-shadow: inset 0 1px 0 rgba(255,255,255,0.09), 0 1px 2px rgba(0,0,0,0.5);
+    background: var(--key-metal);
+    color: var(--ink-2); border: 1px solid #0c1118; cursor: pointer;
+    box-shadow: var(--key-metal-edge);
     transition: all 80ms;
   }
-  .vfo-sub-btn:hover { background: #222c36; color: var(--ink-1); border-color: #2a3a4a; }
+  .vfo-sub-btn:hover { background: var(--key-metal-hover); color: var(--ink-1); border-color: #3a4a5a; }
   .vfo-sub-btn:active { transform: translateY(1px); }
 
   /* VFO Intermediate Telemetry Bar */
@@ -824,12 +840,10 @@
     justify-content: center;
     min-height: 26px;
     padding: 5px 2px 4px;
-    background: linear-gradient(180deg, #232b34 0%, #161d25 100%);
-    border: 1px solid var(--panel-split);
+    background: var(--key-metal);
+    border: 1px solid #0c1118;
     border-radius: var(--radius-key);
-    box-shadow:
-      inset 0 1px 0 rgba(255,255,255,0.10),
-      0 1px 2px rgba(0,0,0,0.6);
+    box-shadow: var(--key-metal-edge);
     color: var(--ink-2);
     cursor: pointer;
     font: 800 9px/1 var(--mono);
@@ -841,20 +855,18 @@
   }
   .modebtn:hover {
     color: var(--ink-1);
-    background: linear-gradient(180deg, #2a333d 0%, #1a222a 100%);
-    border-color: #2b3b4a;
+    background: var(--key-metal-hover);
+    border-color: #3a4a5a;
   }
   .modebtn:active {
     transform: translateY(1px);
     box-shadow: inset 0 2px 4px rgba(0,0,0,0.9);
   }
   .modebtn.on {
-    background: linear-gradient(180deg, #101821 0%, #0a1017 100%);
+    background: var(--key-metal-on);
     border-color: #1d3d5a;
     color: var(--ink-1);
-    box-shadow:
-      inset 0 1.5px 3px rgba(0,0,0,0.85),
-      inset 0 -2px 0 rgba(76, 196, 255, 0.55);
+    box-shadow: var(--key-metal-edge), inset 0 -2px 0 rgba(76, 196, 255, 0.55);
   }
   /* Embedded illuminated jewel LED tally slit */
   .mode-tally {
@@ -893,18 +905,18 @@
     min-height: 22px; padding: 4px 0;
     font: 800 9px/1 var(--mono); text-align: center; letter-spacing: 0.04em;
     border-radius: var(--radius-key);
-    background: linear-gradient(180deg, #232b34 0%, #161d25 100%);
-    color: var(--ink-2); border: 1px solid var(--panel-split);
-    box-shadow: inset 0 1px 0 rgba(255,255,255,0.10), 0 1px 2px rgba(0,0,0,0.6);
+    background: var(--key-metal);
+    color: var(--ink-2); border: 1px solid #0c1118;
+    box-shadow: var(--key-metal-edge);
     text-shadow: 0 1px 0 #000;
     cursor: pointer; transition: all 80ms; white-space: nowrap;
   }
-  .band-btn:hover { background: linear-gradient(180deg, #2a333d 0%, #1a222a 100%); color: var(--ink-1); border-color: #2b3b4a; }
+  .band-btn:hover { background: var(--key-metal-hover); color: var(--ink-1); border-color: #3a4a5a; }
   .band-btn:active { transform: translateY(1px); box-shadow: inset 0 2px 4px rgba(0,0,0,0.9); }
   .band-btn.active {
-    background: linear-gradient(180deg, #0f1e2a 0%, #0a141c 100%);
+    background: var(--key-metal-on);
     color: var(--ink-1); border-color: #1d4a66;
-    box-shadow: inset 0 1px 3px rgba(0,0,0,0.8), inset 0 -2px 0 rgba(76, 196, 255, 0.55);
+    box-shadow: var(--key-metal-edge), inset 0 -2px 0 rgba(76, 196, 255, 0.55);
   }
   .band-tally {
     width: 5px; height: 5px; border-radius: 50%;
@@ -928,22 +940,20 @@
     display: inline-flex; flex-direction: column; align-items: center; justify-content: center;
     min-height: 22px; padding: 4px 2px;
     border-radius: var(--radius-key);
-    background: linear-gradient(180deg, #232b34 0%, #161d25 100%);
-    color: var(--ink-2); border: 1px solid var(--panel-split);
-    box-shadow:
-      inset 0 1px 0 rgba(255,255,255,0.10),
-      0 1px 2px rgba(0,0,0,0.6);
+    background: var(--key-metal);
+    color: var(--ink-2); border: 1px solid #0c1118;
+    box-shadow: var(--key-metal-edge);
     cursor: pointer; font: 800 9px/1 var(--mono);
     letter-spacing: 0.04em; user-select: none;
     text-shadow: 0 1px 0 #000;
     transition: all 80ms; white-space: nowrap; overflow: hidden;
   }
-  .dsp-key:hover { color: var(--ink-1); background: linear-gradient(180deg, #2a333d 0%, #1a222a 100%); border-color: #2b3b4a; }
+  .dsp-key:hover { color: var(--ink-1); background: var(--key-metal-hover); border-color: #3a4a5a; }
   .dsp-key:active { transform: translateY(1px); box-shadow: inset 0 2px 4px #000; }
   .dsp-key.on {
-    background: linear-gradient(180deg, #101821 0%, #0a1017 100%);
+    background: var(--key-metal-on);
     color: var(--ink-1); border-color: #1d3d5a;
-    box-shadow: inset 0 1px 3px #000, inset 0 -2px 0 rgba(76, 196, 255, 0.55);
+    box-shadow: var(--key-metal-edge), inset 0 -2px 0 rgba(76, 196, 255, 0.55);
   }
   .dsp-key.palette-trigger {
     grid-column: 1 / -1;
@@ -1069,25 +1079,14 @@
     text-transform: none; white-space: nowrap;
   }
   .chan-col .sdr-classifier-cell { height: auto; min-height: 60px; }
-  /* Phase 1: collapse to one selected-channel strip. Every id stays in the
-     DOM; the extra classifier cells are CSS-hidden (JS never writes
-     style.display on them) while SEL CH + #sdrClassProtocol stay visible.
-     #sdrPeakButtons stays in the DOM, hidden on the face (peaks live on). */
-  /* Stretch the selected-channel well to the leftover left-column height so
-     the space beside the waterfall is a recessed readout, not a hole. */
   .chan-col-strip {
-    gap: 4px;
-    flex: 1 1 auto;
+    gap: 8px;
     background: var(--panel-well);
     border: 1px solid var(--panel-split);
     border-radius: var(--radius-assembly);
     padding: 6px 8px;
     box-shadow: inset 0 1px 3px rgba(0,0,0,0.8);
   }
-  .chan-col-strip .chan-title { text-transform: uppercase; }
-  .chan-col-strip .sdr-classifier-cell { display: none; }
-  .chan-col-strip .sdr-classifier-cell.chan-keep { display: block; min-height: 0; }
-  .chan-col-strip #sdrPeakButtons { display: none; }
   .chan-col .sdr-classifier-value, .chan-col .sdr-classifier-subvalue { white-space: normal; height: auto; line-height: 1.35; }
   .chan-col .sdr-peak-buttons { height: 74px; }
   @media (max-width: 1080px) {
@@ -1134,7 +1133,7 @@
 
   /* ---------- Audio & Data Scopes (Digital Phosphor CRT) ---------- */
 
-  .scr-scope { margin-top: 4px; width: 100%; }
+  .scr-scope { margin-top: 10px; }
   .vfo-legend {
     font-size: 8.5px; font-weight: 700; letter-spacing: 0.08em;
     color: var(--ink-2); text-transform: uppercase; text-shadow: 0 1px 0 #000;
@@ -1909,29 +1908,6 @@
                 </div>
           </div>
 
-          <div class="scr-scope">
-            <div class="scope-header">
-              <div class="scope-title" id="scopeTitle">AUDIO SCOPE</div>
-              <div class="scope-badges">
-                <span class="scope-mode-tag active" id="scopeModeTag">DIGITAL PHOSPHOR</span>
-                <span class="scope-trig-tag" id="scopeTrigTag">AUTO ZERO-CROSS</span>
-              </div>
-            </div>
-            <div class="scope-panes">
-              <div class="scope-pane">
-                <canvas id="scopeSpecCanvas"></canvas>
-                <div class="scope-axis" id="scopeAxis">
-                  <span>0</span><span>1.0</span><span>2.0</span><span>3.0</span><span>4.0kHz</span>
-                </div>
-              </div>
-              <div class="scope-pane">
-                <canvas id="scopeWaveCanvas"></canvas>
-                <div class="scope-axis">
-                  <span id="scopeLevel">LEVEL: —</span><span id="scopeTime">8ms/Div</span>
-                </div>
-              </div>
-            </div>
-          </div>
         </div>
 
         <!-- RIGHT COLUMN: instruments and the main tuning dial. -->
@@ -2341,6 +2317,30 @@
           <button type="button" class="palette-popup-close" onclick="togglePaletteMenu(false)">&times;</button>
         </div>
         <div class="palette-grid" id="paletteList"></div>
+      </div>
+
+      <div class="scr-scope">
+        <div class="scope-header">
+          <div class="scope-title" id="scopeTitle">AUDIO SCOPE</div>
+          <div class="scope-badges">
+            <span class="scope-mode-tag active" id="scopeModeTag">DIGITAL PHOSPHOR</span>
+            <span class="scope-trig-tag" id="scopeTrigTag">AUTO ZERO-CROSS</span>
+          </div>
+        </div>
+        <div class="scope-panes">
+          <div class="scope-pane">
+            <canvas id="scopeSpecCanvas"></canvas>
+            <div class="scope-axis" id="scopeAxis">
+              <span>0</span><span>1.0</span><span>2.0</span><span>3.0</span><span>4.0kHz</span>
+            </div>
+          </div>
+          <div class="scope-pane">
+            <canvas id="scopeWaveCanvas"></canvas>
+            <div class="scope-axis">
+              <span id="scopeLevel">LEVEL: —</span><span id="scopeTime">8ms/Div</span>
+            </div>
+          </div>
+        </div>
       </div>
 
     </div>
