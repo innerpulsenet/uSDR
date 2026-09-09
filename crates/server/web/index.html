@@ -58,39 +58,43 @@
 
   .rig {
     position: relative;
-    background: linear-gradient(180deg, #242c36 0%, #171e26 12%, #10151c 100%);
-    border: 1px solid #080c10;
+    background: linear-gradient(180deg, #202732 0%, #151b23 10%, #0d1218 100%);
+    border: 1px solid #05080c;
     border-radius: 12px;
-    padding: 16px 18px 18px;
+    padding: 14px 16px 18px;
     box-shadow:
-      0 26px 70px rgba(0,0,0,0.75),
-      0 6px 20px rgba(0,0,0,0.5),
-      inset 0 1px 0 rgba(255,255,255,0.12),
+      0 30px 80px rgba(0,0,0,0.85),
+      0 8px 24px rgba(0,0,0,0.6),
+      inset 0 1px 0 rgba(255,255,255,0.14),
       inset 0 0 0 1px rgba(255,255,255,0.03);
   }
 
-  /* Corner chassis hex fasteners */
+  /* Authentic flush socket-head hex fasteners */
   .chassis-screw {
-    position: absolute; width: 13px; height: 13px; border-radius: 50%;
-    background: radial-gradient(circle at 35% 35%, #556272 0%, #202731 75%);
-    box-shadow: inset 0 1px 1px rgba(255,255,255,0.25), 0 1px 2px rgba(0,0,0,0.7);
-    border: 1px solid #090c10;
-    pointer-events: none; z-index: 5;
+    position: absolute; width: 14px; height: 14px; border-radius: 50%;
+    background: radial-gradient(circle at 35% 35%, #5a6878 0%, #2b3440 60%, #131920 100%);
+    box-shadow: inset 0 1px 1.5px rgba(255,255,255,0.35), 0 2px 4px rgba(0,0,0,0.8);
+    border: 1px solid #080c10;
+    pointer-events: none; z-index: 10;
+    display: flex; align-items: center; justify-content: center;
   }
   .chassis-screw::after {
-    content: ""; position: absolute; top: 3px; left: 5.5px; width: 2px; height: 7px;
-    background: #090d12; box-shadow: 0 0 1px rgba(255,255,255,0.18);
-    transform: rotate(38deg);
+    content: ""; width: 6.5px; height: 6.5px;
+    background: #090e14;
+    clip-path: polygon(50% 0%, 93% 25%, 93% 75%, 50% 100%, 7% 75%, 7% 25%);
+    box-shadow: inset 0 1px 2px rgba(0,0,0,0.9), 0 0 1px rgba(255,255,255,0.25);
   }
   .chassis-screw.top-left { top: 9px; left: 10px; }
   .chassis-screw.top-right { top: 9px; right: 10px; }
   .chassis-screw.bottom-left { bottom: 9px; left: 10px; }
   .chassis-screw.bottom-right { bottom: 9px; right: 10px; }
 
-  /* Brand Header */
+  /* Generic Functional Industrial Header */
   .rig-brand {
-    display: flex; align-items: center; gap: 12px;
-    padding: 2px 8px 12px;
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 12px; padding: 2px 8px 10px;
+    border-bottom: 1px solid rgba(255,255,255,0.04);
+    margin-bottom: 7px;
   }
   .brand-crest {
     display: flex; align-items: center; justify-content: center;
@@ -99,33 +103,65 @@
     display: flex; flex-direction: column;
   }
   .rig-brand .mark {
-    font-weight: 800; font-size: 18px; letter-spacing: 0.08em; color: #f1f7fa;
-    text-shadow: 0 0 10px rgba(56, 189, 248, 0.2);
-    line-height: 1.1;
+    font: 900 14.5px/1 var(--sans); letter-spacing: 0.12em; color: #f1f7fa;
+    text-shadow: 0 1px 3px rgba(0,0,0,0.9), 0 0 10px rgba(56, 189, 248, 0.25);
   }
   .rig-brand .sub {
-    font-size: 9px; font-weight: 600; letter-spacing: 0.22em; color: var(--faint); text-transform: uppercase;
+    font: 700 8px var(--mono); letter-spacing: 0.22em; color: #5a758c; text-transform: uppercase;
     margin-top: 2px;
   }
+  .brand-center-telemetry {
+    display: flex; align-items: center; justify-content: center;
+    flex: 1; max-width: 480px; margin: 0 12px;
+  }
+  .brand-chassis-bezel {
+    display: flex; align-items: center; gap: 7px;
+    background: linear-gradient(180deg, #070d14 0%, #03060a 100%);
+    border: 1px solid #142230;
+    border-radius: 4px;
+    padding: 3px 12px;
+    box-shadow: inset 0 1px 3px rgba(0,0,0,0.8), 0 1px 0 rgba(255,255,255,0.05);
+    font: 700 8.5px/1 var(--mono); letter-spacing: 0.08em;
+  }
+  .brand-led-pip {
+    width: 5px; height: 5px; border-radius: 50%;
+    background: #1a2836;
+  }
+  .brand-led-pip.on {
+    background: #2bff6a; box-shadow: 0 0 6px rgba(43,255,106,0.9);
+  }
+  .brand-metric-label {
+    color: #4b667e; text-transform: uppercase; font-size: 7.5px;
+  }
+  .brand-metric-val {
+    color: #93b5cf; font-weight: 800;
+  }
+  .brand-divider {
+    color: #172738; margin: 0 1px;
+  }
+  .brand-status-cluster {
+    display: flex; align-items: center; gap: 7px;
+  }
   .rig-brand .conn {
-    margin-left: auto; font: 11px/1 var(--mono); color: var(--dim);
+    font: 700 10.5px/1 var(--mono); color: var(--dim);
     display: flex; align-items: center; gap: 6px;
-    background: rgba(8, 14, 20, 0.6); padding: 4px 10px; border-radius: 4px;
-    border: 1px solid #1c2732;
+    background: rgba(6, 12, 18, 0.75); padding: 4px 9px; border-radius: 4px;
+    border: 1px solid #182532;
+    box-shadow: inset 0 1px 2px rgba(0,0,0,0.6);
   }
   .conn-beacon {
-    width: 7px; height: 7px; border-radius: 50%;
+    width: 6.5px; height: 6.5px; border-radius: 50%;
     background: var(--dim);
     box-shadow: 0 0 0 rgba(43, 255, 106, 0);
   }
   .conn-beacon.connected {
     background: var(--green);
-    box-shadow: 0 0 8px var(--green-glow);
+    box-shadow: 0 0 7px var(--green-glow);
     animation: pulseBeacon 2.4s infinite;
   }
   .conn-beacon.reconnecting {
     background: var(--amber);
-    box-shadow: 0 0 8px var(--amber-glow);
+    box-shadow: 0 0 7px var(--amber-glow);
     animation: pulseBeacon 1.2s infinite;
   }
   @keyframes pulseBeacon {
@@ -133,8 +169,13 @@
     50% { transform: scale(1.15); opacity: 1; }
     100% { transform: scale(0.95); opacity: 0.8; }
   }
+  .header-clock {
+    font: 700 13px/1 var(--mono); color: #dce6ee; letter-spacing: 0.05em;
+    background: #081018; padding: 4px 8px; border-radius: 3px; border: 1px solid #14202c;
+    box-shadow: inset 0 1px 2px rgba(0,0,0,0.6);
+  }
 
-  /* Screen (CRT/LCD Instrument Well) */
+  /* Screen (Lower Chassis Well) */
   .screen {
     background: var(--lcd);
     border: 1px solid #000;
@@ -147,169 +188,319 @@
     font-family: var(--mono);
   }
 
-  /* Top Control Strip */
-  .scr-top {
-    display: flex; align-items: center; gap: 8px; margin-bottom: 10px;
-    padding-bottom: 6px;
-    border-bottom: 1px solid rgba(24, 40, 56, 0.45);
-  }
-  .modesw { display: inline-flex; gap: 3px; }
-  .modebtn {
-    font: 700 10px/1 var(--sans); letter-spacing: 0.08em;
-    padding: 6px 10px; border-radius: 4px; cursor: pointer;
-    background: linear-gradient(180deg, #18222b 0%, #0f151c 100%);
-    color: #8da4b5; border: 1px solid #1d2b38;
-    box-shadow: inset 0 1px 0 rgba(255,255,255,0.08), 0 1px 3px rgba(0,0,0,0.4);
-    position: relative;
-    transition: color 120ms, border-color 120ms, background 120ms, transform 80ms;
-  }
-  .modebtn:hover { color: #dbe7ee; border-color: #314457; }
-  .modebtn:active { transform: translateY(1px); }
-  .modebtn.on {
-    background: linear-gradient(180deg, #1d69a8 0%, #134e80 100%);
-    color: #ffffff; border-color: #38bdf8;
-    box-shadow: inset 0 1px 0 rgba(255,255,255,0.22), 0 0 10px rgba(56, 189, 248, 0.35);
-  }
-  .modebtn.on::after {
-    content: ""; position: absolute; bottom: 2px; left: 50%; transform: translateX(-50%);
-    width: 8px; height: 1.5px; border-radius: 1px;
-    background: #60d5ff; box-shadow: 0 0 4px #60d5ff;
-  }
+  /* =========================================================================
+     TOP TRANSCEIVER CONTROL DECK (HIGH-END DESKTOP RADIO FACEPLATE)
+     ========================================================================= */
 
-  .badge {
-    font-size: 11px; font-weight: 700; letter-spacing: 0.05em;
-    padding: 4px 10px; border-radius: 4px;
-    background: #0d1620; color: #a2bed0; border: 1px solid #1a2a38;
-    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: center;
-    box-shadow: inset 0 1px 2px rgba(0,0,0,0.5);
-  }
-  #badgeSpan { width: 78px; }
-  #badgeProto { width: 195px; }
-  .badge.blue { background: #134975; color: #fff; border-color: #2b7bc4; box-shadow: 0 0 8px rgba(43,123,196,0.3); }
-  .badge.live { background: #0b3a20; color: var(--green); border-color: #1a6d3f; box-shadow: 0 0 8px var(--green-glow); }
-  .filt-glyph { opacity: 0.85; filter: drop-shadow(0 0 2px rgba(143,182,204,0.3)); }
-  .scr-top .spacer { flex: 1; }
-  .scr-vfo { font-size: 11px; color: var(--dim); letter-spacing: 0.06em; }
-  .scr-vfo b { color: var(--text); }
-  .scr-clock { font-size: 15px; color: #eaf2f7; letter-spacing: 0.04em; width: 56px; text-align: right; font-weight: 600; }
-
-  /* ---------- Screen Header: S-Meter + VFO Area ---------- */
-
-  .scr-head {
+  .deck-console {
     display: grid;
-    grid-template-columns: 310px minmax(430px, 1.2fr) minmax(580px, 1.4fr);
+    grid-template-columns: 195px 315px minmax(430px, 1.4fr) 240px;
+    gap: 8px;
     align-items: stretch;
-    gap: 12px;
-    margin-bottom: 12px;
+    margin-bottom: 8px;
   }
-  @media (max-width: 1280px) {
-    .scr-head { grid-template-columns: 310px 1fr; }
-    .radio-deck { grid-column: 1 / -1; }
+  @media (max-width: 1320px) {
+    .deck-console {
+      grid-template-columns: 195px 315px 1fr;
+    }
+    .bay-tuning {
+      grid-column: 1 / -1;
+      display: flex; flex-direction: row; justify-content: space-around;
+    }
   }
-  @media (max-width: 760px) {
-    .scr-head { grid-template-columns: 1fr; }
+  @media (max-width: 860px) {
+    .deck-console { grid-template-columns: 1fr; }
+    .bay-tuning { flex-direction: column; }
   }
 
-  /* Authentic Transceiver Tactile Control Deck */
-  .radio-deck {
+  /* Modular Sub-Assembly Bay Housings */
+  .deck-bay {
     position: relative;
-    background: #04080e;
-    border: 1px solid #14202b;
+    background: linear-gradient(180deg, #131a23 0%, #0c1219 45%, #080d12 100%);
+    border: 1px solid #182432;
     border-radius: 6px;
-    padding: 4px;
-    box-shadow: inset 0 2px 8px rgba(0,0,0,0.75), 0 1px 0 rgba(255,255,255,0.05);
-    display: flex; align-items: center; justify-content: center;
+    padding: 6px 8px 7px;
+    box-shadow:
+      inset 0 2px 7px rgba(0,0,0,0.8),
+      0 1px 0 rgba(255,255,255,0.06);
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-start;
+    gap: 6px;
     overflow: hidden;
   }
-  .deck-svg {
-    width: 100%; height: auto; display: block; max-height: 165px;
-    filter: drop-shadow(0 0 5px rgba(0,0,0,0.5));
+  .deck-bay::before {
+    content: ""; position: absolute; top: 0; left: 0; right: 0; height: 1px;
+    background: linear-gradient(90deg, transparent, rgba(255,255,255,0.09) 50%, transparent);
+    pointer-events: none;
   }
-
-  /* Transceiver Tactile Pushbuttons - high contrast and tactile active illumination */
-  .ic-btn { cursor: pointer; user-select: none; }
-  .ic-btn text { fill: #dbeaf6; transition: fill 100ms; text-shadow: 0 1px 3px rgba(0,0,0,0.9); }
-  .ic-btn:hover rect:first-child { fill: #243547; stroke: #38bdf8; }
-  .ic-btn:hover text { fill: #ffffff; }
-  .ic-btn:active rect:first-child { fill: #0a1016; stroke: #152636; }
-  .ic-btn.on rect:first-child { stroke: #38bdf8; fill: #162636; box-shadow: 0 0 10px rgba(56, 189, 248, 0.4); }
-  .ic-btn.on text { fill: #ffffff; text-shadow: 0 0 5px rgba(255, 255, 255, 0.7); }
-
-  /* Horizontal Illuminated Jewel LED Slits */
-  .ic-led-bar { fill: #10161d; stroke: #192430; transition: fill 120ms, stroke 120ms, filter 120ms; }
-  .ic-btn.on .ic-led-bar.led-amber { fill: #ffb830; stroke: #ffd074; filter: drop-shadow(0 0 6px rgba(255,184,48,0.95)); }
-  .ic-btn.on .ic-led-bar.led-cyan { fill: #38bdf8; stroke: #7dd3fc; filter: drop-shadow(0 0 6px rgba(56,189,248,0.95)); }
-  .ic-btn.on .ic-led-bar.led-blue { fill: #60a5fa; stroke: #93c5fd; filter: drop-shadow(0 0 6px rgba(96,165,250,0.95)); }
-  .ic-btn.on .ic-led-bar.led-green { fill: #2bff6a; stroke: #86efac; filter: drop-shadow(0 0 6px rgba(43,255,106,0.95)); }
-  .ic-btn.on .ic-led-bar.led-violet { fill: #c084fc; stroke: #e9d5ff; filter: drop-shadow(0 0 6px rgba(192,132,252,0.95)); }
-
-  /* Interactive Palette Swatch Popover */
-  .palette-popup {
-    position: absolute;
-    width: 290px;
-    max-height: 440px;
-    overflow-y: auto;
-    background: #070e17;
-    border: 1px solid #1e364e;
-    border-radius: 8px;
-    box-shadow: 0 18px 45px rgba(0,0,0,0.9), 0 0 0 1px rgba(56,189,248,0.25);
-    z-index: 1000;
-    padding: 10px;
-    backdrop-filter: blur(12px);
-  }
-  .palette-popup-head {
+  .bay-header {
     display: flex; align-items: center; justify-content: space-between;
-    padding-bottom: 7px; margin-bottom: 8px; border-bottom: 1px solid #142436;
-    font: 700 10.5px var(--mono); letter-spacing: 0.12em; color: #8cb2cc; text-transform: uppercase;
+    border-bottom: 1px solid rgba(24, 38, 52, 0.65);
+    padding-bottom: 3px;
+    margin-bottom: 2px;
   }
-  .palette-popup-close {
-    background: transparent; border: none; color: #64748b; font-size: 17px; cursor: pointer; padding: 0 4px; line-height: 1;
+  .bay-title {
+    font: 800 8.5px/1 var(--mono);
+    letter-spacing: 0.14em;
+    color: #63849f;
+    text-transform: uppercase;
+    text-shadow: 0 1px 2px rgba(0,0,0,0.8);
+    display: flex; align-items: center; gap: 5px;
   }
-  .palette-popup-close:hover { color: #fff; }
-  .palette-grid { display: flex; flex-direction: column; gap: 5px; }
-  .palette-item {
-    display: flex; flex-direction: column; gap: 4px; padding: 6px 9px;
-    background: #0b1522; border: 1px solid #172738; border-radius: 5px;
-    cursor: pointer; text-align: left; transition: all 120ms;
+  .bay-screw-corner {
+    width: 6.5px; height: 6.5px; border-radius: 50%;
+    background: #17212b; border: 1px solid #090e14;
+    box-shadow: inset 0 0.5px 1px rgba(255,255,255,0.25);
+    position: relative;
   }
-  .palette-item:hover { background: #132438; border-color: #38bdf8; }
-  .palette-item.active { background: #122b46; border-color: #38bdf8; box-shadow: inset 2px 0 0 #38bdf8; }
-  .palette-item-top { display: flex; align-items: center; justify-content: space-between; }
-  .palette-item-name { font: 700 11px var(--mono); color: #cbd5e1; }
-  .palette-item.active .palette-item-name { color: #38bdf8; }
-  .palette-item-tag { font: 600 9px var(--mono); color: #64748b; text-transform: uppercase; }
-  .palette-swatch-bar {
-    width: 100%; height: 13px; border-radius: 2px; border: 1px solid rgba(255,255,255,0.15);
+  .bay-screw-corner::after {
+    content: ""; position: absolute; top: 1.5px; left: 2.5px; width: 1.2px; height: 3.5px;
+    background: #06090e; transform: rotate(45deg);
   }
 
-  /* Coaxial Knobs & VFO Flywheel */
-  .concentric-outer { cursor: ns-resize; user-select: none; }
-  .concentric-outer:hover circle:first-child { stroke: #38bdf8; }
-  .concentric-inner { cursor: ns-resize; user-select: none; }
-  .concentric-inner:hover circle:nth-of-type(2) { stroke: #2bff6a; }
-  .vfo-flywheel-wrap { cursor: grab; user-select: none; }
-  .vfo-flywheel-wrap.dragging { cursor: grabbing; }
+  /* -------------------------------------------------------------------------
+     BAY 1: AF & RF FRONT-END (Volume Pot & Linear Faders)
+     ------------------------------------------------------------------------- */
+  .bay-frontend {
+    display: flex; flex-direction: column; justify-content: flex-start; gap: 6px;
+  }
+  .af-pot-housing {
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    padding: 1px 0 4px;
+    border-bottom: 1px solid rgba(22, 34, 46, 0.6);
+    margin-bottom: 3px;
+  }
+  .rotary-knob-svg {
+    width: 88px; height: 88px; display: block;
+    cursor: ns-resize; user-select: none;
+    filter: drop-shadow(0 3px 6px rgba(0,0,0,0.7));
+  }
+  .af-vol-readout-pill {
+    font: 700 8px/1 var(--mono); color: #d0e0ed; letter-spacing: 0.06em;
+    background: #060b10; padding: 2px 7px; border-radius: 3px;
+    border: 1px solid #14202c; margin-top: 2px; text-align: center;
+    box-shadow: inset 0 1px 2px rgba(0,0,0,0.6);
+  }
+  .af-aux-row {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 5px; width: 100%; padding: 2px 0 3px;
+    border-bottom: 1px solid rgba(22, 34, 46, 0.6);
+    margin-bottom: 3px;
+  }
+  .af-listen-btn, .af-aux-btn {
+    flex: 1;
+    display: inline-flex; align-items: center; justify-content: center; gap: 4px;
+    padding: 3.5px 2px; border-radius: 3px;
+    background: linear-gradient(180deg, #18232f 0%, #0d141c 100%);
+    color: #8da4b5; border: 1px solid #1a2837;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.1), 0 1px 2px rgba(0,0,0,0.5);
+    cursor: pointer; font: 800 7.5px/1 var(--mono); letter-spacing: 0.05em;
+    user-select: none; transition: all 90ms; white-space: nowrap;
+  }
+  .af-listen-btn:hover, .af-aux-btn:hover { color: #fff; border-color: #2b4560; }
+  .af-listen-btn:active, .af-aux-btn:active { transform: translateY(1px); }
+  .af-listen-btn.on {
+    background: #0f271c; color: #2bff6a; border-color: #2bff6a;
+    box-shadow: 0 0 6px rgba(43,255,106,0.3);
+  }
+  .af-listen-btn.on .btn-tally.led-green {
+    background: #2bff6a; box-shadow: 0 0 6px #2bff6a;
+  }
+  .af-aux-btn.on {
+    background: #0d2533; color: #38bdf8; border-color: #38bdf8;
+    box-shadow: 0 0 6px rgba(56,189,248,0.3);
+  }
+  .af-aux-btn.on .btn-tally.led-cyan {
+    background: #38bdf8; box-shadow: 0 0 6px #38bdf8;
+  }
 
-  /* Dense Telemetry VFO Console */
-  .vfo-container {
+  /* Dual Linear Vertical Fader Pair */
+  .fader-pair {
+    display: flex;
+    justify-content: space-around;
+    gap: 6px;
+    padding-top: 1px;
+  }
+  .fader-vert-wrap {
+    flex: 1; display: flex; flex-direction: column; align-items: center;
+  }
+  .fader-title {
+    font: 800 7.5px/1 var(--mono); letter-spacing: 0.1em; color: #5a7b97;
+    margin-bottom: 3px; text-align: center; text-transform: uppercase;
+  }
+  .fader-assembly {
+    display: flex; align-items: center; gap: 4px;
+  }
+  .fader-scale {
     display: flex; flex-direction: column; justify-content: space-between;
-    background: linear-gradient(180deg, #070e16 0%, #03060a 100%);
-    border: 1px solid #152434; border-radius: 6px;
-    padding: 6px 10px;
-    box-shadow: inset 0 2px 10px rgba(0,0,0,0.85), 0 1px 0 rgba(255,255,255,0.04);
+    height: 72px; font: 700 6.5px/1 var(--mono); color: #486277;
+    user-select: none; text-align: right;
+  }
+  .fader-scale span {
+    display: flex; align-items: center; justify-content: flex-end; gap: 2px;
+  }
+  .fader-scale span::after {
+    content: ""; width: 3px; height: 1px; background: #223444;
+  }
+  .fader-well {
+    position: relative;
+    width: 26px; height: 72px;
+    background: #05080c;
+    border: 1px solid #131c26;
+    border-radius: 4px;
+    box-shadow:
+      inset 0 2px 7px rgba(0,0,0,0.95),
+      inset 0 0 0 1px rgba(0,0,0,0.8),
+      0 1px 0 rgba(255,255,255,0.06);
+    cursor: ns-resize;
+    user-select: none;
+  }
+  .fader-slot {
+    position: absolute; left: 50%; top: 5px; bottom: 5px; width: 3px;
+    transform: translateX(-50%);
+    background: #020305;
+    border-radius: 2px;
+    box-shadow: inset 0 1px 3px #000;
+  }
+  .fader-cap {
+    position: absolute; left: 50%;
+    width: 24px; height: 14px;
+    transform: translate(-50%, 50%);
+    border-radius: 2.5px;
+    background: linear-gradient(180deg, #3e5062 0%, #202b38 20%, #121922 50%, #1c2734 80%, #0a0e14 100%);
+    border: 1px solid #090e14;
+    box-shadow:
+      0 3px 6px rgba(0,0,0,0.85),
+      inset 0 1px 0 rgba(255,255,255,0.22),
+      inset 0 -1px 0 rgba(0,0,0,0.7);
+    display: flex; align-items: center; justify-content: center;
+    pointer-events: none;
+    transition: bottom 40ms linear;
+  }
+  .fader-cap-ribs {
+    position: absolute; inset: 2px 3px;
+    background: repeating-linear-gradient(0deg, transparent, transparent 1.5px, rgba(255,255,255,0.06) 1.5px, rgba(255,255,255,0.06) 2.5px);
+  }
+  .fader-cap-line {
+    position: relative; z-index: 2; width: 100%; height: 1.8px; border-radius: 1px;
+  }
+  .fader-cap-line.led-amber { background: #ffb830; box-shadow: 0 0 5px rgba(255,184,48,0.9); }
+  .fader-cap-line.led-cyan { background: #38bdf8; box-shadow: 0 0 5px rgba(56,189,248,0.9); }
+  .fader-cap-line.led-blue { background: #60a5fa; box-shadow: 0 0 5px rgba(96,165,250,0.9); }
+  .fader-cap-line.led-violet { background: #c084fc; box-shadow: 0 0 5px rgba(192,132,252,0.9); }
+
+  .fader-footer {
+    display: flex; align-items: center; justify-content: space-between; gap: 4px;
+    width: 100%; margin-top: 4px; padding: 0 2px;
+  }
+  .fader-val {
+    font: 700 8px/1 var(--mono); color: #d0e0ed; white-space: nowrap;
+    background: #060b10; padding: 2px 4px; border-radius: 2px; border: 1px solid #14202c;
+  }
+  .fader-sublabel {
+    font: 700 7px/1 var(--mono); color: #496377; letter-spacing: 0.05em; text-transform: uppercase;
+  }
+  .fader-agc-btn, .fader-reset-btn {
+    font: 800 7.5px/1 var(--mono);
+    padding: 2px 5px; border-radius: 2px;
+    background: linear-gradient(180deg, #18232f 0%, #0d141c 100%);
+    color: #7997af; border: 1px solid #1a2837;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.1), 0 1px 2px rgba(0,0,0,0.5);
+    cursor: pointer; display: flex; align-items: center; gap: 3px;
+    transition: all 90ms;
+  }
+  .fader-agc-btn:hover, .fader-reset-btn:hover { color: #fff; border-color: #2b4560; }
+  .fader-agc-btn:active, .fader-reset-btn:active { transform: translateY(1px); }
+  .fader-agc-btn.on {
+    background: #0e2030; color: #ffb830; border-color: #ffb830;
+    box-shadow: 0 0 6px rgba(255,184,48,0.3);
+  }
+  .btn-tally {
+    width: 4.5px; height: 4.5px; border-radius: 50%; background: #1a2632;
+  }
+  .fader-agc-btn.on .btn-tally.led-amber {
+    background: #ffb830; box-shadow: 0 0 5px #ffb830;
+  }
+
+  /* -------------------------------------------------------------------------
+     BAY 2: PRECISION ANALOG S-METER
+     ------------------------------------------------------------------------- */
+  .meter-housing {
+    position: relative;
+    background: radial-gradient(circle at 50% 120%, #0e1e2d 0%, #050d14 60%, #020508 100%);
+    border: 1px solid #14202b;
+    border-radius: 5px;
+    padding: 4px 4px 6px;
+    box-shadow:
+      inset 0 3px 12px rgba(0,0,0,0.95),
+      0 1px 0 rgba(255,255,255,0.05);
+    display: flex; flex-direction: column; justify-content: space-between;
+  }
+  .smeter-svg {
+    width: 100%; height: auto; display: block;
+    filter: drop-shadow(0 0 5px rgba(0,0,0,0.6));
+  }
+  .meter-readouts {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 4px 6px 0;
+    border-top: 1px solid rgba(22, 36, 50, 0.55);
+    margin-top: 3px;
+  }
+  .meter-num {
+    font: 700 9.5px var(--mono); color: #8cb2cc;
+    white-space: nowrap; overflow: hidden;
+  }
+  .meter-clip-badge {
+    font: 800 8.5px var(--mono); letter-spacing: 0.1em;
+    padding: 1px 6px; border-radius: 2px;
+    background: #141c24; color: #435566; border: 1px solid #1e2832;
+    transition: background 100ms, color 100ms, box-shadow 100ms;
+  }
+  .meter-clip-badge.active {
+    background: #b91c1c; color: #fff; border-color: #ef4444;
+    box-shadow: 0 0 8px rgba(239, 68, 68, 0.7);
+  }
+
+  /* -------------------------------------------------------------------------
+     BAY 3: PRIMARY VFO DISPLAY & DEMODULATOR / DSP MATRICES
+     ------------------------------------------------------------------------- */
+  .bay-vfo-console {
+    display: flex; flex-direction: column; gap: 6px;
+  }
+
+  /* Crisp Recessed OLED/VFD VFO Readout Window */
+  .vfo-container {
+    flex: 1;
+    display: flex; flex-direction: column; justify-content: space-between;
+    background: linear-gradient(180deg, #050b12 0%, #020407 100%);
+    border: 1px solid #132232;
+    border-radius: 5px;
+    padding: 5px 8px;
+    box-shadow:
+      inset 0 3px 12px rgba(0,0,0,0.95),
+      inset 0 0 0 1px rgba(56,189,248,0.06),
+      0 1px 0 rgba(255,255,255,0.04);
     min-width: 0;
+    position: relative;
+  }
+  /* Faint anti-reflective glass crystal sheen */
+  .vfo-container::after {
+    content: ""; position: absolute; inset: 0;
+    background: linear-gradient(135deg, rgba(255,255,255,0.04) 0%, transparent 45%);
+    pointer-events: none; border-radius: 4px;
   }
   .vfo-top-strip {
     display: flex; align-items: center; justify-content: space-between;
-    border-bottom: 1px solid rgba(22,36,50,0.6);
-    padding-bottom: 4px;
+    border-bottom: 1px solid rgba(18, 32, 46, 0.65);
+    padding-bottom: 3px;
   }
   .vfo-badges-left, .vfo-badges-right {
-    display: flex; align-items: center; gap: 5px;
+    display: flex; align-items: center; gap: 4px;
   }
   .vfo-badge-main {
-    font-size: 8.5px; font-weight: 800; letter-spacing: 0.12em;
-    padding: 1.5px 6px; border-radius: 2px;
+    font-size: 8px; font-weight: 800; letter-spacing: 0.12em;
+    padding: 1.5px 5.5px; border-radius: 2px;
     background: #0f273d; color: #38bdf8; border: 1px solid #1f486c;
   }
   .vfo-tag-rx {
@@ -320,54 +511,59 @@
   .vfo-tag-mode {
     font-size: 8px; font-weight: 800; letter-spacing: 0.08em;
     padding: 1px 5px; border-radius: 2px;
-    background: #182330; color: #7dd3fc; border: 1px solid #23374a;
+    background: #152230; color: #7dd3fc; border: 1px solid #1f364c;
   }
   .vfo-tag-filter {
-    font-size: 8px; font-weight: 700; color: #8faec4;
-    font-family: var(--mono);
+    font: 700 8px var(--mono); color: #8faec4;
   }
   .vfo-telemetry-tag {
-    font-size: 7.5px; font-weight: 700; color: #4e6a82; letter-spacing: 0.06em;
-    padding: 1px 4px; border-radius: 2px; background: #0a121a; border: 1px solid #14202c;
+    font: 700 7.5px var(--mono); color: #4e6a82; letter-spacing: 0.06em;
+    padding: 1px 4px; border-radius: 2px; background: #070e15; border: 1px solid #121c26;
   }
   .vfo-utc-clock {
-    font: 700 8.5px var(--mono); color: #dce6ee; letter-spacing: 0.06em;
-    padding-left: 4px;
+    font: 700 8px var(--mono); color: #dce6ee; letter-spacing: 0.06em;
+    padding-left: 2px;
   }
 
   .vfo-freq-hero {
     display: flex; align-items: center; justify-content: space-between;
     gap: 8px; padding: 2px 0;
   }
+  .vfo-center-tools {
+    display: flex; align-items: center; gap: 6px;
+  }
+  .vfo-passband-meter {
+    background: #04090e; border: 1px solid #0f1c28; border-radius: 4px;
+    padding: 2px 5px; display: flex; align-items: center; justify-content: center;
+    box-shadow: inset 0 1px 2px rgba(0,0,0,0.6);
+  }
   .freq {
     display: flex; align-items: baseline; justify-content: flex-start;
     gap: 0; cursor: default; user-select: none; line-height: 1;
   }
   .fd {
-    font-size: 32px; font-weight: 700; color: #ffffff; letter-spacing: -0.01em;
-    display: inline-block; width: 19.5px; text-align: center;
+    font-size: 34px; font-weight: 700; color: #ffffff; letter-spacing: -0.01em;
+    display: inline-block; width: 20px; text-align: center;
     padding: 0 1px; border-radius: 3px; cursor: ns-resize;
-    text-shadow: 0 0 10px rgba(56, 189, 248, 0.4);
+    text-shadow: 0 0 10px rgba(56, 189, 248, 0.45);
     transition: background 90ms, color 90ms;
   }
   .fd.lead { color: #243647; text-shadow: none; }
   .fd:hover { background: rgba(56, 189, 248, 0.22); color: #fff; }
   .fd.sel { background: rgba(56, 189, 248, 0.35); color: #fff; box-shadow: inset 0 -2px 0 var(--accent); }
-  .fdot { font-size: 32px; font-weight: 700; color: #5a7588; padding: 0 1px; }
+  .fdot { font-size: 34px; font-weight: 700; color: #5a7588; padding: 0 1px; }
   .fdot.lead { color: #243647; }
-  .funit { font-size: 12px; color: var(--accent); font-weight: 700; margin-left: 6px; align-self: flex-end; padding-bottom: 3px; }
+  .funit { font-size: 13px; color: var(--accent); font-weight: 700; margin-left: 5px; align-self: flex-end; padding-bottom: 4px; }
 
   .vfo-step-pill {
-    display: inline-flex;
-    align-items: center;
+    display: inline-flex; align-items: center;
     background: linear-gradient(180deg, #0e1a26 0%, #060d14 100%);
     border: 1px solid #1c3247;
     border-radius: 4px;
     padding: 2px 4px 2px 6px;
     gap: 5px;
     box-shadow: inset 0 1px 0 rgba(255,255,255,0.06), 0 1px 3px rgba(0,0,0,0.5);
-    flex-shrink: 0;
-    cursor: pointer;
+    flex-shrink: 0; cursor: pointer;
     transition: border-color 140ms, box-shadow 140ms;
   }
   .vfo-step-pill:hover {
@@ -375,142 +571,303 @@
     box-shadow: 0 0 8px rgba(56, 189, 248, 0.25);
   }
   .vfo-step-badge {
-    font-size: 8px;
-    font-weight: 900;
-    letter-spacing: 0.12em;
-    color: #38bdf8;
-    background: #091a29;
-    padding: 1px 4px;
-    border-radius: 2px;
-    border: 1px solid #163650;
-    user-select: none;
-    transition: color 120ms, border-color 120ms;
+    font: 900 8px var(--mono); letter-spacing: 0.12em;
+    color: #38bdf8; background: #091a29; padding: 1px 4px; border-radius: 2px;
+    border: 1px solid #163650; user-select: none;
   }
   .vfo-step-select {
-    appearance: none;
-    -webkit-appearance: none;
-    background: transparent;
-    border: none;
-    color: #38bdf8;
-    font-family: var(--mono);
-    font-size: 10.5px;
-    font-weight: 700;
-    padding: 1px 15px 1px 2px;
-    cursor: pointer;
-    outline: none;
+    appearance: none; -webkit-appearance: none;
+    background: transparent; border: none; color: #38bdf8;
+    font-family: var(--mono); font-size: 10.5px; font-weight: 700;
+    padding: 1px 15px 1px 2px; cursor: pointer; outline: none;
     background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='6' viewBox='0 0 8 6'%3E%3Cpath d='M1 1.5 L4 4.5 L7 1.5' fill='none' stroke='%2338bdf8' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
-    background-repeat: no-repeat;
-    background-position: right 1px center;
-    transition: color 120ms;
-  }
-  .vfo-step-select:focus {
-    color: #38bdf8;
+    background-repeat: no-repeat; background-position: right 1px center;
   }
   .vfo-step-select option {
-    background: #060d14;
-    color: #e0f2fe;
-    font-family: var(--mono);
-    font-size: 11px;
+    background: #060d14; color: #e0f2fe; font-family: var(--mono); font-size: 11px;
   }
 
-  /* Sub VFO Line */
+  /* Sub VFO Standby Line */
   .vfo-sub-line {
     display: flex; align-items: center; justify-content: space-between;
     padding: 3px 6px; border-radius: 4px;
-    background: #050b10; border: 1px solid #101c26;
+    background: #04080d; border: 1px solid #0e1822;
   }
   .vfo-sub-readout {
-    display: flex; align-items: center; gap: 8px;
+    display: flex; align-items: center; gap: 7px;
   }
   .sub-vfo-badge {
-    font-size: 7.5px; font-weight: 800; letter-spacing: 0.1em;
-    padding: 1px 4px; border-radius: 2px; background: #131c26; color: #6d8fa8;
+    font: 800 7.5px var(--mono); letter-spacing: 0.1em;
+    padding: 1px 4px; border-radius: 2px; background: #101822; color: #6d8fa8;
   }
   .sub-vfo-freq {
-    font: 700 13px var(--mono); color: #a4c4db; letter-spacing: 0.04em;
+    font: 700 12px var(--mono); color: #a4c4db; letter-spacing: 0.04em;
   }
   .sub-vfo-status {
-    font-size: 8px; color: #4e6a82; font-weight: 600; letter-spacing: 0.05em;
+    font: 600 8px var(--mono); color: #4e6a82; letter-spacing: 0.05em;
   }
   .vfo-sub-btns {
     display: flex; gap: 4px;
   }
   .vfo-sub-btn {
-    font: 800 8px var(--mono); padding: 2px 7px; border-radius: 2px;
-    background: #0c1620; color: #7da5c2; border: 1px solid #182a3b; cursor: pointer;
-    transition: background 80ms, color 80ms;
+    font: 800 8px var(--mono); padding: 2px 6px; border-radius: 2px;
+    background: linear-gradient(180deg, #111a24 0%, #090f16 100%);
+    color: #7da5c2; border: 1px solid #162432; cursor: pointer;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.08), 0 1px 2px rgba(0,0,0,0.4);
+    transition: all 80ms;
   }
-  .vfo-sub-btn:hover { background: #182b3d; color: #fff; }
+  .vfo-sub-btn:hover { background: #182b3d; color: #fff; border-color: #274563; }
   .vfo-sub-btn:active { transform: translateY(1px); }
 
-  /* Quick Band Selector Strip */
-  .vfo-band-strip {
-    display: flex; align-items: center; gap: 4px; margin-top: 2px;
-  }
-  .band-btn {
-    flex: 1; padding: 2.5px 0; font: 700 8px var(--mono); text-align: center;
-    border-radius: 2px; background: #081118; color: #5d7d96; border: 1px solid #14212e;
-    cursor: pointer; transition: all 90ms; white-space: nowrap;
-  }
-  .band-btn:hover { background: #122232; color: #c0d8ec; border-color: #243e58; }
-  .band-btn.active {
-    background: #112538; color: #38bdf8; border-color: #255880;
-    box-shadow: inset 0 1px 0 rgba(56,189,248,0.3);
-  }
-  
-  /* Hero Curved SVG S-Meter Housing */
-  .meter-housing {
-    position: relative;
-    background: #060b10;
-    border: 1px solid #14202b;
-    border-radius: 6px;
-    padding: 6px 6px 8px;
-    box-shadow: inset 0 2px 8px rgba(0,0,0,0.7), 0 1px 0 rgba(255,255,255,0.05);
-    display: flex; flex-direction: column; justify-content: space-between;
-  }
-  .smeter-svg {
-    width: 100%; height: auto; display: block;
-    filter: drop-shadow(0 0 4px rgba(0,0,0,0.5));
-  }
-  .meter-readouts {
+  /* VFO Intermediate Telemetry Bar */
+  .vfo-meter-bar {
     display: flex; align-items: center; justify-content: space-between;
-    padding: 4px 6px 0;
-    border-top: 1px solid rgba(24, 40, 56, 0.4);
+    padding: 2px 6px; border-radius: 3px;
+    background: #03060a; border: 1px solid #0d151e;
+    margin: 1px 0;
+  }
+  .vfo-meter-seg {
+    display: flex; align-items: center; gap: 4px;
+    font: 700 8px/1 var(--mono); letter-spacing: 0.05em;
+  }
+  .vfo-seg-label {
+    color: #4b667e; font-size: 7px; text-transform: uppercase;
+  }
+  .vfo-seg-val {
+    color: #93b5cf;
+  }
+  .vfo-cal-seg {
+    cursor: pointer;
+    padding: 1px 3px;
+    border-radius: 2px;
+    transition: all 90ms;
+  }
+  .vfo-cal-seg:hover {
+    background: rgba(56, 189, 248, 0.15);
+    color: #38bdf8;
+  }
+  .vfo-cal-seg:hover .vfo-seg-label {
+    color: #7dd3fc;
+  }
+  .vfo-cal-seg:active {
+    transform: translateY(1px);
+  }
+
+  /* Authentic Mechanical Push Switches: Demodulator Mode Keypad */
+  .mode-keypad {
+    display: grid;
+    grid-template-columns: repeat(11, 1fr);
+    gap: 3px;
+    padding: 2px 0;
+  }
+  .modebtn {
+    position: relative;
+    display: inline-flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 6.5px 2px 5px;
+    background: linear-gradient(180deg, #243242 0%, #17212b 20%, #0f151c 65%, #0a0e13 100%);
+    border: 1px solid #080d12;
+    border-radius: 3.5px;
+    box-shadow:
+      inset 0 1px 0 rgba(255,255,255,0.18),
+      inset 0 -1px 0 rgba(0,0,0,0.65),
+      0 2px 4px rgba(0,0,0,0.65);
+    color: #8da4b5;
+    cursor: pointer;
+    font: 800 9px/1 var(--mono);
+    letter-spacing: 0.06em;
+    user-select: none;
+    transition: all 80ms;
+    min-width: 0;
+  }
+  .modebtn:hover {
+    color: #ffffff;
+    background: linear-gradient(180deg, #2e3e50 0%, #1e2a36 20%, #131b24 65%, #0d1319 100%);
+    border-color: #1b2e40;
+  }
+  .modebtn:active {
+    transform: translateY(1.5px);
+    box-shadow:
+      inset 0 2px 4px rgba(0,0,0,0.9),
+      0 0 1px rgba(0,0,0,0.5);
+  }
+  .modebtn.on {
+    background: linear-gradient(180deg, #162636 0%, #0d1620 100%);
+    border-color: #223f59;
+    color: #ffffff;
+    box-shadow:
+      inset 0 1.5px 3px rgba(0,0,0,0.85),
+      0 0 8px rgba(56,189,248,0.25);
+  }
+  /* Embedded illuminated jewel LED tally slit */
+  .mode-tally {
+    width: 16px; height: 2.2px; border-radius: 1px;
+    background: #080e14; border: 1px solid #101820;
+    margin-bottom: 3.5px;
+    transition: all 120ms;
+  }
+  .modebtn.on .mode-tally.tally-amber {
+    background: #ffb830; border-color: #ffd074;
+    box-shadow: 0 0 6px rgba(255,184,48,0.95), 0 0 1px #ffffff;
+  }
+  .modebtn.on .mode-tally.tally-cyan {
+    background: #38bdf8; border-color: #7dd3fc;
+    box-shadow: 0 0 6px rgba(56,189,248,0.95), 0 0 1px #ffffff;
+  }
+  .modebtn.on .mode-tally.tally-green {
+    background: #2bff6a; border-color: #86efac;
+    box-shadow: 0 0 6px rgba(43,255,106,0.95), 0 0 1px #ffffff;
+  }
+  .modebtn.on .mode-tally.tally-ruby {
+    background: #ff4a36; border-color: #ff8878;
+    box-shadow: 0 0 6px rgba(255,74,54,0.95), 0 0 1px #ffffff;
+  }
+
+  /* Quick Band Matrix Keypad */
+  .band-matrix {
+    display: grid;
+    grid-template-columns: repeat(8, 1fr);
+    gap: 3px;
     margin-top: 2px;
   }
-  .meter-num {
-    font-size: 10px; color: var(--dim); font-weight: 600;
-    white-space: nowrap; overflow: hidden;
+  .band-btn {
+    position: relative;
+    display: inline-flex; align-items: center; justify-content: center; gap: 4px;
+    padding: 5px 0; font: 700 8px var(--mono); text-align: center;
+    border-radius: 3px;
+    background: linear-gradient(180deg, #16202c 0%, #0c1218 100%);
+    color: #6a8ba3; border: 1px solid #131c26;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.08), 0 1px 2px rgba(0,0,0,0.5);
+    cursor: pointer; transition: all 80ms; white-space: nowrap;
   }
-  .meter-clip-badge {
-    font-size: 9px; font-weight: 700; letter-spacing: 0.1em;
-    padding: 1px 6px; border-radius: 2px;
-    background: #182028; color: #485b6d; border: 1px solid #23303d;
-    transition: background 120ms, color 120ms, box-shadow 120ms;
+  .band-btn:hover { background: #192a3a; color: #c0d8ec; border-color: #21384e; }
+  .band-btn:active { transform: translateY(1px); }
+  .band-btn.active {
+    background: #0d2235; color: #38bdf8; border-color: #205075;
+    box-shadow: inset 0 1px 0 rgba(56,189,248,0.25), 0 0 6px rgba(56,189,248,0.2);
   }
-  .meter-clip-badge.active {
-    background: #b91c1c; color: #fff; border-color: #ef4444;
-    box-shadow: 0 0 8px rgba(239, 68, 68, 0.6);
+  .band-tally {
+    width: 4px; height: 4px; border-radius: 50%;
+    background: #060b10; border: 1px solid #101822;
+  }
+  .band-btn.active .band-tally {
+    background: #38bdf8; border-color: #7dd3fc;
+    box-shadow: 0 0 5px rgba(56,189,248,0.9);
   }
 
-  /* Legacy frequency rules cleaned up */
+  /* Tactile DSP & Action Keypad */
+  .dsp-keypad {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 3.5px;
+    margin-top: 4px;
+  }
+  .dsp-key {
+    position: relative;
+    display: inline-flex; flex-direction: column; align-items: center; justify-content: center;
+    padding: 4px 2px; border-radius: 3px;
+    background: linear-gradient(180deg, #212c38 0%, #141c24 30%, #0d1218 100%);
+    color: #7e9bb2; border: 1px solid #090e14;
+    box-shadow:
+      inset 0 1px 0 rgba(255,255,255,0.15),
+      inset 0 -1px 0 rgba(0,0,0,0.6),
+      0 1.5px 3px rgba(0,0,0,0.6);
+    cursor: pointer; font: 800 8px/1 var(--mono);
+    letter-spacing: 0.04em; user-select: none;
+    transition: all 80ms; white-space: nowrap; overflow: hidden;
+  }
+  .dsp-key:hover { color: #fff; background: #283748; border-color: #1e3042; }
+  .dsp-key:active { transform: translateY(1.5px); box-shadow: inset 0 2px 4px #000; }
+  .dsp-key.on {
+    background: #0f1c28; color: #ffffff; border-color: #1d3d5a;
+    box-shadow: inset 0 1px 3px #000, 0 0 6px rgba(56,189,248,0.2);
+  }
+  .dsp-key.palette-trigger {
+    grid-column: span 2;
+  }
+  .dsp-tally {
+    width: 14px; height: 2px; border-radius: 1px;
+    background: #060b10; border: 1px solid #101922; margin-bottom: 2px;
+    transition: all 120ms;
+  }
+  .dsp-key.on .dsp-tally.led-amber { background: #ffb830; border-color: #ffd074; box-shadow: 0 0 5px #ffb830; }
+  .dsp-key.on .dsp-tally.led-cyan { background: #38bdf8; border-color: #7dd3fc; box-shadow: 0 0 5px #38bdf8; }
+  .dsp-key.on .dsp-tally.led-blue { background: #60a5fa; border-color: #93c5fd; box-shadow: 0 0 5px #60a5fa; }
+  .dsp-key.on .dsp-tally.led-green { background: #2bff6a; border-color: #86efac; box-shadow: 0 0 5px #2bff6a; }
+  .dsp-key.on .dsp-tally.led-violet { background: #c084fc; border-color: #e9d5ff; box-shadow: 0 0 5px #c084fc; }
 
-  /* Rotary Jog Wheel Dial */
-  .jog-dial-wrap {
+  /* -------------------------------------------------------------------------
+     BAY 4: DISPLAY FADERS & MAIN VFO TUNING FLYWHEEL
+     ------------------------------------------------------------------------- */
+  .bay-tuning {
+    display: flex; flex-direction: column; justify-content: flex-start; gap: 6px;
+  }
+  .vfo-flywheel-container {
     display: flex; flex-direction: column; align-items: center; justify-content: center;
+    padding-top: 1px;
+  }
+  .vfo-flywheel-svg {
+    width: 126px; height: 126px; display: block;
     cursor: grab; user-select: none;
-    padding: 4px;
+    filter: drop-shadow(0 4px 10px rgba(0,0,0,0.8));
   }
-  .jog-dial-wrap:active, .jog-dial-wrap.dragging { cursor: grabbing; }
-  .jog-dial-svg {
-    width: 76px; height: 76px; display: block;
-    filter: drop-shadow(0 3px 8px rgba(0,0,0,0.6));
-    transition: transform 60ms linear;
+  .vfo-flywheel-svg.dragging { cursor: grabbing; }
+  .vfo-step-status-pill {
+    font: 700 8px/1 var(--mono); color: #7094b0; letter-spacing: 0.08em;
+    background: #060b10; padding: 2px 7px; border-radius: 3px;
+    border: 1px solid #121d28; margin-top: 3px; text-align: center;
+    box-shadow: inset 0 1px 2px rgba(0,0,0,0.6);
   }
-  .jog-label {
-    font-size: 8px; font-weight: 700; letter-spacing: 0.16em; color: var(--faint);
-    margin-top: 4px; text-transform: uppercase;
+
+  /* Interactive Palette Swatch Popover */
+  .palette-popup {
+    position: absolute;
+    width: 280px; max-height: 420px;
+    overflow-y: auto;
+    background: #070e17; border: 1px solid #1e364e; border-radius: 8px;
+    box-shadow: 0 18px 45px rgba(0,0,0,0.9), 0 0 0 1px rgba(56,189,248,0.25);
+    z-index: 1000; padding: 9px;
+    backdrop-filter: blur(12px);
   }
+  .palette-popup-head {
+    display: flex; align-items: center; justify-content: space-between;
+    padding-bottom: 6px; margin-bottom: 7px; border-bottom: 1px solid #142436;
+    font: 700 10px var(--mono); letter-spacing: 0.12em; color: #8cb2cc; text-transform: uppercase;
+  }
+  .palette-popup-close {
+    background: transparent; border: none; color: #64748b; font-size: 16px; cursor: pointer; padding: 0 4px; line-height: 1;
+  }
+  .palette-popup-close:hover { color: #fff; }
+  .palette-grid { display: flex; flex-direction: column; gap: 4px; }
+  .palette-item {
+    display: flex; flex-direction: column; gap: 3.5px; padding: 5px 8px;
+    background: #0b1522; border: 1px solid #172738; border-radius: 4px;
+    cursor: pointer; text-align: left; transition: all 100ms;
+  }
+  .palette-item:hover { background: #132438; border-color: #38bdf8; }
+  .palette-item.active { background: #122b46; border-color: #38bdf8; box-shadow: inset 2px 0 0 #38bdf8; }
+  .palette-item-top { display: flex; align-items: center; justify-content: space-between; }
+  .palette-item-name { font: 700 10.5px var(--mono); color: #cbd5e1; }
+  .palette-item.active .palette-item-name { color: #38bdf8; }
+  .palette-item-tag { font: 600 8.5px var(--mono); color: #64748b; text-transform: uppercase; }
+  .palette-swatch-bar {
+    width: 100%; height: 11px; border-radius: 2px; border: 1px solid rgba(255,255,255,0.15);
+  }
+
+  /* Badges utility */
+  .badge {
+    font-size: 10px; font-weight: 700; letter-spacing: 0.05em;
+    padding: 3px 8px; border-radius: 3px;
+    background: #0b141d; color: #9ab6c9; border: 1px solid #182836;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: center;
+    box-shadow: inset 0 1px 2px rgba(0,0,0,0.5);
+  }
+  #badgeSpan { width: 70px; }
+  #badgeProto { width: 150px; }
+  .badge.blue { background: #134975; color: #fff; border-color: #2b7bc4; box-shadow: 0 0 8px rgba(43,123,196,0.3); }
+  .badge.live { background: #0b3a20; color: var(--green); border-color: #1a6d3f; box-shadow: 0 0 8px var(--green-glow); }
 
   /* ---------- Spectrum & Waterfall Viewport ---------- */
 
@@ -979,581 +1336,689 @@
     <div class="chassis-screw bottom-right" aria-hidden="true"></div>
 
     <div class="rig-brand">
-      <div class="brand-crest" aria-hidden="true">
-        <svg width="26" height="26" viewBox="0 0 26 26">
-          <circle cx="13" cy="13" r="11" fill="#09121a" stroke="#1f364a" stroke-width="1.5"/>
-          <path d="M5 13 Q9 6 13 13 T21 13" fill="none" stroke="#38bdf8" stroke-width="1.8" stroke-linecap="round"/>
-          <circle cx="13" cy="13" r="2.2" fill="#2bff6a"/>
-        </svg>
+      <div style="display:flex; align-items:center; gap:10px;">
+        <div class="brand-crest" aria-hidden="true">
+          <svg width="24" height="24" viewBox="0 0 26 26">
+            <circle cx="13" cy="13" r="11" fill="#09121a" stroke="#1f364a" stroke-width="1.5"/>
+            <path d="M5 13 Q9 6 13 13 T21 13" fill="none" stroke="#38bdf8" stroke-width="1.8" stroke-linecap="round"/>
+            <circle cx="13" cy="13" r="2.2" fill="#2bff6a"/>
+          </svg>
+        </div>
+        <div class="brand-title">
+          <span class="mark">COMMUNICATIONS RECEIVER</span>
+          <span class="sub">PRECISION SDR-1000 TRANSCEIVER PROCESSOR · ALL-MODE DSP</span>
+        </div>
       </div>
-      <div class="brand-title">
-        <span class="mark">uSDR</span>
-        <span class="sub">Precision SDR Spectrum Monitor &amp; Telemetry</span>
+      <div class="brand-center-telemetry" aria-hidden="true">
+        <div class="brand-chassis-bezel">
+          <span class="brand-led-pip on"></span>
+          <span class="brand-metric-label">TUNER</span>
+          <span class="brand-metric-val" id="headerTunerBadge">R820T</span>
+          <span class="brand-divider">/</span>
+          <span class="brand-metric-label">RATE</span>
+          <span class="brand-metric-val" id="headerRateBadge">2.40M</span>
+          <span class="brand-divider">/</span>
+          <span class="brand-metric-label">IF</span>
+          <span class="brand-metric-val">ZERO-IF</span>
+          <span class="brand-divider">/</span>
+          <span class="brand-metric-label">DSP</span>
+          <span class="brand-metric-val" style="color:#2bff6a">ONLINE</span>
+        </div>
       </div>
-      <div class="conn" id="conn">
-        <span class="conn-beacon" id="connBeacon"></span>
-        <span id="connText">connecting…</span>
+      <div class="brand-status-cluster">
+        <span class="badge" id="badgeSpan">2.048M</span>
+        <span class="badge" id="badgeProto">IDLE</span>
+        <span class="badge health-badge" id="badgeHealth" title="Sample stream health: dropped/lagged blocks and lost samples since start">STREAM —</span>
+        <div class="conn" id="conn">
+          <span class="conn-beacon" id="connBeacon"></span>
+          <span id="connText">connecting…</span>
+        </div>
+        <span class="header-clock" id="scrClock">--:--</span>
       </div>
     </div>
 
     <div class="screen">
-      <div class="scr-top">
-        <span class="modesw" role="group" aria-label="Demodulator mode">
-          <button type="button" class="modebtn on" data-mode="nfm">NFM</button>
-          <button type="button" class="modebtn" data-mode="am">AM</button>
-          <button type="button" class="modebtn" data-mode="wfm">WFM</button>
-          <button type="button" class="modebtn" data-mode="p25">P25</button>
-          <button type="button" class="modebtn" data-mode="dmr">DMR</button>
-          <button type="button" class="modebtn" data-mode="nxdn" title="NXDN48/NXDN96 conventional voice through the AMBE+2 vocoder">NXDN</button>
-          <button type="button" class="modebtn" data-mode="packet">PACKET</button>
-          <button type="button" class="modebtn" data-mode="pager" title="Sweep POCSAG/FLEX across the 25 kHz paging channels around the tuned frequency">PAGER</button>
-          <button type="button" class="modebtn" data-mode="flex" title="Dedicated Motorola FLEX pager demodulator with symbol eye and discriminator scope">FLEX</button>
-          <button type="button" class="modebtn" data-mode="auto" title="Run every decoder on the tuned channel at once">AUTO</button>
-          <button type="button" class="modebtn" data-mode="scan" title="Scan a frequency range for voice (AM / NFM / P25 / DMR): locks onto what it can decode and holds the call. Configure it in the SCAN panel.">SCAN</button>
-        </span>
-        <svg class="filt-glyph" width="34" height="14" viewBox="0 0 34 14" aria-hidden="true">
-          <path d="M1 13 L8 3 L26 3 L33 13" fill="none" stroke="#38bdf8" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-        </svg>
-        <span class="badge" id="badgeSpan">2.048M</span>
-        <span class="badge" id="badgeProto">IDLE</span>
-        <span class="badge health-badge" id="badgeHealth" title="Sample stream health: dropped/lagged blocks and lost samples since start">STREAM —</span>
-        <span class="spacer"></span>
-        <span class="scr-vfo">VFO <b>A</b></span>
-        <span class="scr-clock" id="scrClock">--:--</span>
-      </div>
+      <!-- ===================================================================
+           TRANSCEIVER TOP CONTROL DECK (HIGH-END 4-BAY PHYSICAL HARDWARE PANEL)
+           =================================================================== -->
+      <div class="deck-console">
 
-      <div class="scr-head">
-        <!-- Hero Curved SVG Analog/Digital S-Meter -->
-        <div class="meter-housing">
-          <svg class="smeter-svg" id="smeterSvg" viewBox="0 0 340 165" aria-hidden="true">
-<defs>
-  <radialGradient id="dialGlow" cx="50%" cy="120%" r="100%">
-    <stop offset="0%" stop-color="#0c2033"/>
-    <stop offset="40%" stop-color="#05121c"/>
-    <stop offset="80%" stop-color="#02060a"/>
-    <stop offset="100%" stop-color="#010306"/>
-  </radialGradient>
-  <linearGradient id="overS9Grad" x1="0" y1="0" x2="1" y2="0">
-    <stop offset="0%" stop-color="#ff9922"/>
-    <stop offset="50%" stop-color="#ff5533"/>
-    <stop offset="100%" stop-color="#ff2211"/>
-  </linearGradient>
-  <linearGradient id="needleBlade" x1="0" y1="1" x2="0" y2="0">
-    <stop offset="0%" stop-color="#ff8866"/>
-    <stop offset="100%" stop-color="#ff3322"/>
-  </linearGradient>
-  <radialGradient id="hubGrad" cx="35%" cy="35%" r="65%">
-    <stop offset="0%" stop-color="#4d647d"/>
-    <stop offset="50%" stop-color="#1e2c3a"/>
-    <stop offset="100%" stop-color="#0a1017"/>
-  </radialGradient>
-  <filter id="softGlow" x="-15%" y="-15%" width="130%" height="130%">
-    <feGaussianBlur stdDeviation="0.8" result="b"/>
-    <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
-  </filter>
-  <linearGradient id="agcArcGrad" x1="0" y1="0" x2="1" y2="0">
-    <stop offset="0%" stop-color="#38bdf8"/>
-    <stop offset="60%" stop-color="#2bff6a"/>
-    <stop offset="100%" stop-color="#ffb830"/>
-  </linearGradient>
-  <clipPath id="dialClip">
-    <rect x="2" y="2" width="336" height="161" rx="5.5"/>
-  </clipPath>
-</defs>
-
-<!-- Bezel & Dial Face -->
-<rect x="1.5" y="1.5" width="337" height="162" rx="6" fill="url(#dialGlow)" stroke="#162839" stroke-width="1.2"/>
-<rect x="3" y="3" width="334" height="159" rx="4.5" fill="none" stroke="#081017" stroke-width="1"/>
-
-<g clip-path="url(#dialClip)">
-
-<!-- Over-S9 Ribbon -->
-<path d="M 156.98 37.51 A 168.00 168.00 0 0 1 277.99 76.30 L 280.69 73.09 A 172.20 172.20 0 0 0 156.66 33.32 Z" fill="url(#overS9Grad)" filter="url(#softGlow)"/>
-<path d="M 62.01 76.30 A 168.00 168.00 0 0 1 156.98 37.51" fill="none" stroke="#38bdf8" stroke-width="1.8"/>
-<path d="M 156.98 37.51 A 168.00 168.00 0 0 1 277.99 76.30" fill="none" stroke="#ff382a" stroke-width="1.8"/>
-<text x="36.2" y="75.8" font-family="var(--sans)" font-weight="900" font-size="16" fill="#38bdf8" text-anchor="middle" dominant-baseline="central" filter="url(#softGlow)">S</text>
-<text x="296.0" y="54.9" font-family="var(--mono)" font-weight="900" font-size="8.5" fill="#ff4a36" text-anchor="middle" dominant-baseline="central">dB</text>
-<line x1="62.0" y1="76.3" x2="57.2" y2="70.6" stroke="#38bdf8" stroke-width="1.4"/>
-<text x="49.2" y="61.0" font-family="var(--mono)" font-weight="700" font-size="8.5" fill="#a2dcfc" text-anchor="middle" dominant-baseline="central">1</text>
-<line x1="72.3" y1="68.3" x2="70.0" y2="65.1" stroke="#1a5072" stroke-width="0.9"/>
-<line x1="83.2" y1="61.2" x2="79.3" y2="54.7" stroke="#38bdf8" stroke-width="1.4"/>
-<text x="72.9" y="44.0" font-family="var(--mono)" font-weight="700" font-size="8.5" fill="#a2dcfc" text-anchor="middle" dominant-baseline="central">3</text>
-<line x1="94.6" y1="54.9" x2="92.8" y2="51.3" stroke="#1a5072" stroke-width="0.9"/>
-<line x1="106.5" y1="49.5" x2="103.6" y2="42.5" stroke="#38bdf8" stroke-width="1.4"/>
-<text x="98.9" y="31.0" font-family="var(--mono)" font-weight="700" font-size="8.5" fill="#a2dcfc" text-anchor="middle" dominant-baseline="central">5</text>
-<line x1="118.7" y1="45.0" x2="117.5" y2="41.2" stroke="#1a5072" stroke-width="0.9"/>
-<line x1="131.3" y1="41.5" x2="129.5" y2="34.2" stroke="#38bdf8" stroke-width="1.4"/>
-<text x="126.6" y="22.1" font-family="var(--mono)" font-weight="700" font-size="8.5" fill="#a2dcfc" text-anchor="middle" dominant-baseline="central">7</text>
-<line x1="144.0" y1="39.0" x2="143.4" y2="35.1" stroke="#1a5072" stroke-width="0.9"/>
-<line x1="157.0" y1="37.5" x2="156.2" y2="28.0" stroke="#ff4a36" stroke-width="1.9"/>
-<text x="155.4" y="17.6" font-family="var(--mono)" font-weight="700" font-size="8.5" fill="#ff705a" text-anchor="middle" dominant-baseline="central">9</text>
-<line x1="178.7" y1="37.2" x2="178.9" y2="33.2" stroke="#ff4a36" stroke-width="0.9"/>
-<line x1="200.2" y1="39.7" x2="202.0" y2="30.4" stroke="#ff4a36" stroke-width="1.9"/>
-<text x="203.8" y="20.1" font-family="var(--mono)" font-weight="700" font-size="8.5" fill="#ff705a" text-anchor="middle" dominant-baseline="central">+20</text>
-<line x1="221.3" y1="45.0" x2="222.5" y2="41.2" stroke="#ff4a36" stroke-width="0.9"/>
-<line x1="241.5" y1="53.0" x2="245.5" y2="44.4" stroke="#ff4a36" stroke-width="1.9"/>
-<text x="250.0" y="34.9" font-family="var(--mono)" font-weight="700" font-size="8.5" fill="#ff705a" text-anchor="middle" dominant-baseline="central">+40</text>
-<line x1="260.5" y1="63.5" x2="262.6" y2="60.1" stroke="#ff4a36" stroke-width="0.9"/>
-<line x1="278.0" y1="76.3" x2="284.1" y2="69.0" stroke="#ff4a36" stroke-width="1.9"/>
-<text x="290.8" y="61.0" font-family="var(--mono)" font-weight="700" font-size="8.5" fill="#ff705a" text-anchor="middle" dominant-baseline="central">+60</text>
-<!-- PO Scale -->
-<path d="M 79.29 86.79 A 149.00 149.00 0 0 1 260.71 86.79" fill="none" stroke="#1d425c" stroke-width="1.1"/>
-<text x="66.3" y="93.8" font-family="var(--sans)" font-weight="900" font-size="8.5" fill="#38bdf8" text-anchor="middle" dominant-baseline="central">PO</text>
-<text x="271.7" y="92.0" font-family="var(--sans)" font-weight="900" font-size="8.5" fill="#38bdf8" text-anchor="middle" dominant-baseline="central">W</text>
-<line x1="79.3" y1="86.8" x2="75.9" y2="82.4" stroke="#29658f" stroke-width="1.2"/>
-<text x="72.9" y="78.5" font-family="var(--mono)" font-weight="700" font-size="7.5" fill="#9cd9fa" text-anchor="middle" dominant-baseline="central">0</text>
-<line x1="101.2" y1="72.8" x2="98.7" y2="68.0" stroke="#29658f" stroke-width="1.2"/>
-<text x="96.4" y="63.5" font-family="var(--mono)" font-weight="700" font-size="7.5" fill="#9cd9fa" text-anchor="middle" dominant-baseline="central">10</text>
-<line x1="139.0" y1="59.3" x2="137.9" y2="53.9" stroke="#29658f" stroke-width="1.2"/>
-<text x="136.8" y="49.0" font-family="var(--mono)" font-weight="700" font-size="7.5" fill="#9cd9fa" text-anchor="middle" dominant-baseline="central">50</text>
-<line x1="179.1" y1="56.3" x2="179.4" y2="50.8" stroke="#29658f" stroke-width="1.2"/>
-<text x="179.7" y="45.8" font-family="var(--mono)" font-weight="700" font-size="7.5" fill="#9cd9fa" text-anchor="middle" dominant-baseline="central">100</text>
-<line x1="212.3" y1="62.1" x2="213.9" y2="56.9" stroke="#29658f" stroke-width="1.2"/>
-<text x="215.3" y="52.1" font-family="var(--mono)" font-weight="700" font-size="7.5" fill="#9cd9fa" text-anchor="middle" dominant-baseline="central">150</text>
-<line x1="238.8" y1="72.8" x2="241.3" y2="68.0" stroke="#29658f" stroke-width="1.2"/>
-<text x="243.6" y="63.5" font-family="var(--mono)" font-weight="700" font-size="7.5" fill="#9cd9fa" text-anchor="middle" dominant-baseline="central">200</text>
-<line x1="260.7" y1="86.8" x2="264.1" y2="82.4" stroke="#29658f" stroke-width="1.2"/>
-<text x="267.1" y="78.5" font-family="var(--mono)" font-weight="700" font-size="7.5" fill="#9cd9fa" text-anchor="middle" dominant-baseline="central">250</text>
-<!-- IC Scale -->
-<path d="M 93.35 97.54 A 132.00 132.00 0 0 1 248.52 98.89" fill="none" stroke="#1d425c" stroke-width="1.1"/>
-<text x="81.8" y="103.5" font-family="var(--sans)" font-weight="900" font-size="8" fill="#38bdf8" text-anchor="middle" dominant-baseline="central">IC</text>
-<text x="258.2" y="103.5" font-family="var(--sans)" font-weight="900" font-size="8" fill="#38bdf8" text-anchor="middle" dominant-baseline="central">A</text>
-<line x1="93.3" y1="97.5" x2="90.7" y2="93.9" stroke="#29658f" stroke-width="1.1"/>
-<text x="88.4" y="90.6" font-family="var(--mono)" font-weight="700" font-size="7" fill="#9cd9fa" text-anchor="middle" dominant-baseline="central">0</text>
-<line x1="113.2" y1="85.9" x2="111.2" y2="81.8" stroke="#29658f" stroke-width="1.1"/>
-<text x="109.5" y="78.2" font-family="var(--mono)" font-weight="700" font-size="7" fill="#9cd9fa" text-anchor="middle" dominant-baseline="central">1</text>
-<line x1="127.0" y1="80.2" x2="125.6" y2="75.9" stroke="#29658f" stroke-width="1.1"/>
-<text x="124.3" y="72.2" font-family="var(--mono)" font-weight="700" font-size="7" fill="#9cd9fa" text-anchor="middle" dominant-baseline="central">1.5</text>
-<line x1="142.6" y1="75.9" x2="141.6" y2="71.5" stroke="#29658f" stroke-width="1.1"/>
-<text x="140.8" y="67.6" font-family="var(--mono)" font-weight="700" font-size="7" fill="#9cd9fa" text-anchor="middle" dominant-baseline="central">2</text>
-<line x1="164.2" y1="73.1" x2="164.0" y2="68.6" stroke="#29658f" stroke-width="1.1"/>
-<text x="163.9" y="64.6" font-family="var(--mono)" font-weight="700" font-size="7" fill="#9cd9fa" text-anchor="middle" dominant-baseline="central">3</text>
-<line x1="191.8" y1="74.8" x2="192.5" y2="70.4" stroke="#29658f" stroke-width="1.1"/>
-<text x="193.2" y="66.4" font-family="var(--mono)" font-weight="700" font-size="7" fill="#9cd9fa" text-anchor="middle" dominant-baseline="central">5</text>
-<line x1="216.2" y1="81.4" x2="217.8" y2="77.1" stroke="#29658f" stroke-width="1.1"/>
-<text x="219.2" y="73.4" font-family="var(--mono)" font-weight="700" font-size="7" fill="#9cd9fa" text-anchor="middle" dominant-baseline="central">10</text>
-<line x1="235.0" y1="90.1" x2="237.2" y2="86.2" stroke="#29658f" stroke-width="1.1"/>
-<text x="239.2" y="82.7" font-family="var(--mono)" font-weight="700" font-size="7" fill="#9cd9fa" text-anchor="middle" dominant-baseline="central">15</text>
-<line x1="248.5" y1="98.9" x2="251.2" y2="95.3" stroke="#29658f" stroke-width="1.1"/>
-<text x="253.6" y="92.1" font-family="var(--mono)" font-weight="700" font-size="7" fill="#9cd9fa" text-anchor="middle" dominant-baseline="central">20</text>
-<!-- SWR Scale -->
-<path d="M 105.98 108.27 A 116.00 116.00 0 0 1 234.02 108.27" fill="none" stroke="#1d425c" stroke-width="1.1"/>
-<text x="94.2" y="114.6" font-family="var(--sans)" font-weight="900" font-size="7.5" fill="#38bdf8" text-anchor="middle" dominant-baseline="central">SWR</text>
-<line x1="106.0" y1="108.3" x2="103.5" y2="104.5" stroke="#29658f" stroke-width="1.1"/>
-<text x="101.4" y="101.4" font-family="var(--mono)" font-weight="700" font-size="7.5" fill="#9cd9fa" text-anchor="middle" dominant-baseline="central">1</text>
-<line x1="129.4" y1="96.3" x2="127.8" y2="92.1" stroke="#29658f" stroke-width="1.1"/>
-<text x="126.5" y="88.7" font-family="var(--mono)" font-weight="700" font-size="7.5" fill="#9cd9fa" text-anchor="middle" dominant-baseline="central">1.5</text>
-<line x1="153.9" y1="90.1" x2="153.2" y2="85.7" stroke="#29658f" stroke-width="1.1"/>
-<text x="152.7" y="82.0" font-family="var(--mono)" font-weight="700" font-size="7.5" fill="#9cd9fa" text-anchor="middle" dominant-baseline="central">2</text>
-<line x1="188.1" y1="90.4" x2="188.9" y2="86.0" stroke="#ff4a36" stroke-width="1.4"/>
-<text x="189.4" y="82.3" font-family="var(--mono)" font-weight="700" font-size="7.5" fill="#ff705a" text-anchor="middle" dominant-baseline="central">3</text>
-<line x1="232.3" y1="107.2" x2="234.7" y2="103.4" stroke="#ff4a36" stroke-width="1.4"/>
-<text x="236.7" y="100.3" font-family="var(--mono)" font-weight="700" font-size="7.5" fill="#ff705a" text-anchor="middle" dominant-baseline="central">∞</text>
-<!-- COMP Scale -->
-<path d="M 117.23 118.88 A 101.00 101.00 0 0 1 221.26 117.98" fill="none" stroke="#1d425c" stroke-width="1.1"/>
-<text x="105.5" y="125.3" font-family="var(--sans)" font-weight="900" font-size="7" fill="#38bdf8" text-anchor="middle" dominant-baseline="central">COMP</text>
-<text x="228.8" y="121.0" font-family="var(--sans)" font-weight="900" font-size="7" fill="#38bdf8" text-anchor="middle" dominant-baseline="central">dB</text>
-<line x1="117.2" y1="118.9" x2="115.2" y2="115.6" stroke="#29658f" stroke-width="1"/>
-<text x="113.6" y="112.9" font-family="var(--mono)" font-weight="700" font-size="6.5" fill="#9cd9fa" text-anchor="middle" dominant-baseline="central">0</text>
-<line x1="138.8" y1="108.9" x2="137.6" y2="105.3" stroke="#29658f" stroke-width="1"/>
-<text x="136.6" y="102.3" font-family="var(--mono)" font-weight="700" font-size="6.5" fill="#9cd9fa" text-anchor="middle" dominant-baseline="central">5</text>
-<line x1="161.2" y1="104.4" x2="160.9" y2="100.6" stroke="#29658f" stroke-width="1"/>
-<text x="160.6" y="97.4" font-family="var(--mono)" font-weight="700" font-size="6.5" fill="#9cd9fa" text-anchor="middle" dominant-baseline="central">10</text>
-<line x1="184.1" y1="105.0" x2="184.6" y2="101.2" stroke="#29658f" stroke-width="1"/>
-<text x="185.0" y="98.1" font-family="var(--mono)" font-weight="700" font-size="6.5" fill="#9cd9fa" text-anchor="middle" dominant-baseline="central">15</text>
-<line x1="203.7" y1="109.8" x2="205.0" y2="106.2" stroke="#29658f" stroke-width="1"/>
-<text x="206.1" y="103.2" font-family="var(--mono)" font-weight="700" font-size="6.5" fill="#9cd9fa" text-anchor="middle" dominant-baseline="central">20</text>
-<line x1="221.3" y1="118.0" x2="223.2" y2="114.7" stroke="#29658f" stroke-width="1"/>
-<text x="224.8" y="111.9" font-family="var(--mono)" font-weight="700" font-size="6.5" fill="#9cd9fa" text-anchor="middle" dominant-baseline="central">30</text>
-<!-- Dynamic AGC Sub-Scale (Authentic Moving AGC Meter) -->
-<g id="meterAgcGroup">
-  <text x="110" y="132.5" font-family="var(--sans)" font-weight="900" font-size="7.5" fill="#38bdf8" text-anchor="middle" dominant-baseline="central" filter="url(#softGlow)">AGC</text>
-  <text x="228" y="132.5" font-family="var(--mono)" font-weight="700" font-size="6.5" fill="#5a7d9a" text-anchor="middle" dominant-baseline="central">dB</text>
-
-  <!-- Track groove -->
-  <path d="M 132.3 127.7 A 86.00 86.00 0 0 1 207.7 127.7" fill="none" stroke="#0b1722" stroke-width="4.5" stroke-linecap="round"/>
-  <path d="M 132.3 127.7 A 86.00 86.00 0 0 1 207.7 127.7" fill="none" stroke="#183248" stroke-width="1.2" stroke-linecap="round"/>
-
-  <!-- Dynamic Active Luminous AGC Arc (Sweeps with Gain Reduction) -->
-  <path id="meterAgcArc" d="M 132.3 127.7 A 86.00 86.00 0 0 1 133.0 127.5" fill="none" stroke="url(#agcArcGrad)" stroke-width="3.2" stroke-linecap="round" filter="url(#softGlow)"/>
-
-  <!-- Ticks & Calibration Labels (0, 10, 20, 30, 40 dB) -->
-  <line x1="133.8" y1="129.9" x2="130.8" y2="125.6" stroke="#29658f" stroke-width="1.1"/>
-  <text x="129.2" y="122.2" font-family="var(--mono)" font-weight="700" font-size="6" fill="#8cb9d8" text-anchor="middle" dominant-baseline="central">0</text>
-  <line x1="151.8" y1="123.3" x2="149.9" y2="118.8" stroke="#29658f" stroke-width="1.1"/>
-  <text x="148.6" y="115.1" font-family="var(--mono)" font-weight="700" font-size="6" fill="#8cb9d8" text-anchor="middle" dominant-baseline="central">10</text>
-  <line x1="170.0" y1="122.5" x2="170.0" y2="117.5" stroke="#29658f" stroke-width="1.2"/>
-  <text x="170.0" y="113.5" font-family="var(--mono)" font-weight="700" font-size="6" fill="#8cb9d8" text-anchor="middle" dominant-baseline="central">20</text>
-  <line x1="188.2" y1="123.3" x2="190.1" y2="118.8" stroke="#29658f" stroke-width="1.1"/>
-  <text x="191.4" y="115.1" font-family="var(--mono)" font-weight="700" font-size="6" fill="#8cb9d8" text-anchor="middle" dominant-baseline="central">30</text>
-  <line x1="206.2" y1="129.9" x2="209.2" y2="125.6" stroke="#29658f" stroke-width="1.1"/>
-  <text x="210.8" y="122.2" font-family="var(--mono)" font-weight="700" font-size="6" fill="#8cb9d8" text-anchor="middle" dominant-baseline="central">40</text>
-
-  <!-- Dedicated Moving AGC Needle / Pointer -->
-  <g id="meterAgcNeedle" transform="rotate(-26 170 205)">
-    <line x1="170" y1="126" x2="170" y2="116" stroke="#ffffff" stroke-width="1.8" stroke-linecap="round" filter="url(#softGlow)"/>
-    <polygon points="168.6,118 171.4,118 170,113.5" fill="#2bff6a" filter="url(#softGlow)"/>
-  </g>
-</g>
-
-<!-- Dynamic Peak Needle (dashed) -->
-<line id="meterPeakNeedle" x1="170" y1="205" x2="170" y2="18" stroke="#ffb830" stroke-width="1.2" stroke-dasharray="3,2" opacity="0.8" transform="rotate(-40.0 170 205)"/>
-
-<!-- Live Active Needle -->
-<g id="meterNeedleGroup" transform="rotate(-15 170 205)">
-  <!-- Soft drop-shadow onto dial face -->
-  <polygon points="171.5,205 172.6,180 170.8,18 169.2,18 170.2,180" fill="rgba(0,0,0,0.6)"/>
-  <!-- Counterweight below pivot -->
-  <line x1="170" y1="205" x2="170" y2="219" stroke="#ff382a" stroke-width="3" stroke-linecap="round"/>
-  <circle cx="170" cy="216" r="3.5" fill="#18232e" stroke="#ff382a" stroke-width="1.2"/>
-  <!-- Slender tapered needle blade -->
-  <polygon points="168.5,205 169.1,165 169.55,18 170.45,18 170.9,165 171.5,205" fill="url(#needleBlade)" filter="url(#softGlow)"/>
-  <!-- Luminous white pinpoint tip -->
-  <circle cx="170" cy="18" r="1.1" fill="#ffffff"/>
-</g>
-
-<!-- Metal Pivot Hub -->
-<circle cx="170" cy="205" r="19" fill="url(#hubGrad)" stroke="#090e14" stroke-width="1.5"/>
-<circle cx="170" cy="205" r="13" fill="none" stroke="#2c3e52" stroke-width="1.2"/>
-<circle cx="170" cy="205" r="6.5" fill="#0b1219" stroke="#1c2834" stroke-width="1"/>
-<circle cx="170" cy="205" r="2" fill="#38bdf8" opacity="0.6"/>
-
-<!-- Glass Cover Specular Flare -->
-<path d="M 6 8 Q 170 30 334 8 L 334 20 Q 170 42 6 20 Z" fill="white" opacity="0.04" pointer-events="none"/>
-</g>
-</svg>
-          <div class="meter-readouts">
-            <div class="meter-num" id="meterNum">RF — · SNR —</div>
-            <span class="meter-clip-badge" id="meterClipLed">CLIP</span>
-          </div>
-          <!-- Backward-compatible legacy meter elements -->
-          <div class="meter-scale" id="meterScale" style="display:none"></div>
-          <div class="meter-mask" id="meterMask" style="display:none"></div>
-          <div class="meter-peak" id="meterPeak" style="display:none"></div>
-        </div>
-
-                <!-- VFO Multi-Telemetry Center Console -->
-        <div class="vfo-container">
-          <!-- Top Telemetry Strip -->
-          <div class="vfo-top-strip">
-            <div class="vfo-badges-left">
-              <span class="vfo-badge-main">VFO-A</span>
-              <span class="vfo-tag-rx">● RX</span>
-              <span class="vfo-tag-mode" id="vfoModeBadge">NFM</span>
-              <span class="vfo-tag-filter" id="vfoFilterBadge">BW 12.5k · SHARP</span>
-            </div>
-            <div class="vfo-badges-right">
-              <span class="vfo-telemetry-tag">ANT 1</span>
-              <span class="vfo-telemetry-tag">PRE 1</span>
-              <span class="vfo-telemetry-tag">ATT 0dB</span>
-              <span class="vfo-telemetry-tag" id="vfoAgcTag">AGC MID</span>
-              <span class="vfo-utc-clock" id="vfoUtcClock">00:00:00 UTC</span>
-            </div>
+        <!-- BAY 1: AF & RF FRONT-END (Volume Rotary Pot & Linear Vertical Faders) -->
+        <div class="deck-bay bay-frontend">
+          <div class="bay-header">
+            <span class="bay-title"><span class="bay-screw-corner"></span>AF / RF FRONT-END</span>
+            <span class="bay-screw-corner"></span>
           </div>
 
-          <!-- Center Main Frequency Readout -->
-          <div class="vfo-freq-hero">
-            <div class="freq" id="freqReadout"></div>
-            <div class="vfo-step-pill" title="Tuning step (TS / STEP)">
-              <span class="vfo-step-badge">TS</span>
-              <select class="vfo-step-select" id="snapSel" title="Tuning raster step">
-                <option value="auto" id="snapOptAuto">AUTO (6.25k)</option>
-                <option value="100">100 Hz</option>
-                <option value="1000">1 kHz</option>
-                <option value="2500">2.5 kHz</option>
-                <option value="5000">5 kHz</option>
-                <option value="6250" selected>6.25 kHz</option>
-                <option value="12500">12.5 kHz</option>
-                <option value="25000">25 kHz</option>
-                <option value="100000">100 kHz</option>
-                <option value="200000">200 kHz</option>
-              </select>
-              <span class="vfo-step-val" id="snapEffective" style="display:none">6.25 kHz</span>
-            </div>
+          <!-- Standalone High-Fidelity AF Gain (Volume) Rotary Pot -->
+          <div class="af-pot-housing">
+            <svg class="rotary-knob-svg" id="deckAfVolWrap" viewBox="0 0 110 110" title="AF Volume: Drag vertically or scroll to adjust volume. Click center cap to Mute.">
+              <defs>
+                <radialGradient id="afKnobOuterGrad" cx="35%" cy="30%" r="70%">
+                  <stop offset="0%" stop-color="#4f667e"/>
+                  <stop offset="35%" stop-color="#28384a"/>
+                  <stop offset="85%" stop-color="#141e28"/>
+                  <stop offset="100%" stop-color="#0a1016"/>
+                </radialGradient>
+                <linearGradient id="afKnobBezelGrad" x1="0.1" y1="0" x2="0.9" y2="1">
+                  <stop offset="0%" stop-color="#a8c0d6"/>
+                  <stop offset="20%" stop-color="#ffffff"/>
+                  <stop offset="45%" stop-color="#8ba5bd"/>
+                  <stop offset="70%" stop-color="#31485c"/>
+                  <stop offset="90%" stop-color="#15222e"/>
+                  <stop offset="100%" stop-color="#0d1620"/>
+                </linearGradient>
+                <radialGradient id="afKnobFaceGrad" cx="35%" cy="30%" r="65%">
+                  <stop offset="0%" stop-color="#34485e"/>
+                  <stop offset="50%" stop-color="#1a2734"/>
+                  <stop offset="90%" stop-color="#0d141c"/>
+                  <stop offset="100%" stop-color="#060a0e"/>
+                </radialGradient>
+                <radialGradient id="afCapGrad" cx="35%" cy="30%" r="65%">
+                  <stop offset="0%" stop-color="#4c627a"/>
+                  <stop offset="60%" stop-color="#1e2b38"/>
+                  <stop offset="100%" stop-color="#0a1016"/>
+                </radialGradient>
+              </defs>
+              <!-- Chassis Shadow -->
+              <circle cx="55" cy="58" r="46" fill="rgba(0,0,0,0.85)"/>
+              <!-- Dial Calibrated Scales (0 to 10) -->
+              <g id="deckAfVolTicks">
+                <path d="M 22.5 87.5 A 46 46 0 1 1 87.5 87.5" fill="none" stroke="#1d2e3f" stroke-width="1.2"/>
+                <line x1="22.5" y1="87.5" x2="19.0" y2="91.0" stroke="#7e9eb8" stroke-width="1.5"/>
+                <text x="14" y="96" font-family="var(--mono)" font-weight="700" font-size="6.5" fill="#6d8da8" text-anchor="middle">0</text>
+                <line x1="12.0" y1="55.0" x2="7.5" y2="55.0" stroke="#7e9eb8" stroke-width="1.5"/>
+                <text x="3" y="57" font-family="var(--mono)" font-weight="700" font-size="6.5" fill="#6d8da8" text-anchor="middle">2</text>
+                <line x1="33.0" y1="23.0" x2="30.0" y2="18.5" stroke="#7e9eb8" stroke-width="1.5"/>
+                <text x="27" y="14" font-family="var(--mono)" font-weight="700" font-size="6.5" fill="#6d8da8" text-anchor="middle">4</text>
+                <line x1="77.0" y1="23.0" x2="80.0" y2="18.5" stroke="#7e9eb8" stroke-width="1.5"/>
+                <text x="83" y="14" font-family="var(--mono)" font-weight="700" font-size="6.5" fill="#6d8da8" text-anchor="middle">6</text>
+                <line x1="98.0" y1="55.0" x2="102.5" y2="55.0" stroke="#7e9eb8" stroke-width="1.5"/>
+                <text x="107" y="57" font-family="var(--mono)" font-weight="700" font-size="6.5" fill="#6d8da8" text-anchor="middle">8</text>
+                <line x1="87.5" y1="87.5" x2="91.0" y2="91.0" stroke="#7e9eb8" stroke-width="1.5"/>
+                <text x="96" y="96" font-family="var(--mono)" font-weight="700" font-size="6.5" fill="#6d8da8" text-anchor="middle">10</text>
+              </g>
+              <!-- Turned Outer Knob Body -->
+              <circle cx="55" cy="55" r="39" fill="url(#afKnobOuterGrad)" stroke="#060c12" stroke-width="1.4"/>
+              <g id="deckAfVolKnurls" transform="rotate(27 55 55)"></g>
+              <circle cx="55" cy="55" r="32" fill="url(#afKnobBezelGrad)" stroke="#090f15" stroke-width="1.1"/>
+              <circle cx="55" cy="55" r="28" fill="url(#afKnobFaceGrad)" stroke="#1a2b3c" stroke-width="0.9"/>
+              <circle cx="55" cy="55" r="23" fill="none" stroke="rgba(255,255,255,0.08)" stroke-width="0.7"/>
+              <!-- Pointer needle -->
+              <g id="deckAfVolPointer" transform="rotate(27 55 55)">
+                <line x1="55" y1="28" x2="55" y2="46" stroke="#2bff6a" stroke-width="2.6" stroke-linecap="round"/>
+                <circle cx="55" cy="28.5" r="1.4" fill="#ffffff"/>
+              </g>
+              <!-- Push-to-Mute Center Cap -->
+              <circle id="deckMuteBtn" cx="55" cy="55" r="9" fill="url(#afCapGrad)" stroke="#111c26" stroke-width="1.2" style="cursor:pointer" title="Click to Mute / Unmute"/>
+              <path d="M 52.5 53 L 54.5 53 L 57 51 L 57 59 L 54.5 57 L 52.5 57 Z" fill="#8caec4" pointer-events="none"/>
+            </svg>
+            <div class="af-vol-readout-pill" id="deckAfVolReadout">AF 60% · ACTIVE</div>
           </div>
 
-          <!-- Secondary Sub-VFO / Standby Line -->
-          <div class="vfo-sub-line">
-            <div class="vfo-sub-readout">
-              <span class="sub-vfo-badge">VFO-B SUB</span>
-              <span class="sub-vfo-freq" id="subFreqReadout">0144.200.00 MHz</span>
-              <span class="sub-vfo-status">STANDBY · SPLIT OFF</span>
-            </div>
-            <div class="vfo-sub-btns">
-              <button type="button" class="vfo-sub-btn" id="btnVfoSwap" title="Swap VFO A and B (A/B)">A / B</button>
-              <button type="button" class="vfo-sub-btn" id="btnVfoSync" title="Copy VFO A to B (A=B)">A = B</button>
-              <button type="button" class="vfo-sub-btn" id="btnVfoSplit" title="Toggle Split TX/RX">SPLIT</button>
-            </div>
+          <!-- AF Auxiliary Function Row: Audio Monitor & Front-End Offset -->
+          <div class="af-aux-row">
+            <button type="button" class="af-listen-btn" id="btnListen" title="Audio Monitor (LISTEN / MUTE)">
+              <span class="btn-tally led-green" id="listenTally"></span>
+              <span id="listenBtnLabel">LISTEN</span>
+            </button>
+            <button type="button" class="af-aux-btn" id="btnLoOffset" title="LO Off-Center Offset (+/- 250 kHz)">
+              <span class="btn-tally led-cyan" id="loOffsetTally"></span>
+              <span id="loOffsetBtnLabel">LO OFFSET</span>
+            </button>
           </div>
 
-          <!-- Quick Band Selector Strip -->
-          <div class="vfo-band-strip">
-            <button type="button" class="band-btn" data-freq="121500000" data-mode="am">AIR 118</button>
-            <button type="button" class="band-btn" data-freq="144200000" data-mode="nfm">2M 144</button>
-            <button type="button" class="band-btn active" data-freq="156800000" data-mode="nfm">MAR 156</button>
-            <button type="button" class="band-btn" data-freq="222000000" data-mode="nfm">1.25M</button>
-            <button type="button" class="band-btn" data-freq="432100000" data-mode="nfm">70C 430</button>
-            <button type="button" class="band-btn" data-freq="929612500" data-mode="pager">PAGER</button>
-            <button type="button" class="band-btn" data-freq="851012500" data-mode="p25">TRUNK</button>
-            <button type="button" class="band-btn" data-freq="98100000" data-mode="wfm">WFM 88</button>
+          <!-- Dual Linear Faders: RF GAIN & SQUELCH -->
+          <div class="fader-pair">
+            <!-- RF Gain Vertical Linear Fader -->
+            <div class="fader-vert-wrap" id="faderRfGainWrap">
+              <span class="fader-title">RF GAIN</span>
+              <div class="fader-assembly">
+                <div class="fader-scale">
+                  <span>50</span>
+                  <span>40</span>
+                  <span>30</span>
+                  <span>20</span>
+                  <span>10</span>
+                  <span>0</span>
+                </div>
+                <div class="fader-well" id="faderRfGainTrack" title="RF Gain: Drag or scroll to adjust. Click AGC to toggle auto mode.">
+                  <div class="fader-slot"></div>
+                  <div class="fader-cap" id="faderRfGainCap" style="bottom: 80%;">
+                    <div class="fader-cap-ribs"></div>
+                    <div class="fader-cap-line led-amber"></div>
+                  </div>
+                </div>
+              </div>
+              <div class="fader-footer">
+                <button type="button" class="fader-agc-btn on" id="faderAgcBtn" title="Toggle Automatic Gain Control">
+                  <span class="btn-tally led-amber"></span>AGC
+                </button>
+                <span class="fader-val" id="faderRfGainVal">auto</span>
+              </div>
+            </div>
+
+            <!-- Squelch Vertical Linear Fader -->
+            <div class="fader-vert-wrap" id="faderSqlWrap">
+              <span class="fader-title">SQUELCH</span>
+              <div class="fader-assembly">
+                <div class="fader-scale">
+                  <span>-20</span>
+                  <span>-40</span>
+                  <span>-60</span>
+                  <span>-80</span>
+                  <span>-100</span>
+                  <span>-120</span>
+                </div>
+                <div class="fader-well" id="faderSqlTrack" title="Squelch: Drag or scroll to adjust threshold level.">
+                  <div class="fader-slot"></div>
+                  <div class="fader-cap" id="faderSqlCap" style="bottom: 45%;">
+                    <div class="fader-cap-ribs"></div>
+                    <div class="fader-cap-line led-cyan"></div>
+                  </div>
+                </div>
+              </div>
+              <div class="fader-footer">
+                <span class="fader-sublabel">SQL</span>
+                <span class="fader-val" id="faderSqlVal">-75 dB</span>
+              </div>
+            </div>
           </div>
         </div>
 
-        <!-- Precision Transceiver Control Deck -->
-        <div class="radio-deck" style="position:relative">
-          <svg class="deck-svg" id="deckSvg" viewBox="0 0 680 165" aria-hidden="true">
-            <defs>
-              <filter id="blurShadow" x="-20%" y="-20%" width="140%" height="140%">
-                <feGaussianBlur in="SourceAlpha" stdDeviation="3"/>
-                <feOffset dx="0" dy="2" result="offsetblur"/>
-                <feFlood flood-color="#000000" flood-opacity="0.8"/>
-                <feComposite in2="offsetblur" operator="in"/>
-                <feMerge>
-                  <feMergeNode/>
-                  <feMergeNode in="SourceGraphic"/>
-                </feMerge>
-              </filter>
-              <radialGradient id="panelBg" cx="50%" cy="50%" r="75%">
-                <stop offset="0%" stop-color="#081018"/>
-                <stop offset="100%" stop-color="#020508"/>
-              </radialGradient>
-              <linearGradient id="outerKnobBody" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0%" stop-color="#3c5064"/>
-                <stop offset="35%" stop-color="#1e2936"/>
-                <stop offset="80%" stop-color="#121822"/>
-                <stop offset="100%" stop-color="#080c10"/>
-              </linearGradient>
-              <radialGradient id="outerKnobPlateau" cx="35%" cy="30%" r="70%">
-                <stop offset="0%" stop-color="#2a3a4c"/>
-                <stop offset="65%" stop-color="#16222e"/>
-                <stop offset="100%" stop-color="#0c1218"/>
-              </radialGradient>
-              <linearGradient id="innerKnobBody" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0%" stop-color="#4f667e"/>
-                <stop offset="35%" stop-color="#28384a"/>
-                <stop offset="85%" stop-color="#141e28"/>
-                <stop offset="100%" stop-color="#0a1016"/>
-              </linearGradient>
-              <linearGradient id="polishedChrome" x1="0.1" y1="0" x2="0.9" y2="1">
-                <stop offset="0%" stop-color="#a8c0d6"/>
-                <stop offset="20%" stop-color="#ffffff"/>
-                <stop offset="45%" stop-color="#8ba5bd"/>
-                <stop offset="70%" stop-color="#31485c"/>
-                <stop offset="90%" stop-color="#15222e"/>
-                <stop offset="100%" stop-color="#0d1620"/>
-              </linearGradient>
-              <radialGradient id="innerKnobFace" cx="35%" cy="30%" r="65%">
-                <stop offset="0%" stop-color="#34485e"/>
-                <stop offset="50%" stop-color="#1a2734"/>
-                <stop offset="90%" stop-color="#0d141c"/>
-                <stop offset="100%" stop-color="#060a0e"/>
-              </radialGradient>
-              <radialGradient id="centerCapGrad" cx="35%" cy="30%" r="65%">
-                <stop offset="0%" stop-color="#4c627a"/>
-                <stop offset="60%" stop-color="#1e2b38"/>
-                <stop offset="100%" stop-color="#0a1016"/>
-              </radialGradient>
-              <linearGradient id="icBtnGrad" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0%" stop-color="#283a4c"/>
-                <stop offset="12%" stop-color="#192634"/>
-                <stop offset="88%" stop-color="#121b25"/>
-                <stop offset="100%" stop-color="#0a0f16"/>
-              </linearGradient>
-              <radialGradient id="vfoHeavyBody" cx="35%" cy="32%" r="70%">
-                <stop offset="0%" stop-color="#42586e"/>
-                <stop offset="30%" stop-color="#243240"/>
-                <stop offset="75%" stop-color="#121a24"/>
-                <stop offset="100%" stop-color="#070a0e"/>
-              </radialGradient>
-              <radialGradient id="vfoDimpleCrater" cx="28%" cy="26%" r="72%">
-                <stop offset="0%" stop-color="#040608"/>
-                <stop offset="50%" stop-color="#0e1720"/>
-                <stop offset="85%" stop-color="#243445"/>
-                <stop offset="100%" stop-color="#526d88"/>
-              </radialGradient>
-            </defs>
-            <rect x="1.5" y="1.5" width="677" height="162" rx="6" fill="url(#panelBg)" stroke="#142230" stroke-width="1.2"/>
-            <!-- SECTION 1: DUAL CONCENTRIC AF/RF KNOB -->
-            <g id="deckDualAfRf">
-              <circle cx="74" cy="78.5" r="44" fill="rgba(0,0,0,0.7)" filter="url(#blurShadow)"/>
-              <g id="deckRfGainTicks">
-                <line x1="42.2" y1="107.8" x2="39.0" y2="111.0" stroke="#89a8c4" stroke-width="1.6"/>
-                <text x="35.5" y="117.0" font-family="var(--mono)" font-weight="700" font-size="6.5" fill="#6d8da8" text-anchor="middle">0</text>
-                <line x1="35.6" y1="99.5" x2="33.9" y2="100.6" stroke="#24374a" stroke-width="1.0"/>
-                <line x1="31.2" y1="89.9" x2="29.3" y2="90.5" stroke="#24374a" stroke-width="1.0"/>
-                <line x1="29.1" y1="79.5" x2="27.1" y2="79.7" stroke="#24374a" stroke-width="1.0"/>
-                <line x1="29.6" y1="69.0" x2="25.1" y2="68.3" stroke="#89a8c4" stroke-width="1.6"/>
-                <text x="20.2" y="70.0" font-family="var(--mono)" font-weight="700" font-size="6.5" fill="#6d8da8" text-anchor="middle">2</text>
-                <line x1="32.4" y1="58.8" x2="30.6" y2="58.0" stroke="#24374a" stroke-width="1.0"/>
-                <line x1="37.6" y1="49.5" x2="36.0" y2="48.4" stroke="#24374a" stroke-width="1.0"/>
-                <line x1="44.8" y1="41.8" x2="43.5" y2="40.3" stroke="#24374a" stroke-width="1.0"/>
-                <line x1="53.6" y1="35.9" x2="51.5" y2="31.9" stroke="#89a8c4" stroke-width="1.6"/>
-                <text x="49.3" y="29.9" font-family="var(--mono)" font-weight="700" font-size="6.5" fill="#6d8da8" text-anchor="middle">4</text>
-                <line x1="63.5" y1="32.2" x2="63.0" y2="30.3" stroke="#24374a" stroke-width="1.0"/>
-                <line x1="74.0" y1="31.0" x2="74.0" y2="29.0" stroke="#24374a" stroke-width="1.0"/>
-                <line x1="84.5" y1="32.2" x2="85.0" y2="30.3" stroke="#24374a" stroke-width="1.0"/>
-                <line x1="94.4" y1="35.9" x2="96.5" y2="31.9" stroke="#89a8c4" stroke-width="1.6"/>
-                <text x="98.7" y="29.9" font-family="var(--mono)" font-weight="700" font-size="6.5" fill="#6d8da8" text-anchor="middle">6</text>
-                <line x1="103.2" y1="41.8" x2="104.5" y2="40.3" stroke="#24374a" stroke-width="1.0"/>
-                <line x1="110.4" y1="49.5" x2="112.0" y2="48.4" stroke="#24374a" stroke-width="1.0"/>
-                <line x1="115.6" y1="58.8" x2="117.4" y2="58.0" stroke="#24374a" stroke-width="1.0"/>
-                <line x1="118.4" y1="69.0" x2="122.9" y2="68.3" stroke="#89a8c4" stroke-width="1.6"/>
-                <text x="127.8" y="70.0" font-family="var(--mono)" font-weight="700" font-size="6.5" fill="#6d8da8" text-anchor="middle">8</text>
-                <line x1="118.9" y1="79.5" x2="120.9" y2="79.7" stroke="#24374a" stroke-width="1.0"/>
-                <line x1="116.8" y1="89.9" x2="118.7" y2="90.5" stroke="#24374a" stroke-width="1.0"/>
-                <line x1="112.4" y1="99.5" x2="114.1" y2="100.6" stroke="#24374a" stroke-width="1.0"/>
-                <line x1="105.8" y1="107.8" x2="109.0" y2="111.0" stroke="#89a8c4" stroke-width="1.6"/>
-                <text x="112.5" y="117.0" font-family="var(--mono)" font-weight="700" font-size="6.5" fill="#6d8da8" text-anchor="middle">10</text>
-              </g>
-              <path id="deckRfGainArc" d="M 40.4 109.6 A 47.5 47.5 0 1 1 120.9 68.6" fill="none" stroke="#ffb830" stroke-width="2.4" stroke-linecap="round"/>
-              <g id="deckRfGainWrap" class="concentric-outer" title="RF Gain (Outer): Drag/scroll to adjust. Double-click for AGC.">
-                <circle cx="74" cy="76" r="42" fill="url(#outerKnobBody)" stroke="#060c12" stroke-width="1.6"/>
-                <g id="deckRfGainKnurls" transform="rotate(81 74 76)"></g>
-                <circle cx="74" cy="76" r="36" fill="url(#outerKnobPlateau)" stroke="#1a2736" stroke-width="1.1"/>
-                <g id="deckRfGainPointer" transform="rotate(81 74 76)">
-                  <line x1="74" y1="34.5" x2="74" y2="40.5" stroke="#ffb830" stroke-width="2.8" stroke-linecap="round"/>
+        <!-- BAY 2: PRECISION INSTRUMENTATION & ANALOG S-METER -->
+        <div class="deck-bay bay-meter">
+          <div class="bay-header">
+            <span class="bay-title"><span class="bay-screw-corner"></span>ANALOG MULTI-METER</span>
+            <span class="bay-screw-corner"></span>
+          </div>
+
+          <!-- Hero Recessed Curved SVG Analog S-Meter -->
+          <div class="meter-housing">
+            <svg class="smeter-svg" id="smeterSvg" viewBox="0 0 340 165" aria-hidden="true">
+              <defs>
+                <radialGradient id="dialGlow" cx="50%" cy="120%" r="100%">
+                  <stop offset="0%" stop-color="#142638"/>
+                  <stop offset="45%" stop-color="#081420"/>
+                  <stop offset="80%" stop-color="#03080d"/>
+                  <stop offset="100%" stop-color="#010306"/>
+                </radialGradient>
+                <linearGradient id="overS9Grad" x1="0" y1="0" x2="1" y2="0">
+                  <stop offset="0%" stop-color="#ff9922"/>
+                  <stop offset="50%" stop-color="#ff5533"/>
+                  <stop offset="100%" stop-color="#ff2211"/>
+                </linearGradient>
+                <linearGradient id="needleBlade" x1="0" y1="1" x2="0" y2="0">
+                  <stop offset="0%" stop-color="#ff8866"/>
+                  <stop offset="100%" stop-color="#ff3322"/>
+                </linearGradient>
+                <radialGradient id="hubGrad" cx="35%" cy="35%" r="65%">
+                  <stop offset="0%" stop-color="#4d647d"/>
+                  <stop offset="50%" stop-color="#1e2c3a"/>
+                  <stop offset="100%" stop-color="#0a1017"/>
+                </radialGradient>
+                <filter id="softGlow" x="-15%" y="-15%" width="130%" height="130%">
+                  <feGaussianBlur stdDeviation="0.8" result="b"/>
+                  <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+                </filter>
+                <linearGradient id="agcArcGrad" x1="0" y1="0" x2="1" y2="0">
+                  <stop offset="0%" stop-color="#38bdf8"/>
+                  <stop offset="60%" stop-color="#2bff6a"/>
+                  <stop offset="100%" stop-color="#ffb830"/>
+                </linearGradient>
+                <clipPath id="dialClip">
+                  <rect x="2" y="2" width="336" height="161" rx="5.5"/>
+                </clipPath>
+              </defs>
+
+              <!-- Bezel & Dial Face -->
+              <rect x="1.5" y="1.5" width="337" height="162" rx="6" fill="url(#dialGlow)" stroke="#162839" stroke-width="1.2"/>
+              <rect x="3" y="3" width="334" height="159" rx="4.5" fill="none" stroke="#081017" stroke-width="1"/>
+
+              <g clip-path="url(#dialClip)">
+                <!-- Over-S9 Ribbon -->
+                <path d="M 156.98 37.51 A 168.00 168.00 0 0 1 277.99 76.30 L 280.69 73.09 A 172.20 172.20 0 0 0 156.66 33.32 Z" fill="url(#overS9Grad)" filter="url(#softGlow)"/>
+                <path d="M 62.01 76.30 A 168.00 168.00 0 0 1 156.98 37.51" fill="none" stroke="#38bdf8" stroke-width="1.8"/>
+                <path d="M 156.98 37.51 A 168.00 168.00 0 0 1 277.99 76.30" fill="none" stroke="#ff382a" stroke-width="1.8"/>
+                <text x="36.2" y="75.8" font-family="var(--sans)" font-weight="900" font-size="16" fill="#38bdf8" text-anchor="middle" dominant-baseline="central" filter="url(#softGlow)">S</text>
+                <text x="296.0" y="54.9" font-family="var(--mono)" font-weight="900" font-size="8.5" fill="#ff4a36" text-anchor="middle" dominant-baseline="central">dB</text>
+                <line x1="62.0" y1="76.3" x2="57.2" y2="70.6" stroke="#38bdf8" stroke-width="1.4"/>
+                <text x="49.2" y="61.0" font-family="var(--mono)" font-weight="700" font-size="8.5" fill="#a2dcfc" text-anchor="middle" dominant-baseline="central">1</text>
+                <line x1="72.3" y1="68.3" x2="70.0" y2="65.1" stroke="#1a5072" stroke-width="0.9"/>
+                <line x1="83.2" y1="61.2" x2="79.3" y2="54.7" stroke="#38bdf8" stroke-width="1.4"/>
+                <text x="72.9" y="44.0" font-family="var(--mono)" font-weight="700" font-size="8.5" fill="#a2dcfc" text-anchor="middle" dominant-baseline="central">3</text>
+                <line x1="94.6" y1="54.9" x2="92.8" y2="51.3" stroke="#1a5072" stroke-width="0.9"/>
+                <line x1="106.5" y1="49.5" x2="103.6" y2="42.5" stroke="#38bdf8" stroke-width="1.4"/>
+                <text x="98.9" y="31.0" font-family="var(--mono)" font-weight="700" font-size="8.5" fill="#a2dcfc" text-anchor="middle" dominant-baseline="central">5</text>
+                <line x1="118.7" y1="45.0" x2="117.5" y2="41.2" stroke="#1a5072" stroke-width="0.9"/>
+                <line x1="131.3" y1="41.5" x2="129.5" y2="34.2" stroke="#38bdf8" stroke-width="1.4"/>
+                <text x="126.6" y="22.1" font-family="var(--mono)" font-weight="700" font-size="8.5" fill="#a2dcfc" text-anchor="middle" dominant-baseline="central">7</text>
+                <line x1="144.0" y1="39.0" x2="143.4" y2="35.1" stroke="#1a5072" stroke-width="0.9"/>
+                <line x1="157.0" y1="37.5" x2="156.2" y2="28.0" stroke="#ff4a36" stroke-width="1.9"/>
+                <text x="155.4" y="17.6" font-family="var(--mono)" font-weight="700" font-size="8.5" fill="#ff705a" text-anchor="middle" dominant-baseline="central">9</text>
+                <line x1="178.7" y1="37.2" x2="178.9" y2="33.2" stroke="#ff4a36" stroke-width="0.9"/>
+                <line x1="200.2" y1="39.7" x2="202.0" y2="30.4" stroke="#ff4a36" stroke-width="1.9"/>
+                <text x="203.8" y="20.1" font-family="var(--mono)" font-weight="700" font-size="8.5" fill="#ff705a" text-anchor="middle" dominant-baseline="central">+20</text>
+                <line x1="221.3" y1="45.0" x2="222.5" y2="41.2" stroke="#ff4a36" stroke-width="0.9"/>
+                <line x1="241.5" y1="53.0" x2="245.5" y2="44.4" stroke="#ff4a36" stroke-width="1.9"/>
+                <text x="250.0" y="34.9" font-family="var(--mono)" font-weight="700" font-size="8.5" fill="#ff705a" text-anchor="middle" dominant-baseline="central">+40</text>
+                <line x1="260.5" y1="63.5" x2="262.6" y2="60.1" stroke="#ff4a36" stroke-width="0.9"/>
+                <line x1="278.0" y1="76.3" x2="284.1" y2="69.0" stroke="#ff4a36" stroke-width="1.9"/>
+                <text x="290.8" y="61.0" font-family="var(--mono)" font-weight="700" font-size="8.5" fill="#ff705a" text-anchor="middle" dominant-baseline="central">+60</text>
+
+                <!-- PO Scale -->
+                <path d="M 79.29 86.79 A 149.00 149.00 0 0 1 260.71 86.79" fill="none" stroke="#1d425c" stroke-width="1.1"/>
+                <text x="66.3" y="93.8" font-family="var(--sans)" font-weight="900" font-size="8.5" fill="#38bdf8" text-anchor="middle" dominant-baseline="central">PO</text>
+                <text x="271.7" y="92.0" font-family="var(--sans)" font-weight="900" font-size="8.5" fill="#38bdf8" text-anchor="middle" dominant-baseline="central">W</text>
+                <line x1="79.3" y1="86.8" x2="75.9" y2="82.4" stroke="#29658f" stroke-width="1.2"/>
+                <text x="72.9" y="78.5" font-family="var(--mono)" font-weight="700" font-size="7.5" fill="#9cd9fa" text-anchor="middle" dominant-baseline="central">0</text>
+                <line x1="101.2" y1="72.8" x2="98.7" y2="68.0" stroke="#29658f" stroke-width="1.2"/>
+                <text x="96.4" y="63.5" font-family="var(--mono)" font-weight="700" font-size="7.5" fill="#9cd9fa" text-anchor="middle" dominant-baseline="central">10</text>
+                <line x1="139.0" y1="59.3" x2="137.9" y2="53.9" stroke="#29658f" stroke-width="1.2"/>
+                <text x="136.8" y="49.0" font-family="var(--mono)" font-weight="700" font-size="7.5" fill="#9cd9fa" text-anchor="middle" dominant-baseline="central">50</text>
+                <line x1="179.1" y1="56.3" x2="179.4" y2="50.8" stroke="#29658f" stroke-width="1.2"/>
+                <text x="179.7" y="45.8" font-family="var(--mono)" font-weight="700" font-size="7.5" fill="#9cd9fa" text-anchor="middle" dominant-baseline="central">100</text>
+                <line x1="212.3" y1="62.1" x2="213.9" y2="56.9" stroke="#29658f" stroke-width="1.2"/>
+                <text x="215.3" y="52.1" font-family="var(--mono)" font-weight="700" font-size="7.5" fill="#9cd9fa" text-anchor="middle" dominant-baseline="central">150</text>
+                <line x1="238.8" y1="72.8" x2="241.3" y2="68.0" stroke="#29658f" stroke-width="1.2"/>
+                <text x="243.6" y="63.5" font-family="var(--mono)" font-weight="700" font-size="7.5" fill="#9cd9fa" text-anchor="middle" dominant-baseline="central">200</text>
+                <line x1="260.7" y1="86.8" x2="264.1" y2="82.4" stroke="#29658f" stroke-width="1.2"/>
+                <text x="267.1" y="78.5" font-family="var(--mono)" font-weight="700" font-size="7.5" fill="#9cd9fa" text-anchor="middle" dominant-baseline="central">250</text>
+
+                <!-- IC Scale -->
+                <path d="M 93.35 97.54 A 132.00 132.00 0 0 1 248.52 98.89" fill="none" stroke="#1d425c" stroke-width="1.1"/>
+                <text x="81.8" y="103.5" font-family="var(--sans)" font-weight="900" font-size="8" fill="#38bdf8" text-anchor="middle" dominant-baseline="central">IC</text>
+                <text x="258.2" y="103.5" font-family="var(--sans)" font-weight="900" font-size="8" fill="#38bdf8" text-anchor="middle" dominant-baseline="central">A</text>
+                <line x1="93.3" y1="97.5" x2="90.7" y2="93.9" stroke="#29658f" stroke-width="1.1"/>
+                <text x="88.4" y="90.6" font-family="var(--mono)" font-weight="700" font-size="7" fill="#9cd9fa" text-anchor="middle" dominant-baseline="central">0</text>
+                <line x1="113.2" y1="85.9" x2="111.2" y2="81.8" stroke="#29658f" stroke-width="1.1"/>
+                <text x="109.5" y="78.2" font-family="var(--mono)" font-weight="700" font-size="7" fill="#9cd9fa" text-anchor="middle" dominant-baseline="central">1</text>
+                <line x1="127.0" y1="80.2" x2="125.6" y2="75.9" stroke="#29658f" stroke-width="1.1"/>
+                <text x="124.3" y="72.2" font-family="var(--mono)" font-weight="700" font-size="7" fill="#9cd9fa" text-anchor="middle" dominant-baseline="central">1.5</text>
+                <line x1="142.6" y1="75.9" x2="141.6" y2="71.5" stroke="#29658f" stroke-width="1.1"/>
+                <text x="140.8" y="67.6" font-family="var(--mono)" font-weight="700" font-size="7" fill="#9cd9fa" text-anchor="middle" dominant-baseline="central">2</text>
+                <line x1="164.2" y1="73.1" x2="164.0" y2="68.6" stroke="#29658f" stroke-width="1.1"/>
+                <text x="163.9" y="64.6" font-family="var(--mono)" font-weight="700" font-size="7" fill="#9cd9fa" text-anchor="middle" dominant-baseline="central">3</text>
+                <line x1="191.8" y1="74.8" x2="192.5" y2="70.4" stroke="#29658f" stroke-width="1.1"/>
+                <text x="193.2" y="66.4" font-family="var(--mono)" font-weight="700" font-size="7" fill="#9cd9fa" text-anchor="middle" dominant-baseline="central">5</text>
+                <line x1="216.2" y1="81.4" x2="217.8" y2="77.1" stroke="#29658f" stroke-width="1.1"/>
+                <text x="219.2" y="73.4" font-family="var(--mono)" font-weight="700" font-size="7" fill="#9cd9fa" text-anchor="middle" dominant-baseline="central">10</text>
+                <line x1="235.0" y1="90.1" x2="237.2" y2="86.2" stroke="#29658f" stroke-width="1.1"/>
+                <text x="239.2" y="82.7" font-family="var(--mono)" font-weight="700" font-size="7" fill="#9cd9fa" text-anchor="middle" dominant-baseline="central">15</text>
+                <line x1="248.5" y1="98.9" x2="251.2" y2="95.3" stroke="#29658f" stroke-width="1.1"/>
+                <text x="253.6" y="92.1" font-family="var(--mono)" font-weight="700" font-size="7" fill="#9cd9fa" text-anchor="middle" dominant-baseline="central">20</text>
+
+                <!-- SWR Scale -->
+                <path d="M 105.98 108.27 A 116.00 116.00 0 0 1 234.02 108.27" fill="none" stroke="#1d425c" stroke-width="1.1"/>
+                <text x="94.2" y="114.6" font-family="var(--sans)" font-weight="900" font-size="7.5" fill="#38bdf8" text-anchor="middle" dominant-baseline="central">SWR</text>
+                <line x1="106.0" y1="108.3" x2="103.5" y2="104.5" stroke="#29658f" stroke-width="1.1"/>
+                <text x="101.4" y="101.4" font-family="var(--mono)" font-weight="700" font-size="7.5" fill="#9cd9fa" text-anchor="middle" dominant-baseline="central">1</text>
+                <line x1="129.4" y1="96.3" x2="127.8" y2="92.1" stroke="#29658f" stroke-width="1.1"/>
+                <text x="126.5" y="88.7" font-family="var(--mono)" font-weight="700" font-size="7.5" fill="#9cd9fa" text-anchor="middle" dominant-baseline="central">1.5</text>
+                <line x1="153.9" y1="90.1" x2="153.2" y2="85.7" stroke="#29658f" stroke-width="1.1"/>
+                <text x="152.7" y="82.0" font-family="var(--mono)" font-weight="700" font-size="7.5" fill="#9cd9fa" text-anchor="middle" dominant-baseline="central">2</text>
+                <line x1="188.1" y1="90.4" x2="188.9" y2="86.0" stroke="#ff4a36" stroke-width="1.4"/>
+                <text x="189.4" y="82.3" font-family="var(--mono)" font-weight="700" font-size="7.5" fill="#ff705a" text-anchor="middle" dominant-baseline="central">3</text>
+                <line x1="232.3" y1="107.2" x2="234.7" y2="103.4" stroke="#ff4a36" stroke-width="1.4"/>
+                <text x="236.7" y="100.3" font-family="var(--mono)" font-weight="700" font-size="7.5" fill="#ff705a" text-anchor="middle" dominant-baseline="central">∞</text>
+
+                <!-- COMP Scale -->
+                <path d="M 117.23 118.88 A 101.00 101.00 0 0 1 221.26 117.98" fill="none" stroke="#1d425c" stroke-width="1.1"/>
+                <text x="105.5" y="125.3" font-family="var(--sans)" font-weight="900" font-size="7" fill="#38bdf8" text-anchor="middle" dominant-baseline="central">COMP</text>
+                <text x="228.8" y="121.0" font-family="var(--sans)" font-weight="900" font-size="7" fill="#38bdf8" text-anchor="middle" dominant-baseline="central">dB</text>
+                <line x1="117.2" y1="118.9" x2="115.2" y2="115.6" stroke="#29658f" stroke-width="1"/>
+                <text x="113.6" y="112.9" font-family="var(--mono)" font-weight="700" font-size="6.5" fill="#9cd9fa" text-anchor="middle" dominant-baseline="central">0</text>
+                <line x1="138.8" y1="108.9" x2="137.6" y2="105.3" stroke="#29658f" stroke-width="1"/>
+                <text x="136.6" y="102.3" font-family="var(--mono)" font-weight="700" font-size="6.5" fill="#9cd9fa" text-anchor="middle" dominant-baseline="central">5</text>
+                <line x1="161.2" y1="104.4" x2="160.9" y2="100.6" stroke="#29658f" stroke-width="1"/>
+                <text x="160.6" y="97.4" font-family="var(--mono)" font-weight="700" font-size="6.5" fill="#9cd9fa" text-anchor="middle" dominant-baseline="central">10</text>
+                <line x1="184.1" y1="105.0" x2="184.6" y2="101.2" stroke="#29658f" stroke-width="1"/>
+                <text x="185.0" y="98.1" font-family="var(--mono)" font-weight="700" font-size="6.5" fill="#9cd9fa" text-anchor="middle" dominant-baseline="central">15</text>
+                <line x1="203.7" y1="109.8" x2="205.0" y2="106.2" stroke="#29658f" stroke-width="1"/>
+                <text x="206.1" y="103.2" font-family="var(--mono)" font-weight="700" font-size="6.5" fill="#9cd9fa" text-anchor="middle" dominant-baseline="central">20</text>
+                <line x1="221.3" y1="118.0" x2="223.2" y2="114.7" stroke="#29658f" stroke-width="1"/>
+                <text x="224.8" y="111.9" font-family="var(--mono)" font-weight="700" font-size="6.5" fill="#9cd9fa" text-anchor="middle" dominant-baseline="central">30</text>
+
+                <!-- Dynamic AGC Sub-Scale (Authentic Moving AGC Meter) -->
+                <g id="meterAgcGroup">
+                  <text x="110" y="132.5" font-family="var(--sans)" font-weight="900" font-size="7.5" fill="#38bdf8" text-anchor="middle" dominant-baseline="central" filter="url(#softGlow)">AGC</text>
+                  <text x="228" y="132.5" font-family="var(--mono)" font-weight="700" font-size="6.5" fill="#5a7d9a" text-anchor="middle" dominant-baseline="central">dB</text>
+                  <path d="M 132.3 127.7 A 86.00 86.00 0 0 1 207.7 127.7" fill="none" stroke="#0b1722" stroke-width="4.5" stroke-linecap="round"/>
+                  <path d="M 132.3 127.7 A 86.00 86.00 0 0 1 207.7 127.7" fill="none" stroke="#183248" stroke-width="1.2" stroke-linecap="round"/>
+                  <path id="meterAgcArc" d="M 132.3 127.7 A 86.00 86.00 0 0 1 133.0 127.5" fill="none" stroke="url(#agcArcGrad)" stroke-width="3.2" stroke-linecap="round" filter="url(#softGlow)"/>
+
+                  <line x1="133.8" y1="129.9" x2="130.8" y2="125.6" stroke="#29658f" stroke-width="1.1"/>
+                  <text x="129.2" y="122.2" font-family="var(--mono)" font-weight="700" font-size="6" fill="#8cb9d8" text-anchor="middle" dominant-baseline="central">0</text>
+                  <line x1="151.8" y1="123.3" x2="149.9" y2="118.8" stroke="#29658f" stroke-width="1.1"/>
+                  <text x="148.6" y="115.1" font-family="var(--mono)" font-weight="700" font-size="6" fill="#8cb9d8" text-anchor="middle" dominant-baseline="central">10</text>
+                  <line x1="170.0" y1="122.5" x2="170.0" y2="117.5" stroke="#29658f" stroke-width="1.2"/>
+                  <text x="170.0" y="113.5" font-family="var(--mono)" font-weight="700" font-size="6" fill="#8cb9d8" text-anchor="middle" dominant-baseline="central">20</text>
+                  <line x1="188.2" y1="123.3" x2="190.1" y2="118.8" stroke="#29658f" stroke-width="1.1"/>
+                  <text x="191.4" y="115.1" font-family="var(--mono)" font-weight="700" font-size="6" fill="#8cb9d8" text-anchor="middle" dominant-baseline="central">30</text>
+                  <line x1="206.2" y1="129.9" x2="209.2" y2="125.6" stroke="#29658f" stroke-width="1.1"/>
+                  <text x="210.8" y="122.2" font-family="var(--mono)" font-weight="700" font-size="6" fill="#8cb9d8" text-anchor="middle" dominant-baseline="central">40</text>
+
+                  <g id="meterAgcNeedle" transform="rotate(-26 170 205)">
+                    <line x1="170" y1="126" x2="170" y2="116" stroke="#ffffff" stroke-width="1.8" stroke-linecap="round" filter="url(#softGlow)"/>
+                    <polygon points="168.6,118 171.4,118 170,113.5" fill="#2bff6a" filter="url(#softGlow)"/>
+                  </g>
                 </g>
-              </g>
-              <g id="deckAfVolWrap" class="concentric-inner" title="AF Volume (Inner): Drag/scroll to adjust volume. Click cap for Mute.">
-                <circle cx="74" cy="78" r="27.5" fill="rgba(0,0,0,0.8)"/>
-                <circle cx="74" cy="76" r="26" fill="url(#innerKnobBody)" stroke="#04080c" stroke-width="1.3"/>
-                <g id="deckAfVolKnurls" transform="rotate(27 74 76)"></g>
-                <circle cx="74" cy="76" r="21.5" fill="url(#polishedChrome)" stroke="#080e14" stroke-width="1.1"/>
-                <circle cx="74" cy="76" r="18.5" fill="url(#innerKnobFace)" stroke="#1a2a3a" stroke-width="0.9"/>
-                <circle cx="74" cy="76" r="15.5" fill="none" stroke="rgba(255,255,255,0.08)" stroke-width="0.7"/>
-                <circle cx="74" cy="76" r="12" fill="none" stroke="rgba(0,0,0,0.4)" stroke-width="0.7"/>
-                <g id="deckAfVolPointer" transform="rotate(27 74 76)">
-                  <line x1="74" y1="55" x2="74" y2="70" stroke="#2bff6a" stroke-width="2.4" stroke-linecap="round"/>
-                  <circle cx="74" cy="55.5" r="1.3" fill="#ffffff"/>
+
+                <!-- Dynamic Peak Needle (dashed) -->
+                <line id="meterPeakNeedle" x1="170" y1="205" x2="170" y2="18" stroke="#ffb830" stroke-width="1.2" stroke-dasharray="3,2" opacity="0.8" transform="rotate(-40.0 170 205)"/>
+
+                <!-- Live Active Galvanometer Needle with cast shadow -->
+                <g id="meterNeedleGroup" transform="rotate(-15 170 205)">
+                  <polygon points="172.5,205 173.8,178 171.8,18 170.2,18 171.2,178" fill="rgba(0,0,0,0.65)"/>
+                  <line x1="170" y1="205" x2="170" y2="219" stroke="#ff382a" stroke-width="3" stroke-linecap="round"/>
+                  <circle cx="170" cy="216" r="3.5" fill="#18232e" stroke="#ff382a" stroke-width="1.2"/>
+                  <polygon points="168.5,205 169.1,165 169.55,18 170.45,18 170.9,165 171.5,205" fill="url(#needleBlade)" filter="url(#softGlow)"/>
+                  <circle cx="170" cy="18" r="1.1" fill="#ffffff"/>
                 </g>
-                <circle id="deckMuteBtn" cx="74" cy="76" r="5.5" fill="url(#centerCapGrad)" stroke="#111c26" stroke-width="1.1" style="cursor:pointer"/>
+
+                <!-- Metal Pivot Hub -->
+                <circle cx="170" cy="205" r="19" fill="url(#hubGrad)" stroke="#090e14" stroke-width="1.5"/>
+                <circle cx="170" cy="205" r="13" fill="none" stroke="#2c3e52" stroke-width="1.2"/>
+                <circle cx="170" cy="205" r="6.5" fill="#0b1219" stroke="#1c2834" stroke-width="1"/>
+                <circle cx="170" cy="205" r="2" fill="#38bdf8" opacity="0.6"/>
+
+                <!-- Curved Glass Cover Specular Flare -->
+                <path d="M 6 8 Q 170 30 334 8 L 334 20 Q 170 42 6 20 Z" fill="white" opacity="0.05" pointer-events="none"/>
               </g>
-              <text x="74" y="14" font-family="var(--sans)" font-weight="900" font-size="8" fill="#587a96" text-anchor="middle" letter-spacing="0.12em">AF VOL · RF GAIN</text>
-              <text id="deckAfVolReadout" x="74" y="152" font-family="var(--mono)" font-weight="700" font-size="7.5" fill="#dce6ee" text-anchor="middle">AF 60% · RF 40dB (AGC)</text>
-            </g>
-            <!-- Divider 1 -->
-            <line x1="148" y1="12" x2="148" y2="153" stroke="#132332" stroke-width="1.2"/>
-            <!-- SECTION 2: DUAL CONCENTRIC SPAN & ZOOM KNOB -->
-            <g id="deckDualDsp">
-              <g id="deckPalTicks"></g>
-              <!-- Outer Active Luminous Arc -->
-              <path id="deckPalArc" d="M 174.5 104.5 A 39.5 39.5 0 0 1 176.2 51.3" fill="none" stroke="#38bdf8" stroke-width="2.2" stroke-linecap="round"/>
-              <g id="deckPalWrap" class="concentric-outer" title="Span Bandwidth (Outer): Drag/scroll to adjust RF sampling bandwidth.">
-                <circle cx="204" cy="76" r="34" fill="url(#outerKnobBody)" stroke="#060c12" stroke-width="1.5"/>
-                <g id="deckPalKnurls" transform="rotate(-59 204 76)"></g>
-                <circle cx="204" cy="76" r="29" fill="url(#outerKnobPlateau)" stroke="#1a2736" stroke-width="1"/>
-                <g id="deckPalPointer" transform="rotate(-59 204 76)">
-                  <line x1="204" y1="42.5" x2="204" y2="47.5" stroke="#38bdf8" stroke-width="2.6" stroke-linecap="round"/>
-                </g>
-              </g>
-              <g id="deckSpanWrap" class="concentric-inner" title="Span Zoom (Inner): Drag/scroll to magnify FFT. Click cap to reset.">
-                <circle cx="204" cy="77.5" r="22" fill="rgba(0,0,0,0.7)"/>
-                <circle cx="204" cy="76" r="21" fill="url(#innerKnobBody)" stroke="#04080c" stroke-width="1.2"/>
-                <g id="deckSpanKnurls" transform="rotate(-27 204 76)"></g>
-                <circle cx="204" cy="76" r="17.2" fill="url(#polishedChrome)" stroke="#090f15" stroke-width="0.9"/>
-                <circle cx="204" cy="76" r="14.8" fill="url(#innerKnobFace)" stroke="#1c2b3a" stroke-width="0.8"/>
-                <g id="deckSpanPointer" transform="rotate(-27 204 76)">
-                  <line x1="204" y1="59" x2="204" y2="70.5" stroke="#c084fc" stroke-width="2.2" stroke-linecap="round"/>
-                  <circle cx="204" cy="59.5" r="1.1" fill="#ffffff"/>
-                </g>
-                <circle id="deckSpanBtn" cx="204" cy="76" r="4.8" fill="url(#centerCapGrad)" stroke="#111c26" stroke-width="1" style="cursor:pointer"/>
-              </g>
-              <text x="204" y="14" font-family="var(--sans)" font-weight="900" font-size="8" fill="#587a96" text-anchor="middle" letter-spacing="0.12em">SPAN · FFT ZOOM</text>
-              <text id="deckSpanReadout" x="204" y="152" font-family="var(--mono)" font-weight="700" font-size="7.5" fill="#dce6ee" text-anchor="middle">SPAN 2.05M · ZOOM 1.0x</text>
-            </g>
-            <!-- Divider 2 -->
-            <line x1="262" y1="12" x2="262" y2="153" stroke="#132332" stroke-width="1.2"/>
-            <!-- SECTION 3: TACTILE DSP HARDKEYS WITH LED SLITS & HIGH-CONTRAST LABELS -->
-            <g id="keyPeak" class="ic-btn on" transform="translate(276, 18)" style="cursor:pointer" title="Peak Hold Trace">
-              <rect width="52" height="32" rx="4" fill="url(#icBtnGrad)" stroke="#060a0e" stroke-width="1.1"/>
-              <rect x="1" y="1" width="50" height="30" rx="3" fill="none" stroke="rgba(255,255,255,0.09)" stroke-width="0.8"/>
-              <rect class="ic-led-bar led-amber" x="7" y="5" width="38" height="3" rx="1.5"/>
-              <text id="keyPeakLabel" x="26.0" y="23" font-family="var(--mono)" font-weight="800" font-size="9.5" fill="#ffffff" text-anchor="middle">PEAK</text>
-            </g>
-            <g id="keyAuto" class="ic-btn on" transform="translate(333, 18)" style="cursor:pointer" title="Auto Dynamic Range">
-              <rect width="52" height="32" rx="4" fill="url(#icBtnGrad)" stroke="#060a0e" stroke-width="1.1"/>
-              <rect x="1" y="1" width="50" height="30" rx="3" fill="none" stroke="rgba(255,255,255,0.09)" stroke-width="0.8"/>
-              <rect class="ic-led-bar led-cyan" x="7" y="5" width="38" height="3" rx="1.5"/>
-              <text id="keyAutoLabel" x="26.0" y="23" font-family="var(--mono)" font-weight="800" font-size="9.5" fill="#ffffff" text-anchor="middle">AUTO</text>
-            </g>
-            <g id="keyFill" class="ic-btn on" transform="translate(390, 18)" style="cursor:pointer" title="Spectrum Trace Area Fill">
-              <rect width="52" height="32" rx="4" fill="url(#icBtnGrad)" stroke="#060a0e" stroke-width="1.1"/>
-              <rect x="1" y="1" width="50" height="30" rx="3" fill="none" stroke="rgba(255,255,255,0.09)" stroke-width="0.8"/>
-              <rect class="ic-led-bar led-blue" x="7" y="5" width="38" height="3" rx="1.5"/>
-              <text id="keyFillLabel" x="26.0" y="23" font-family="var(--mono)" font-weight="800" font-size="9.5" fill="#ffffff" text-anchor="middle">FILL</text>
-            </g>
-            <g id="keyAvg" class="ic-btn" transform="translate(447, 18)" style="cursor:pointer" title="Frame Integration Average">
-              <rect width="52" height="32" rx="4" fill="url(#icBtnGrad)" stroke="#060a0e" stroke-width="1.1"/>
-              <rect x="1" y="1" width="50" height="30" rx="3" fill="none" stroke="rgba(255,255,255,0.09)" stroke-width="0.8"/>
-              <rect class="ic-led-bar led-green" x="7" y="5" width="38" height="3" rx="1.5"/>
-              <text id="keyAvgLabel" x="26.0" y="23" font-family="var(--mono)" font-weight="800" font-size="8.5" fill="#ffffff" text-anchor="middle">AVG OFF</text>
-            </g>
-            <g id="keyCenter" class="ic-btn" transform="translate(276, 56)" style="cursor:pointer" title="Recenter Tuned Carrier in Spectrum">
-              <rect width="52" height="32" rx="4" fill="url(#icBtnGrad)" stroke="#060a0e" stroke-width="1.1"/>
-              <rect x="1" y="1" width="50" height="30" rx="3" fill="none" stroke="rgba(255,255,255,0.09)" stroke-width="0.8"/>
-              <rect class="ic-led-bar led-cyan" x="7" y="5" width="38" height="3" rx="1.5"/>
-              <text id="keyCenterLabel" x="26.0" y="23" font-family="var(--mono)" font-weight="800" font-size="8.5" fill="#ffffff" text-anchor="middle">CENTER</text>
-            </g>
-            <g id="keySpur" class="ic-btn" transform="translate(333, 56)" style="cursor:pointer" title="Spur Check and Auto Notch">
-              <rect width="52" height="32" rx="4" fill="url(#icBtnGrad)" stroke="#060a0e" stroke-width="1.1"/>
-              <rect x="1" y="1" width="50" height="30" rx="3" fill="none" stroke="rgba(255,255,255,0.09)" stroke-width="0.8"/>
-              <rect class="ic-led-bar led-violet" x="7" y="5" width="38" height="3" rx="1.5"/>
-              <text id="keySpurLabel" x="26.0" y="23" font-family="var(--mono)" font-weight="800" font-size="9.5" fill="#ffffff" text-anchor="middle">SPUR</text>
-            </g>
-            <g id="keyZoomOut" class="ic-btn" transform="translate(390, 56)" style="cursor:pointer" title="Zoom Out">
-              <rect width="52" height="32" rx="4" fill="url(#icBtnGrad)" stroke="#060a0e" stroke-width="1.1"/>
-              <rect x="1" y="1" width="50" height="30" rx="3" fill="none" stroke="rgba(255,255,255,0.09)" stroke-width="0.8"/>
-              <rect class="ic-led-bar led-blue" x="7" y="5" width="38" height="3" rx="1.5"/>
-              <text id="keyZoomOutLabel" x="26.0" y="23" font-family="var(--mono)" font-weight="800" font-size="9.5" fill="#ffffff" text-anchor="middle">ZOOM −</text>
-            </g>
-            <g id="keyZoomIn" class="ic-btn" transform="translate(447, 56)" style="cursor:pointer" title="Zoom In">
-              <rect width="52" height="32" rx="4" fill="url(#icBtnGrad)" stroke="#060a0e" stroke-width="1.1"/>
-              <rect x="1" y="1" width="50" height="30" rx="3" fill="none" stroke="rgba(255,255,255,0.09)" stroke-width="0.8"/>
-              <rect class="ic-led-bar led-blue" x="7" y="5" width="38" height="3" rx="1.5"/>
-              <text id="keyZoomInLabel" x="26.0" y="23" font-family="var(--mono)" font-weight="800" font-size="9.5" fill="#ffffff" text-anchor="middle">ZOOM +</text>
-            </g>
-            <!-- Interactive Palette Swatch Trigger Button -->
-            <g id="keyPalette" class="ic-btn" transform="translate(276, 95)" style="cursor:pointer" title="Waterfall & Spectrum Palette: Click to select color theme">
-              <rect width="223" height="28" rx="4" fill="url(#icBtnGrad)" stroke="#1a2d40" stroke-width="1.2"/>
-              <rect x="1" y="1" width="221" height="26" rx="3" fill="none" stroke="rgba(255,255,255,0.09)" stroke-width="0.8"/>
-              <rect class="ic-led-bar led-amber" x="8" y="4.5" width="207" height="2.5" rx="1.2"/>
-              <text id="keyPaletteLabel" x="111.5" y="19.5" font-family="var(--mono)" font-weight="800" font-size="9.5" fill="#ffffff" text-anchor="middle" letter-spacing="0.08em">PALETTE: SMARTSDR ▾</text>
-            </g>
-            <text x="387.5" y="140" font-family="var(--mono)" font-weight="700" font-size="7" fill="#4d6f8a" text-anchor="middle" letter-spacing="0.14em">PRECISION SDR WORKSTATION · DSP ENGINE</text>
-            <!-- Divider 3 -->
-            <line x1="518" y1="12" x2="518" y2="153" stroke="#132332" stroke-width="1.2"/>
-            <!-- SECTION 4: HERO VFO FLYWHEEL -->
-            <g id="vfoFlywheelWrap" class="vfo-flywheel-wrap" style="cursor:grab" title="VFO Flywheel: Drag vertically or spin to tune. Hold Shift for fine step.">
-              <circle cx="598" cy="79" r="57" fill="rgba(0,0,0,0.75)" filter="url(#blurShadow)"/>
-              <circle cx="598" cy="76" r="55" fill="#04070a" stroke="#14202b" stroke-width="1.2"/>
+            </svg>
+            <div class="meter-readouts">
+              <div class="meter-num" id="meterNum">RF — · SNR —</div>
+              <span class="meter-clip-badge" id="meterClipLed">CLIP</span>
+            </div>
+            <!-- Backward-compatible legacy meter elements -->
+            <div class="meter-scale" id="meterScale" style="display:none"></div>
+            <div class="meter-mask" id="meterMask" style="display:none"></div>
+            <div class="meter-peak" id="meterPeak" style="display:none"></div>
+          </div>
+
+          <!-- Tactile DSP Pushbutton Keypad directly integrated in Meter bay -->
+          <div class="dsp-keypad" role="group" aria-label="DSP and Filter Controls">
+            <button type="button" class="dsp-key on" id="keyPeak" title="Peak Hold Trace">
+              <span class="dsp-tally led-amber"></span>
+              <span id="keyPeakLabel">PEAK</span>
+            </button>
+            <button type="button" class="dsp-key on" id="keyAuto" title="Auto Dynamic Range">
+              <span class="dsp-tally led-cyan"></span>
+              <span id="keyAutoLabel">AUTO</span>
+            </button>
+            <button type="button" class="dsp-key on" id="keyFill" title="Spectrum Area Fill">
+              <span class="dsp-tally led-blue"></span>
+              <span id="keyFillLabel">FILL</span>
+            </button>
+            <button type="button" class="dsp-key" id="keyAvg" title="Frame Integration Average">
+              <span class="dsp-tally led-green"></span>
+              <span id="keyAvgLabel">AVG OFF</span>
+            </button>
+            <button type="button" class="dsp-key" id="keyCenter" title="Recenter Tuned Carrier in Spectrum">
+              <span class="dsp-tally led-cyan"></span>
+              <span id="keyCenterLabel">CENTER</span>
+            </button>
+            <button type="button" class="dsp-key" id="keySpur" title="Spur Check & Auto Notch">
+              <span class="dsp-tally led-violet"></span>
+              <span id="keySpurLabel">SPUR</span>
+            </button>
+            <button type="button" class="dsp-key palette-trigger" id="keyPalette" title="Waterfall & Spectrum Palette">
+              <span class="dsp-tally led-amber"></span>
+              <span id="keyPaletteLabel">PALETTE: SMARTSDR ▾</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- BAY 3: PRIMARY VFO DISPLAY & DEMODULATOR MATRICES -->
+        <div class="deck-bay bay-vfo bay-vfo-console">
+          <div class="bay-header">
+            <span class="bay-title"><span class="bay-screw-corner"></span>PRIMARY VFO &amp; DEMODULATOR</span>
+            <span class="bay-screw-corner"></span>
+          </div>
+
+          <!-- Recessed OLED/VFD VFO Readout Window -->
+          <div class="vfo-container">
+            <!-- Top Telemetry Strip -->
+            <div class="vfo-top-strip">
+              <div class="vfo-badges-left">
+                <span class="vfo-badge-main">VFO-A</span>
+                <span class="vfo-tag-rx">● RX</span>
+                <span class="vfo-tag-mode" id="vfoModeBadge">NFM</span>
+                <span class="vfo-tag-filter" id="vfoFilterBadge">BW 12.5k · SHARP</span>
+              </div>
+              <div class="vfo-badges-right">
+                <span class="vfo-telemetry-tag">ANT 1</span>
+                <span class="vfo-telemetry-tag">PRE 1</span>
+                <span class="vfo-telemetry-tag">ATT 0dB</span>
+                <span class="vfo-telemetry-tag" id="vfoAgcTag">AGC MID</span>
+                <span class="vfo-utc-clock" id="vfoUtcClock">00:00:00 UTC</span>
+              </div>
+            </div>
+
+            <!-- Center Main Frequency Readout -->
+            <div class="vfo-freq-hero">
+              <div class="freq" id="freqReadout"></div>
+              <div class="vfo-center-tools">
+                <div class="vfo-passband-meter" title="IF Filter Bandwidth Shape">
+                  <svg width="84" height="24" viewBox="0 0 84 24">
+                    <defs>
+                      <linearGradient id="vfoFilterGrad" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="0%" stop-color="#38bdf8" stop-opacity="0.35"/>
+                        <stop offset="100%" stop-color="#38bdf8" stop-opacity="0.03"/>
+                      </linearGradient>
+                    </defs>
+                    <path d="M 4 22 L 18 22 Q 26 22 30 5 L 54 5 Q 58 22 66 22 L 80 22" fill="url(#vfoFilterGrad)" stroke="#1f4b6e" stroke-width="1.2"/>
+                    <line x1="42" y1="3" x2="42" y2="22" stroke="#2bff6a" stroke-width="1.3" stroke-dasharray="2 1.5"/>
+                    <text x="42" y="20" font-family="var(--mono)" font-size="7" font-weight="800" fill="#38bdf8" text-anchor="middle" id="vfoIfFilterLabel">12.5k</text>
+                  </svg>
+                </div>
+                <div class="vfo-step-pill" title="Tuning step (TS / STEP)">
+                  <span class="vfo-step-badge">TS</span>
+                  <select class="vfo-step-select" id="snapSel" title="Tuning raster step">
+                    <option value="auto" id="snapOptAuto">AUTO (6.25k)</option>
+                    <option value="100">100 Hz</option>
+                    <option value="1000">1 kHz</option>
+                    <option value="2500">2.5 kHz</option>
+                    <option value="5000">5 kHz</option>
+                    <option value="6250" selected>6.25 kHz</option>
+                    <option value="12500">12.5 kHz</option>
+                    <option value="25000">25 kHz</option>
+                    <option value="100000">100 kHz</option>
+                    <option value="200000">200 kHz</option>
+                  </select>
+                  <span class="vfo-step-val" id="snapEffective" style="display:none">6.25 kHz</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- VFO Intermediate Telemetry Bar: Live Signal & Demod Metrics -->
+            <div class="vfo-meter-bar">
+              <div class="vfo-meter-seg"><span class="vfo-seg-label">CH PWR</span><span class="vfo-seg-val" id="vfoChPwrVal">-61.3 dBFS</span></div>
+              <div class="vfo-meter-seg"><span class="vfo-seg-label">SNR</span><span class="vfo-seg-val" id="vfoSnrVal">2.2 dB</span></div>
+              <div class="vfo-meter-seg"><span class="vfo-seg-label">SQL GATE</span><span class="vfo-seg-val" id="vfoSqlGateVal" style="color:#2bff6a">OPEN</span></div>
+              <div class="vfo-meter-seg vfo-cal-seg" id="vfoCalSeg" title="Carrier Frequency Error · Click to calibrate PPM against tuned carrier"><span class="vfo-seg-label">ERR</span><span class="vfo-seg-val" id="vfoFreqErrVal">—</span></div>
+              <div class="vfo-meter-seg"><span class="vfo-seg-label">NOTCH</span><span class="vfo-seg-val" id="vfoNotchVal">AUTO</span></div>
+            </div>
+
+            <!-- Secondary Sub-VFO / Standby Line -->
+            <div class="vfo-sub-line">
+              <div class="vfo-sub-readout">
+                <span class="sub-vfo-badge">VFO-B SUB</span>
+                <span class="sub-vfo-freq" id="subFreqReadout">0144.200.00 MHz</span>
+                <span class="sub-vfo-status">STANDBY · SPLIT OFF</span>
+              </div>
+              <div class="vfo-sub-btns">
+                <button type="button" class="vfo-sub-btn" id="btnVfoSwap" title="Swap VFO A and B (A/B)">A / B</button>
+                <button type="button" class="vfo-sub-btn" id="btnVfoSync" title="Copy VFO A to B (A=B)">A = B</button>
+                <button type="button" class="vfo-sub-btn" id="btnVfoSplit" title="Toggle Split TX/RX">SPLIT</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Authentic Mechanical Push Switches: Demodulator Mode Keypad -->
+          <div class="mode-keypad" role="group" aria-label="Demodulator mode">
+            <button type="button" class="modebtn on" data-mode="nfm" title="Narrowband FM (voice)"><span class="mode-tally tally-amber"></span>NFM</button>
+            <button type="button" class="modebtn" data-mode="am" title="Amplitude Modulation (airband & AM broadcast)"><span class="mode-tally tally-amber"></span>AM</button>
+            <button type="button" class="modebtn" data-mode="wfm" title="Wideband FM (broadcast radio)"><span class="mode-tally tally-cyan"></span>WFM</button>
+            <button type="button" class="modebtn" data-mode="p25" title="APCO Project 25 digital voice"><span class="mode-tally tally-green"></span>P25</button>
+            <button type="button" class="modebtn" data-mode="dmr" title="Digital Mobile Radio voice"><span class="mode-tally tally-green"></span>DMR</button>
+            <button type="button" class="modebtn" data-mode="nxdn" title="NXDN48/NXDN96 digital voice"><span class="mode-tally tally-green"></span>NXDN</button>
+            <button type="button" class="modebtn" data-mode="packet" title="AX.25 1200 baud packet radio"><span class="mode-tally tally-green"></span>PACKET</button>
+            <button type="button" class="modebtn" data-mode="pager" title="POCSAG / FLEX paging sweep"><span class="mode-tally tally-cyan"></span>PAGER</button>
+            <button type="button" class="modebtn" data-mode="flex" title="Dedicated Motorola FLEX pager demodulator"><span class="mode-tally tally-cyan"></span>FLEX</button>
+            <button type="button" class="modebtn" data-mode="auto" title="Simultaneous multi-protocol auto-decoder"><span class="mode-tally tally-ruby"></span>AUTO</button>
+            <button type="button" class="modebtn" data-mode="scan" title="Autonomous frequency scanner"><span class="mode-tally tally-ruby"></span>SCAN</button>
+          </div>
+
+          <!-- Quick Band Presets Matrix -->
+          <div class="band-matrix" role="group" aria-label="Band presets">
+            <button type="button" class="band-btn" data-freq="121500000" data-mode="am"><span class="band-tally"></span>AIR 118</button>
+            <button type="button" class="band-btn" data-freq="144200000" data-mode="nfm"><span class="band-tally"></span>2M 144</button>
+            <button type="button" class="band-btn active" data-freq="156800000" data-mode="nfm"><span class="band-tally"></span>MAR 156</button>
+            <button type="button" class="band-btn" data-freq="222000000" data-mode="nfm"><span class="band-tally"></span>1.25M</button>
+            <button type="button" class="band-btn" data-freq="432100000" data-mode="nfm"><span class="band-tally"></span>70C 430</button>
+            <button type="button" class="band-btn" data-freq="929612500" data-mode="pager"><span class="band-tally"></span>PAGER</button>
+            <button type="button" class="band-btn" data-freq="851012500" data-mode="p25"><span class="band-tally"></span>TRUNK</button>
+            <button type="button" class="band-btn" data-freq="98100000" data-mode="wfm"><span class="band-tally"></span>WFM 88</button>
+          </div>
+        </div>
+
+        <!-- BAY 4: DISPLAY FADERS & MASTER VFO TUNING FLYWHEEL -->
+        <div class="deck-bay bay-tuning">
+          <div class="bay-header">
+            <span class="bay-title"><span class="bay-screw-corner"></span>DISPLAY &amp; MAIN TUNING</span>
+            <span class="bay-screw-corner"></span>
+          </div>
+
+          <!-- Dual Display Faders: SPAN RATE & FFT ZOOM -->
+          <div class="fader-pair" style="border-bottom: 1px solid rgba(22, 34, 46, 0.6); padding-bottom: 5px; margin-bottom: 5px;">
+            <!-- SPAN Rate Linear Stepped Fader -->
+            <div class="fader-vert-wrap" id="faderSpanWrap">
+              <span class="fader-title">SPAN RATE</span>
+              <div class="fader-assembly">
+                <div class="fader-scale">
+                  <span>3.2M</span>
+                  <span>2.4M</span>
+                  <span>2.05M</span>
+                  <span>1.54M</span>
+                  <span>1.02M</span>
+                  <span>250k</span>
+                </div>
+                <div class="fader-well" id="faderSpanTrack" title="Span Bandwidth: Drag or scroll to select RF sample rate.">
+                  <div class="fader-slot"></div>
+                  <div class="fader-cap" id="faderSpanCap" style="bottom: 60%;">
+                    <div class="fader-cap-ribs"></div>
+                    <div class="fader-cap-line led-blue"></div>
+                  </div>
+                </div>
+              </div>
+              <div class="fader-footer">
+                <span class="fader-sublabel">BW</span>
+                <span class="fader-val" id="faderSpanVal">2.048M</span>
+              </div>
+            </div>
+
+            <!-- FFT Zoom Linear Continuous Fader -->
+            <div class="fader-vert-wrap" id="faderZoomWrap">
+              <span class="fader-title">FFT ZOOM</span>
+              <div class="fader-assembly">
+                <div class="fader-scale">
+                  <span>32x</span>
+                  <span>16x</span>
+                  <span>8x</span>
+                  <span>4x</span>
+                  <span>2x</span>
+                  <span>1x</span>
+                </div>
+                <div class="fader-well" id="faderZoomTrack" title="FFT Zoom: Drag or scroll to magnify spectrum. Click 1x RST to reset.">
+                  <div class="fader-slot"></div>
+                  <div class="fader-cap" id="faderZoomCap" style="bottom: 0%;">
+                    <div class="fader-cap-ribs"></div>
+                    <div class="fader-cap-line led-violet"></div>
+                  </div>
+                </div>
+              </div>
+              <div class="fader-footer">
+                <button type="button" class="fader-reset-btn" id="faderZoomReset" title="Reset Zoom to 1.0x">1x RST</button>
+                <span class="fader-val" id="faderZoomVal">1.0x</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Prominent Heavy Optical Encoder Flywheel Dial -->
+          <div class="vfo-flywheel-container">
+            <svg class="vfo-flywheel-svg" id="vfoFlywheelWrap" viewBox="0 0 160 160" title="Main VFO Flywheel: Drag vertically or spin to tune. Hold Shift for fine steps.">
+              <defs>
+                <radialGradient id="vfoOuterBezelGrad" cx="35%" cy="30%" r="70%">
+                  <stop offset="0%" stop-color="#3c5064"/>
+                  <stop offset="35%" stop-color="#1e2936"/>
+                  <stop offset="80%" stop-color="#121822"/>
+                  <stop offset="100%" stop-color="#080c10"/>
+                </radialGradient>
+                <linearGradient id="vfoChromeBezel" x1="0.1" y1="0" x2="0.9" y2="1">
+                  <stop offset="0%" stop-color="#b0c8de"/>
+                  <stop offset="25%" stop-color="#ffffff"/>
+                  <stop offset="50%" stop-color="#7e9bb4"/>
+                  <stop offset="75%" stop-color="#283d50"/>
+                  <stop offset="90%" stop-color="#14202c"/>
+                  <stop offset="100%" stop-color="#0a1016"/>
+                </linearGradient>
+                <radialGradient id="vfoHeavyRotorGrad" cx="35%" cy="32%" r="70%">
+                  <stop offset="0%" stop-color="#465c72"/>
+                  <stop offset="25%" stop-color="#273646"/>
+                  <stop offset="70%" stop-color="#141c26"/>
+                  <stop offset="100%" stop-color="#080c10"/>
+                </radialGradient>
+                <radialGradient id="vfoDimpleCraterGrad" cx="28%" cy="26%" r="72%">
+                  <stop offset="0%" stop-color="#020406"/>
+                  <stop offset="50%" stop-color="#0d151e"/>
+                  <stop offset="85%" stop-color="#223242"/>
+                  <stop offset="100%" stop-color="#557290"/>
+                </radialGradient>
+                <radialGradient id="vfoAxleHubGrad" cx="35%" cy="35%" r="65%">
+                  <stop offset="0%" stop-color="#4c637c"/>
+                  <stop offset="55%" stop-color="#1c2836"/>
+                  <stop offset="100%" stop-color="#090e14"/>
+                </radialGradient>
+              </defs>
+              <!-- Heavy Chassis Drop Shadow -->
+              <circle cx="80" cy="84" r="74" fill="rgba(0,0,0,0.85)"/>
+              <!-- Outer Heavy Knurl Ring Flange -->
+              <circle cx="80" cy="80" r="72" fill="#05080c" stroke="#16222e" stroke-width="1.4"/>
+              <!-- 72 Precision Outer Knurling Teeth -->
               <g id="vfoKnurlGroup"></g>
-              <circle cx="598" cy="76" r="47" fill="url(#polishedChrome)" stroke="#060c12" stroke-width="1.3"/>
-              <circle cx="598" cy="76" r="43" fill="url(#vfoHeavyBody)" stroke="#1a2736" stroke-width="1.1"/>
-              <circle cx="598" cy="76" r="38" fill="none" stroke="rgba(255,255,255,0.07)" stroke-width="0.8"/>
-              <circle cx="598" cy="76" r="31" fill="none" stroke="rgba(0,0,0,0.4)" stroke-width="0.8"/>
-              <circle cx="598" cy="76" r="24" fill="none" stroke="rgba(255,255,255,0.05)" stroke-width="0.8"/>
-              <g id="vfoFlywheelSpinner" transform="rotate(0 598 76)">
-                <circle cx="598" cy="48" r="12.5" fill="rgba(0,0,0,0.88)"/>
-                <circle cx="598" cy="48" r="11.5" fill="url(#vfoDimpleCrater)" stroke="#030608" stroke-width="1.3"/>
-                <circle cx="598" cy="48" r="8.5" fill="none" stroke="rgba(255,255,255,0.22)" stroke-width="0.9"/>
+              <!-- Polished Chamfered Bezel Collar -->
+              <circle cx="80" cy="80" r="62" fill="url(#vfoChromeBezel)" stroke="#060b10" stroke-width="1.4"/>
+              <!-- Heavy Turned Aluminum Rotor Face -->
+              <circle cx="80" cy="80" r="57" fill="url(#vfoHeavyRotorGrad)" stroke="#1a2736" stroke-width="1.2"/>
+              <circle cx="80" cy="80" r="51" fill="none" stroke="rgba(255,255,255,0.08)" stroke-width="0.8"/>
+              <circle cx="80" cy="80" r="42" fill="none" stroke="rgba(0,0,0,0.45)" stroke-width="0.8"/>
+              <circle cx="80" cy="80" r="33" fill="none" stroke="rgba(255,255,255,0.06)" stroke-width="0.8"/>
+              <!-- Flywheel Spinner with Machined Finger Dimple Crater -->
+              <g id="vfoFlywheelSpinner" transform="rotate(0 80 80)">
+                <!-- Finger Dimple Crater (positioned at r=44 from center) -->
+                <circle cx="80" cy="36" r="16.5" fill="rgba(0,0,0,0.92)"/>
+                <circle cx="80" cy="36" r="15" fill="url(#vfoDimpleCraterGrad)" stroke="#020406" stroke-width="1.5"/>
+                <circle cx="80" cy="36" r="11" fill="none" stroke="rgba(255,255,255,0.22)" stroke-width="1"/>
               </g>
-              <circle cx="598" cy="76" r="14.5" fill="url(#polishedChrome)" stroke="#080e14" stroke-width="1.1"/>
-              <circle cx="598" cy="76" r="11" fill="url(#centerCapGrad)" stroke="#1a2530" stroke-width="0.8"/>
-              <circle cx="598" cy="76" r="3.5" fill="#04070a"/>
-            </g>
-            <text x="598" y="14" font-family="var(--sans)" font-weight="900" font-size="8.5" fill="#38bdf8" text-anchor="middle" letter-spacing="0.14em">MAIN TUNING</text>
-            <text id="jogStepBadge" x="598" y="152" font-family="var(--mono)" font-weight="700" font-size="7.5" fill="#6d8fa8" text-anchor="middle">6.25 kHz · FLYWHEEL</text>
-          </svg>
-          <!-- Palette Swatch Selection Popup Menu -->
-          <div id="paletteMenu" class="palette-popup" style="display:none">
-            <div class="palette-popup-head">
-              <span>Waterfall Color Theme</span>
-              <button type="button" class="palette-popup-close" onclick="togglePaletteMenu(false)">&times;</button>
-            </div>
-            <div class="palette-grid" id="paletteList"></div>
+              <!-- Center Axle Hub Cap -->
+              <circle cx="80" cy="80" r="18" fill="url(#vfoChromeBezel)" stroke="#080e14" stroke-width="1.2"/>
+              <circle cx="80" cy="80" r="14" fill="url(#vfoAxleHubGrad)" stroke="#1a2736" stroke-width="1"/>
+              <circle cx="80" cy="80" r="4.5" fill="#04070a"/>
+            </svg>
+            <div class="vfo-step-status-pill" id="jogStepBadge">6.25 kHz · FLYWHEEL</div>
           </div>
         </div>
 
+      </div><!-- /.deck-console -->
+
+      <!-- Palette Swatch Selection Popup Menu -->
+      <div id="paletteMenu" class="palette-popup" style="display:none">
+        <div class="palette-popup-head">
+          <span>Waterfall Color Theme</span>
+          <button type="button" class="palette-popup-close" onclick="togglePaletteMenu(false)">&times;</button>
+        </div>
+        <div class="palette-grid" id="paletteList"></div>
       </div>
 <div class="spec-row">
       <div class="spec-col">
@@ -1651,7 +2116,7 @@
     <div class="ctlgroup">
       <span class="grouplabel">Audio</span>
       <div class="ctl">
-        <button type="button" class="softkey" id="btnListen" style="padding:6px 15px">LISTEN</button>
+        <button type="button" class="softkey" id="btnListenSecondary" style="padding:6px 15px">LISTEN</button>
         <input type="range" id="volRange" min="0" max="100" step="1" value="60" title="volume">
         <span class="val" id="volVal">60%</span>
       </div>
@@ -1915,6 +2380,7 @@ function showSideTab(id) {
     }
     if (p) p.classList.toggle('on', on);
   }
+  if (id === 'tabCalls' && typeof loadCalls === 'function') loadCalls();
 }
 for (const [tabId, panelId] of [['tabClassifier', 'panelClassifier'], ['tabDecode', 'panelDecode'], ['tabCalls', 'panelCalls'], ['tabScan', 'panelScan']]) {
   const t = document.getElementById(tabId);
@@ -2707,6 +3173,8 @@ let sdrCenterHz = 155000000;
 let sdrRateHz = 2048000;
 let sdrMinDb = -90;
 let sdrMaxDb = -10;
+let sdrSquelchDb = -75;
+let sdrSquelchDragging = false;
 let sdrAutoRange = true;
 let sdrPeakHold = true;
 let sdrFillTrace = true;
@@ -2807,20 +3275,25 @@ function cssSize(cv) {
 }
 
 
+let flywheelRaf = 0;
+let jogAngle = 0;
+
 function setupVfoFlywheel() {
   const wrap = $('vfoFlywheelWrap') || $('jogDialWrap');
   const spinner = $('vfoFlywheelSpinner');
   const knurlGroup = $('vfoKnurlGroup');
   if (!wrap || !spinner) return;
+  if (wrap.dataset.vfoBound) return;
+  wrap.dataset.vfoBound = '1';
 
-  const cx = 598, cy = 76;
+  const cx = 80, cy = 80;
   const ns = 'http://www.w3.org/2000/svg';
 
   // Precision outer knurling teeth around perimeter (72 teeth)
   if (knurlGroup && !knurlGroup.children.length) {
     for (let i = 0; i < 72; i++) {
       const a = (i / 72.0) * Math.PI * 2;
-      const r1 = 47.0, r2 = 53.5;
+      const r1 = 63.0, r2 = 71.0;
       const line = document.createElementNS(ns, 'line');
       line.setAttribute('x1', (cx + Math.cos(a) * r1).toFixed(1));
       line.setAttribute('y1', (cy + Math.sin(a) * r1).toFixed(1));
@@ -2832,14 +3305,52 @@ function setupVfoFlywheel() {
     }
   }
 
-  let jogAngle = 0;
   let dragStartY = 0;
   let isDragging = false;
   let accumDelta = 0;
+  let lastTime = 0;
+  let flywheelVelocity = 0;
+
+  const cancelMomentum = () => {
+    if (flywheelRaf) {
+      cancelAnimationFrame(flywheelRaf);
+      flywheelRaf = 0;
+    }
+  };
+
+  const startMomentum = (initVel, shiftKey) => {
+    cancelMomentum();
+    let vel = Math.max(-25, Math.min(25, initVel));
+    let accumMomentum = 0;
+    const friction = 0.93;
+    function inertiaStep() {
+      vel *= friction;
+      if (Math.abs(vel) < 0.08) {
+        flywheelRaf = 0;
+        return;
+      }
+      jogAngle = (jogAngle + vel) % 360;
+      spinner.setAttribute('transform', `rotate(${jogAngle.toFixed(1)} ${cx} ${cy})`);
+      accumMomentum += vel;
+      const threshold = 12;
+      const stepHz = snapStepHz();
+      while (Math.abs(accumMomentum) >= threshold) {
+        const step = accumMomentum > 0 ? 1 : -1;
+        const deltaHz = step * (shiftKey ? Math.max(100, Math.round(stepHz / 10)) : stepHz);
+        stepRxFreq(deltaHz);
+        accumMomentum -= step * threshold;
+      }
+      flywheelRaf = requestAnimationFrame(inertiaStep);
+    }
+    flywheelRaf = requestAnimationFrame(inertiaStep);
+  };
 
   wrap.addEventListener('pointerdown', (e) => {
+    cancelMomentum();
     isDragging = true;
     dragStartY = e.clientY;
+    lastTime = performance.now();
+    flywheelVelocity = 0;
     accumDelta = 0;
     wrap.setPointerCapture(e.pointerId);
     wrap.classList.add('dragging');
@@ -2847,13 +3358,17 @@ function setupVfoFlywheel() {
 
   wrap.addEventListener('pointermove', (e) => {
     if (!isDragging) return;
+    const now = performance.now();
+    const dt = Math.max(1, now - lastTime);
     const dy = dragStartY - e.clientY;
     dragStartY = e.clientY;
+    lastTime = now;
+    flywheelVelocity = (dy / dt) * 16.0;
     accumDelta += dy;
-    jogAngle = (jogAngle + dy * 2.2) % 360;
+    jogAngle = (jogAngle + dy * 1.8) % 360;
     spinner.setAttribute('transform', `rotate(${jogAngle.toFixed(1)} ${cx} ${cy})`);
 
-    const threshold = 14;
+    const threshold = 12;
     const stepHz = snapStepHz();
     while (Math.abs(accumDelta) >= threshold) {
       const step = accumDelta > 0 ? 1 : -1;
@@ -2868,6 +3383,9 @@ function setupVfoFlywheel() {
       isDragging = false;
       wrap.classList.remove('dragging');
       try { wrap.releasePointerCapture(e.pointerId); } catch (_) {}
+      if (Math.abs(flywheelVelocity) > 0.8) {
+        startMomentum(flywheelVelocity, e.shiftKey);
+      }
     }
   };
   wrap.addEventListener('pointerup', endDrag);
@@ -2875,8 +3393,9 @@ function setupVfoFlywheel() {
 
   wrap.addEventListener('wheel', (e) => {
     e.preventDefault();
+    cancelMomentum();
     const dir = e.deltaY < 0 ? 1 : -1;
-    jogAngle = (jogAngle + dir * 15) % 360;
+    jogAngle = (jogAngle + dir * 14) % 360;
     spinner.setAttribute('transform', `rotate(${jogAngle.toFixed(1)} ${cx} ${cy})`);
     const stepHz = snapStepHz();
     const deltaHz = dir * (e.shiftKey ? Math.max(100, Math.round(stepHz / 10)) : stepHz);
@@ -2939,6 +3458,48 @@ function makeKnobDraggable(wrapId, onDelta) {
   }, { passive: false });
 }
 
+function makeFaderDraggable(trackId, onFractionChange) {
+  const track = $(trackId);
+  if (!track) return;
+  if (track.dataset.faderBound) return;
+  track.dataset.faderBound = '1';
+  let isDragging = false;
+
+  const updateFromPointer = (e) => {
+    const rect = track.getBoundingClientRect();
+    const h = rect.height || 74;
+    const distFromBottom = rect.bottom - e.clientY;
+    const frac = Math.max(0, Math.min(1.0, distFromBottom / h));
+    onFractionChange(frac, false);
+  };
+
+  track.addEventListener('pointerdown', (e) => {
+    isDragging = true;
+    track.setPointerCapture(e.pointerId);
+    updateFromPointer(e);
+  });
+
+  track.addEventListener('pointermove', (e) => {
+    if (!isDragging) return;
+    updateFromPointer(e);
+  });
+
+  const endDrag = (e) => {
+    if (isDragging) {
+      isDragging = false;
+      try { track.releasePointerCapture(e.pointerId); } catch (_) {}
+    }
+  };
+  track.addEventListener('pointerup', endDrag);
+  track.addEventListener('pointercancel', endDrag);
+
+  track.addEventListener('wheel', (e) => {
+    e.preventDefault();
+    const delta = (e.deltaY < 0 ? 1 : -1) * (e.shiftKey ? 0.02 : 0.06);
+    onFractionChange(delta, true);
+  }, { passive: false });
+}
+
 let subVfoHz = 144200000;
 let isVfoSplit = false;
 
@@ -2958,15 +3519,16 @@ function updateSubVfoUi() {
 function updateVfoTelemetry() {
   const mBadge = $('vfoModeBadge');
   if (mBadge) mBadge.textContent = sdrMode.toUpperCase();
+  let bw = '12.5k · SHARP';
+  let bwLabel = '12.5k';
+  if (sdrMode === 'wfm') { bw = '200k · FLAT'; bwLabel = '200k'; }
+  else if (sdrMode === 'am') { bw = '6.0k · MID'; bwLabel = '6.0k'; }
+  else if (sdrMode === 'packet' || sdrMode === 'flex') { bw = '25.0k · SHARP'; bwLabel = '25.0k'; }
+  else if (sdrMode === 'pager') { bw = '12.5k · SHARP'; bwLabel = '12.5k'; }
   const fBadge = $('vfoFilterBadge');
-  if (fBadge) {
-    let bw = '12.5k · SHARP';
-    if (sdrMode === 'wfm') bw = '200k · FLAT';
-    else if (sdrMode === 'am') bw = '6.0k · MID';
-    else if (sdrMode === 'packet' || sdrMode === 'flex') bw = '25.0k · SHARP';
-    else if (sdrMode === 'pager') bw = '12.5k · SHARP';
-    fBadge.textContent = `BW ${bw}`;
-  }
+  if (fBadge) fBadge.textContent = `BW ${bw}`;
+  const ifLbl = $('vfoIfFilterLabel');
+  if (ifLbl) ifLbl.textContent = bwLabel;
   const aTag = $('vfoAgcTag');
   if (aTag) {
     const agc = $('sdrAgc');
@@ -2981,17 +3543,21 @@ function syncGainUi() {
   const isAgc = agc ? agc.checked : false;
   const val = Number(slider.value) || 0;
   const frac = val / 50.0;
-  setKnobArc('deckRfGainArc', 74, 76, 47.5, isAgc ? 0.75 : frac);
-  setKnobPointer('deckRfGainPointer', 74, 76, isAgc ? 0.75 : frac);
-  setKnobPointer('deckRfGainKnurls', 74, 76, isAgc ? 0.75 : frac);
+  const cap = $('faderRfGainCap');
+  if (cap) cap.style.bottom = `${(frac * 100).toFixed(1)}%`;
+  const fVal = $('faderRfGainVal');
+  if (fVal) fVal.textContent = isAgc ? 'auto' : `${Math.round(val)} dB`;
+  const agcBtn = $('faderAgcBtn');
+  if (agcBtn) agcBtn.classList.toggle('on', isAgc);
+  if ($('deckRfGainPointer')) setKnobPointer('deckRfGainPointer', 74, 76, isAgc ? 0.75 : frac);
   updateAfVolReadout();
   updateVfoTelemetry();
 }
 
 function syncAfVolUi() {
   const arcFrac = audioOn ? audioVolume : 0;
-  setKnobPointer('deckAfVolPointer', 74, 76, arcFrac);
-  setKnobPointer('deckAfVolKnurls', 74, 76, arcFrac);
+  setKnobPointer('deckAfVolPointer', 55, 55, arcFrac);
+  setKnobPointer('deckAfVolKnurls', 55, 55, arcFrac);
   updateAfVolReadout();
   if ($('volRange')) $('volRange').value = Math.round(audioVolume * 100);
   if ($('volVal')) $('volVal').textContent = Math.round(audioVolume * 100) + '%';
@@ -3001,10 +3567,18 @@ function updateAfVolReadout() {
   const txt = $('deckAfVolReadout');
   if (!txt) return;
   const volStr = !audioOn ? 'MUTED' : `${Math.round(audioVolume * 100)}%`;
-  const agc = $('sdrAgc');
-  const slider = $('sdrGainRange');
-  const gainStr = (agc && agc.checked) ? 'AGC' : `${slider ? slider.value : 40}dB`;
-  txt.textContent = `AF ${volStr} · RF ${gainStr}`;
+  txt.textContent = `AF ${volStr} · ${!audioOn ? 'MUTED' : 'ACTIVE'}`;
+}
+
+function syncSquelchUi() {
+  const cap = $('faderSqlCap');
+  const val = $('faderSqlVal');
+  const min = (typeof sdrMinDb === 'number') ? sdrMinDb : -120;
+  const max = (typeof sdrMaxDb === 'number') ? sdrMaxDb : 0;
+  const range = (max - min) || 1;
+  const frac = Math.max(0, Math.min(1.0, (sdrSquelchDb - min) / range));
+  if (cap) cap.style.bottom = `${(frac * 100).toFixed(1)}%`;
+  if (val) val.textContent = `${Math.round(sdrSquelchDb)} dB`;
 }
 
 const SPAN_RATES = [250000, 1024000, 1536000, 2048000, 2400000, 3200000];
@@ -3013,11 +3587,15 @@ function syncSpanKnobUi() {
   const sel = $('sdrRateSel');
   const curRate = sel ? Number(sel.value) : sdrRateHz;
   let idx = SPAN_RATES.indexOf(curRate);
-  if (idx < 0) idx = 3;
+  if (idx < 0) {
+    idx = SPAN_RATES.reduce((best, r, i) => Math.abs(r - curRate) < Math.abs(SPAN_RATES[best] - curRate) ? i : best, 0);
+  }
   const frac = idx / Math.max(1, SPAN_RATES.length - 1);
-  setKnobArc('deckPalArc', 204, 76, 39.5, frac);
-  setKnobPointer('deckPalPointer', 204, 76, frac);
-  setKnobPointer('deckPalKnurls', 204, 76, frac);
+  const cap = $('faderSpanCap');
+  if (cap) cap.style.bottom = `${(frac * 100).toFixed(1)}%`;
+  const val = $('faderSpanVal');
+  const rateM = (curRate / 1e6).toFixed(curRate >= 1e6 ? (curRate % 1e6 === 0 ? 1 : 2) : 3);
+  if (val) val.textContent = `${rateM}M`;
   updateDspReadout();
 }
 
@@ -3059,7 +3637,7 @@ function togglePaletteMenu(force) {
     renderPaletteMenuList();
     const btn = $('keyPalette');
     if (btn) {
-      const deckWrap = document.querySelector('.radio-deck-wrap');
+      const deckWrap = document.querySelector('.radio-deck-wrap') || document.querySelector('.deck-console');
       if (deckWrap) {
         const wrapRect = deckWrap.getBoundingClientRect();
         const btnRect = btn.getBoundingClientRect();
@@ -3101,96 +3679,62 @@ document.addEventListener('keydown', (e) => {
 
 function syncZoomUi() {
   const frac = Math.max(0, Math.min(1, Math.log2(sdrZoom || 1) / 5.0));
-  setKnobPointer('deckSpanPointer', 204, 76, frac);
-  setKnobPointer('deckSpanKnurls', 204, 76, frac);
+  const cap = $('faderZoomCap');
+  if (cap) cap.style.bottom = `${(frac * 100).toFixed(1)}%`;
+  const val = $('faderZoomVal');
+  if (val) val.textContent = (sdrZoom && sdrZoom > 1.05) ? `${sdrZoom.toFixed(1)}x` : '1.0x';
   updateDspReadout();
 }
 
 function updateDspReadout() {
   const txt = $('deckSpanReadout');
-  if (!txt) return;
-  const sel = $('sdrRateSel');
-  const curRate = sel ? Number(sel.value) : sdrRateHz;
-  const rateM = (curRate / 1e6).toFixed(curRate >= 1e6 ? (curRate % 1e6 === 0 ? 1 : 2) : 3);
-  const zStr = (sdrZoom && sdrZoom > 1.05) ? `${sdrZoom.toFixed(1)}x` : '1.0x';
-  txt.textContent = `SPAN ${rateM}M · ZOOM ${zStr}`;
+  if (txt) {
+    const sel = $('sdrRateSel');
+    const curRate = sel ? Number(sel.value) : sdrRateHz;
+    const rateM = (curRate / 1e6).toFixed(curRate >= 1e6 ? (curRate % 1e6 === 0 ? 1 : 2) : 3);
+    const zStr = (sdrZoom && sdrZoom > 1.05) ? `${sdrZoom.toFixed(1)}x` : '1.0x';
+    txt.textContent = `SPAN ${rateM}M · ZOOM ${zStr}`;
+  }
+  const badge = $('jogStepBadge');
+  if (badge) {
+    const stepHz = snapStepHz();
+    const stepStr = stepHz >= 1000 ? `${(stepHz / 1000).toFixed(stepHz % 1000 === 0 ? 1 : 2)} kHz` : `${stepHz} Hz`;
+    badge.textContent = `${stepStr} · FLYWHEEL`;
+  }
+  const spanBadge = $('badgeSpan');
+  if (spanBadge) {
+    const sel = $('sdrRateSel');
+    const curRate = sel ? Number(sel.value) : sdrRateHz;
+    const rateM = (curRate / 1e6).toFixed(curRate >= 1e6 ? (curRate % 1e6 === 0 ? 1 : 2) : 3);
+    spanBadge.textContent = `${rateM}M`;
+  }
 }
 
 function buildConcentricTicks() {
   const ns = 'http://www.w3.org/2000/svg';
-  // 1. Palette ticks (RF Gain ticks are rendered in SVG scale)
-  const gPal = $('deckPalTicks');
-  if (gPal && !gPal.children.length) {
-    const cx = 204, cy = 76, r_outer = 34;
-    for (let i = 0; i <= 20; i++) {
-      const ang = 135.0 + (i / 20.0) * 270.0;
-      const rad = ang * Math.PI / 180.0;
-      const isMaj = i % 5 === 0;
-      const r1 = r_outer + 3, r2 = r_outer + (isMaj ? 6.5 : 4.5);
-      const l = document.createElementNS(ns, 'line');
-      l.setAttribute('x1', (cx + r1 * Math.cos(rad)).toFixed(1));
-      l.setAttribute('y1', (cy + r1 * Math.sin(rad)).toFixed(1));
-      l.setAttribute('x2', (cx + r2 * Math.cos(rad)).toFixed(1));
-      l.setAttribute('y2', (cy + r2 * Math.sin(rad)).toFixed(1));
-      l.setAttribute('stroke', isMaj ? '#5a7a96' : '#203040');
-      l.setAttribute('stroke-width', isMaj ? '1.5' : '0.9');
-      gPal.appendChild(l);
-    }
-  }
-  // 2. Fluting teeth for inner & outer knobs
   const addFlutes = (id, cx, cy, r1, r2, count) => {
     const g = $(id);
     if (g && !g.children.length) {
       for (let i = 0; i < count; i++) {
         const rad = (i / count) * Math.PI * 2;
         const l = document.createElementNS(ns, 'line');
-        l.setAttribute('x1', (cx + r1 * Math.cos(rad)).toFixed(1));
-        l.setAttribute('y1', (cy + r1 * Math.sin(rad)).toFixed(1));
-        l.setAttribute('x2', (cx + r2 * Math.cos(rad)).toFixed(1));
-        l.setAttribute('y2', (cy + r2 * Math.sin(rad)).toFixed(1));
+        l.setAttribute('x1', (cx + Math.cos(rad) * r1).toFixed(1));
+        l.setAttribute('y1', (cy + Math.sin(rad) * r1).toFixed(1));
+        l.setAttribute('x2', (cx + Math.cos(rad) * r2).toFixed(1));
+        l.setAttribute('y2', (cy + Math.sin(rad) * r2).toFixed(1));
         l.setAttribute('stroke', i % 2 === 0 ? 'rgba(255,255,255,0.25)' : 'rgba(0,0,0,0.75)');
         l.setAttribute('stroke-width', '1.3');
         g.appendChild(l);
       }
     }
   };
-  addFlutes('deckRfGainKnurls', 74, 76, 36.5, 41.5, 48);
-  addFlutes('deckAfVolKnurls', 74, 76, 21.5, 25.5, 32);
-  addFlutes('deckPalKnurls', 204, 76, 29.5, 33.5, 40);
-  addFlutes('deckSpanKnurls', 204, 76, 17.5, 20.5, 28);
+  addFlutes('deckAfVolKnurls', 55, 55, 33.5, 38.5, 36);
 }
 
 function setupRadioDeck() {
   buildConcentricTicks();
 
-  // 1. Dual Concentric Knob 1: AF VOL (inner) & RF GAIN (outer)
-  makeKnobDraggable('deckRfGainWrap', (dy, isFine) => {
-    const slider = $('sdrGainRange');
-    const agc = $('sdrAgc');
-    if (!slider) return;
-    if (agc && agc.checked) {
-      agc.checked = false;
-      slider.disabled = false;
-    }
-    const step = isFine ? 0.5 : 2.0;
-    let v = Number(slider.value) + (dy > 0 ? step : -step);
-    v = Math.max(0, Math.min(50, Math.round(v)));
-    slider.value = v;
-    $('sdrGainVal').textContent = v + ' dB';
-    setSdrGain(v);
-    syncGainUi();
-  });
-  $('deckRfGainWrap')?.addEventListener('dblclick', () => {
-    const agc = $('sdrAgc');
-    const slider = $('sdrGainRange');
-    if (!agc || !slider) return;
-    agc.checked = !agc.checked;
-    slider.disabled = agc.checked;
-    setSdrGain(agc.checked ? null : parseFloat(slider.value));
-    $('sdrGainVal').textContent = agc.checked ? 'auto' : slider.value + ' dB';
-    syncGainUi();
-  });
-
+  // 1. Dedicated Standalone AF Gain (Volume) Rotary Pot (Bay 1)
   makeKnobDraggable('deckAfVolWrap', (dy, isFine) => {
     if (!audioOn) startAudio();
     const step = isFine ? 0.01 : 0.04;
@@ -3205,7 +3749,58 @@ function setupRadioDeck() {
     syncAfVolUi();
   });
 
-  // 2. Dual Concentric Knob 2: SPAN (outer) & FFT ZOOM (inner)
+  // 2. Precision Linear Vertical Faders
+  // RF Gain Fader (Bay 1)
+  makeFaderDraggable('faderRfGainTrack', (frac, isDelta) => {
+    const slider = $('sdrGainRange');
+    const agc = $('sdrAgc');
+    if (!slider) return;
+    if (agc && agc.checked) {
+      agc.checked = false;
+      slider.disabled = false;
+    }
+    let val;
+    if (isDelta) {
+      val = Math.round(Number(slider.value) + frac * 50);
+    } else {
+      val = Math.round(frac * 50);
+    }
+    val = Math.max(0, Math.min(50, val));
+    slider.value = val;
+    const gainValEl = $('sdrGainVal');
+    if (gainValEl) gainValEl.textContent = `${val} dB`;
+    setSdrGain(val);
+    syncGainUi();
+  });
+
+  $('faderAgcBtn')?.addEventListener('click', () => {
+    const agc = $('sdrAgc');
+    const slider = $('sdrGainRange');
+    if (!agc || !slider) return;
+    agc.checked = !agc.checked;
+    slider.disabled = agc.checked;
+    setSdrGain(agc.checked ? null : parseFloat(slider.value));
+    const gainValEl = $('sdrGainVal');
+    if (gainValEl) gainValEl.textContent = agc.checked ? 'auto' : `${slider.value} dB`;
+    syncGainUi();
+  });
+
+  // Squelch Fader (Bay 1)
+  makeFaderDraggable('faderSqlTrack', (frac, isDelta) => {
+    const min = (typeof sdrMinDb === 'number') ? sdrMinDb : -120;
+    const max = (typeof sdrMaxDb === 'number') ? sdrMaxDb : 0;
+    const range = (max - min) || 1;
+    if (isDelta) {
+      sdrSquelchDb = Math.round(sdrSquelchDb + frac * range);
+    } else {
+      sdrSquelchDb = Math.round(min + frac * range);
+    }
+    sdrSquelchDb = Math.max(min, Math.min(max, sdrSquelchDb));
+    syncSquelchUi();
+    scheduleHoverPaint();
+  });
+
+  // SPAN Rate Fader (Bay 4)
   const stepSpanRate = (dir) => {
     const sel = $('sdrRateSel');
     const curRate = sel ? Number(sel.value) : sdrRateHz;
@@ -3221,21 +3816,42 @@ function setupRadioDeck() {
       syncSpanKnobUi();
     }
   };
-  makeKnobDraggable('deckPalWrap', (dy) => {
-    stepSpanRate(dy > 0 ? 1 : -1);
+
+  makeFaderDraggable('faderSpanTrack', (frac, isDelta) => {
+    if (isDelta) {
+      stepSpanRate(frac > 0 ? 1 : -1);
+    } else {
+      const sel = $('sdrRateSel');
+      const idx = Math.max(0, Math.min(SPAN_RATES.length - 1, Math.round(frac * (SPAN_RATES.length - 1))));
+      const newRate = SPAN_RATES[idx];
+      const curRate = sel ? Number(sel.value) : sdrRateHz;
+      if (newRate !== curRate) {
+        setSdrRate(newRate);
+        if (sel) sel.value = String(newRate);
+        syncSpanKnobUi();
+      }
+    }
   });
-  makeKnobDraggable('deckSpanWrap', (dy) => {
-    if (dy > 0) setZoom(sdrZoom * 1.25);
-    else setZoom(sdrZoom / 1.25);
+
+  // FFT Zoom Fader (Bay 4)
+  makeFaderDraggable('faderZoomTrack', (frac, isDelta) => {
+    if (isDelta) {
+      const factor = frac > 0 ? 1.25 : (1 / 1.25);
+      setZoom(Math.max(1, Math.min(32, sdrZoom * factor)));
+    } else {
+      let z = Math.pow(2, frac * 5.0);
+      if (z < 1.08) z = 1;
+      setZoom(Math.max(1, Math.min(32, z)));
+    }
     syncZoomUi();
   });
-  $('deckSpanBtn')?.addEventListener('click', (e) => {
-    e.stopPropagation();
+
+  $('faderZoomReset')?.addEventListener('click', () => {
     setZoom(1);
     syncZoomUi();
   });
 
-  // 3. Sub-VFO & Quick Band Keys
+  // 3. Sub-VFO & Quick Band Keys (Bay 3)
   $('btnVfoSwap')?.addEventListener('click', () => {
     const temp = sdrInspectHz;
     tuneRxHz(subVfoHz, true);
@@ -3268,6 +3884,7 @@ function setupRadioDeck() {
 
   syncGainUi();
   syncAfVolUi();
+  syncSquelchUi();
   syncPaletteUi();
   syncSpanKnobUi();
   syncZoomUi();
@@ -3819,9 +4436,6 @@ function drawSdrSpectrum(pwr) {
     ctx.setLineDash([]);
   }
 }
-
-let sdrSquelchDb = -75;
-let sdrSquelchDragging = false;
 
 /// Wipe the waterfall.
 ///
@@ -4749,17 +5363,18 @@ function pointerFreq(e, cv) {
   return { x, hz: freqForX(x, rect.width) };
 }
 
+let hoverPaintPending = false;
+function scheduleHoverPaint() {
+  if (hoverPaintPending) return;
+  hoverPaintPending = true;
+  requestAnimationFrame(() => {
+    hoverPaintPending = false;
+    if (sdrLastPwr.length) drawSdrSpectrum(sdrLastPwr);
+  });
+}
+
 function setupSdrInteractions() {
   const targets = [sdrSpecCanvas, sdrWfCanvas];
-  let hoverPaintPending = false;
-  const scheduleHoverPaint = () => {
-    if (hoverPaintPending) return;
-    hoverPaintPending = true;
-    requestAnimationFrame(() => {
-      hoverPaintPending = false;
-      if (sdrLastPwr.length) drawSdrSpectrum(sdrLastPwr);
-    });
-  };
 
   // Canvas squelch drag interaction
   let squelchJustDragged = false;
@@ -4781,6 +5396,7 @@ function setupSdrInteractions() {
           const clampedY = Math.max(0, Math.min(H, cy));
           sdrSquelchDb = Math.round(sdrMinDb + (1 - clampedY / H) * range);
           scheduleHoverPaint();
+          syncSquelchUi();
         };
         const onUp = () => {
           sdrSquelchDragging = false;
@@ -4811,6 +5427,7 @@ function setupSdrInteractions() {
           const clampedY = Math.max(0, Math.min(H, cy));
           sdrSquelchDb = Math.round(sdrMinDb + (1 - clampedY / H) * range);
           scheduleHoverPaint();
+          syncSquelchUi();
         };
         const onTouchEnd = () => {
           sdrSquelchDragging = false;
@@ -4918,6 +5535,7 @@ function setupControls() {
     sdrMaxDb = Number($('sdrMaxDb').value);
     if (sdrMaxDb <= sdrMinDb + 10) { sdrMaxDb = sdrMinDb + 10; $('sdrMaxDb').value = sdrMaxDb; }
     $('sdrRangeVal').textContent = sdrMinDb + '..' + sdrMaxDb;
+    syncSquelchUi();
     if (sdrLastPwr.length) drawSdrSpectrum(sdrLastPwr);
   };
   $('sdrMinDb').addEventListener('input', onRange);
@@ -4970,8 +5588,8 @@ function setupControls() {
     centreSpanHz(sdrInspectHz);
   });
 
-  $('keyZoomIn').addEventListener('click', () => setZoom(sdrZoom * 2));
-  $('keyZoomOut').addEventListener('click', () => setZoom(sdrZoom / 2));
+  $('keyZoomIn')?.addEventListener('click', () => setZoom(sdrZoom * 2));
+  $('keyZoomOut')?.addEventListener('click', () => setZoom(sdrZoom / 2));
 
   $('keySpur').addEventListener('click', async () => {
     if (sdrSpurOffsets.length) {
@@ -5014,28 +5632,47 @@ function setupControls() {
 
   // Calibration needs a carrier whose true frequency the operator vouches for;
   // the receiver supplies the measured error and the arithmetic.
-  $('btnCalibrate').addEventListener('click', async () => {
+  async function calibrateSdr() {
     const b = $('btnCalibrate');
-    b.textContent = 'measuring';
+    const vfoVal = $('vfoFreqErrVal');
+    if (b) b.textContent = 'measuring';
+    if (vfoVal) vfoVal.textContent = 'CAL...';
     try {
-      // A refused calibration ("no signal to calibrate against…") comes
-      // back as plain text, not JSON; parsing it as JSON first turned the
-      // server's reason into a SyntaxError on screen. sdrPost reads the
-      // body as text and surfaces the reason itself.
-      const j = await (await sdrPost('/api/sdr/calibrate', {}, 'calibrate')).json();
-      $('ppmInput').value = j.ppm.toFixed(1);
-      $('err').textContent = `calibrated to ${j.ppm.toFixed(1)} ppm from ` +
+      const res = await sdrPost('/api/sdr/calibrate', {}, 'calibrate');
+      const j = await res.json();
+      if ($('ppmInput')) $('ppmInput').value = j.ppm.toFixed(1);
+      const msg = `calibrated to ${j.ppm.toFixed(1)} ppm from ` +
         `${(j.referenceHz/1e6).toFixed(5)} MHz (${Math.round(j.measuredErrorHz)} Hz error)`;
+      $('err').textContent = msg;
+      $('err').style.color = '#2bff6a';
+      setTimeout(() => { if ($('err').textContent === msg) { $('err').textContent = ''; $('err').style.color = ''; } }, 6000);
     } catch (e) {
       $('err').textContent = 'calibrate: ' + e.message;
-    } finally { b.textContent = 'calibrate'; }
+      $('err').style.color = '';
+    } finally {
+      if (b) b.textContent = 'calibrate';
+    }
+  }
+
+  $('btnCalibrate')?.addEventListener('click', calibrateSdr);
+  $('vfoCalSeg')?.addEventListener('click', calibrateSdr);
+
+  $('chkLoOffset')?.addEventListener('change', (e) => {
+    setFrontend({ lo_offset: e.target.checked });
+    $('btnLoOffset')?.classList.toggle('on', e.target.checked);
   });
+  $('btnLoOffset')?.addEventListener('click', () => {
+    const chk = $('chkLoOffset');
+    const next = chk ? !chk.checked : !$('btnLoOffset')?.classList.contains('on');
+    if (chk) chk.checked = next;
+    $('btnLoOffset')?.classList.toggle('on', next);
+    setFrontend({ lo_offset: next });
+  });
+  $('chkClipGuard')?.addEventListener('change', (e) => setFrontend({ clip_guard: e.target.checked }));
+  $('chkTunerAgc')?.addEventListener('change', (e) => setFrontend({ tuner_agc: e.target.checked }));
 
-  $('chkLoOffset').addEventListener('change', (e) => setFrontend({ lo_offset: e.target.checked }));
-  $('chkClipGuard').addEventListener('change', (e) => setFrontend({ clip_guard: e.target.checked }));
-  $('chkTunerAgc').addEventListener('change', (e) => setFrontend({ tuner_agc: e.target.checked }));
-
-  $('btnListen').addEventListener('click', () => audioOn ? stopAudio() : startAudio());
+  $('btnListen')?.addEventListener('click', () => audioOn ? stopAudio() : startAudio());
+  $('btnListenSecondary')?.addEventListener('click', () => audioOn ? stopAudio() : startAudio());
   $('volRange').addEventListener('input', (e) => {
     audioVolume = Number(e.target.value) / 100;
     $('volVal').textContent = e.target.value + '%';
@@ -5345,15 +5982,31 @@ function updateMeter(c, peakIq, channelDbfs, noiseDbfs, scope) {
 
   // Digital readout numbers below meter
   const num = $('meterNum');
+  const rf = meterPhysics.rawDbfs;
+  const snr = meterPhysics.snrDb;
   if (num) {
-    const rf = meterPhysics.rawDbfs;
-    const snr = meterPhysics.snrDb;
     const agcRedDb = agcChecked ? (agcPhysics.pos * 0.45).toFixed(0) : 'OFF';
     num.textContent = 'CH ' + (rf === null ? '—' : rf.toFixed(1) + ' dBFS')
       + '  ·  SNR ' + (snr === null ? '—' : snr.toFixed(1) + ' dB')
       + '  ·  AGC ' + (agcChecked ? `${agcRedDb} dB` : 'OFF');
     if (clip) num.textContent += '  ·  CLIP';
     num.style.color = clip ? '#ff8a7a' : '';
+  }
+
+  // VFO Intermediate Telemetry Bar live sync
+  const vfoPwr = $('vfoChPwrVal');
+  if (vfoPwr) vfoPwr.textContent = rf === null ? '— dBFS' : `${rf.toFixed(1)} dBFS`;
+  const vfoSnr = $('vfoSnrVal');
+  if (vfoSnr) vfoSnr.textContent = snr === null ? '— dB' : `${snr.toFixed(1)} dB`;
+  const sqlGate = $('vfoSqlGateVal');
+  if (sqlGate) {
+    const open = rf !== null && (typeof sdrSquelchDb === 'number' ? rf >= sdrSquelchDb : true);
+    sqlGate.textContent = open ? 'OPEN' : 'CLOSED';
+    sqlGate.style.color = open ? '#2bff6a' : '#ffb830';
+  }
+  const vfoNotch = $('vfoNotchVal');
+  if (vfoNotch) {
+    vfoNotch.textContent = (Array.isArray(sdrSpurOffsets) && sdrSpurOffsets.length > 0) ? `NOTCH ${sdrSpurOffsets.length}` : 'AUTO';
   }
 }
 // ---------- audio ----------
@@ -5388,8 +6041,18 @@ function startAudio() {
   ensureAudioGraph();
   audioOn = true;
   audioNext = 0;
-  $('btnListen').classList.add('on');
-  $('btnListen').textContent = 'MUTE';
+  const b = $('btnListen');
+  if (b) {
+    b.classList.add('on');
+    const lbl = $('listenBtnLabel');
+    if (lbl) lbl.textContent = 'MUTE';
+    else b.textContent = 'MUTE';
+  }
+  const b2 = $('btnListenSecondary');
+  if (b2) {
+    b2.classList.add('on');
+    b2.textContent = 'MUTE';
+  }
   syncAfVolUi();
 }
 
@@ -5397,8 +6060,18 @@ function stopAudio() {
   audioOn = false;
   const a = $('callAudio');
   if (audioCtx && (!a || a.paused)) audioCtx.suspend();
-  $('btnListen').classList.remove('on');
-  $('btnListen').textContent = 'LISTEN';
+  const b = $('btnListen');
+  if (b) {
+    b.classList.remove('on');
+    const lbl = $('listenBtnLabel');
+    if (lbl) lbl.textContent = 'LISTEN';
+    else b.textContent = 'LISTEN';
+  }
+  const b2 = $('btnListenSecondary');
+  if (b2) {
+    b2.classList.remove('on');
+    b2.textContent = 'LISTEN';
+  }
   syncAfVolUi();
 }
 
@@ -5869,6 +6542,8 @@ function updateSdrStatus(s) {
   updateBandPresetUi();
   if ($('sdrRateSel')) $('sdrRateSel').value = String(Math.round(s.rate_hz));
   if ($('badgeSpan')) $('badgeSpan').textContent = (s.rate_hz / 1e6).toFixed(3).replace(/0+$/, '').replace(/\.$/, '') + 'M';
+  if ($('headerTunerBadge') && s.tuner) $('headerTunerBadge').textContent = s.tuner.replace('Rafael Micro ', '');
+  if ($('headerRateBadge') && s.rate_hz) $('headerRateBadge').textContent = `${(s.rate_hz / 1e6).toFixed(2)}M`;
   syncSpanKnobUi();
   if ($('sdrRadioSel') && s.serial) $('sdrRadioSel').value = s.serial;
   if (s.mode && s.mode !== sdrMode) applyModeUi(s.mode);
@@ -5892,6 +6567,7 @@ function updateSdrStatus(s) {
     }
   }
   if ($('chkLoOffset')) $('chkLoOffset').checked = !!s.lo_offset;
+  $('btnLoOffset')?.classList.toggle('on', !!s.lo_offset);
   if ($('ppmInput') && document.activeElement !== $('ppmInput')) {
     $('ppmInput').value = (s.ppm ?? 0).toFixed(1);
   }
@@ -5900,7 +6576,20 @@ function updateSdrStatus(s) {
     $('freqErrVal').textContent = s.freq_error_hz == null
       ? 'err —' : `err ${Math.round(s.freq_error_hz)} Hz`;
     $('freqErrVal').style.color = s.freq_error_hz == null ? ''
-      : (Math.abs(s.freq_error_hz) > 2000 ? 'var(--amber)' : '');
+      : (Math.abs(s.freq_error_hz) > 2000 ? 'var(--amber)' : '#38bdf8');
+  }
+  if ($('vfoFreqErrVal')) {
+    if (s.freq_error_hz == null) {
+      $('vfoFreqErrVal').textContent = '—';
+      $('vfoFreqErrVal').style.color = '';
+    } else {
+      const err = Math.round(s.freq_error_hz);
+      const sign = err >= 0 ? '+' : '';
+      $('vfoFreqErrVal').textContent = Math.abs(err) >= 10000
+        ? `${sign}${(err / 1e3).toFixed(1)}k`
+        : `${sign}${err} Hz`;
+      $('vfoFreqErrVal').style.color = Math.abs(err) > 2000 ? '#ffb830' : '#38bdf8';
+    }
   }
   if ($('chkClipGuard')) $('chkClipGuard').checked = !!s.clip_guard;
   if ($('chkTunerAgc')) $('chkTunerAgc').checked = !!s.tuner_agc;
@@ -6104,6 +6793,12 @@ async function loadCalls() {
     if (sig === callsSig) return;
     callsSig = sig;
     const el = $('callsList');
+    const note = $('callsNote');
+    if (note) {
+      note.textContent = list.length
+        ? `${list.length} call${list.length === 1 ? '' : 's'} recorded · kept until server restarts`
+        : 'Voice calls are kept here until the server restarts';
+    }
     if (!el) return;
     if (!list.length) {
       el.innerHTML = '<div class="data-empty">No voice calls yet.</div>';

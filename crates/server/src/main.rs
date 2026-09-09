@@ -641,6 +641,12 @@ async fn post_sdr_ppm(
     Ok(Json(serde_json::json!({ "ok": true, "ppm": req.ppm })))
 }
 
+#[derive(serde::Deserialize, Default)]
+#[serde(default)]
+struct SdrCalibrateReq {
+    reference_hz: Option<f64>,
+}
+
 /// Work out the crystal error from a signal whose true frequency is known.
 ///
 /// The receiver measures where the tuned channel's energy actually sits; the
@@ -650,18 +656,26 @@ async fn post_sdr_ppm(
 /// channel, a commercial repeater.
 async fn post_sdr_calibrate(
     State(st): State<Arc<AppState>>,
+    body: Option<Json<SdrCalibrateReq>>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let guard = st.sdr.lock().expect("sdr");
     let sdr = guard
         .as_ref()
         .ok_or_else(|| ApiError::BadRequest("the receiver is not running".into()))?;
-    let (err_hz, inspect_hz, ppm_now) = {
+    let (err_hz, mut inspect_hz, ppm_now) = {
         let s = sdr.status.lock().expect("sdr status");
         (s.freq_error_hz, s.inspect_hz, s.ppm)
     };
+    if let Some(Json(req)) = body {
+        if let Some(ref_hz) = req.reference_hz {
+            if ref_hz > 0.0 {
+                inspect_hz = ref_hz;
+            }
+        }
+    }
     let err_hz = err_hz.ok_or_else(|| {
         ApiError::BadRequest(
-            "no signal to calibrate against — tune to a carrier you know the frequency of".into(),
+            "no carrier detected near tuned frequency — tune to a steady carrier (e.g. NOAA weather radio, broadcast station, or control channel) where an error is displayed".into(),
         )
     })?;
     if inspect_hz <= 0.0 {
@@ -672,8 +686,7 @@ async fn post_sdr_calibrate(
     let ppm = ppm_now - (err_hz / inspect_hz) * 1e6;
     if !(-200.0..=200.0).contains(&ppm) {
         return Err(ApiError::BadRequest(format!(
-            "measured correction {ppm:.1} ppm is outside the plausible range — \
-             is the reference frequency right?"
+            "measured correction {ppm:.1} ppm is outside the plausible range (-200..+200 ppm) — is the reference frequency right?"
         )));
     }
     sdr.set_ppm(ppm)?;

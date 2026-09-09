@@ -379,3 +379,208 @@ test('scope chrome resets the trigger tag colour on kind change', () => {
     'leaving the symbol scope must clear the per-frame lock colour');
   assert.strictEqual(run(ctx, `document.getElementById('scopeTrigTag').textContent`), 'AUTO ZERO-CROSS');
 });
+
+// ---------------------------------------------------------------------------
+// 7. Transceiver deck: Standalone AF Gain knob and RF Gain fader.
+// ---------------------------------------------------------------------------
+test('standalone AF Gain knob syncs volume and readout correctly', () => {
+  const ctx = buildContext();
+  run(ctx, `
+    audioOn = true;
+    audioVolume = 0.75;
+    syncAfVolUi();
+  `);
+  const readout = run(ctx, `document.getElementById('deckAfVolReadout').textContent`);
+  assert.ok(readout.includes('75%'), `readout should display 75%: ${readout}`);
+  assert.ok(readout.includes('ACTIVE'), `readout should indicate active state: ${readout}`);
+
+  // Test mute
+  run(ctx, `
+    audioOn = false;
+    syncAfVolUi();
+  `);
+  const mutedReadout = run(ctx, `document.getElementById('deckAfVolReadout').textContent`);
+  assert.ok(mutedReadout.includes('MUTED'), `readout should indicate muted: ${mutedReadout}`);
+});
+
+test('linear faders for RF Gain, Squelch, SPAN and Zoom sync accurately', () => {
+  const ctx = buildContext();
+  // 1. RF Gain Fader & AGC button
+  run(ctx, `
+    document.getElementById('sdrGainRange').value = '35';
+    document.getElementById('sdrAgc').checked = false;
+    syncGainUi();
+  `);
+  assert.strictEqual(run(ctx, `document.getElementById('faderRfGainCap').style.bottom`), '70.0%');
+  assert.strictEqual(run(ctx, `document.getElementById('faderRfGainVal').textContent`), '35 dB');
+  assert.strictEqual(run(ctx, `document.getElementById('faderAgcBtn').classList.contains('on')`), false);
+
+  // Toggle AGC
+  run(ctx, `
+    document.getElementById('sdrAgc').checked = true;
+    syncGainUi();
+  `);
+  assert.strictEqual(run(ctx, `document.getElementById('faderRfGainVal').textContent`), 'auto');
+  assert.strictEqual(run(ctx, `document.getElementById('faderAgcBtn').classList.contains('on')`), true);
+
+  // 2. Squelch Fader live sync
+  run(ctx, `
+    sdrMinDb = -100;
+    sdrMaxDb = 0;
+    sdrSquelchDb = -40;
+    syncSquelchUi();
+  `);
+  // (-40 - (-100)) / 100 = 60%
+  assert.strictEqual(run(ctx, `document.getElementById('faderSqlCap').style.bottom`), '60.0%');
+  assert.strictEqual(run(ctx, `document.getElementById('faderSqlVal').textContent`), '-40 dB');
+
+  // 3. SPAN Rate Fader
+  run(ctx, `
+    document.getElementById('sdrRateSel').value = '2048000';
+    syncSpanKnobUi();
+  `);
+  assert.strictEqual(run(ctx, `document.getElementById('faderSpanVal').textContent`), '2.05M');
+
+  // 4. FFT Zoom Fader
+  run(ctx, `
+    sdrZoom = 4.0;
+    syncZoomUi();
+  `);
+  // log2(4) / 5 = 2 / 5 = 40%
+  assert.strictEqual(run(ctx, `document.getElementById('faderZoomCap').style.bottom`), '40.0%');
+  assert.strictEqual(run(ctx, `document.getElementById('faderZoomVal').textContent`), '4.0x');
+});
+
+test('Main VFO flywheel setup generates 72 knurling teeth', () => {
+  const ctx = buildContext();
+  run(ctx, `
+    setupVfoFlywheel();
+  `);
+  const knurls = run(ctx, `document.getElementById('vfoKnurlGroup').children.length`);
+  assert.strictEqual(knurls, 72, 'Main VFO flywheel must have 72 precision knurling teeth');
+});
+
+test('Aux row LISTEN/LO OFFSET buttons and VFO telemetry bar sync correctly', () => {
+  const ctx = buildContext();
+  run(ctx, `
+    startAudio();
+  `);
+  assert.strictEqual(run(ctx, `document.getElementById('listenBtnLabel').textContent`), 'MUTE');
+  assert.strictEqual(run(ctx, `document.getElementById('btnListen').classList.contains('on')`), true);
+
+  run(ctx, `
+    stopAudio();
+  `);
+  assert.strictEqual(run(ctx, `document.getElementById('listenBtnLabel').textContent`), 'LISTEN');
+  assert.strictEqual(run(ctx, `document.getElementById('btnListen').classList.contains('on')`), false);
+
+  run(ctx, `
+    updateSdrStatus({ lo_offset: true });
+  `);
+  assert.strictEqual(run(ctx, `document.getElementById('btnLoOffset').classList.contains('on')`), true);
+
+  run(ctx, `
+    updateSdrStatus({ freq_error_hz: 245.0 });
+  `);
+  assert.strictEqual(run(ctx, `document.getElementById('vfoFreqErrVal').textContent`), '+245 Hz');
+  assert.strictEqual(run(ctx, `document.getElementById('freqErrVal').textContent`), 'err 245 Hz');
+
+  run(ctx, `
+    updateSdrStatus({ freq_error_hz: null });
+  `);
+  assert.strictEqual(run(ctx, `document.getElementById('vfoFreqErrVal').textContent`), '—');
+  assert.strictEqual(run(ctx, `document.getElementById('freqErrVal').textContent`), 'err —');
+
+  run(ctx, `
+    updateMeter(null, null, -50.0, -70.0, null);
+  `);
+  assert.strictEqual(run(ctx, `document.getElementById('vfoChPwrVal').textContent`), '-50.0 dBFS');
+  assert.strictEqual(run(ctx, `document.getElementById('vfoSnrVal').textContent`), '20.0 dB');
+  assert.strictEqual(run(ctx, `document.getElementById('vfoSqlGateVal').textContent`), 'OPEN');
+});
+
+test('Realistic DOM environment with strict element checking boots without errors', () => {
+  const html = fs.readFileSync(PAGE, 'utf8');
+  const validIds = new Set();
+  const idRegex = /id=["']([^"']+)["']/g;
+  let match;
+  while ((match = idRegex.exec(html)) !== null) {
+    validIds.add(match[1]);
+  }
+
+  const byId = new Map();
+  const document = {
+    getElementById(id) {
+      if (!validIds.has(id)) return null;
+      if (!byId.has(id)) byId.set(id, makeEl(id));
+      return byId.get(id);
+    },
+    querySelectorAll() { return []; },
+    querySelector() { return null; },
+    createElement(tag) { return makeEl('created-' + tag); },
+    createElementNS(ns, tag) {
+      const el = makeEl('created-' + tag);
+      el.tagName = String(tag).toUpperCase();
+      return el;
+    },
+    addEventListener() {}, removeEventListener() {},
+    body: makeEl('body'),
+    documentElement: makeEl('html'),
+    activeElement: null,
+    hidden: false,
+    visibilityState: 'visible',
+  };
+
+  class WebSocketStub {
+    static OPEN = 1;
+    constructor() { this.readyState = 1; }
+    send() {} close() { this.readyState = 3; }
+    addEventListener() {}
+  }
+
+  const sandbox = {
+    document,
+    WebSocket: WebSocketStub,
+    navigator: { userAgent: 'node-test', platform: 'linux', clipboard: { writeText: async () => {} } },
+    location: { href: 'http://127.0.0.1:8073/', protocol: 'http:', host: '127.0.0.1:8073', search: '' },
+    history: { pushState() {}, replaceState() {} },
+    fetch: async () => ({ ok: true, json: async () => ({}), text: async () => '' }),
+    setInterval: () => 0, clearInterval() {}, setTimeout: () => 0, clearTimeout() {},
+    requestAnimationFrame: () => 0, cancelAnimationFrame() {},
+    performance: { now: () => Date.now() },
+    matchMedia: () => ({ matches: false, addEventListener() {}, addListener() {} }),
+    localStorage: { getItem: () => null, setItem: () => {}, removeItem: () => {} },
+    sessionStorage: { getItem: () => null, setItem: () => {}, removeItem: () => {} },
+    AudioContext: class { constructor() { this.state = 'running'; this.destination = {}; this.sampleRate = 48000; } createGain() { return { gain: { value: 1, setValueAtTime() {} }, connect() {}, disconnect() {} }; } createBufferSource() { return { connect() {}, start() {}, stop() {}, buffer: null }; } createScriptProcessor() { return { connect() {}, onaudioprocess: null }; } resume() { return Promise.resolve(); } close() { return Promise.resolve(); } },
+    Image: class { constructor() { this.width = 1; this.height = 1; } },
+    Audio: class { play() { return Promise.resolve(); } pause() {} },
+    Blob: class {},
+    URL: Object.assign(function () {}, { createObjectURL: () => 'blob:stub', revokeObjectURL() {} }),
+    FileReader: class { readAsArrayBuffer() {} readAsDataURL() {} },
+    ResizeObserver: class { observe() {} unobserve() {} disconnect() {} },
+    MutationObserver: class { observe() {} disconnect() {} },
+    IntersectionObserver: class { observe() {} disconnect() {} },
+    console: { log() {}, warn() {}, error() {}, info() {}, debug() {} },
+    alert() {}, confirm: () => false, prompt: () => null,
+    devicePixelRatio: 1, innerWidth: 1920, innerHeight: 1080,
+    addEventListener() {}, removeEventListener() {},
+    scrollTo() {}, getComputedStyle: () => ({ getPropertyValue: () => '' }),
+    OffscreenCanvas: class { constructor(w, h) { this.width = w; this.height = h; } getContext() { return ctx2d(); } },
+    Path2D: class {}, ImageData: class {}, TextEncoder, TextDecoder,
+    atob: s => Buffer.from(s, 'base64').toString('binary'),
+    btoa: s => Buffer.from(s, 'binary').toString('base64'),
+    queueMicrotask: f => f(),
+    structuredClone: x => JSON.parse(JSON.stringify(x)),
+    crypto: { randomUUID: () => '00000000-0000-0000-0000-000000000000' },
+  };
+  sandbox.window = sandbox;
+  sandbox.self = sandbox;
+  sandbox.globalThis = sandbox;
+
+  const ctx = vm.createContext(sandbox);
+  const m = html.match(/<script[^>]*>([\s\S]*?)<\/script>/);
+  assert.doesNotThrow(() => {
+    vm.runInContext(m[1], ctx, { filename: 'index.html inline script' });
+  });
+});
+

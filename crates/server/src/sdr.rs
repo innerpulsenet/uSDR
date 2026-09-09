@@ -2804,6 +2804,8 @@ fn run_sdr(
     // Smoothed carrier error. A single frame's centroid is noisy; a
     // calibration wants a settled figure.
     let mut freq_error_hz: Option<f64> = None;
+    let mut last_carrier_err_at: Option<Instant> = None;
+    let mut last_carrier_inspect_hz: f64 = inspect_hz;
     let mut flex_carrier_corr_hz: f64 = 0.0;
     let mut last_flex_inspect_hz: f64 = inspect_hz;
     let mut next_call_id: u64 = 1;
@@ -5157,40 +5159,6 @@ fn run_sdr(
                 &mut sorted_scratch,
             );
             last_snr_db = channel_dbfs - noise_dbfs;
-            // Only meaningful when something is actually there to measure.
-            // PAGER measures differently: there is no clicked carrier to
-            // centroid (the mode's "bandwidth" is the whole sweep span), so
-            // the live channel's decoders report the offset their sync-time
-            // DC reference settled on — which is exactly the figure a ppm
-            // calibration needs, and the only honest one on a channel whose
-            // idle content biases any raw discriminator mean.
-            if current_mode == SdrMode::Pager {
-                if let Some(err) =
-                    pager_bank.as_ref().and_then(|b| b.carrier_offset_hz())
-                {
-                    freq_error_hz = Some(match freq_error_hz {
-                        Some(prev) => prev + (err - prev) * 0.15,
-                        None => err,
-                    });
-                }
-            } else if current_mode == SdrMode::Flex {
-                // freq_error_hz is maintained from flex.diagnostics().last_carrier_offset_hz
-            } else if channel_dbfs - noise_dbfs > 3.0
-                && let Some(err) = carrier_offset_hz(
-                    shown,
-                    shown_rate,
-                    inspect_hz - shown_centre,
-                    f64::from(current_mode.bandwidth_hz()),
-                    &mut sorted_scratch,
-                )
-            {
-                freq_error_hz = Some(match freq_error_hz {
-                    Some(prev) => prev + (err - prev) * 0.15,
-                    None => err,
-                });
-            } else if last_snr_db < 1.5 && current_mode != SdrMode::Flex {
-                freq_error_hz = None;
-            }
             // `shown` is re-centred on the display centre (which sits away
             // from the dial whenever the inspect channel is off-tune), and
             // the spur offsets above are display-relative — so the peak
@@ -5205,6 +5173,96 @@ fn run_sdr(
                 &decode_history,
             );
             decode_history.prune();
+
+            // Track carrier offset for frequency calibration (PPM correction) and dial accuracy.
+            if (last_carrier_inspect_hz - inspect_hz).abs() > 10.0 {
+                freq_error_hz = None;
+                last_carrier_err_at = None;
+                last_carrier_inspect_hz = inspect_hz;
+            }
+
+            // 1. Check protocol-specific carrier tracking decoders if active
+            let decoder_err = match current_mode {
+                SdrMode::Pager => pager_bank.as_ref().and_then(|b| b.carrier_offset_hz()),
+                SdrMode::P25 => {
+                    if let Demod::P25 { rx } = &demod {
+                        rx.carrier_offset_hz()
+                    } else {
+                        None
+                    }
+                }
+                SdrMode::Dmr => {
+                    if let Demod::Dmr { rx } = &demod {
+                        rx.carrier_offset_hz()
+                    } else {
+                        None
+                    }
+                }
+                SdrMode::Flex => {
+                    if let Demod::Flex { flex } = &demod {
+                        flex.diagnostics().last_carrier_offset_hz.map(f64::from)
+                    } else {
+                        None
+                    }
+                }
+                _ => None,
+            };
+
+            // 2. Direct in-channel spectral centroid if channel energy stands over the noise floor
+            let in_channel_offset = if channel_dbfs - noise_dbfs > 3.0 {
+                carrier_offset_hz(
+                    shown,
+                    shown_rate,
+                    inspect_hz - shown_centre,
+                    f64::from(current_mode.bandwidth_hz()),
+                    &mut sorted_scratch,
+                )
+            } else {
+                None
+            };
+
+            // 3. Nearby carrier peak search: detects carriers when crystal error has shifted
+            // the signal outside the narrow channel filter (up to ±60 kHz of inspect_hz).
+            let nearby_peak_offset = if in_channel_offset.is_none() && decoder_err.is_none() {
+                let max_search_hz = (inspect_hz * 120e-6).clamp(30_000.0, 60_000.0);
+                peaks
+                    .iter()
+                    .filter(|p| {
+                        p.snr_db >= 4.0 && (p.freq_hz - inspect_hz).abs() <= max_search_hz
+                    })
+                    .min_by(|a, b| {
+                        (a.freq_hz - inspect_hz)
+                            .abs()
+                            .total_cmp(&(b.freq_hz - inspect_hz).abs())
+                    })
+                    .and_then(|p| {
+                        let peak_offset_display = p.freq_hz - shown_centre;
+                        carrier_offset_hz(
+                            shown,
+                            shown_rate,
+                            peak_offset_display,
+                            25_000.0,
+                            &mut sorted_scratch,
+                        )
+                        .map(|fine_corr| (p.freq_hz + fine_corr) - inspect_hz)
+                    })
+            } else {
+                None
+            };
+
+            let raw_err = decoder_err
+                .or(in_channel_offset)
+                .or(nearby_peak_offset);
+
+            if let Some(err) = raw_err {
+                freq_error_hz = Some(match freq_error_hz {
+                    Some(prev) => prev + (err - prev) * 0.20,
+                    None => err,
+                });
+                last_carrier_err_at = Some(Instant::now());
+            } else if last_carrier_err_at.is_some_and(|t| t.elapsed() > Duration::from_secs(5)) {
+                freq_error_hz = None;
+            }
 
             // Voice scan: look for candidates in the fresh FULL-span spectrum
             // (the display peaks above were found in the possibly-zoomed
