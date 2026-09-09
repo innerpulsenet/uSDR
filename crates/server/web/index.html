@@ -246,35 +246,44 @@
   }
 
   /* =========================================================================
-     TOP TRANSCEIVER CONTROL DECK (HIGH-END DESKTOP RADIO FACEPLATE)
+     TRANSCEIVER FACEPLATE GEOMETRY
+
+     The panel is arranged the way a real HF/VHF/UHF radio is: the display is
+     the centrepiece, the knobs and faders an operator touches without looking
+     away sit to its left, the instruments and the main tuning dial to its
+     right. The keys stay under the display they belong to.
      ========================================================================= */
 
   .deck-console {
     display: grid;
-    grid-template-columns: 195px 315px minmax(430px, 1.4fr) 240px;
+    grid-template-columns: 220px minmax(0, 1fr) 300px;
     gap: 8px;
-    align-items: stretch;
+    align-items: start;
     margin-bottom: 8px;
   }
-  @media (max-width: 1320px) {
-    .deck-console {
-      grid-template-columns: 195px 315px 1fr;
-    }
-    /* The tuning bay becomes a full-width row. Keep the two faders and the
-       flywheel grouped in the middle: spread across a meter of panel they
-       looked detached from their own readouts. The bay header still owns the
-       whole first line, or the title collides with its own readout. */
-    .bay-tuning {
-      grid-column: 1 / -1;
-      display: flex; flex-direction: row; flex-wrap: wrap;
-      justify-content: center; align-items: flex-start; gap: 22px;
-    }
-    .bay-tuning .bay-header { flex: 1 1 100%; }
-    .bay-tuning .fader-vert-wrap { flex: 0 0 auto; }
+  /* Control column: AF/RF front end over the selected-channel readout. */
+  .panel-left {
+    display: flex; flex-direction: column; gap: 8px; min-width: 0;
   }
-  @media (max-width: 860px) {
+  /* Display column: readout over the panadapter it describes. */
+  .panel-center {
+    display: flex; flex-direction: column; gap: 8px; min-width: 0;
+  }
+  /* Instrument column: S-meter over the main tuning dial. The meter keeps
+     enough width to stay readable — a dial whose numbers cannot be read is
+     decoration, not an instrument. */
+  .panel-right {
+    display: flex; flex-direction: column; gap: 8px;
+  }
+  /* The three columns stay on one row down to 900 px: the main tuning dial
+     and the meter are instruments, not optional extras, so they narrow with
+     the panel rather than dropping below the fold. */
+  @media (max-width: 1120px) {
+    .deck-console { grid-template-columns: 200px minmax(0, 1fr) 250px; }
+  }
+  @media (max-width: 900px) {
     .deck-console { grid-template-columns: 1fr; }
-    .bay-tuning { flex-direction: column; }
+    .panel-right { flex-direction: row; justify-content: center; gap: 14px; }
   }
 
   /* Modular sub-assemblies on the panel face: flat matte, separated by a 1 px
@@ -1009,14 +1018,12 @@
   /* Spectrum and waterfall in the middle, the selected channel's diagnostics
      beside them: what is being received, and why it is or is not decoding,
      without leaving the picture. */
-  .spec-row {
-    display: grid; grid-template-columns: minmax(0, 1fr) 236px; gap: 10px;
-    align-items: stretch;
-  }
+  /* The panadapter now owns the full width of the display column: the selected
+     channel's diagnostics moved to the instrument column beside it. */
+  .spec-row { display: block; }
   .spec-col { min-width: 0; }
   .chan-col {
     display: flex; flex-direction: column; gap: 8px; min-width: 0;
-    padding-top: 16px;
   }
   .chan-col .chan-title {
     font-size: 9px; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase;
@@ -1030,8 +1037,6 @@
   .chan-col .sdr-classifier-value, .chan-col .sdr-classifier-subvalue { white-space: normal; height: auto; line-height: 1.35; }
   .chan-col .sdr-peak-buttons { height: 74px; }
   @media (max-width: 1080px) {
-    .spec-row { grid-template-columns: 1fr; }
-    .chan-col { padding-top: 0; }
     .chan-col .sdr-classifier-cell { min-height: 0; }
   }
   .health-badge { cursor: default; }
@@ -1463,6 +1468,13 @@
     .scope-panes { grid-template-columns: 1fr; }
     .softkeys { grid-template-columns: repeat(4, 1fr); }
   }
+  /* Shorter waterfall on narrow panels: the display column carries the
+     panadapter and, below 1120 px, the instrument row follows it. Trimming
+     the waterfall keeps the main tuning dial within reach instead of a screen
+     below the fold. Declared after the canvas rules so it wins the cascade. */
+  @media (max-width: 1320px) {
+    #sdrWaterfallCanvas { height: 200px; }
+  }
   /* Motion is decoration on a faceplate: LEDs blink, keys travel, the LCD
      fades in. Operators who ask for reduced motion get the same panel with
      the animation removed. The needle ballistics are driven by rAF, not CSS,
@@ -1532,651 +1544,699 @@
       <!-- ===================================================================
            TRANSCEIVER TOP CONTROL DECK (HIGH-END 4-BAY PHYSICAL HARDWARE PANEL)
            =================================================================== -->
-      <div class="deck-console">
-
-        <!-- BAY 1: AF & RF FRONT-END (Volume Rotary Pot & Linear Vertical Faders) -->
-        <div class="deck-bay bay-frontend">
-          <div class="bay-header">
-            <span class="bay-title"><span class="bay-screw-corner"></span>AF / RF FRONT-END</span>
-            <span class="bay-screw-corner"></span>
-          </div>
-
-          <!-- Standalone High-Fidelity AF Gain (Volume) Rotary Pot -->
-          <div class="af-pot-housing">
-            <svg class="rotary-knob-svg" id="deckAfVolWrap" viewBox="0 0 110 110" title="AF Volume: Drag vertically or scroll to adjust volume. Click center cap to Mute.">
-              <defs>
-                <radialGradient id="afKnobOuterGrad" cx="35%" cy="30%" r="70%">
-                  <stop offset="0%" stop-color="#4f667e"/>
-                  <stop offset="35%" stop-color="#28384a"/>
-                  <stop offset="85%" stop-color="#141e28"/>
-                  <stop offset="100%" stop-color="#0a1016"/>
-                </radialGradient>
-                <linearGradient id="afKnobBezelGrad" x1="0.1" y1="0" x2="0.9" y2="1">
-                  <stop offset="0%" stop-color="#a8c0d6"/>
-                  <stop offset="20%" stop-color="#ffffff"/>
-                  <stop offset="45%" stop-color="#8ba5bd"/>
-                  <stop offset="70%" stop-color="#31485c"/>
-                  <stop offset="90%" stop-color="#15222e"/>
-                  <stop offset="100%" stop-color="#0d1620"/>
-                </linearGradient>
-                <radialGradient id="afKnobFaceGrad" cx="35%" cy="30%" r="65%">
-                  <stop offset="0%" stop-color="#34485e"/>
-                  <stop offset="50%" stop-color="#1a2734"/>
-                  <stop offset="90%" stop-color="#0d141c"/>
-                  <stop offset="100%" stop-color="#060a0e"/>
-                </radialGradient>
-                <radialGradient id="afCapGrad" cx="35%" cy="30%" r="65%">
-                  <stop offset="0%" stop-color="#4c627a"/>
-                  <stop offset="60%" stop-color="#1e2b38"/>
-                  <stop offset="100%" stop-color="#0a1016"/>
-                </radialGradient>
-              </defs>
-              <!-- Chassis Shadow -->
-              <circle cx="55" cy="58" r="46" fill="rgba(0,0,0,0.85)"/>
-              <!-- Dial Calibrated Scales (0 to 10) -->
-              <g id="deckAfVolTicks">
-                <path d="M 22.5 87.5 A 46 46 0 1 1 87.5 87.5" fill="none" stroke="#1d2e3f" stroke-width="1.2"/>
-                <line x1="22.5" y1="87.5" x2="19.0" y2="91.0" stroke="#7e9eb8" stroke-width="1.5"/>
-                <text x="14" y="96" font-family="var(--mono)" font-weight="700" font-size="8" fill="#6d8da8" text-anchor="middle">0</text>
-                <line x1="12.0" y1="55.0" x2="7.5" y2="55.0" stroke="#7e9eb8" stroke-width="1.5"/>
-                <text x="3" y="57" font-family="var(--mono)" font-weight="700" font-size="8" fill="#6d8da8" text-anchor="middle">2</text>
-                <line x1="33.0" y1="23.0" x2="30.0" y2="18.5" stroke="#7e9eb8" stroke-width="1.5"/>
-                <text x="27" y="14" font-family="var(--mono)" font-weight="700" font-size="8" fill="#6d8da8" text-anchor="middle">4</text>
-                <line x1="77.0" y1="23.0" x2="80.0" y2="18.5" stroke="#7e9eb8" stroke-width="1.5"/>
-                <text x="83" y="14" font-family="var(--mono)" font-weight="700" font-size="8" fill="#6d8da8" text-anchor="middle">6</text>
-                <line x1="98.0" y1="55.0" x2="102.5" y2="55.0" stroke="#7e9eb8" stroke-width="1.5"/>
-                <text x="107" y="57" font-family="var(--mono)" font-weight="700" font-size="8" fill="#6d8da8" text-anchor="middle">8</text>
-                <line x1="87.5" y1="87.5" x2="91.0" y2="91.0" stroke="#7e9eb8" stroke-width="1.5"/>
-                <text x="96" y="96" font-family="var(--mono)" font-weight="700" font-size="8" fill="#6d8da8" text-anchor="middle">10</text>
-              </g>
-              <!-- Turned Outer Knob Body -->
-              <circle cx="55" cy="55" r="39" fill="url(#afKnobOuterGrad)" stroke="#060c12" stroke-width="1.4"/>
-              <g id="deckAfVolKnurls" transform="rotate(27 55 55)"></g>
-              <circle cx="55" cy="55" r="32" fill="url(#afKnobBezelGrad)" stroke="#090f15" stroke-width="1.1"/>
-              <circle cx="55" cy="55" r="28" fill="url(#afKnobFaceGrad)" stroke="#1a2b3c" stroke-width="0.9"/>
-              <circle cx="55" cy="55" r="23" fill="none" stroke="rgba(255,255,255,0.08)" stroke-width="0.7"/>
-              <!-- Pointer needle -->
-              <g id="deckAfVolPointer" transform="rotate(27 55 55)">
-                <line x1="55" y1="28" x2="55" y2="46" stroke="#2bff6a" stroke-width="2.6" stroke-linecap="round"/>
-                <circle cx="55" cy="28.5" r="1.4" fill="#ffffff"/>
-              </g>
-              <!-- Push-to-Mute Center Cap -->
-              <circle id="deckMuteBtn" cx="55" cy="55" r="9" fill="url(#afCapGrad)" stroke="#111c26" stroke-width="1.2" style="cursor:pointer" title="Click to Mute / Unmute"/>
-              <path d="M 52.5 53 L 54.5 53 L 57 51 L 57 59 L 54.5 57 L 52.5 57 Z" fill="#8caec4" pointer-events="none"/>
-            </svg>
-            <div class="af-vol-readout-pill" id="deckAfVolReadout">AF 60% · ACTIVE</div>
-          </div>
-
-          <!-- AF Auxiliary Function Row: Audio Monitor & Front-End Offset -->
-          <div class="af-aux-row">
-            <button type="button" class="af-listen-btn" id="btnListen" title="Audio Monitor (LISTEN / MUTE)">
-              <span class="btn-tally led-green" id="listenTally"></span>
-              <span id="listenBtnLabel">LISTEN</span>
-            </button>
-            <button type="button" class="af-aux-btn" id="btnLoOffset" title="LO Off-Center Offset (+/- 250 kHz)">
-              <span class="btn-tally led-cyan" id="loOffsetTally"></span>
-              <span id="loOffsetBtnLabel">LO OFFSET</span>
-            </button>
-          </div>
-
-          <!-- Dual Linear Faders: RF GAIN & SQUELCH -->
-          <div class="fader-pair">
-            <!-- RF Gain Vertical Linear Fader -->
-            <div class="fader-vert-wrap" id="faderRfGainWrap">
-              <span class="fader-title">RF GAIN</span>
-              <div class="fader-assembly">
-                <div class="fader-scale">
-                  <span>50</span>
-                  <span>40</span>
-                  <span>30</span>
-                  <span>20</span>
-                  <span>10</span>
-                  <span>0</span>
-                </div>
-                <div class="fader-well" id="faderRfGainTrack" title="RF Gain: Drag or scroll to adjust. Click AGC to toggle auto mode.">
-                  <div class="fader-slot"></div>
-                  <div class="fader-cap" id="faderRfGainCap" style="bottom: 80%;">
-                    <div class="fader-cap-ribs"></div>
-                    <div class="fader-cap-line led-amber"></div>
-                  </div>
-                </div>
+      <div class="deck-console panel-main">
+        <!-- LEFT COLUMN: AF / RF front end — the knobs and faders an
+             operator touches without looking away from the display — plus
+             the selected channel's readout. -->
+        <div class="panel-left">
+            <div class="deck-bay bay-frontend">
+              <div class="bay-header">
+                <span class="bay-title"><span class="bay-screw-corner"></span>AF / RF FRONT-END</span>
+                <span class="bay-screw-corner"></span>
               </div>
-              <div class="fader-footer">
-                <button type="button" class="fader-agc-btn on" id="faderAgcBtn" title="Toggle Automatic Gain Control">
-                  <span class="btn-tally led-amber"></span>AGC
-                </button>
-                <span class="fader-val" id="faderRfGainVal">auto</span>
-              </div>
-            </div>
 
-            <!-- Squelch Vertical Linear Fader -->
-            <div class="fader-vert-wrap" id="faderSqlWrap">
-              <span class="fader-title">SQUELCH</span>
-              <div class="fader-assembly">
-                <div class="fader-scale">
-                  <span>-20</span>
-                  <span>-40</span>
-                  <span>-60</span>
-                  <span>-80</span>
-                  <span>-100</span>
-                  <span>-120</span>
-                </div>
-                <div class="fader-well" id="faderSqlTrack" title="Squelch: Drag or scroll to adjust threshold level.">
-                  <div class="fader-slot"></div>
-                  <div class="fader-cap" id="faderSqlCap" style="bottom: 45%;">
-                    <div class="fader-cap-ribs"></div>
-                    <div class="fader-cap-line led-cyan"></div>
-                  </div>
-                </div>
-              </div>
-              <div class="fader-footer">
-                <span class="fader-sublabel">SQL</span>
-                <span class="fader-val" id="faderSqlVal">-75 dB</span>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <!-- BAY 2: PRECISION INSTRUMENTATION & ANALOG S-METER -->
-        <div class="deck-bay bay-meter">
-          <div class="bay-header">
-            <span class="bay-title"><span class="bay-screw-corner"></span>ANALOG MULTI-METER</span>
-            <span class="bay-screw-corner"></span>
-          </div>
-
-          <!-- Hero Recessed Curved SVG Analog S-Meter -->
-          <div class="meter-housing">
-            <svg class="smeter-svg" id="smeterSvg" viewBox="0 0 340 165" aria-hidden="true">
-              <defs>
-                <radialGradient id="dialGlow" cx="50%" cy="120%" r="100%">
-                  <stop offset="0%" stop-color="#142638"/>
-                  <stop offset="45%" stop-color="#081420"/>
-                  <stop offset="80%" stop-color="#03080d"/>
-                  <stop offset="100%" stop-color="#010306"/>
-                </radialGradient>
-                <linearGradient id="overS9Grad" x1="0" y1="0" x2="1" y2="0">
-                  <stop offset="0%" stop-color="#ff9922"/>
-                  <stop offset="50%" stop-color="#ff5533"/>
-                  <stop offset="100%" stop-color="#ff2211"/>
-                </linearGradient>
-                <linearGradient id="needleBlade" x1="0" y1="1" x2="0" y2="0">
-                  <stop offset="0%" stop-color="#ff8866"/>
-                  <stop offset="100%" stop-color="#ff3322"/>
-                </linearGradient>
-                <radialGradient id="hubGrad" cx="35%" cy="35%" r="65%">
-                  <stop offset="0%" stop-color="#4d647d"/>
-                  <stop offset="50%" stop-color="#1e2c3a"/>
-                  <stop offset="100%" stop-color="#0a1017"/>
-                </radialGradient>
-                <filter id="softGlow" x="-15%" y="-15%" width="130%" height="130%">
-                  <feGaussianBlur stdDeviation="0.8" result="b"/>
-                  <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
-                </filter>
-                <linearGradient id="agcArcGrad" x1="0" y1="0" x2="1" y2="0">
-                  <stop offset="0%" stop-color="#38bdf8"/>
-                  <stop offset="60%" stop-color="#2bff6a"/>
-                  <stop offset="100%" stop-color="#ffb830"/>
-                </linearGradient>
-                <clipPath id="dialClip">
-                  <rect x="2" y="2" width="336" height="161" rx="5.5"/>
-                </clipPath>
-              </defs>
-
-              <!-- Bezel & Dial Face -->
-              <rect x="1.5" y="1.5" width="337" height="162" rx="6" fill="url(#dialGlow)" stroke="#162839" stroke-width="1.2"/>
-              <rect x="3" y="3" width="334" height="159" rx="4.5" fill="none" stroke="#081017" stroke-width="1"/>
-
-              <g clip-path="url(#dialClip)">
-                <!-- Over-S9 Ribbon -->
-                <path d="M 156.98 37.51 A 168.00 168.00 0 0 1 277.99 76.30 L 280.69 73.09 A 172.20 172.20 0 0 0 156.66 33.32 Z" fill="url(#overS9Grad)" filter="url(#softGlow)"/>
-                <path d="M 62.01 76.30 A 168.00 168.00 0 0 1 156.98 37.51" fill="none" stroke="#38bdf8" stroke-width="1.8"/>
-                <path d="M 156.98 37.51 A 168.00 168.00 0 0 1 277.99 76.30" fill="none" stroke="#ff382a" stroke-width="1.8"/>
-                <text x="36.2" y="75.8" font-family="var(--sans)" font-weight="900" font-size="16" fill="#38bdf8" text-anchor="middle" dominant-baseline="central" filter="url(#softGlow)">S</text>
-                <text x="322.0" y="44.0" font-family="var(--mono)" font-weight="900" font-size="10" fill="#ff4a36" text-anchor="middle" dominant-baseline="central">dB</text>
-                <line x1="62.0" y1="76.3" x2="57.2" y2="70.6" stroke="#38bdf8" stroke-width="1.4"/>
-                <text x="49.2" y="61.0" font-family="var(--mono)" font-weight="700" font-size="10" fill="#a2dcfc" text-anchor="middle" dominant-baseline="central">1</text>
-                <line x1="72.3" y1="68.3" x2="70.0" y2="65.1" stroke="#1a5072" stroke-width="0.9"/>
-                <line x1="83.2" y1="61.2" x2="79.3" y2="54.7" stroke="#38bdf8" stroke-width="1.4"/>
-                <text x="72.9" y="44.0" font-family="var(--mono)" font-weight="700" font-size="10" fill="#a2dcfc" text-anchor="middle" dominant-baseline="central">3</text>
-                <line x1="94.6" y1="54.9" x2="92.8" y2="51.3" stroke="#1a5072" stroke-width="0.9"/>
-                <line x1="106.5" y1="49.5" x2="103.6" y2="42.5" stroke="#38bdf8" stroke-width="1.4"/>
-                <text x="98.9" y="31.0" font-family="var(--mono)" font-weight="700" font-size="10" fill="#a2dcfc" text-anchor="middle" dominant-baseline="central">5</text>
-                <line x1="118.7" y1="45.0" x2="117.5" y2="41.2" stroke="#1a5072" stroke-width="0.9"/>
-                <line x1="131.3" y1="41.5" x2="129.5" y2="34.2" stroke="#38bdf8" stroke-width="1.4"/>
-                <text x="126.6" y="22.1" font-family="var(--mono)" font-weight="700" font-size="10" fill="#a2dcfc" text-anchor="middle" dominant-baseline="central">7</text>
-                <line x1="144.0" y1="39.0" x2="143.4" y2="35.1" stroke="#1a5072" stroke-width="0.9"/>
-                <line x1="157.0" y1="37.5" x2="156.2" y2="28.0" stroke="#ff4a36" stroke-width="1.9"/>
-                <text x="155.4" y="17.6" font-family="var(--mono)" font-weight="700" font-size="10" fill="#ff705a" text-anchor="middle" dominant-baseline="central">9</text>
-                <line x1="178.7" y1="37.2" x2="178.9" y2="33.2" stroke="#ff4a36" stroke-width="0.9"/>
-                <line x1="200.2" y1="39.7" x2="202.0" y2="30.4" stroke="#ff4a36" stroke-width="1.9"/>
-                <text x="203.8" y="20.1" font-family="var(--mono)" font-weight="700" font-size="10" fill="#ff705a" text-anchor="middle" dominant-baseline="central">+20</text>
-                <line x1="221.3" y1="45.0" x2="222.5" y2="41.2" stroke="#ff4a36" stroke-width="0.9"/>
-                <line x1="241.5" y1="53.0" x2="245.5" y2="44.4" stroke="#ff4a36" stroke-width="1.9"/>
-                <text x="250.0" y="34.9" font-family="var(--mono)" font-weight="700" font-size="10" fill="#ff705a" text-anchor="middle" dominant-baseline="central">+40</text>
-                <line x1="260.5" y1="63.5" x2="262.6" y2="60.1" stroke="#ff4a36" stroke-width="0.9"/>
-                <line x1="278.0" y1="76.3" x2="284.1" y2="69.0" stroke="#ff4a36" stroke-width="1.9"/>
-                <text x="290.8" y="61.0" font-family="var(--mono)" font-weight="700" font-size="10" fill="#ff705a" text-anchor="middle" dominant-baseline="central">+60</text>
-
-                <!-- PO Scale -->
-                <path d="M 79.29 86.79 A 149.00 149.00 0 0 1 260.71 86.79" fill="none" stroke="#1d425c" stroke-width="1.1"/>
-                <text x="66.3" y="93.8" font-family="var(--sans)" font-weight="900" font-size="10" fill="#38bdf8" text-anchor="middle" dominant-baseline="central">PO</text>
-                <text x="271.7" y="92.0" font-family="var(--sans)" font-weight="900" font-size="10" fill="#38bdf8" text-anchor="middle" dominant-baseline="central">W</text>
-                <line x1="79.3" y1="86.8" x2="75.9" y2="82.4" stroke="#29658f" stroke-width="1.2"/>
-                <text x="72.9" y="78.5" font-family="var(--mono)" font-weight="700" font-size="7.5" fill="#9cd9fa" text-anchor="middle" dominant-baseline="central">0</text>
-                <line x1="101.2" y1="72.8" x2="98.7" y2="68.0" stroke="#29658f" stroke-width="1.2"/>
-                <text x="96.4" y="63.5" font-family="var(--mono)" font-weight="700" font-size="7.5" fill="#9cd9fa" text-anchor="middle" dominant-baseline="central">10</text>
-                <line x1="139.0" y1="59.3" x2="137.9" y2="53.9" stroke="#29658f" stroke-width="1.2"/>
-                <text x="136.8" y="49.0" font-family="var(--mono)" font-weight="700" font-size="7.5" fill="#9cd9fa" text-anchor="middle" dominant-baseline="central">50</text>
-                <line x1="179.1" y1="56.3" x2="179.4" y2="50.8" stroke="#29658f" stroke-width="1.2"/>
-                <text x="179.7" y="45.8" font-family="var(--mono)" font-weight="700" font-size="7.5" fill="#9cd9fa" text-anchor="middle" dominant-baseline="central">100</text>
-                <line x1="212.3" y1="62.1" x2="213.9" y2="56.9" stroke="#29658f" stroke-width="1.2"/>
-                <text x="215.3" y="52.1" font-family="var(--mono)" font-weight="700" font-size="7.5" fill="#9cd9fa" text-anchor="middle" dominant-baseline="central">150</text>
-                <line x1="238.8" y1="72.8" x2="241.3" y2="68.0" stroke="#29658f" stroke-width="1.2"/>
-                <text x="243.6" y="63.5" font-family="var(--mono)" font-weight="700" font-size="7.5" fill="#9cd9fa" text-anchor="middle" dominant-baseline="central">200</text>
-                <line x1="260.7" y1="86.8" x2="264.1" y2="82.4" stroke="#29658f" stroke-width="1.2"/>
-                <text x="267.1" y="78.5" font-family="var(--mono)" font-weight="700" font-size="7.5" fill="#9cd9fa" text-anchor="middle" dominant-baseline="central">250</text>
-
-                <!-- IC Scale -->
-                <path d="M 93.35 97.54 A 132.00 132.00 0 0 1 248.52 98.89" fill="none" stroke="#1d425c" stroke-width="1.1"/>
-                <text x="81.8" y="103.5" font-family="var(--sans)" font-weight="900" font-size="9" fill="#38bdf8" text-anchor="middle" dominant-baseline="central">IC</text>
-                <text x="258.2" y="103.5" font-family="var(--sans)" font-weight="900" font-size="9" fill="#38bdf8" text-anchor="middle" dominant-baseline="central">A</text>
-                <line x1="93.3" y1="97.5" x2="90.7" y2="93.9" stroke="#29658f" stroke-width="1.1"/>
-                <text x="88.4" y="90.6" font-family="var(--mono)" font-weight="700" font-size="7" fill="#9cd9fa" text-anchor="middle" dominant-baseline="central">0</text>
-                <line x1="113.2" y1="85.9" x2="111.2" y2="81.8" stroke="#29658f" stroke-width="1.1"/>
-                <text x="109.5" y="78.2" font-family="var(--mono)" font-weight="700" font-size="7" fill="#9cd9fa" text-anchor="middle" dominant-baseline="central">1</text>
-                <line x1="127.0" y1="80.2" x2="125.6" y2="75.9" stroke="#29658f" stroke-width="1.1"/>
-                <text x="124.3" y="72.2" font-family="var(--mono)" font-weight="700" font-size="7" fill="#9cd9fa" text-anchor="middle" dominant-baseline="central">1.5</text>
-                <line x1="142.6" y1="75.9" x2="141.6" y2="71.5" stroke="#29658f" stroke-width="1.1"/>
-                <text x="140.8" y="67.6" font-family="var(--mono)" font-weight="700" font-size="7" fill="#9cd9fa" text-anchor="middle" dominant-baseline="central">2</text>
-                <line x1="164.2" y1="73.1" x2="164.0" y2="68.6" stroke="#29658f" stroke-width="1.1"/>
-                <text x="163.9" y="64.6" font-family="var(--mono)" font-weight="700" font-size="7" fill="#9cd9fa" text-anchor="middle" dominant-baseline="central">3</text>
-                <line x1="191.8" y1="74.8" x2="192.5" y2="70.4" stroke="#29658f" stroke-width="1.1"/>
-                <text x="193.2" y="66.4" font-family="var(--mono)" font-weight="700" font-size="7" fill="#9cd9fa" text-anchor="middle" dominant-baseline="central">5</text>
-                <line x1="216.2" y1="81.4" x2="217.8" y2="77.1" stroke="#29658f" stroke-width="1.1"/>
-                <text x="219.2" y="73.4" font-family="var(--mono)" font-weight="700" font-size="7" fill="#9cd9fa" text-anchor="middle" dominant-baseline="central">10</text>
-                <line x1="235.0" y1="90.1" x2="237.2" y2="86.2" stroke="#29658f" stroke-width="1.1"/>
-                <text x="239.2" y="82.7" font-family="var(--mono)" font-weight="700" font-size="7" fill="#9cd9fa" text-anchor="middle" dominant-baseline="central">15</text>
-                <line x1="248.5" y1="98.9" x2="251.2" y2="95.3" stroke="#29658f" stroke-width="1.1"/>
-                <text x="253.6" y="92.1" font-family="var(--mono)" font-weight="700" font-size="7" fill="#9cd9fa" text-anchor="middle" dominant-baseline="central">20</text>
-
-                <!-- SWR Scale -->
-                <path d="M 105.98 108.27 A 116.00 116.00 0 0 1 234.02 108.27" fill="none" stroke="#1d425c" stroke-width="1.1"/>
-                <text x="94.2" y="114.6" font-family="var(--sans)" font-weight="900" font-size="7.5" fill="#38bdf8" text-anchor="middle" dominant-baseline="central">SWR</text>
-                <line x1="106.0" y1="108.3" x2="103.5" y2="104.5" stroke="#29658f" stroke-width="1.1"/>
-                <text x="101.4" y="101.4" font-family="var(--mono)" font-weight="700" font-size="7.5" fill="#9cd9fa" text-anchor="middle" dominant-baseline="central">1</text>
-                <line x1="129.4" y1="96.3" x2="127.8" y2="92.1" stroke="#29658f" stroke-width="1.1"/>
-                <text x="126.5" y="88.7" font-family="var(--mono)" font-weight="700" font-size="7.5" fill="#9cd9fa" text-anchor="middle" dominant-baseline="central">1.5</text>
-                <line x1="153.9" y1="90.1" x2="153.2" y2="85.7" stroke="#29658f" stroke-width="1.1"/>
-                <text x="152.7" y="82.0" font-family="var(--mono)" font-weight="700" font-size="7.5" fill="#9cd9fa" text-anchor="middle" dominant-baseline="central">2</text>
-                <line x1="188.1" y1="90.4" x2="188.9" y2="86.0" stroke="#ff4a36" stroke-width="1.4"/>
-                <text x="189.4" y="82.3" font-family="var(--mono)" font-weight="700" font-size="7.5" fill="#ff705a" text-anchor="middle" dominant-baseline="central">3</text>
-                <line x1="232.3" y1="107.2" x2="234.7" y2="103.4" stroke="#ff4a36" stroke-width="1.4"/>
-                <text x="236.7" y="100.3" font-family="var(--mono)" font-weight="700" font-size="7.5" fill="#ff705a" text-anchor="middle" dominant-baseline="central">∞</text>
-
-                <!-- COMP Scale -->
-                <path d="M 117.23 118.88 A 101.00 101.00 0 0 1 221.26 117.98" fill="none" stroke="#1d425c" stroke-width="1.1"/>
-                <text x="105.5" y="125.3" font-family="var(--sans)" font-weight="900" font-size="7" fill="#38bdf8" text-anchor="middle" dominant-baseline="central">COMP</text>
-                <text x="228.8" y="121.0" font-family="var(--sans)" font-weight="900" font-size="7" fill="#38bdf8" text-anchor="middle" dominant-baseline="central">dB</text>
-                <line x1="117.2" y1="118.9" x2="115.2" y2="115.6" stroke="#29658f" stroke-width="1"/>
-                <text x="113.6" y="112.9" font-family="var(--mono)" font-weight="700" font-size="8" fill="#9cd9fa" text-anchor="middle" dominant-baseline="central">0</text>
-                <line x1="138.8" y1="108.9" x2="137.6" y2="105.3" stroke="#29658f" stroke-width="1"/>
-                <text x="136.6" y="102.3" font-family="var(--mono)" font-weight="700" font-size="8" fill="#9cd9fa" text-anchor="middle" dominant-baseline="central">5</text>
-                <line x1="161.2" y1="104.4" x2="160.9" y2="100.6" stroke="#29658f" stroke-width="1"/>
-                <text x="160.6" y="97.4" font-family="var(--mono)" font-weight="700" font-size="8" fill="#9cd9fa" text-anchor="middle" dominant-baseline="central">10</text>
-                <line x1="184.1" y1="105.0" x2="184.6" y2="101.2" stroke="#29658f" stroke-width="1"/>
-                <text x="185.0" y="98.1" font-family="var(--mono)" font-weight="700" font-size="8" fill="#9cd9fa" text-anchor="middle" dominant-baseline="central">15</text>
-                <line x1="203.7" y1="109.8" x2="205.0" y2="106.2" stroke="#29658f" stroke-width="1"/>
-                <text x="206.1" y="103.2" font-family="var(--mono)" font-weight="700" font-size="8" fill="#9cd9fa" text-anchor="middle" dominant-baseline="central">20</text>
-                <line x1="221.3" y1="118.0" x2="223.2" y2="114.7" stroke="#29658f" stroke-width="1"/>
-                <text x="224.8" y="111.9" font-family="var(--mono)" font-weight="700" font-size="8" fill="#9cd9fa" text-anchor="middle" dominant-baseline="central">30</text>
-
-                <!-- Dynamic AGC Sub-Scale (Authentic Moving AGC Meter) -->
-                <g id="meterAgcGroup">
-                  <text x="110" y="132.5" font-family="var(--sans)" font-weight="900" font-size="7.5" fill="#38bdf8" text-anchor="middle" dominant-baseline="central" filter="url(#softGlow)">AGC</text>
-                  <text x="228" y="132.5" font-family="var(--mono)" font-weight="700" font-size="8" fill="#5a7d9a" text-anchor="middle" dominant-baseline="central">dB</text>
-                  <path d="M 132.3 127.7 A 86.00 86.00 0 0 1 207.7 127.7" fill="none" stroke="#0b1722" stroke-width="4.5" stroke-linecap="round"/>
-                  <path d="M 132.3 127.7 A 86.00 86.00 0 0 1 207.7 127.7" fill="none" stroke="#183248" stroke-width="1.2" stroke-linecap="round"/>
-                  <path id="meterAgcArc" d="M 132.3 127.7 A 86.00 86.00 0 0 1 133.0 127.5" fill="none" stroke="url(#agcArcGrad)" stroke-width="3.2" stroke-linecap="round" filter="url(#softGlow)"/>
-
-                  <line x1="133.8" y1="129.9" x2="130.8" y2="125.6" stroke="#29658f" stroke-width="1.1"/>
-                  <text x="129.2" y="122.2" font-family="var(--mono)" font-weight="700" font-size="6" fill="#8cb9d8" text-anchor="middle" dominant-baseline="central">0</text>
-                  <line x1="151.8" y1="123.3" x2="149.9" y2="118.8" stroke="#29658f" stroke-width="1.1"/>
-                  <text x="148.6" y="115.1" font-family="var(--mono)" font-weight="700" font-size="6" fill="#8cb9d8" text-anchor="middle" dominant-baseline="central">10</text>
-                  <line x1="170.0" y1="122.5" x2="170.0" y2="117.5" stroke="#29658f" stroke-width="1.2"/>
-                  <text x="170.0" y="113.5" font-family="var(--mono)" font-weight="700" font-size="6" fill="#8cb9d8" text-anchor="middle" dominant-baseline="central">20</text>
-                  <line x1="188.2" y1="123.3" x2="190.1" y2="118.8" stroke="#29658f" stroke-width="1.1"/>
-                  <text x="191.4" y="115.1" font-family="var(--mono)" font-weight="700" font-size="6" fill="#8cb9d8" text-anchor="middle" dominant-baseline="central">30</text>
-                  <line x1="206.2" y1="129.9" x2="209.2" y2="125.6" stroke="#29658f" stroke-width="1.1"/>
-                  <text x="210.8" y="122.2" font-family="var(--mono)" font-weight="700" font-size="6" fill="#8cb9d8" text-anchor="middle" dominant-baseline="central">40</text>
-
-                  <g id="meterAgcNeedle" transform="rotate(-26 170 205)">
-                    <line x1="170" y1="126" x2="170" y2="116" stroke="#ffffff" stroke-width="1.8" stroke-linecap="round" filter="url(#softGlow)"/>
-                    <polygon points="168.6,118 171.4,118 170,113.5" fill="#2bff6a" filter="url(#softGlow)"/>
+              <!-- Standalone High-Fidelity AF Gain (Volume) Rotary Pot -->
+              <div class="af-pot-housing">
+                <svg class="rotary-knob-svg" id="deckAfVolWrap" viewBox="0 0 110 110" title="AF Volume: Drag vertically or scroll to adjust volume. Click center cap to Mute.">
+                  <defs>
+                    <radialGradient id="afKnobOuterGrad" cx="35%" cy="30%" r="70%">
+                      <stop offset="0%" stop-color="#4f667e"/>
+                      <stop offset="35%" stop-color="#28384a"/>
+                      <stop offset="85%" stop-color="#141e28"/>
+                      <stop offset="100%" stop-color="#0a1016"/>
+                    </radialGradient>
+                    <linearGradient id="afKnobBezelGrad" x1="0.1" y1="0" x2="0.9" y2="1">
+                      <stop offset="0%" stop-color="#a8c0d6"/>
+                      <stop offset="20%" stop-color="#ffffff"/>
+                      <stop offset="45%" stop-color="#8ba5bd"/>
+                      <stop offset="70%" stop-color="#31485c"/>
+                      <stop offset="90%" stop-color="#15222e"/>
+                      <stop offset="100%" stop-color="#0d1620"/>
+                    </linearGradient>
+                    <radialGradient id="afKnobFaceGrad" cx="35%" cy="30%" r="65%">
+                      <stop offset="0%" stop-color="#34485e"/>
+                      <stop offset="50%" stop-color="#1a2734"/>
+                      <stop offset="90%" stop-color="#0d141c"/>
+                      <stop offset="100%" stop-color="#060a0e"/>
+                    </radialGradient>
+                    <radialGradient id="afCapGrad" cx="35%" cy="30%" r="65%">
+                      <stop offset="0%" stop-color="#4c627a"/>
+                      <stop offset="60%" stop-color="#1e2b38"/>
+                      <stop offset="100%" stop-color="#0a1016"/>
+                    </radialGradient>
+                  </defs>
+                  <!-- Chassis Shadow -->
+                  <circle cx="55" cy="58" r="46" fill="rgba(0,0,0,0.85)"/>
+                  <!-- Dial Calibrated Scales (0 to 10) -->
+                  <g id="deckAfVolTicks">
+                    <path d="M 22.5 87.5 A 46 46 0 1 1 87.5 87.5" fill="none" stroke="#1d2e3f" stroke-width="1.2"/>
+                    <line x1="22.5" y1="87.5" x2="19.0" y2="91.0" stroke="#7e9eb8" stroke-width="1.5"/>
+                    <text x="14" y="96" font-family="var(--mono)" font-weight="700" font-size="8" fill="#6d8da8" text-anchor="middle">0</text>
+                    <line x1="12.0" y1="55.0" x2="7.5" y2="55.0" stroke="#7e9eb8" stroke-width="1.5"/>
+                    <text x="3" y="57" font-family="var(--mono)" font-weight="700" font-size="8" fill="#6d8da8" text-anchor="middle">2</text>
+                    <line x1="33.0" y1="23.0" x2="30.0" y2="18.5" stroke="#7e9eb8" stroke-width="1.5"/>
+                    <text x="27" y="14" font-family="var(--mono)" font-weight="700" font-size="8" fill="#6d8da8" text-anchor="middle">4</text>
+                    <line x1="77.0" y1="23.0" x2="80.0" y2="18.5" stroke="#7e9eb8" stroke-width="1.5"/>
+                    <text x="83" y="14" font-family="var(--mono)" font-weight="700" font-size="8" fill="#6d8da8" text-anchor="middle">6</text>
+                    <line x1="98.0" y1="55.0" x2="102.5" y2="55.0" stroke="#7e9eb8" stroke-width="1.5"/>
+                    <text x="107" y="57" font-family="var(--mono)" font-weight="700" font-size="8" fill="#6d8da8" text-anchor="middle">8</text>
+                    <line x1="87.5" y1="87.5" x2="91.0" y2="91.0" stroke="#7e9eb8" stroke-width="1.5"/>
+                    <text x="96" y="96" font-family="var(--mono)" font-weight="700" font-size="8" fill="#6d8da8" text-anchor="middle">10</text>
                   </g>
-                </g>
-
-                <!-- Dynamic Peak Needle (dashed) -->
-                <line id="meterPeakNeedle" x1="170" y1="205" x2="170" y2="18" stroke="#ffb830" stroke-width="1.2" stroke-dasharray="3,2" opacity="0.8" transform="rotate(-40.0 170 205)"/>
-
-                <!-- Live Active Galvanometer Needle with cast shadow -->
-                <g id="meterNeedleGroup" transform="rotate(-15 170 205)">
-                  <polygon points="172.5,205 173.8,178 171.8,18 170.2,18 171.2,178" fill="rgba(0,0,0,0.65)"/>
-                  <line x1="170" y1="205" x2="170" y2="219" stroke="#ff382a" stroke-width="3" stroke-linecap="round"/>
-                  <circle cx="170" cy="216" r="3.5" fill="#18232e" stroke="#ff382a" stroke-width="1.2"/>
-                  <polygon points="168.5,205 169.1,165 169.55,18 170.45,18 170.9,165 171.5,205" fill="url(#needleBlade)" filter="url(#softGlow)"/>
-                  <circle cx="170" cy="18" r="1.1" fill="#ffffff"/>
-                </g>
-
-                <!-- Metal Pivot Hub -->
-                <circle cx="170" cy="205" r="19" fill="url(#hubGrad)" stroke="#090e14" stroke-width="1.5"/>
-                <circle cx="170" cy="205" r="13" fill="none" stroke="#2c3e52" stroke-width="1.2"/>
-                <!-- The real pivot sits below the dial face (y=205, outside the
-                     viewBox), so the bearing is drawn where it crosses the glass.
-                     Without it the needle appeared to come from nowhere. -->
-                <circle cx="170" cy="160" r="12.5" fill="url(#hubGrad)" stroke="#090e14" stroke-width="1.4"/>
-                <circle cx="170" cy="160" r="7.5" fill="none" stroke="#2c3e52" stroke-width="1"/>
-                <circle cx="170" cy="160" r="3.2" fill="#0b131a" stroke="#3d5266" stroke-width="0.8"/>
-                <circle cx="166.5" cy="156.5" r="1.6" fill="rgba(255,255,255,0.35)"/>
-                <circle cx="170" cy="205" r="6.5" fill="#0b1219" stroke="#1c2834" stroke-width="1"/>
-                <circle cx="170" cy="205" r="2" fill="#38bdf8" opacity="0.6"/>
-
-                <!-- Curved Glass Cover Specular Flare -->
-                <path d="M 6 8 Q 170 30 334 8 L 334 20 Q 170 42 6 20 Z" fill="white" opacity="0.05" pointer-events="none"/>
-              </g>
-            </svg>
-            <div class="meter-readouts">
-              <div class="meter-num" id="meterNum">RF — · SNR —</div>
-              <span class="meter-clip-badge" id="meterClipLed">CLIP</span>
-            </div>
-            <!-- Backward-compatible legacy meter elements -->
-            <div class="meter-scale" id="meterScale" style="display:none"></div>
-            <div class="meter-mask" id="meterMask" style="display:none"></div>
-            <div class="meter-peak" id="meterPeak" style="display:none"></div>
-          </div>
-
-          <!-- Tactile DSP Pushbutton Keypad directly integrated in Meter bay -->
-          <div class="dsp-keypad" role="group" aria-label="DSP and Filter Controls">
-            <button type="button" class="dsp-key on" id="keyPeak" title="Peak Hold Trace">
-              <span class="dsp-tally led-amber"></span>
-              <span id="keyPeakLabel">PEAK</span>
-            </button>
-            <button type="button" class="dsp-key on" id="keyAuto" title="Auto Dynamic Range">
-              <span class="dsp-tally led-cyan"></span>
-              <span id="keyAutoLabel">AUTO</span>
-            </button>
-            <button type="button" class="dsp-key on" id="keyFill" title="Spectrum Area Fill">
-              <span class="dsp-tally led-blue"></span>
-              <span id="keyFillLabel">FILL</span>
-            </button>
-            <button type="button" class="dsp-key" id="keyAvg" title="Frame Integration Average">
-              <span class="dsp-tally led-green"></span>
-              <span id="keyAvgLabel">AVG OFF</span>
-            </button>
-            <button type="button" class="dsp-key" id="keyCenter" title="Recenter Tuned Carrier in Spectrum">
-              <span class="dsp-tally led-cyan"></span>
-              <span id="keyCenterLabel">CENTER</span>
-            </button>
-            <button type="button" class="dsp-key" id="keySpur" title="Spur Check & Auto Notch">
-              <span class="dsp-tally led-violet"></span>
-              <span id="keySpurLabel">SPUR</span>
-            </button>
-            <button type="button" class="dsp-key" id="keyZoomOut" title="Zoom Out (halve the display magnification)">
-              <span class="dsp-tally led-cyan"></span>
-              <span id="keyZoomOutLabel">ZOOM −</span>
-            </button>
-            <button type="button" class="dsp-key" id="keyZoomIn" title="Zoom In (double the display magnification)">
-              <span class="dsp-tally led-cyan"></span>
-              <span id="keyZoomInLabel">ZOOM +</span>
-            </button>
-            <button type="button" class="dsp-key palette-trigger" id="keyPalette" title="Waterfall & Spectrum Palette">
-              <span class="dsp-tally led-amber"></span>
-              <span id="keyPaletteLabel">PALETTE: SMARTSDR ▾</span>
-            </button>
-          </div>
-        </div>
-
-        <!-- BAY 3: PRIMARY VFO DISPLAY & DEMODULATOR MATRICES -->
-        <div class="deck-bay bay-vfo bay-vfo-console">
-          <div class="bay-header">
-            <span class="bay-title"><span class="bay-screw-corner"></span>PRIMARY VFO &amp; DEMODULATOR</span>
-            <span class="bay-screw-corner"></span>
-          </div>
-
-          <!-- Recessed OLED/VFD VFO Readout Window -->
-          <div class="vfo-container">
-            <!-- Top Telemetry Strip -->
-            <div class="vfo-top-strip">
-              <div class="vfo-badges-left">
-                <span class="vfo-badge-main">VFO-A</span>
-                <span class="vfo-tag-rx">● RX</span>
-                <span class="vfo-tag-mode" id="vfoModeBadge">NFM</span>
-                <span class="vfo-tag-filter" id="vfoFilterBadge">BW 12.5k · SHARP</span>
+                  <!-- Turned Outer Knob Body -->
+                  <circle cx="55" cy="55" r="39" fill="url(#afKnobOuterGrad)" stroke="#060c12" stroke-width="1.4"/>
+                  <g id="deckAfVolKnurls" transform="rotate(27 55 55)"></g>
+                  <circle cx="55" cy="55" r="32" fill="url(#afKnobBezelGrad)" stroke="#090f15" stroke-width="1.1"/>
+                  <circle cx="55" cy="55" r="28" fill="url(#afKnobFaceGrad)" stroke="#1a2b3c" stroke-width="0.9"/>
+                  <circle cx="55" cy="55" r="23" fill="none" stroke="rgba(255,255,255,0.08)" stroke-width="0.7"/>
+                  <!-- Pointer needle -->
+                  <g id="deckAfVolPointer" transform="rotate(27 55 55)">
+                    <line x1="55" y1="28" x2="55" y2="46" stroke="#2bff6a" stroke-width="2.6" stroke-linecap="round"/>
+                    <circle cx="55" cy="28.5" r="1.4" fill="#ffffff"/>
+                  </g>
+                  <!-- Push-to-Mute Center Cap -->
+                  <circle id="deckMuteBtn" cx="55" cy="55" r="9" fill="url(#afCapGrad)" stroke="#111c26" stroke-width="1.2" style="cursor:pointer" title="Click to Mute / Unmute"/>
+                  <path d="M 52.5 53 L 54.5 53 L 57 51 L 57 59 L 54.5 57 L 52.5 57 Z" fill="#8caec4" pointer-events="none"/>
+                </svg>
+                <div class="af-vol-readout-pill" id="deckAfVolReadout">AF 60% · ACTIVE</div>
               </div>
-              <div class="vfo-badges-right">
-                <span class="vfo-telemetry-tag">ANT 1</span>
-                <span class="vfo-telemetry-tag">PRE 1</span>
-                <span class="vfo-telemetry-tag">ATT 0dB</span>
-                <span class="vfo-telemetry-tag" id="vfoAgcTag">AGC MID</span>
-                <span class="vfo-utc-clock" id="vfoUtcClock">00:00:00 UTC</span>
-              </div>
-            </div>
 
-            <!-- Center Main Frequency Readout -->
-            <div class="vfo-freq-hero">
-              <div class="freq" id="freqReadout"></div>
-              <div class="vfo-center-tools">
-                <div class="vfo-passband-meter" title="IF Filter Bandwidth Shape">
-                  <svg width="84" height="24" viewBox="0 0 84 24">
-                    <defs>
-                      <linearGradient id="vfoFilterGrad" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="0%" stop-color="#38bdf8" stop-opacity="0.35"/>
-                        <stop offset="100%" stop-color="#38bdf8" stop-opacity="0.03"/>
-                      </linearGradient>
-                    </defs>
-                    <path d="M 4 22 L 18 22 Q 26 22 30 5 L 54 5 Q 58 22 66 22 L 80 22" fill="url(#vfoFilterGrad)" stroke="#1f4b6e" stroke-width="1.2"/>
-                    <line x1="42" y1="3" x2="42" y2="22" stroke="#2bff6a" stroke-width="1.3" stroke-dasharray="2 1.5"/>
-                    <text x="42" y="20" font-family="var(--mono)" font-size="7" font-weight="800" fill="#38bdf8" text-anchor="middle" id="vfoIfFilterLabel">12.5k</text>
-                  </svg>
+              <!-- AF Auxiliary Function Row: Audio Monitor & Front-End Offset -->
+              <div class="af-aux-row">
+                <button type="button" class="af-listen-btn" id="btnListen" title="Audio Monitor (LISTEN / MUTE)">
+                  <span class="btn-tally led-green" id="listenTally"></span>
+                  <span id="listenBtnLabel">LISTEN</span>
+                </button>
+                <button type="button" class="af-aux-btn" id="btnLoOffset" title="LO Off-Center Offset (+/- 250 kHz)">
+                  <span class="btn-tally led-cyan" id="loOffsetTally"></span>
+                  <span id="loOffsetBtnLabel">LO OFFSET</span>
+                </button>
+              </div>
+
+              <!-- Dual Linear Faders: RF GAIN & SQUELCH -->
+              <div class="fader-pair">
+                <!-- RF Gain Vertical Linear Fader -->
+                <div class="fader-vert-wrap" id="faderRfGainWrap">
+                  <span class="fader-title">RF GAIN</span>
+                  <div class="fader-assembly">
+                    <div class="fader-scale">
+                      <span>50</span>
+                      <span>40</span>
+                      <span>30</span>
+                      <span>20</span>
+                      <span>10</span>
+                      <span>0</span>
+                    </div>
+                    <div class="fader-well" id="faderRfGainTrack" title="RF Gain: Drag or scroll to adjust. Click AGC to toggle auto mode.">
+                      <div class="fader-slot"></div>
+                      <div class="fader-cap" id="faderRfGainCap" style="bottom: 80%;">
+                        <div class="fader-cap-ribs"></div>
+                        <div class="fader-cap-line led-amber"></div>
+                      </div>
+                    </div>
+                  </div>
+                  <div class="fader-footer">
+                    <button type="button" class="fader-agc-btn on" id="faderAgcBtn" title="Toggle Automatic Gain Control">
+                      <span class="btn-tally led-amber"></span>AGC
+                    </button>
+                    <span class="fader-val" id="faderRfGainVal">auto</span>
+                  </div>
                 </div>
-                <div class="vfo-step-pill" title="Tuning step (TS / STEP)">
-                  <span class="vfo-step-badge">TS</span>
-                  <select class="vfo-step-select" id="snapSel" title="Tuning raster step">
-                    <option value="auto" id="snapOptAuto">AUTO (6.25k)</option>
-                    <option value="100">100 Hz</option>
-                    <option value="1000">1 kHz</option>
-                    <option value="2500">2.5 kHz</option>
-                    <option value="5000">5 kHz</option>
-                    <option value="6250" selected>6.25 kHz</option>
-                    <option value="12500">12.5 kHz</option>
-                    <option value="25000">25 kHz</option>
-                    <option value="100000">100 kHz</option>
-                    <option value="200000">200 kHz</option>
-                  </select>
-                  <span class="vfo-step-val" id="snapEffective" style="display:none">6.25 kHz</span>
-                </div>
-              </div>
-            </div>
 
-            <!-- VFO Intermediate Telemetry Bar: Live Signal & Demod Metrics -->
-            <div class="vfo-meter-bar">
-              <div class="vfo-meter-seg"><span class="vfo-seg-label">CH PWR</span><span class="vfo-seg-val" id="vfoChPwrVal">-61.3 dBFS</span></div>
-              <div class="vfo-meter-seg"><span class="vfo-seg-label">SNR</span><span class="vfo-seg-val" id="vfoSnrVal">2.2 dB</span></div>
-              <div class="vfo-meter-seg"><span class="vfo-seg-label">SQL GATE</span><span class="vfo-seg-val" id="vfoSqlGateVal" style="color:#2bff6a">OPEN</span></div>
-              <div class="vfo-meter-seg vfo-cal-seg" id="vfoCalSeg" title="Carrier Frequency Error · Click to calibrate PPM against tuned carrier"><span class="vfo-seg-label">ERR</span><span class="vfo-seg-val" id="vfoFreqErrVal">—</span></div>
-              <div class="vfo-meter-seg"><span class="vfo-seg-label">NOTCH</span><span class="vfo-seg-val" id="vfoNotchVal">AUTO</span></div>
-            </div>
-
-            <!-- Secondary Sub-VFO / Standby Line -->
-            <div class="vfo-sub-line">
-              <div class="vfo-sub-readout">
-                <span class="sub-vfo-badge">VFO-B SUB</span>
-                <span class="sub-vfo-freq" id="subFreqReadout">0144.200.00 MHz</span>
-                <span class="sub-vfo-status">STANDBY · SPLIT OFF</span>
-              </div>
-              <div class="vfo-sub-btns">
-                <button type="button" class="vfo-sub-btn" id="btnVfoSwap" title="Swap VFO A and B (A/B)">A / B</button>
-                <button type="button" class="vfo-sub-btn" id="btnVfoSync" title="Copy VFO A to B (A=B)">A = B</button>
-                <button type="button" class="vfo-sub-btn" id="btnVfoSplit" title="Toggle Split TX/RX">SPLIT</button>
-              </div>
-            </div>
-          </div>
-
-          <!-- Authentic Mechanical Push Switches: Demodulator Mode Keypad -->
-          <div class="mode-keypad" role="group" aria-label="Demodulator mode">
-            <button type="button" class="modebtn on" data-mode="nfm" title="Narrowband FM (voice)"><span class="mode-tally tally-amber"></span>NFM</button>
-            <button type="button" class="modebtn" data-mode="am" title="Amplitude Modulation (airband & AM broadcast)"><span class="mode-tally tally-amber"></span>AM</button>
-            <button type="button" class="modebtn" data-mode="wfm" title="Wideband FM (broadcast radio)"><span class="mode-tally tally-cyan"></span>WFM</button>
-            <button type="button" class="modebtn" data-mode="p25" title="APCO Project 25 digital voice"><span class="mode-tally tally-green"></span>P25</button>
-            <button type="button" class="modebtn" data-mode="dmr" title="Digital Mobile Radio voice"><span class="mode-tally tally-green"></span>DMR</button>
-            <button type="button" class="modebtn" data-mode="nxdn" title="NXDN48/NXDN96 digital voice"><span class="mode-tally tally-green"></span>NXDN</button>
-            <button type="button" class="modebtn" data-mode="packet" title="AX.25 1200 baud packet radio"><span class="mode-tally tally-green"></span>PACKET</button>
-            <button type="button" class="modebtn" data-mode="pager" title="POCSAG / FLEX paging sweep"><span class="mode-tally tally-cyan"></span>PAGER</button>
-            <button type="button" class="modebtn" data-mode="flex" title="Dedicated Motorola FLEX pager demodulator"><span class="mode-tally tally-cyan"></span>FLEX</button>
-            <button type="button" class="modebtn" data-mode="auto" title="Simultaneous multi-protocol auto-decoder"><span class="mode-tally tally-ruby"></span>AUTO</button>
-            <button type="button" class="modebtn" data-mode="scan" title="Autonomous frequency scanner"><span class="mode-tally tally-ruby"></span>SCAN</button>
-          </div>
-
-          <!-- Quick Band Presets Matrix -->
-          <div class="band-matrix" role="group" aria-label="Band presets">
-            <button type="button" class="band-btn" data-freq="121500000" data-mode="am"><span class="band-tally"></span>AIR 118</button>
-            <button type="button" class="band-btn" data-freq="144200000" data-mode="nfm"><span class="band-tally"></span>2M 144</button>
-            <button type="button" class="band-btn active" data-freq="156800000" data-mode="nfm"><span class="band-tally"></span>MAR 156</button>
-            <button type="button" class="band-btn" data-freq="222000000" data-mode="nfm"><span class="band-tally"></span>220 222</button>
-            <button type="button" class="band-btn" data-freq="432100000" data-mode="nfm"><span class="band-tally"></span>70C 430</button>
-            <button type="button" class="band-btn" data-freq="929612500" data-mode="pager"><span class="band-tally"></span>PGR 929</button>
-            <button type="button" class="band-btn" data-freq="851012500" data-mode="p25"><span class="band-tally"></span>TRK 851</button>
-            <button type="button" class="band-btn" data-freq="98100000" data-mode="wfm"><span class="band-tally"></span>WFM 88</button>
-          </div>
-        </div>
-
-        <!-- BAY 4: DISPLAY FADERS & MASTER VFO TUNING FLYWHEEL -->
-        <div class="deck-bay bay-tuning">
-          <div class="bay-header">
-            <span class="bay-title"><span class="bay-screw-corner"></span>DISPLAY &amp; MAIN TUNING</span>
-            <span class="bay-readout" id="deckSpanReadout">SPAN 2.05M · ZOOM 1.0x</span>
-            <span class="bay-screw-corner"></span>
-          </div>
-
-          <!-- Dual Display Faders: SPAN RATE & FFT ZOOM -->
-          <div class="fader-pair" style="border-bottom: 1px solid rgba(22, 34, 46, 0.6); padding-bottom: 5px; margin-bottom: 5px;">
-            <!-- SPAN Rate Linear Stepped Fader -->
-            <div class="fader-vert-wrap" id="faderSpanWrap">
-              <span class="fader-title">SPAN RATE</span>
-              <div class="fader-assembly">
-                <div class="fader-scale">
-                  <span>3.2M</span>
-                  <span>2.4M</span>
-                  <span>2.05M</span>
-                  <span>1.54M</span>
-                  <span>1.02M</span>
-                  <span>250k</span>
-                </div>
-                <div class="fader-well" id="faderSpanTrack" title="Span Bandwidth: Drag or scroll to select RF sample rate.">
-                  <div class="fader-slot"></div>
-                  <div class="fader-cap" id="faderSpanCap" style="bottom: 60%;">
-                    <div class="fader-cap-ribs"></div>
-                    <div class="fader-cap-line led-blue"></div>
+                <!-- Squelch Vertical Linear Fader -->
+                <div class="fader-vert-wrap" id="faderSqlWrap">
+                  <span class="fader-title">SQUELCH</span>
+                  <div class="fader-assembly">
+                    <div class="fader-scale">
+                      <span>-20</span>
+                      <span>-40</span>
+                      <span>-60</span>
+                      <span>-80</span>
+                      <span>-100</span>
+                      <span>-120</span>
+                    </div>
+                    <div class="fader-well" id="faderSqlTrack" title="Squelch: Drag or scroll to adjust threshold level.">
+                      <div class="fader-slot"></div>
+                      <div class="fader-cap" id="faderSqlCap" style="bottom: 45%;">
+                        <div class="fader-cap-ribs"></div>
+                        <div class="fader-cap-line led-cyan"></div>
+                      </div>
+                    </div>
+                  </div>
+                  <div class="fader-footer">
+                    <span class="fader-sublabel">SQL</span>
+                    <span class="fader-val" id="faderSqlVal">-75 dB</span>
                   </div>
                 </div>
               </div>
-              <div class="fader-footer">
-                <span class="fader-sublabel">BW</span>
-                <span class="fader-val" id="faderSpanVal">2.048M</span>
-              </div>
             </div>
 
-            <!-- FFT Zoom Linear Continuous Fader -->
-            <div class="fader-vert-wrap" id="faderZoomWrap">
-              <span class="fader-title">FFT ZOOM</span>
-              <div class="fader-assembly">
-                <div class="fader-scale">
-                  <span>32x</span>
-                  <span>16x</span>
-                  <span>8x</span>
-                  <span>4x</span>
-                  <span>2x</span>
-                  <span>1x</span>
-                </div>
-                <div class="fader-well" id="faderZoomTrack" title="FFT Zoom: Drag or scroll to magnify spectrum. Click 1x RST to reset.">
-                  <div class="fader-slot"></div>
-                  <div class="fader-cap" id="faderZoomCap" style="bottom: 0%;">
-                    <div class="fader-cap-ribs"></div>
-                    <div class="fader-cap-line led-violet"></div>
-                  </div>
-                </div>
-              </div>
-              <div class="fader-footer">
-                <button type="button" class="fader-reset-btn" id="faderZoomReset" title="Reset Zoom to 1.0x">1x RST</button>
-                <span class="fader-val" id="faderZoomVal">1.0x</span>
-              </div>
-            </div>
+          <div class="chan-col" aria-label="Selected channel">
+          <div class="chan-title">Selected channel
+          <span class="note" id="sdrInspectFreqBadge">—</span>
           </div>
-
-          <!-- Prominent Heavy Optical Encoder Flywheel Dial -->
-          <div class="vfo-flywheel-container">
-            <svg class="vfo-flywheel-svg" id="vfoFlywheelWrap" viewBox="0 0 160 160" title="Main VFO Flywheel: Drag vertically or spin to tune. Hold Shift for fine steps.">
-              <defs>
-                <radialGradient id="vfoOuterBezelGrad" cx="35%" cy="30%" r="70%">
-                  <stop offset="0%" stop-color="#3c5064"/>
-                  <stop offset="35%" stop-color="#1e2936"/>
-                  <stop offset="80%" stop-color="#121822"/>
-                  <stop offset="100%" stop-color="#080c10"/>
-                </radialGradient>
-                <linearGradient id="vfoChromeBezel" x1="0.1" y1="0" x2="0.9" y2="1">
-                  <stop offset="0%" stop-color="#b0c8de"/>
-                  <stop offset="25%" stop-color="#ffffff"/>
-                  <stop offset="50%" stop-color="#7e9bb4"/>
-                  <stop offset="75%" stop-color="#283d50"/>
-                  <stop offset="90%" stop-color="#14202c"/>
-                  <stop offset="100%" stop-color="#0a1016"/>
-                </linearGradient>
-                <radialGradient id="vfoHeavyRotorGrad" cx="35%" cy="32%" r="70%">
-                  <stop offset="0%" stop-color="#465c72"/>
-                  <stop offset="25%" stop-color="#273646"/>
-                  <stop offset="70%" stop-color="#141c26"/>
-                  <stop offset="100%" stop-color="#080c10"/>
-                </radialGradient>
-                <radialGradient id="vfoDimpleCraterGrad" cx="28%" cy="26%" r="72%">
-                  <stop offset="0%" stop-color="#020406"/>
-                  <stop offset="50%" stop-color="#0d151e"/>
-                  <stop offset="85%" stop-color="#223242"/>
-                  <stop offset="100%" stop-color="#557290"/>
-                </radialGradient>
-                <radialGradient id="vfoAxleHubGrad" cx="35%" cy="35%" r="65%">
-                  <stop offset="0%" stop-color="#4c637c"/>
-                  <stop offset="55%" stop-color="#1c2836"/>
-                  <stop offset="100%" stop-color="#090e14"/>
-                </radialGradient>
-              </defs>
-              <!-- Heavy Chassis Drop Shadow -->
-              <circle cx="80" cy="84" r="74" fill="rgba(0,0,0,0.85)"/>
-              <!-- Outer Heavy Knurl Ring Flange -->
-              <circle cx="80" cy="80" r="72" fill="#05080c" stroke="#16222e" stroke-width="1.4"/>
-              <!-- 72 Precision Outer Knurling Teeth -->
-              <g id="vfoKnurlGroup"></g>
-              <!-- Polished Chamfered Bezel Collar -->
-              <circle cx="80" cy="80" r="62" fill="url(#vfoChromeBezel)" stroke="#060b10" stroke-width="1.4"/>
-              <!-- Heavy Turned Aluminum Rotor Face -->
-              <circle cx="80" cy="80" r="57" fill="url(#vfoHeavyRotorGrad)" stroke="#1a2736" stroke-width="1.2"/>
-              <circle cx="80" cy="80" r="51" fill="none" stroke="rgba(255,255,255,0.08)" stroke-width="0.8"/>
-              <circle cx="80" cy="80" r="42" fill="none" stroke="rgba(0,0,0,0.45)" stroke-width="0.8"/>
-              <circle cx="80" cy="80" r="33" fill="none" stroke="rgba(255,255,255,0.06)" stroke-width="0.8"/>
-              <!-- Flywheel Spinner with Machined Finger Dimple Crater -->
-              <g id="vfoFlywheelSpinner" transform="rotate(0 80 80)">
-                <!-- Finger Dimple Crater (positioned at r=44 from center) -->
-                <circle cx="80" cy="36" r="16.5" fill="rgba(0,0,0,0.92)"/>
-                <circle cx="80" cy="36" r="15" fill="url(#vfoDimpleCraterGrad)" stroke="#020406" stroke-width="1.5"/>
-                <circle cx="80" cy="36" r="11" fill="none" stroke="rgba(255,255,255,0.22)" stroke-width="1"/>
-              </g>
-              <!-- Center Axle Hub Cap -->
-              <circle cx="80" cy="80" r="18" fill="url(#vfoChromeBezel)" stroke="#080e14" stroke-width="1.2"/>
-              <circle cx="80" cy="80" r="14" fill="url(#vfoAxleHubGrad)" stroke="#1a2736" stroke-width="1"/>
-              <circle cx="80" cy="80" r="4.5" fill="#04070a"/>
-            </svg>
-            <div class="vfo-step-status-pill" id="jogStepBadge">6.25 kHz · FLYWHEEL</div>
+          <div class="sdr-classifier-cell">
+          <div class="sdr-classifier-label">Protocol <span class="note" id="sdrInspectStatusBadge" style="float:right; text-transform:none; letter-spacing:0; font:10px var(--mono); color:var(--faint)">IDLE</span></div>
+          <div id="sdrClassProtocol" class="sdr-classifier-value" style="font-size:13px; font-weight:700; color:#38bdf8; margin-top:3px;">Idle / Noise</div>
+          <div id="sdrClassDetails" class="sdr-classifier-subvalue" style="font-size:11px; color:#94a3b8; margin-top:2px;">Waiting for carrier…</div>
+          </div>
+          <div class="sdr-classifier-cell">
+          <div class="sdr-classifier-label">Modulation</div>
+          <div id="sdrClassModulation" class="sdr-classifier-value" style="font-size:12px; font-weight:600; margin-top:3px;">—</div>
+          <div id="sdrClassConfidence" class="sdr-classifier-subvalue" style="font-size:11px; color:#94a3b8; margin-top:2px;">Confidence: —</div>
+          </div>
+          <div class="sdr-classifier-cell">
+          <div class="sdr-classifier-label">Signal</div>
+          <div id="sdrClassPower" class="sdr-classifier-value" style="font-size:12px; font-weight:600; margin-top:3px;">RF — · above floor — · quieting —</div>
+          <div id="sdrClassDev" class="sdr-classifier-subvalue" style="font-size:11px; color:#94a3b8; margin-top:2px;">Dev: —</div>
+          </div>
+          <div class="sdr-classifier-cell">
+          <div class="sdr-classifier-label">Peaks in span <span style="float:right; text-transform:none; letter-spacing:0; font:10px var(--mono); color:var(--faint)">dB above floor</span></div>
+          <div id="sdrPeakButtons" class="sdr-peak-buttons" style="margin-top:5px;"></div>
+          </div>
           </div>
         </div>
 
+        <!-- CENTER COLUMN: the display well. The frequency readout sits
+             directly above the panadapter it describes, the way a real
+             transceiver stacks them. -->
+        <div class="panel-center">
+          <div class="deck-bay bay-vfo bay-vfo-console">
+            <div class="bay-header">
+              <span class="bay-title"><span class="bay-screw-corner"></span>PRIMARY VFO &amp; DEMODULATOR</span>
+              <span class="bay-screw-corner"></span>
+            </div>
+
+            <!-- Recessed OLED/VFD VFO Readout Window -->
+            <div class="vfo-container">
+              <!-- Top Telemetry Strip -->
+              <div class="vfo-top-strip">
+                <div class="vfo-badges-left">
+                  <span class="vfo-badge-main">VFO-A</span>
+                  <span class="vfo-tag-rx">● RX</span>
+                  <span class="vfo-tag-mode" id="vfoModeBadge">NFM</span>
+                  <span class="vfo-tag-filter" id="vfoFilterBadge">BW 12.5k · SHARP</span>
+                </div>
+                <div class="vfo-badges-right">
+                  <span class="vfo-telemetry-tag">ANT 1</span>
+                  <span class="vfo-telemetry-tag">PRE 1</span>
+                  <span class="vfo-telemetry-tag">ATT 0dB</span>
+                  <span class="vfo-telemetry-tag" id="vfoAgcTag">AGC MID</span>
+                  <span class="vfo-utc-clock" id="vfoUtcClock">00:00:00 UTC</span>
+                </div>
+              </div>
+
+              <!-- Center Main Frequency Readout -->
+              <div class="vfo-freq-hero">
+                <div class="freq" id="freqReadout"></div>
+                <div class="vfo-center-tools">
+                  <div class="vfo-passband-meter" title="IF Filter Bandwidth Shape">
+                    <svg width="84" height="24" viewBox="0 0 84 24">
+                      <defs>
+                        <linearGradient id="vfoFilterGrad" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="0%" stop-color="#38bdf8" stop-opacity="0.35"/>
+                          <stop offset="100%" stop-color="#38bdf8" stop-opacity="0.03"/>
+                        </linearGradient>
+                      </defs>
+                      <path d="M 4 22 L 18 22 Q 26 22 30 5 L 54 5 Q 58 22 66 22 L 80 22" fill="url(#vfoFilterGrad)" stroke="#1f4b6e" stroke-width="1.2"/>
+                      <line x1="42" y1="3" x2="42" y2="22" stroke="#2bff6a" stroke-width="1.3" stroke-dasharray="2 1.5"/>
+                      <text x="42" y="20" font-family="var(--mono)" font-size="7" font-weight="800" fill="#38bdf8" text-anchor="middle" id="vfoIfFilterLabel">12.5k</text>
+                    </svg>
+                  </div>
+                  <div class="vfo-step-pill" title="Tuning step (TS / STEP)">
+                    <span class="vfo-step-badge">TS</span>
+                    <select class="vfo-step-select" id="snapSel" title="Tuning raster step">
+                      <option value="auto" id="snapOptAuto">AUTO (6.25k)</option>
+                      <option value="100">100 Hz</option>
+                      <option value="1000">1 kHz</option>
+                      <option value="2500">2.5 kHz</option>
+                      <option value="5000">5 kHz</option>
+                      <option value="6250" selected>6.25 kHz</option>
+                      <option value="12500">12.5 kHz</option>
+                      <option value="25000">25 kHz</option>
+                      <option value="100000">100 kHz</option>
+                      <option value="200000">200 kHz</option>
+                    </select>
+                    <span class="vfo-step-val" id="snapEffective" style="display:none">6.25 kHz</span>
+                  </div>
+                </div>
+              </div>
+
+              <!-- VFO Intermediate Telemetry Bar: Live Signal & Demod Metrics -->
+              <div class="vfo-meter-bar">
+                <div class="vfo-meter-seg"><span class="vfo-seg-label">CH PWR</span><span class="vfo-seg-val" id="vfoChPwrVal">-61.3 dBFS</span></div>
+                <div class="vfo-meter-seg"><span class="vfo-seg-label">SNR</span><span class="vfo-seg-val" id="vfoSnrVal">2.2 dB</span></div>
+                <div class="vfo-meter-seg"><span class="vfo-seg-label">SQL GATE</span><span class="vfo-seg-val" id="vfoSqlGateVal" style="color:#2bff6a">OPEN</span></div>
+                <div class="vfo-meter-seg vfo-cal-seg" id="vfoCalSeg" title="Carrier Frequency Error · Click to calibrate PPM against tuned carrier"><span class="vfo-seg-label">ERR</span><span class="vfo-seg-val" id="vfoFreqErrVal">—</span></div>
+                <div class="vfo-meter-seg"><span class="vfo-seg-label">NOTCH</span><span class="vfo-seg-val" id="vfoNotchVal">AUTO</span></div>
+              </div>
+
+              <!-- Secondary Sub-VFO / Standby Line -->
+              <div class="vfo-sub-line">
+                <div class="vfo-sub-readout">
+                  <span class="sub-vfo-badge">VFO-B SUB</span>
+                  <span class="sub-vfo-freq" id="subFreqReadout">0144.200.00 MHz</span>
+                  <span class="sub-vfo-status">STANDBY · SPLIT OFF</span>
+                </div>
+                <div class="vfo-sub-btns">
+                  <button type="button" class="vfo-sub-btn" id="btnVfoSwap" title="Swap VFO A and B (A/B)">A / B</button>
+                  <button type="button" class="vfo-sub-btn" id="btnVfoSync" title="Copy VFO A to B (A=B)">A = B</button>
+                  <button type="button" class="vfo-sub-btn" id="btnVfoSplit" title="Toggle Split TX/RX">SPLIT</button>
+                </div>
+              </div>
+            </div>
+
+            <!-- Authentic Mechanical Push Switches: Demodulator Mode Keypad -->
+            <div class="mode-keypad" role="group" aria-label="Demodulator mode">
+              <button type="button" class="modebtn on" data-mode="nfm" title="Narrowband FM (voice)"><span class="mode-tally tally-amber"></span>NFM</button>
+              <button type="button" class="modebtn" data-mode="am" title="Amplitude Modulation (airband & AM broadcast)"><span class="mode-tally tally-amber"></span>AM</button>
+              <button type="button" class="modebtn" data-mode="wfm" title="Wideband FM (broadcast radio)"><span class="mode-tally tally-cyan"></span>WFM</button>
+              <button type="button" class="modebtn" data-mode="p25" title="APCO Project 25 digital voice"><span class="mode-tally tally-green"></span>P25</button>
+              <button type="button" class="modebtn" data-mode="dmr" title="Digital Mobile Radio voice"><span class="mode-tally tally-green"></span>DMR</button>
+              <button type="button" class="modebtn" data-mode="nxdn" title="NXDN48/NXDN96 digital voice"><span class="mode-tally tally-green"></span>NXDN</button>
+              <button type="button" class="modebtn" data-mode="packet" title="AX.25 1200 baud packet radio"><span class="mode-tally tally-green"></span>PACKET</button>
+              <button type="button" class="modebtn" data-mode="pager" title="POCSAG / FLEX paging sweep"><span class="mode-tally tally-cyan"></span>PAGER</button>
+              <button type="button" class="modebtn" data-mode="flex" title="Dedicated Motorola FLEX pager demodulator"><span class="mode-tally tally-cyan"></span>FLEX</button>
+              <button type="button" class="modebtn" data-mode="auto" title="Simultaneous multi-protocol auto-decoder"><span class="mode-tally tally-ruby"></span>AUTO</button>
+              <button type="button" class="modebtn" data-mode="scan" title="Autonomous frequency scanner"><span class="mode-tally tally-ruby"></span>SCAN</button>
+            </div>
+
+            <!-- Quick Band Presets Matrix -->
+            <div class="band-matrix" role="group" aria-label="Band presets">
+              <button type="button" class="band-btn" data-freq="121500000" data-mode="am"><span class="band-tally"></span>AIR 118</button>
+              <button type="button" class="band-btn" data-freq="144200000" data-mode="nfm"><span class="band-tally"></span>2M 144</button>
+              <button type="button" class="band-btn active" data-freq="156800000" data-mode="nfm"><span class="band-tally"></span>MAR 156</button>
+              <button type="button" class="band-btn" data-freq="222000000" data-mode="nfm"><span class="band-tally"></span>220 222</button>
+              <button type="button" class="band-btn" data-freq="432100000" data-mode="nfm"><span class="band-tally"></span>70C 430</button>
+              <button type="button" class="band-btn" data-freq="929612500" data-mode="pager"><span class="band-tally"></span>PGR 929</button>
+              <button type="button" class="band-btn" data-freq="851012500" data-mode="p25"><span class="band-tally"></span>TRK 851</button>
+              <button type="button" class="band-btn" data-freq="98100000" data-mode="wfm"><span class="band-tally"></span>WFM 88</button>
+            </div>
+          </div>
+
+          <div class="spec-row">
+                <div class="spec-col">
+                <div class="spec-edge">
+                  <span id="edgeLo">—</span>
+                  <span id="edgeHi">—</span>
+                </div>
+                <div class="spec-canvases" id="sdrCanvasWrap">
+                  <canvas id="sdrSpectrumCanvas"></canvas>
+                  <canvas id="sdrWaterfallCanvas"></canvas>
+                  <canvas id="sdrScanOverlayCanvas"></canvas>
+                  <div class="spec-readout" id="sdrHoverReadout" hidden></div>
+                </div>
+                <div class="spec-scale" id="specScale"></div>
+                </div>
+          </div>
+        </div>
+
+        <!-- RIGHT COLUMN: instruments and the main tuning dial. -->
+        <div class="panel-right">
+          <div class="deck-bay bay-meter">
+            <div class="bay-header">
+              <span class="bay-title"><span class="bay-screw-corner"></span>ANALOG MULTI-METER</span>
+              <span class="bay-screw-corner"></span>
+            </div>
+
+            <!-- Hero Recessed Curved SVG Analog S-Meter -->
+            <div class="meter-housing">
+              <svg class="smeter-svg" id="smeterSvg" viewBox="0 0 340 165" aria-hidden="true">
+                <defs>
+                  <radialGradient id="dialGlow" cx="50%" cy="120%" r="100%">
+                    <stop offset="0%" stop-color="#142638"/>
+                    <stop offset="45%" stop-color="#081420"/>
+                    <stop offset="80%" stop-color="#03080d"/>
+                    <stop offset="100%" stop-color="#010306"/>
+                  </radialGradient>
+                  <linearGradient id="overS9Grad" x1="0" y1="0" x2="1" y2="0">
+                    <stop offset="0%" stop-color="#ff9922"/>
+                    <stop offset="50%" stop-color="#ff5533"/>
+                    <stop offset="100%" stop-color="#ff2211"/>
+                  </linearGradient>
+                  <linearGradient id="needleBlade" x1="0" y1="1" x2="0" y2="0">
+                    <stop offset="0%" stop-color="#ff8866"/>
+                    <stop offset="100%" stop-color="#ff3322"/>
+                  </linearGradient>
+                  <radialGradient id="hubGrad" cx="35%" cy="35%" r="65%">
+                    <stop offset="0%" stop-color="#4d647d"/>
+                    <stop offset="50%" stop-color="#1e2c3a"/>
+                    <stop offset="100%" stop-color="#0a1017"/>
+                  </radialGradient>
+                  <filter id="softGlow" x="-15%" y="-15%" width="130%" height="130%">
+                    <feGaussianBlur stdDeviation="0.8" result="b"/>
+                    <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+                  </filter>
+                  <linearGradient id="agcArcGrad" x1="0" y1="0" x2="1" y2="0">
+                    <stop offset="0%" stop-color="#38bdf8"/>
+                    <stop offset="60%" stop-color="#2bff6a"/>
+                    <stop offset="100%" stop-color="#ffb830"/>
+                  </linearGradient>
+                  <clipPath id="dialClip">
+                    <rect x="2" y="2" width="336" height="161" rx="5.5"/>
+                  </clipPath>
+                </defs>
+
+                <!-- Bezel & Dial Face -->
+                <rect x="1.5" y="1.5" width="337" height="162" rx="6" fill="url(#dialGlow)" stroke="#162839" stroke-width="1.2"/>
+                <rect x="3" y="3" width="334" height="159" rx="4.5" fill="none" stroke="#081017" stroke-width="1"/>
+
+                <g clip-path="url(#dialClip)">
+                  <!-- Over-S9 Ribbon -->
+                  <path d="M 156.98 37.51 A 168.00 168.00 0 0 1 277.99 76.30 L 280.69 73.09 A 172.20 172.20 0 0 0 156.66 33.32 Z" fill="url(#overS9Grad)" filter="url(#softGlow)"/>
+                  <path d="M 62.01 76.30 A 168.00 168.00 0 0 1 156.98 37.51" fill="none" stroke="#38bdf8" stroke-width="1.8"/>
+                  <path d="M 156.98 37.51 A 168.00 168.00 0 0 1 277.99 76.30" fill="none" stroke="#ff382a" stroke-width="1.8"/>
+                  <text x="36.2" y="75.8" font-family="var(--sans)" font-weight="900" font-size="16" fill="#38bdf8" text-anchor="middle" dominant-baseline="central" filter="url(#softGlow)">S</text>
+                  <text x="322.0" y="44.0" font-family="var(--mono)" font-weight="900" font-size="10" fill="#ff4a36" text-anchor="middle" dominant-baseline="central">dB</text>
+                  <line x1="62.0" y1="76.3" x2="57.2" y2="70.6" stroke="#38bdf8" stroke-width="1.4"/>
+                  <text x="49.2" y="61.0" font-family="var(--mono)" font-weight="700" font-size="10" fill="#a2dcfc" text-anchor="middle" dominant-baseline="central">1</text>
+                  <line x1="72.3" y1="68.3" x2="70.0" y2="65.1" stroke="#1a5072" stroke-width="0.9"/>
+                  <line x1="83.2" y1="61.2" x2="79.3" y2="54.7" stroke="#38bdf8" stroke-width="1.4"/>
+                  <text x="72.9" y="44.0" font-family="var(--mono)" font-weight="700" font-size="10" fill="#a2dcfc" text-anchor="middle" dominant-baseline="central">3</text>
+                  <line x1="94.6" y1="54.9" x2="92.8" y2="51.3" stroke="#1a5072" stroke-width="0.9"/>
+                  <line x1="106.5" y1="49.5" x2="103.6" y2="42.5" stroke="#38bdf8" stroke-width="1.4"/>
+                  <text x="98.9" y="31.0" font-family="var(--mono)" font-weight="700" font-size="10" fill="#a2dcfc" text-anchor="middle" dominant-baseline="central">5</text>
+                  <line x1="118.7" y1="45.0" x2="117.5" y2="41.2" stroke="#1a5072" stroke-width="0.9"/>
+                  <line x1="131.3" y1="41.5" x2="129.5" y2="34.2" stroke="#38bdf8" stroke-width="1.4"/>
+                  <text x="126.6" y="22.1" font-family="var(--mono)" font-weight="700" font-size="10" fill="#a2dcfc" text-anchor="middle" dominant-baseline="central">7</text>
+                  <line x1="144.0" y1="39.0" x2="143.4" y2="35.1" stroke="#1a5072" stroke-width="0.9"/>
+                  <line x1="157.0" y1="37.5" x2="156.2" y2="28.0" stroke="#ff4a36" stroke-width="1.9"/>
+                  <text x="155.4" y="17.6" font-family="var(--mono)" font-weight="700" font-size="10" fill="#ff705a" text-anchor="middle" dominant-baseline="central">9</text>
+                  <line x1="178.7" y1="37.2" x2="178.9" y2="33.2" stroke="#ff4a36" stroke-width="0.9"/>
+                  <line x1="200.2" y1="39.7" x2="202.0" y2="30.4" stroke="#ff4a36" stroke-width="1.9"/>
+                  <text x="203.8" y="20.1" font-family="var(--mono)" font-weight="700" font-size="10" fill="#ff705a" text-anchor="middle" dominant-baseline="central">+20</text>
+                  <line x1="221.3" y1="45.0" x2="222.5" y2="41.2" stroke="#ff4a36" stroke-width="0.9"/>
+                  <line x1="241.5" y1="53.0" x2="245.5" y2="44.4" stroke="#ff4a36" stroke-width="1.9"/>
+                  <text x="250.0" y="34.9" font-family="var(--mono)" font-weight="700" font-size="10" fill="#ff705a" text-anchor="middle" dominant-baseline="central">+40</text>
+                  <line x1="260.5" y1="63.5" x2="262.6" y2="60.1" stroke="#ff4a36" stroke-width="0.9"/>
+                  <line x1="278.0" y1="76.3" x2="284.1" y2="69.0" stroke="#ff4a36" stroke-width="1.9"/>
+                  <text x="290.8" y="61.0" font-family="var(--mono)" font-weight="700" font-size="10" fill="#ff705a" text-anchor="middle" dominant-baseline="central">+60</text>
+
+                  <!-- PO Scale -->
+                  <path d="M 79.29 86.79 A 149.00 149.00 0 0 1 260.71 86.79" fill="none" stroke="#1d425c" stroke-width="1.1"/>
+                  <text x="66.3" y="93.8" font-family="var(--sans)" font-weight="900" font-size="10" fill="#38bdf8" text-anchor="middle" dominant-baseline="central">PO</text>
+                  <text x="271.7" y="92.0" font-family="var(--sans)" font-weight="900" font-size="10" fill="#38bdf8" text-anchor="middle" dominant-baseline="central">W</text>
+                  <line x1="79.3" y1="86.8" x2="75.9" y2="82.4" stroke="#29658f" stroke-width="1.2"/>
+                  <text x="72.9" y="78.5" font-family="var(--mono)" font-weight="700" font-size="7.5" fill="#9cd9fa" text-anchor="middle" dominant-baseline="central">0</text>
+                  <line x1="101.2" y1="72.8" x2="98.7" y2="68.0" stroke="#29658f" stroke-width="1.2"/>
+                  <text x="96.4" y="63.5" font-family="var(--mono)" font-weight="700" font-size="7.5" fill="#9cd9fa" text-anchor="middle" dominant-baseline="central">10</text>
+                  <line x1="139.0" y1="59.3" x2="137.9" y2="53.9" stroke="#29658f" stroke-width="1.2"/>
+                  <text x="136.8" y="49.0" font-family="var(--mono)" font-weight="700" font-size="7.5" fill="#9cd9fa" text-anchor="middle" dominant-baseline="central">50</text>
+                  <line x1="179.1" y1="56.3" x2="179.4" y2="50.8" stroke="#29658f" stroke-width="1.2"/>
+                  <text x="179.7" y="45.8" font-family="var(--mono)" font-weight="700" font-size="7.5" fill="#9cd9fa" text-anchor="middle" dominant-baseline="central">100</text>
+                  <line x1="212.3" y1="62.1" x2="213.9" y2="56.9" stroke="#29658f" stroke-width="1.2"/>
+                  <text x="215.3" y="52.1" font-family="var(--mono)" font-weight="700" font-size="7.5" fill="#9cd9fa" text-anchor="middle" dominant-baseline="central">150</text>
+                  <line x1="238.8" y1="72.8" x2="241.3" y2="68.0" stroke="#29658f" stroke-width="1.2"/>
+                  <text x="243.6" y="63.5" font-family="var(--mono)" font-weight="700" font-size="7.5" fill="#9cd9fa" text-anchor="middle" dominant-baseline="central">200</text>
+                  <line x1="260.7" y1="86.8" x2="264.1" y2="82.4" stroke="#29658f" stroke-width="1.2"/>
+                  <text x="267.1" y="78.5" font-family="var(--mono)" font-weight="700" font-size="7.5" fill="#9cd9fa" text-anchor="middle" dominant-baseline="central">250</text>
+
+                  <!-- IC Scale -->
+                  <path d="M 93.35 97.54 A 132.00 132.00 0 0 1 248.52 98.89" fill="none" stroke="#1d425c" stroke-width="1.1"/>
+                  <text x="81.8" y="103.5" font-family="var(--sans)" font-weight="900" font-size="9" fill="#38bdf8" text-anchor="middle" dominant-baseline="central">IC</text>
+                  <text x="258.2" y="103.5" font-family="var(--sans)" font-weight="900" font-size="9" fill="#38bdf8" text-anchor="middle" dominant-baseline="central">A</text>
+                  <line x1="93.3" y1="97.5" x2="90.7" y2="93.9" stroke="#29658f" stroke-width="1.1"/>
+                  <text x="88.4" y="90.6" font-family="var(--mono)" font-weight="700" font-size="7" fill="#9cd9fa" text-anchor="middle" dominant-baseline="central">0</text>
+                  <line x1="113.2" y1="85.9" x2="111.2" y2="81.8" stroke="#29658f" stroke-width="1.1"/>
+                  <text x="109.5" y="78.2" font-family="var(--mono)" font-weight="700" font-size="7" fill="#9cd9fa" text-anchor="middle" dominant-baseline="central">1</text>
+                  <line x1="127.0" y1="80.2" x2="125.6" y2="75.9" stroke="#29658f" stroke-width="1.1"/>
+                  <text x="124.3" y="72.2" font-family="var(--mono)" font-weight="700" font-size="7" fill="#9cd9fa" text-anchor="middle" dominant-baseline="central">1.5</text>
+                  <line x1="142.6" y1="75.9" x2="141.6" y2="71.5" stroke="#29658f" stroke-width="1.1"/>
+                  <text x="140.8" y="67.6" font-family="var(--mono)" font-weight="700" font-size="7" fill="#9cd9fa" text-anchor="middle" dominant-baseline="central">2</text>
+                  <line x1="164.2" y1="73.1" x2="164.0" y2="68.6" stroke="#29658f" stroke-width="1.1"/>
+                  <text x="163.9" y="64.6" font-family="var(--mono)" font-weight="700" font-size="7" fill="#9cd9fa" text-anchor="middle" dominant-baseline="central">3</text>
+                  <line x1="191.8" y1="74.8" x2="192.5" y2="70.4" stroke="#29658f" stroke-width="1.1"/>
+                  <text x="193.2" y="66.4" font-family="var(--mono)" font-weight="700" font-size="7" fill="#9cd9fa" text-anchor="middle" dominant-baseline="central">5</text>
+                  <line x1="216.2" y1="81.4" x2="217.8" y2="77.1" stroke="#29658f" stroke-width="1.1"/>
+                  <text x="219.2" y="73.4" font-family="var(--mono)" font-weight="700" font-size="7" fill="#9cd9fa" text-anchor="middle" dominant-baseline="central">10</text>
+                  <line x1="235.0" y1="90.1" x2="237.2" y2="86.2" stroke="#29658f" stroke-width="1.1"/>
+                  <text x="239.2" y="82.7" font-family="var(--mono)" font-weight="700" font-size="7" fill="#9cd9fa" text-anchor="middle" dominant-baseline="central">15</text>
+                  <line x1="248.5" y1="98.9" x2="251.2" y2="95.3" stroke="#29658f" stroke-width="1.1"/>
+                  <text x="253.6" y="92.1" font-family="var(--mono)" font-weight="700" font-size="7" fill="#9cd9fa" text-anchor="middle" dominant-baseline="central">20</text>
+
+                  <!-- SWR Scale -->
+                  <path d="M 105.98 108.27 A 116.00 116.00 0 0 1 234.02 108.27" fill="none" stroke="#1d425c" stroke-width="1.1"/>
+                  <text x="94.2" y="114.6" font-family="var(--sans)" font-weight="900" font-size="7.5" fill="#38bdf8" text-anchor="middle" dominant-baseline="central">SWR</text>
+                  <line x1="106.0" y1="108.3" x2="103.5" y2="104.5" stroke="#29658f" stroke-width="1.1"/>
+                  <text x="101.4" y="101.4" font-family="var(--mono)" font-weight="700" font-size="7.5" fill="#9cd9fa" text-anchor="middle" dominant-baseline="central">1</text>
+                  <line x1="129.4" y1="96.3" x2="127.8" y2="92.1" stroke="#29658f" stroke-width="1.1"/>
+                  <text x="126.5" y="88.7" font-family="var(--mono)" font-weight="700" font-size="7.5" fill="#9cd9fa" text-anchor="middle" dominant-baseline="central">1.5</text>
+                  <line x1="153.9" y1="90.1" x2="153.2" y2="85.7" stroke="#29658f" stroke-width="1.1"/>
+                  <text x="152.7" y="82.0" font-family="var(--mono)" font-weight="700" font-size="7.5" fill="#9cd9fa" text-anchor="middle" dominant-baseline="central">2</text>
+                  <line x1="188.1" y1="90.4" x2="188.9" y2="86.0" stroke="#ff4a36" stroke-width="1.4"/>
+                  <text x="189.4" y="82.3" font-family="var(--mono)" font-weight="700" font-size="7.5" fill="#ff705a" text-anchor="middle" dominant-baseline="central">3</text>
+                  <line x1="232.3" y1="107.2" x2="234.7" y2="103.4" stroke="#ff4a36" stroke-width="1.4"/>
+                  <text x="236.7" y="100.3" font-family="var(--mono)" font-weight="700" font-size="7.5" fill="#ff705a" text-anchor="middle" dominant-baseline="central">∞</text>
+
+                  <!-- COMP Scale -->
+                  <path d="M 117.23 118.88 A 101.00 101.00 0 0 1 221.26 117.98" fill="none" stroke="#1d425c" stroke-width="1.1"/>
+                  <text x="105.5" y="125.3" font-family="var(--sans)" font-weight="900" font-size="7" fill="#38bdf8" text-anchor="middle" dominant-baseline="central">COMP</text>
+                  <text x="228.8" y="121.0" font-family="var(--sans)" font-weight="900" font-size="7" fill="#38bdf8" text-anchor="middle" dominant-baseline="central">dB</text>
+                  <line x1="117.2" y1="118.9" x2="115.2" y2="115.6" stroke="#29658f" stroke-width="1"/>
+                  <text x="113.6" y="112.9" font-family="var(--mono)" font-weight="700" font-size="8" fill="#9cd9fa" text-anchor="middle" dominant-baseline="central">0</text>
+                  <line x1="138.8" y1="108.9" x2="137.6" y2="105.3" stroke="#29658f" stroke-width="1"/>
+                  <text x="136.6" y="102.3" font-family="var(--mono)" font-weight="700" font-size="8" fill="#9cd9fa" text-anchor="middle" dominant-baseline="central">5</text>
+                  <line x1="161.2" y1="104.4" x2="160.9" y2="100.6" stroke="#29658f" stroke-width="1"/>
+                  <text x="160.6" y="97.4" font-family="var(--mono)" font-weight="700" font-size="8" fill="#9cd9fa" text-anchor="middle" dominant-baseline="central">10</text>
+                  <line x1="184.1" y1="105.0" x2="184.6" y2="101.2" stroke="#29658f" stroke-width="1"/>
+                  <text x="185.0" y="98.1" font-family="var(--mono)" font-weight="700" font-size="8" fill="#9cd9fa" text-anchor="middle" dominant-baseline="central">15</text>
+                  <line x1="203.7" y1="109.8" x2="205.0" y2="106.2" stroke="#29658f" stroke-width="1"/>
+                  <text x="206.1" y="103.2" font-family="var(--mono)" font-weight="700" font-size="8" fill="#9cd9fa" text-anchor="middle" dominant-baseline="central">20</text>
+                  <line x1="221.3" y1="118.0" x2="223.2" y2="114.7" stroke="#29658f" stroke-width="1"/>
+                  <text x="224.8" y="111.9" font-family="var(--mono)" font-weight="700" font-size="8" fill="#9cd9fa" text-anchor="middle" dominant-baseline="central">30</text>
+
+                  <!-- Dynamic AGC Sub-Scale (Authentic Moving AGC Meter) -->
+                  <g id="meterAgcGroup">
+                    <text x="110" y="132.5" font-family="var(--sans)" font-weight="900" font-size="7.5" fill="#38bdf8" text-anchor="middle" dominant-baseline="central" filter="url(#softGlow)">AGC</text>
+                    <text x="228" y="132.5" font-family="var(--mono)" font-weight="700" font-size="8" fill="#5a7d9a" text-anchor="middle" dominant-baseline="central">dB</text>
+                    <path d="M 132.3 127.7 A 86.00 86.00 0 0 1 207.7 127.7" fill="none" stroke="#0b1722" stroke-width="4.5" stroke-linecap="round"/>
+                    <path d="M 132.3 127.7 A 86.00 86.00 0 0 1 207.7 127.7" fill="none" stroke="#183248" stroke-width="1.2" stroke-linecap="round"/>
+                    <path id="meterAgcArc" d="M 132.3 127.7 A 86.00 86.00 0 0 1 133.0 127.5" fill="none" stroke="url(#agcArcGrad)" stroke-width="3.2" stroke-linecap="round" filter="url(#softGlow)"/>
+
+                    <line x1="133.8" y1="129.9" x2="130.8" y2="125.6" stroke="#29658f" stroke-width="1.1"/>
+                    <text x="129.2" y="122.2" font-family="var(--mono)" font-weight="700" font-size="6" fill="#8cb9d8" text-anchor="middle" dominant-baseline="central">0</text>
+                    <line x1="151.8" y1="123.3" x2="149.9" y2="118.8" stroke="#29658f" stroke-width="1.1"/>
+                    <text x="148.6" y="115.1" font-family="var(--mono)" font-weight="700" font-size="6" fill="#8cb9d8" text-anchor="middle" dominant-baseline="central">10</text>
+                    <line x1="170.0" y1="122.5" x2="170.0" y2="117.5" stroke="#29658f" stroke-width="1.2"/>
+                    <text x="170.0" y="113.5" font-family="var(--mono)" font-weight="700" font-size="6" fill="#8cb9d8" text-anchor="middle" dominant-baseline="central">20</text>
+                    <line x1="188.2" y1="123.3" x2="190.1" y2="118.8" stroke="#29658f" stroke-width="1.1"/>
+                    <text x="191.4" y="115.1" font-family="var(--mono)" font-weight="700" font-size="6" fill="#8cb9d8" text-anchor="middle" dominant-baseline="central">30</text>
+                    <line x1="206.2" y1="129.9" x2="209.2" y2="125.6" stroke="#29658f" stroke-width="1.1"/>
+                    <text x="210.8" y="122.2" font-family="var(--mono)" font-weight="700" font-size="6" fill="#8cb9d8" text-anchor="middle" dominant-baseline="central">40</text>
+
+                    <g id="meterAgcNeedle" transform="rotate(-26 170 205)">
+                      <line x1="170" y1="126" x2="170" y2="116" stroke="#ffffff" stroke-width="1.8" stroke-linecap="round" filter="url(#softGlow)"/>
+                      <polygon points="168.6,118 171.4,118 170,113.5" fill="#2bff6a" filter="url(#softGlow)"/>
+                    </g>
+                  </g>
+
+                  <!-- Dynamic Peak Needle (dashed) -->
+                  <line id="meterPeakNeedle" x1="170" y1="205" x2="170" y2="18" stroke="#ffb830" stroke-width="1.2" stroke-dasharray="3,2" opacity="0.8" transform="rotate(-40.0 170 205)"/>
+
+                  <!-- Live Active Galvanometer Needle with cast shadow -->
+                  <g id="meterNeedleGroup" transform="rotate(-15 170 205)">
+                    <polygon points="172.5,205 173.8,178 171.8,18 170.2,18 171.2,178" fill="rgba(0,0,0,0.65)"/>
+                    <line x1="170" y1="205" x2="170" y2="219" stroke="#ff382a" stroke-width="3" stroke-linecap="round"/>
+                    <circle cx="170" cy="216" r="3.5" fill="#18232e" stroke="#ff382a" stroke-width="1.2"/>
+                    <polygon points="168.5,205 169.1,165 169.55,18 170.45,18 170.9,165 171.5,205" fill="url(#needleBlade)" filter="url(#softGlow)"/>
+                    <circle cx="170" cy="18" r="1.1" fill="#ffffff"/>
+                  </g>
+
+                  <!-- Metal Pivot Hub -->
+                  <circle cx="170" cy="205" r="19" fill="url(#hubGrad)" stroke="#090e14" stroke-width="1.5"/>
+                  <circle cx="170" cy="205" r="13" fill="none" stroke="#2c3e52" stroke-width="1.2"/>
+                  <!-- The real pivot sits below the dial face (y=205, outside the
+                       viewBox), so the bearing is drawn where it crosses the glass.
+                       Without it the needle appeared to come from nowhere. -->
+                  <circle cx="170" cy="160" r="12.5" fill="url(#hubGrad)" stroke="#090e14" stroke-width="1.4"/>
+                  <circle cx="170" cy="160" r="7.5" fill="none" stroke="#2c3e52" stroke-width="1"/>
+                  <circle cx="170" cy="160" r="3.2" fill="#0b131a" stroke="#3d5266" stroke-width="0.8"/>
+                  <circle cx="166.5" cy="156.5" r="1.6" fill="rgba(255,255,255,0.35)"/>
+                  <circle cx="170" cy="205" r="6.5" fill="#0b1219" stroke="#1c2834" stroke-width="1"/>
+                  <circle cx="170" cy="205" r="2" fill="#38bdf8" opacity="0.6"/>
+
+                  <!-- Curved Glass Cover Specular Flare -->
+                  <path d="M 6 8 Q 170 30 334 8 L 334 20 Q 170 42 6 20 Z" fill="white" opacity="0.05" pointer-events="none"/>
+                </g>
+              </svg>
+              <div class="meter-readouts">
+                <div class="meter-num" id="meterNum">RF — · SNR —</div>
+                <span class="meter-clip-badge" id="meterClipLed">CLIP</span>
+              </div>
+              <!-- Backward-compatible legacy meter elements -->
+              <div class="meter-scale" id="meterScale" style="display:none"></div>
+              <div class="meter-mask" id="meterMask" style="display:none"></div>
+              <div class="meter-peak" id="meterPeak" style="display:none"></div>
+            </div>
+
+            <!-- Tactile DSP Pushbutton Keypad directly integrated in Meter bay -->
+            <div class="dsp-keypad" role="group" aria-label="DSP and Filter Controls">
+              <button type="button" class="dsp-key on" id="keyPeak" title="Peak Hold Trace">
+                <span class="dsp-tally led-amber"></span>
+                <span id="keyPeakLabel">PEAK</span>
+              </button>
+              <button type="button" class="dsp-key on" id="keyAuto" title="Auto Dynamic Range">
+                <span class="dsp-tally led-cyan"></span>
+                <span id="keyAutoLabel">AUTO</span>
+              </button>
+              <button type="button" class="dsp-key on" id="keyFill" title="Spectrum Area Fill">
+                <span class="dsp-tally led-blue"></span>
+                <span id="keyFillLabel">FILL</span>
+              </button>
+              <button type="button" class="dsp-key" id="keyAvg" title="Frame Integration Average">
+                <span class="dsp-tally led-green"></span>
+                <span id="keyAvgLabel">AVG OFF</span>
+              </button>
+              <button type="button" class="dsp-key" id="keyCenter" title="Recenter Tuned Carrier in Spectrum">
+                <span class="dsp-tally led-cyan"></span>
+                <span id="keyCenterLabel">CENTER</span>
+              </button>
+              <button type="button" class="dsp-key" id="keySpur" title="Spur Check & Auto Notch">
+                <span class="dsp-tally led-violet"></span>
+                <span id="keySpurLabel">SPUR</span>
+              </button>
+              <button type="button" class="dsp-key" id="keyZoomOut" title="Zoom Out (halve the display magnification)">
+                <span class="dsp-tally led-cyan"></span>
+                <span id="keyZoomOutLabel">ZOOM −</span>
+              </button>
+              <button type="button" class="dsp-key" id="keyZoomIn" title="Zoom In (double the display magnification)">
+                <span class="dsp-tally led-cyan"></span>
+                <span id="keyZoomInLabel">ZOOM +</span>
+              </button>
+              <button type="button" class="dsp-key palette-trigger" id="keyPalette" title="Waterfall & Spectrum Palette">
+                <span class="dsp-tally led-amber"></span>
+                <span id="keyPaletteLabel">PALETTE: SMARTSDR ▾</span>
+              </button>
+            </div>
+          </div>
+
+          <div class="deck-bay bay-tuning">
+            <div class="bay-header">
+              <span class="bay-title"><span class="bay-screw-corner"></span>DISPLAY &amp; MAIN TUNING</span>
+              <span class="bay-readout" id="deckSpanReadout">SPAN 2.05M · ZOOM 1.0x</span>
+              <span class="bay-screw-corner"></span>
+            </div>
+
+            <!-- Dual Display Faders: SPAN RATE & FFT ZOOM -->
+            <div class="fader-pair" style="border-bottom: 1px solid rgba(22, 34, 46, 0.6); padding-bottom: 5px; margin-bottom: 5px;">
+              <!-- SPAN Rate Linear Stepped Fader -->
+              <div class="fader-vert-wrap" id="faderSpanWrap">
+                <span class="fader-title">SPAN RATE</span>
+                <div class="fader-assembly">
+                  <div class="fader-scale">
+                    <span>3.2M</span>
+                    <span>2.4M</span>
+                    <span>2.05M</span>
+                    <span>1.54M</span>
+                    <span>1.02M</span>
+                    <span>250k</span>
+                  </div>
+                  <div class="fader-well" id="faderSpanTrack" title="Span Bandwidth: Drag or scroll to select RF sample rate.">
+                    <div class="fader-slot"></div>
+                    <div class="fader-cap" id="faderSpanCap" style="bottom: 60%;">
+                      <div class="fader-cap-ribs"></div>
+                      <div class="fader-cap-line led-blue"></div>
+                    </div>
+                  </div>
+                </div>
+                <div class="fader-footer">
+                  <span class="fader-sublabel">BW</span>
+                  <span class="fader-val" id="faderSpanVal">2.048M</span>
+                </div>
+              </div>
+
+              <!-- FFT Zoom Linear Continuous Fader -->
+              <div class="fader-vert-wrap" id="faderZoomWrap">
+                <span class="fader-title">FFT ZOOM</span>
+                <div class="fader-assembly">
+                  <div class="fader-scale">
+                    <span>32x</span>
+                    <span>16x</span>
+                    <span>8x</span>
+                    <span>4x</span>
+                    <span>2x</span>
+                    <span>1x</span>
+                  </div>
+                  <div class="fader-well" id="faderZoomTrack" title="FFT Zoom: Drag or scroll to magnify spectrum. Click 1x RST to reset.">
+                    <div class="fader-slot"></div>
+                    <div class="fader-cap" id="faderZoomCap" style="bottom: 0%;">
+                      <div class="fader-cap-ribs"></div>
+                      <div class="fader-cap-line led-violet"></div>
+                    </div>
+                  </div>
+                </div>
+                <div class="fader-footer">
+                  <button type="button" class="fader-reset-btn" id="faderZoomReset" title="Reset Zoom to 1.0x">1x RST</button>
+                  <span class="fader-val" id="faderZoomVal">1.0x</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- Prominent Heavy Optical Encoder Flywheel Dial -->
+            <div class="vfo-flywheel-container">
+              <svg class="vfo-flywheel-svg" id="vfoFlywheelWrap" viewBox="0 0 160 160" title="Main VFO Flywheel: Drag vertically or spin to tune. Hold Shift for fine steps.">
+                <defs>
+                  <radialGradient id="vfoOuterBezelGrad" cx="35%" cy="30%" r="70%">
+                    <stop offset="0%" stop-color="#3c5064"/>
+                    <stop offset="35%" stop-color="#1e2936"/>
+                    <stop offset="80%" stop-color="#121822"/>
+                    <stop offset="100%" stop-color="#080c10"/>
+                  </radialGradient>
+                  <linearGradient id="vfoChromeBezel" x1="0.1" y1="0" x2="0.9" y2="1">
+                    <stop offset="0%" stop-color="#b0c8de"/>
+                    <stop offset="25%" stop-color="#ffffff"/>
+                    <stop offset="50%" stop-color="#7e9bb4"/>
+                    <stop offset="75%" stop-color="#283d50"/>
+                    <stop offset="90%" stop-color="#14202c"/>
+                    <stop offset="100%" stop-color="#0a1016"/>
+                  </linearGradient>
+                  <radialGradient id="vfoHeavyRotorGrad" cx="35%" cy="32%" r="70%">
+                    <stop offset="0%" stop-color="#465c72"/>
+                    <stop offset="25%" stop-color="#273646"/>
+                    <stop offset="70%" stop-color="#141c26"/>
+                    <stop offset="100%" stop-color="#080c10"/>
+                  </radialGradient>
+                  <radialGradient id="vfoDimpleCraterGrad" cx="28%" cy="26%" r="72%">
+                    <stop offset="0%" stop-color="#020406"/>
+                    <stop offset="50%" stop-color="#0d151e"/>
+                    <stop offset="85%" stop-color="#223242"/>
+                    <stop offset="100%" stop-color="#557290"/>
+                  </radialGradient>
+                  <radialGradient id="vfoAxleHubGrad" cx="35%" cy="35%" r="65%">
+                    <stop offset="0%" stop-color="#4c637c"/>
+                    <stop offset="55%" stop-color="#1c2836"/>
+                    <stop offset="100%" stop-color="#090e14"/>
+                  </radialGradient>
+                </defs>
+                <!-- Heavy Chassis Drop Shadow -->
+                <circle cx="80" cy="84" r="74" fill="rgba(0,0,0,0.85)"/>
+                <!-- Outer Heavy Knurl Ring Flange -->
+                <circle cx="80" cy="80" r="72" fill="#05080c" stroke="#16222e" stroke-width="1.4"/>
+                <!-- 72 Precision Outer Knurling Teeth -->
+                <g id="vfoKnurlGroup"></g>
+                <!-- Polished Chamfered Bezel Collar -->
+                <circle cx="80" cy="80" r="62" fill="url(#vfoChromeBezel)" stroke="#060b10" stroke-width="1.4"/>
+                <!-- Heavy Turned Aluminum Rotor Face -->
+                <circle cx="80" cy="80" r="57" fill="url(#vfoHeavyRotorGrad)" stroke="#1a2736" stroke-width="1.2"/>
+                <circle cx="80" cy="80" r="51" fill="none" stroke="rgba(255,255,255,0.08)" stroke-width="0.8"/>
+                <circle cx="80" cy="80" r="42" fill="none" stroke="rgba(0,0,0,0.45)" stroke-width="0.8"/>
+                <circle cx="80" cy="80" r="33" fill="none" stroke="rgba(255,255,255,0.06)" stroke-width="0.8"/>
+                <!-- Flywheel Spinner with Machined Finger Dimple Crater -->
+                <g id="vfoFlywheelSpinner" transform="rotate(0 80 80)">
+                  <!-- Finger Dimple Crater (positioned at r=44 from center) -->
+                  <circle cx="80" cy="36" r="16.5" fill="rgba(0,0,0,0.92)"/>
+                  <circle cx="80" cy="36" r="15" fill="url(#vfoDimpleCraterGrad)" stroke="#020406" stroke-width="1.5"/>
+                  <circle cx="80" cy="36" r="11" fill="none" stroke="rgba(255,255,255,0.22)" stroke-width="1"/>
+                </g>
+                <!-- Center Axle Hub Cap -->
+                <circle cx="80" cy="80" r="18" fill="url(#vfoChromeBezel)" stroke="#080e14" stroke-width="1.2"/>
+                <circle cx="80" cy="80" r="14" fill="url(#vfoAxleHubGrad)" stroke="#1a2736" stroke-width="1"/>
+                <circle cx="80" cy="80" r="4.5" fill="#04070a"/>
+              </svg>
+              <div class="vfo-step-status-pill" id="jogStepBadge">6.25 kHz · FLYWHEEL</div>
+            </div>
+          </div>
+        </div>
       </div><!-- /.deck-console -->
 
       <!-- Palette Swatch Selection Popup Menu -->
@@ -2187,45 +2247,6 @@
         </div>
         <div class="palette-grid" id="paletteList"></div>
       </div>
-<div class="spec-row">
-      <div class="spec-col">
-      <div class="spec-edge">
-        <span id="edgeLo">—</span>
-        <span id="edgeHi">—</span>
-      </div>
-      <div class="spec-canvases" id="sdrCanvasWrap">
-        <canvas id="sdrSpectrumCanvas"></canvas>
-        <canvas id="sdrWaterfallCanvas"></canvas>
-        <canvas id="sdrScanOverlayCanvas"></canvas>
-        <div class="spec-readout" id="sdrHoverReadout" hidden></div>
-      </div>
-      <div class="spec-scale" id="specScale"></div>
-      </div>
-      <div class="chan-col" aria-label="Selected channel">
-        <div class="chan-title">Selected channel
-          <span class="note" id="sdrInspectFreqBadge">—</span>
-        </div>
-        <div class="sdr-classifier-cell">
-          <div class="sdr-classifier-label">Protocol <span class="note" id="sdrInspectStatusBadge" style="float:right; text-transform:none; letter-spacing:0; font:10px var(--mono); color:var(--faint)">IDLE</span></div>
-          <div id="sdrClassProtocol" class="sdr-classifier-value" style="font-size:13px; font-weight:700; color:#38bdf8; margin-top:3px;">Idle / Noise</div>
-          <div id="sdrClassDetails" class="sdr-classifier-subvalue" style="font-size:11px; color:#94a3b8; margin-top:2px;">Waiting for carrier…</div>
-        </div>
-        <div class="sdr-classifier-cell">
-          <div class="sdr-classifier-label">Modulation</div>
-          <div id="sdrClassModulation" class="sdr-classifier-value" style="font-size:12px; font-weight:600; margin-top:3px;">—</div>
-          <div id="sdrClassConfidence" class="sdr-classifier-subvalue" style="font-size:11px; color:#94a3b8; margin-top:2px;">Confidence: —</div>
-        </div>
-        <div class="sdr-classifier-cell">
-          <div class="sdr-classifier-label">Signal</div>
-          <div id="sdrClassPower" class="sdr-classifier-value" style="font-size:12px; font-weight:600; margin-top:3px;">RF — · above floor — · quieting —</div>
-          <div id="sdrClassDev" class="sdr-classifier-subvalue" style="font-size:11px; color:#94a3b8; margin-top:2px;">Dev: —</div>
-        </div>
-        <div class="sdr-classifier-cell">
-          <div class="sdr-classifier-label">Peaks in span <span style="float:right; text-transform:none; letter-spacing:0; font:10px var(--mono); color:var(--faint)">dB above floor</span></div>
-          <div id="sdrPeakButtons" class="sdr-peak-buttons" style="margin-top:5px;"></div>
-        </div>
-      </div>
-</div>
 
       <div class="scr-scope">
         <div class="scope-header">
