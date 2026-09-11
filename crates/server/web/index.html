@@ -1471,6 +1471,11 @@
   .p25-key-actions button { padding: 7px 10px; }
   #p25KeyStatus { color: #a9bacb; }
   #p25KeyStatus[data-error="true"] { color: #fca5a5; }
+  .p25-key-inventory { margin-top: 10px; border-top: 1px solid #27323c; padding-top: 9px; }
+  .p25-key-inventory-title { color: #9cb5c8; font-size: 10px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; }
+  .p25-key-inventory-list { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 6px; }
+  .p25-key-inventory-item { padding: 4px 7px; border: 1px solid #273b4c; border-radius: 4px; background: #081018; color: #a9bacb; font: 10px var(--mono); }
+  .p25-key-inventory-item.current { border-color: #38bdf8; color: #d8f3ff; }
   #p25KeyPanel[hidden] { display: none; }
   details.advanced { margin-top: 10px; }
   details.advanced > summary {
@@ -1796,6 +1801,32 @@
   }
   .sdr-classifier-log > :nth-child(even) { background: rgba(56, 189, 248, 0.04); }
   .sdr-classifier-log > :hover { background: rgba(56, 189, 248, 0.12); }
+
+  .call-entry { white-space: normal !important; padding: 6px 7px !important; }
+  .call-primary {
+    display: flex; align-items: baseline; gap: 8px; min-width: 0;
+  }
+  .call-identity {
+    color: #94a3b8; font-size: 10px; overflow: hidden;
+    text-overflow: ellipsis; min-width: 0;
+  }
+  .call-actions {
+    display: flex; align-items: center; gap: 4px; margin-left: auto; flex: none;
+  }
+  .call-actions a { text-decoration: none; }
+  .call-telemetry {
+    display: flex; flex-wrap: wrap; align-items: baseline; gap: 3px 10px;
+    padding: 4px 0 0 1px; color: #7890a2; font-size: 9.5px;
+    line-height: 1.35;
+  }
+  .call-telemetry span { white-space: nowrap; }
+  .call-telemetry .call-warn { color: #facc15; }
+  .call-telemetry .call-bad { color: #f87171; }
+  .call-telemetry .call-good { color: #4ade80; }
+  .wrap.side-dock-active .call-primary,
+  .wrap:not(.stack-dock-active) .side-col .call-primary { flex-wrap: wrap; gap: 4px 7px; }
+  .wrap.side-dock-active .call-actions,
+  .wrap:not(.stack-dock-active) .side-col .call-actions { margin-left: 0; }
 
   /* ---------- Streamlined Decode Log & Inspector Master-Detail Layout ---------- */
   .decode-main-split {
@@ -2848,6 +2879,10 @@
           <button type="submit" class="sdr-preset-btn" id="p25KeySave" disabled>Save key</button>
           <button type="button" class="sdr-preset-btn" id="p25KeyRemove" disabled>Remove channel key</button>
           <span id="p25KeyStatus" role="status" aria-live="polite">Select P25 mode to configure a key.</span>
+        </div>
+        <div class="p25-key-inventory">
+          <div class="p25-key-inventory-title">Configured channel keys</div>
+          <div id="p25KeyInventory" class="p25-key-inventory-list">None saved.</div>
         </div>
         <p class="p25-key-note">Saved privately on the server for this frequency. Applies without restarting. Saved key values are never displayed.</p>
       </form>
@@ -7698,6 +7733,15 @@ function applyP25KeyStatus(status) {
   $('p25KeyValue').placeholder = status.configured ? 'Enter a replacement key' : 'Enter key';
   p25KeyLengthHint();
   p25KeyButtons();
+  const inventory = $('p25KeyInventory');
+  const names = {129: 'DES-OFB', 132: 'AES-256', 137: 'AES-128', 170: 'ADP'};
+  const entries = Array.isArray(status.entries) ? status.entries : [];
+  inventory.innerHTML = entries.length ? entries.map(entry => {
+    const current = entry.frequency_hz === status.frequency_hz ? ' current' : '';
+    const alg = names[entry.algorithm] || `ALG 0x${entry.algorithm.toString(16).toUpperCase().padStart(2, '0')}`;
+    const kid = entry.key_id.toString(16).toUpperCase().padStart(4, '0');
+    return `<span class="p25-key-inventory-item${current}" title="${entry.key_bits}-bit key material is saved privately">${(entry.frequency_hz / 1e6).toFixed(6)} MHz · ${alg} · KID 0x${kid}</span>`;
+  }).join('') : '<span class="p25-key-note">None saved through the channel-key panel.</span>';
 }
 async function syncP25KeyPanel(force = false) {
   const visible = sdrMode === 'p25';
@@ -7723,7 +7767,7 @@ async function syncP25KeyPanel(force = false) {
     if (request !== p25KeyRequest) return;
     p25KeyLoaded = true;
     applyP25KeyStatus(status);
-    p25KeyMessage(status.configured ? 'Channel key saved. Enter a new value to replace it.' : 'No channel key saved. Startup key files still apply.');
+    p25KeyMessage(status.configured ? 'Matching channel key exists. ALG and Key ID are shown below.' : 'No key saved for this frequency. Startup key files may still apply.');
   } catch (e) { if (request === p25KeyRequest) p25KeyMessage(e.message, true); }
 }
 async function changeP25Key(action) {
@@ -8133,29 +8177,50 @@ async function loadCalls() {
       const who = [
         c.sourceId != null ? `from ${c.sourceId}` : null,
         c.targetId != null ? `to ${c.targetId}` : null,
-        c.tone || null,
       ].filter(Boolean).join(' · ');
-      // Why a call is silent matters more than that it is. So does why it
-      // sounds scrambled: a high bit-error metric means weak signal, not a
-      // misidentified protocol.
-      const err = c.errorPct == null ? '' : c.errorPct >= 20
-        ? `<span style="color:#f87171; font-size:10px; flex:none" title="voice frames heavily corrected — weak signal">bit errors ~${c.errorPct}%</span>`
-        : c.errorPct >= 8
-          ? `<span style="color:#facc15; font-size:10px; flex:none">some errors</span>`
-          : '';
       const why = c.encrypted && !c.decrypted
-        ? `<span style="color:#f87171">encrypted${c.algorithm ? ' · ALG ' + esc(c.algorithm) : ''} — muted</span>`
+        ? '<span style="color:#f87171">encrypted — muted</span>'
         : silent
           ? '<span style="color:#facc15">no audio decoded</span>'
           : `<button type="button" class="sdr-preset-btn" onclick="playCall(${c.id})">▶ play</button>`;
-      return `<div style="display:flex; align-items:baseline; gap:8px;">
-        <span style="color:#64748b; font-size:10px; flex:none">${t}</span>
-        <span style="color:#4ade80; font-weight:700; flex:none">${esc(c.protocol)}</span>
-        <span style="color:#38bdf8; flex:none">${(c.freqHz/1e6).toFixed(4)}</span>
-        <span style="color:#94a3b8; font-size:10px; flex:none">${c.durationS.toFixed(1)}s</span>
-        ${err}
-        <span style="color:#94a3b8; font-size:10px; overflow:hidden; text-overflow:ellipsis">${esc(who)}</span>
-        <span style="margin-left:auto; flex:none; font-size:10px">${why}</span>
+      const telemetry = [];
+      const telem = (label, cls = '') => telemetry.push(`<span${cls ? ` class="${cls}"` : ''}>${esc(label)}</span>`);
+      if (c.digitalProtocol) telem(c.digitalProtocol);
+      if (c.peakSnrDb != null) telem(`SNR ${c.peakSnrDb.toFixed(1)} dB`, c.peakSnrDb < 8 ? 'call-warn' : '');
+      if (c.freqErrorHz != null) {
+        const off = `${c.freqErrorHz >= 0 ? '+' : ''}${c.freqErrorHz.toFixed(0)} Hz`;
+        telem(`tune error ${off}`, Math.abs(c.freqErrorHz) >= 1000 ? 'call-warn' : '');
+      }
+      if (c.tone) telem(c.tone);
+      if (c.mdc) telem(c.mdc);
+      if (c.colorCode != null) telem(`CC ${c.colorCode}`);
+      if (c.slot != null) telem(`slot ${c.slot}`);
+      if (c.group != null) telem(c.group ? 'group call' : 'private call');
+      if (c.talkerAlias) telem(`alias ${c.talkerAlias}`);
+      if (c.manufacturer) telem(`MFID ${c.manufacturer}`);
+      if (c.serviceOptions != null) telem(`service 0x${c.serviceOptions.toString(16).toUpperCase().padStart(2, '0')}`);
+      if (c.emergency) telem('EMERGENCY', 'call-bad');
+      if (c.encrypted) telem(c.decrypted ? 'encrypted · decrypted' : 'encrypted · no key', c.decrypted ? 'call-good' : 'call-bad');
+      if (c.algorithm) telem(`ALG ${c.algorithm}`);
+      if (c.keyId != null) telem(`KEY 0x${c.keyId.toString(16).toUpperCase().padStart(4, '0')}`);
+      if (c.errorPct != null) telem(`voice errors ~${c.errorPct}%`, c.errorPct >= 20 ? 'call-bad' : c.errorPct >= 8 ? 'call-warn' : '');
+      if (c.voicedFraction != null) telem(`voiced ${(c.voicedFraction * 100).toFixed(0)}%`);
+      telem(`audio ${c.rateHz} Hz · ${c.samples} samples · peak ${(c.peak * 100).toFixed(1)}%`);
+      telem(`IQ CS16LE ${c.iqRateHz} sps · ${c.iqSamples} samples`);
+      const stem = `usdr-call-${c.id}-${(c.freqHz/1e6).toFixed(5)}MHz`;
+      return `<div class="call-entry">
+        <div class="call-primary">
+          <span style="color:#64748b; font-size:10px; flex:none">${t}</span>
+          <span style="color:#4ade80; font-weight:700; flex:none">${esc(c.protocol)}</span>
+          <span style="color:#38bdf8; flex:none">${(c.freqHz/1e6).toFixed(5)}</span>
+          <span style="color:#94a3b8; font-size:10px; flex:none">${c.durationS.toFixed(1)}s</span>
+          <span class="call-identity">${esc(who)}</span>
+          <span class="call-actions">${why}
+            <a class="sdr-preset-btn" href="/api/sdr/calls/${c.id}/audio.wav" download="${stem}.wav" title="Export decoded mono audio">WAV</a>
+            <a class="sdr-preset-btn" href="/api/sdr/calls/${c.id}/raw.iq" download title="Export channelized raw IQ as interleaved signed 16-bit little-endian I/Q">IQ</a>
+          </span>
+        </div>
+        <div class="call-telemetry">${telemetry.join('')}</div>
       </div>`;
     }).join('');
   } catch (e) { /* the status line already reports a missing radio */ }

@@ -193,6 +193,9 @@ SWR: this is RX-only.
   an **Advanced** drawer under the main controls; the results (class log,
   decode log, last heard, scan) sit directly below the receiver. The `⤢ tall`
   button, or `F`, gives them most of the viewport.
+- **Last Heard diagnostics** retain each call's decoded WAV, channelized raw
+  CS16LE I/Q, peak SNR, tuning error, protocol identities, encryption/key IDs,
+  and every other end-of-call field the demodulator recovered.
 - **Protocol Decode / FEC panel** showing accepted *and* rejected frame
   attempts, so a heuristic label is never presented as a successful decode.
 - **Rolling 20-second capture** of voice audio, discriminator output, and
@@ -280,6 +283,7 @@ not be exposed to a network you do not control.
 | `POST /api/sdr/device` | `{"serial": "…"}` |
 | `GET /api/sdr/calls` | Recent voice calls, newest first (P25, DMR, and scanner-caught AM/NFM) |
 | `GET /api/sdr/calls/{id}/audio.wav` | That call's audio |
+| `GET /api/sdr/calls/{id}/raw.iq` | That call's channelized raw I/Q (`CS16LE`, interleaved I/Q; frequency, rate, and format are returned as `x-usdr-*` headers) |
 | `GET /api/sdr/capture.wav?kind=` | `voice`, `discriminator`, `iq`, or `span` (raw device I/Q at the span rate; the ring is demand-armed — the first request starts the fill, so re-request for the full 12 s) |
 | `POST /api/sdr/replay?frequency_hz=` | Decode a posted I/Q WAV (≤ 16 MiB) |
 | `GET /ws` | JSON stream of `fft`, `decode`, and `status` events |

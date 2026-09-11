@@ -139,6 +139,9 @@ fn save_settings(path: &PathBuf, s: &Settings) -> Result<()> {
 
 struct AppState {
     sdr: Mutex<Option<sdr::SdrRuntime>>,
+    /// Call history belongs to the application rather than a browser
+    /// connection or a particular radio worker lifetime.
+    calls: Arc<Mutex<std::collections::VecDeque<sdr::RecordedCall>>>,
     sdr_events: tokio::sync::broadcast::Sender<sdr::SdrEvent>,
     audio: tokio::sync::broadcast::Sender<sdr::AudioFrame>,
     settings: Mutex<Settings>,
@@ -247,7 +250,13 @@ async fn main() -> Result<()> {
     // Audio is a live monitor: a client that falls behind should skip forward
     // to the present rather than play a growing delay, so the queue is short.
     let (audio_tx, _) = tokio::sync::broadcast::channel(32);
-    let runtime = sdr::spawn(cfg, sdr_events.clone(), audio_tx.clone())?;
+    let calls = Arc::new(Mutex::new(std::collections::VecDeque::new()));
+    let runtime = sdr::spawn(
+        cfg,
+        sdr_events.clone(),
+        audio_tx.clone(),
+        Arc::clone(&calls),
+    )?;
     // Put the receiver back on the channel it was on, if that channel is
     // still inside the span it came up with.
     if let Some(hz) = settings.inspect_hz {
@@ -262,6 +271,7 @@ async fn main() -> Result<()> {
 
     let state = Arc::new(AppState {
         sdr: Mutex::new(Some(runtime)),
+        calls,
         sdr_events,
         audio: audio_tx,
         settings: Mutex::new(settings),
@@ -293,6 +303,7 @@ async fn main() -> Result<()> {
         .route("/api/sdr/modes", get(get_sdr_modes))
         .route("/api/sdr/calls", get(get_sdr_calls))
         .route("/api/sdr/calls/{id}/audio.wav", get(get_sdr_call_audio))
+        .route("/api/sdr/calls/{id}/raw.iq", get(get_sdr_call_iq))
         .route("/api/sdr/capture.wav", get(get_sdr_capture))
         // A 20 s I/Q capture is a few MiB, well past axum's 2 MiB default.
         // The handler enforces the real ceiling; this just lets the body reach it.
@@ -747,19 +758,12 @@ async fn get_sdr_modes() -> Json<Vec<sdr::ModeCapabilities>> {
 async fn get_sdr_calls(
     State(st): State<Arc<AppState>>,
 ) -> Result<Json<Vec<serde_json::Value>>, ApiError> {
-    let calls = st
-        .sdr
-        .lock()
-        .expect("sdr")
-        .as_ref()
-        .map(|r| {
-            let ring = r.calls.lock().expect("calls");
-            ring.iter()
-                .rev()
-                .map(|c| serde_json::to_value(c).unwrap_or_default())
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
+    let ring = st.calls.lock().expect("calls");
+    let calls = ring
+        .iter()
+        .rev()
+        .map(|c| serde_json::to_value(c).unwrap_or_default())
+        .collect::<Vec<_>>();
     Ok(Json(calls))
 }
 
@@ -767,17 +771,15 @@ async fn get_sdr_call_audio(
     State(st): State<Arc<AppState>>,
     axum::extract::Path(id): axum::extract::Path<u64>,
 ) -> Result<Response, ApiError> {
-    let call = st
-        .sdr
+    let (audio, rate_hz) = st
+        .calls
         .lock()
-        .expect("sdr")
-        .as_ref()
-        .and_then(|r| {
-            let ring = r.calls.lock().expect("calls");
-            ring.iter().find(|c| c.id == id).cloned()
-        })
+        .expect("calls")
+        .iter()
+        .find(|c| c.id == id)
+        .map(|c| (c.audio.clone(), c.rate_hz))
         .ok_or(ApiError::NotFound)?;
-    let wav = sdr::pcm_wav_public(&call.audio, call.rate_hz, 1);
+    let wav = sdr::pcm_wav_public(&audio, rate_hz, 1);
     Ok((
         [
             (header::CONTENT_TYPE, "audio/wav"),
@@ -785,6 +787,53 @@ async fn get_sdr_call_audio(
             (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
         ],
         wav,
+    )
+        .into_response())
+}
+
+/// Channelized complex baseband for one recorded call. The payload is raw
+/// CS16LE: signed 16-bit I then signed 16-bit Q, with no file header. The
+/// centre frequency and exact sample rate are carried both by the calls JSON
+/// and response headers so diagnostic tools can replay it without guessing.
+async fn get_sdr_call_iq(
+    State(st): State<Arc<AppState>>,
+    axum::extract::Path(id): axum::extract::Path<u64>,
+) -> Result<Response, ApiError> {
+    let (raw, rate_hz, freq_hz) = tokio::task::spawn_blocking(move || {
+        let (iq, rate_hz, freq_hz) = st
+            .calls
+            .lock()
+            .expect("calls")
+            .iter()
+            .find(|c| c.id == id)
+            .map(|c| (c.iq.clone(), c.iq_rate_hz, c.freq_hz))?;
+        let mut raw = Vec::with_capacity(iq.len() * 2);
+        for sample in iq {
+            raw.extend_from_slice(&sample.to_le_bytes());
+        }
+        Some((raw, rate_hz, freq_hz))
+    })
+    .await
+    .map_err(|e| ApiError::BadRequest(format!("IQ export task failed: {e}")))?
+    .ok_or(ApiError::NotFound)?;
+    let filename = format!(
+        "usdr-call-{id}-{:.5}MHz-{}sps-cs16le.iq",
+        freq_hz / 1e6,
+        rate_hz
+    );
+    Ok((
+        [
+            (header::CONTENT_TYPE, "application/octet-stream"),
+            (header::CACHE_CONTROL, "no-store"),
+            (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
+        ],
+        [
+            ("content-disposition", format!("attachment; filename=\"{filename}\"")),
+            ("x-usdr-frequency-hz", freq_hz.round().to_string()),
+            ("x-usdr-sample-rate-hz", rate_hz.to_string()),
+            ("x-usdr-iq-format", "cs16le".to_string()),
+        ],
+        raw,
     )
         .into_response())
 }

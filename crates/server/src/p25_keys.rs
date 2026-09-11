@@ -49,6 +49,16 @@ pub struct Status {
     configured: bool,
     algorithm: Option<u8>,
     key_id: Option<u16>,
+    /// Safe inventory of channel-scoped keys. Key material never crosses the
+    /// API; frequency + ALGID + KID are enough to match an over-the-air call.
+    entries: Vec<KeySummary>,
+}
+#[derive(Serialize)]
+struct KeySummary {
+    frequency_hz: u64,
+    algorithm: u8,
+    key_id: u16,
+    key_bits: u16,
 }
 
 pub struct ChannelKeys {
@@ -133,6 +143,22 @@ impl ChannelKeys {
             configured: entry.is_some(),
             algorithm: entry.map(|e| e.algorithm),
             key_id: entry.map(|e| e.key_id),
+            entries: self
+                .entries
+                .iter()
+                .map(|(&frequency_hz, entry)| KeySummary {
+                    frequency_hz,
+                    algorithm: entry.algorithm,
+                    key_id: entry.key_id,
+                    key_bits: match entry.algorithm {
+                        0xaa => 40,
+                        0x81 => 64,
+                        0x84 => 256,
+                        0x89 => 128,
+                        _ => 0,
+                    },
+                })
+                .collect(),
         }
     }
     fn apply(&mut self, request: Request) -> Result<Status, ApiError> {
@@ -283,6 +309,10 @@ mod tests {
         let response = store.apply(request(hz, "0001020304")).ok().unwrap();
         let json = serde_json::to_value(response).unwrap();
         assert_eq!(json["configured"], true);
+        assert_eq!(json["entries"][0]["frequency_hz"], hz);
+        assert_eq!(json["entries"][0]["algorithm"], 0xaa);
+        assert_eq!(json["entries"][0]["key_id"], 0xbeef);
+        assert_eq!(json["entries"][0]["key_bits"], 40);
         assert!(json.get("key").is_none());
         assert!(!json.to_string().contains("0001020304"));
         let first = stream(hz).unwrap();

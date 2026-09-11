@@ -890,7 +890,6 @@ impl CaptureBuffer {
 
 pub struct SdrRuntime {
     pub status: Arc<Mutex<SdrStatus>>,
-    pub calls: Arc<Mutex<VecDeque<RecordedCall>>>,
     stop: Arc<AtomicBool>,
     cmd_tx: std::sync::mpsc::Sender<SdrCmd>,
     worker: Option<std::thread::JoinHandle<()>>,
@@ -1249,12 +1248,12 @@ pub fn spawn(
     cfg: SdrCfg,
     events: broadcast::Sender<SdrEvent>,
     audio: broadcast::Sender<AudioFrame>,
+    calls: Arc<Mutex<VecDeque<RecordedCall>>>,
 ) -> Result<SdrRuntime> {
     let status = Arc::new(Mutex::new(SdrStatus::default()));
     let stop = Arc::new(AtomicBool::new(false));
     let (cmd_tx, cmd_rx) = std::sync::mpsc::channel();
     let capture = Arc::new(Mutex::new(CaptureBuffer::default()));
-    let calls: Arc<Mutex<VecDeque<RecordedCall>>> = Arc::new(Mutex::new(VecDeque::new()));
 
     let thread_status = Arc::clone(&status);
     let thread_stop = Arc::clone(&stop);
@@ -1284,7 +1283,6 @@ pub fn spawn(
         cmd_tx,
         worker: Some(worker),
         capture,
-        calls,
     })
 }
 
@@ -1576,18 +1574,49 @@ pub struct RecordedCall {
     pub freq_hz: f64,
     pub rate_hz: u32,
     pub samples: usize,
+    /// Complex channel samples, interleaved I/Q as signed 16-bit values.
+    pub iq_rate_hz: u32,
+    pub iq_samples: usize,
     /// Peak absolute sample, so a silent recording is obvious without playing it.
     pub peak: f32,
     pub encrypted: bool,
     pub decrypted: bool,
+    /// Strongest spectrum-derived SNR seen during the call.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub peak_snr_db: Option<f32>,
+    /// Average carrier offset reported by the protocol demodulator.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub freq_error_hz: Option<f32>,
+    /// Fraction of captured audio admitted by the voice/noise gate.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub voiced_fraction: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub algorithm: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub key_id: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub tone: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mdc: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub digital_protocol: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub color_code: Option<u8>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub slot: Option<u8>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source_id: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub target_id: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub group: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub manufacturer: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub service_options: Option<u8>,
+    pub emergency: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub talker_alias: Option<String>,
     /// Smoothed voice-frame bit-error metric, 0-100, where the protocol
     /// reports one. A call that plays scrambled usually reads high — weak
     /// signal, not the wrong decoder.
@@ -1595,6 +1624,8 @@ pub struct RecordedCall {
     pub error_pct: Option<u8>,
     #[serde(skip)]
     pub audio: Vec<i16>,
+    #[serde(skip)]
+    pub iq: Vec<i16>,
 }
 
 /// How many finished calls to keep. A handful is enough to look back over what
@@ -1607,15 +1638,19 @@ const RECENT_CALLS: usize = 16;
 struct CallRecorder {
     active: bool,
     started_ms: u64,
-    cap_samples: usize,
+    audio_cap_samples: usize,
+    iq_cap_samples: usize,
+    iq_rate_hz: u32,
     buf: Vec<i16>,
+    /// Interleaved signed 16-bit little-endian I/Q on export.
+    iq: Vec<i16>,
 }
 
 /// Hard ceiling on one recorded call. A continuous carrier — a weather
 /// broadcast, a control channel — holds squelch open indefinitely, and
 /// without a cap that "call" grows at ~100 KB/s of i16 for as long as it
 /// holds. Three minutes covers all but the longest real conversations; the
-/// audio is truncated, not the call dropped.
+/// audio and channel I/Q are truncated, not the call dropped.
 const MAX_CALL_SECS: f32 = 180.0;
 
 impl CallRecorder {
@@ -1623,23 +1658,30 @@ impl CallRecorder {
         Self {
             active: false,
             started_ms: 0,
-            cap_samples: usize::MAX,
+            audio_cap_samples: usize::MAX,
+            iq_cap_samples: usize::MAX,
+            iq_rate_hz: 0,
             buf: Vec::new(),
+            iq: Vec::new(),
         }
     }
 
-    fn start(&mut self, rate_hz: f64, now_ms: u64) {
+    fn start(&mut self, audio_rate_hz: f64, iq_rate_hz: f64, now_ms: u64) {
         self.active = true;
         self.started_ms = now_ms;
-        self.cap_samples = (rate_hz.max(1.0) as usize).max(1) * MAX_CALL_SECS as usize;
+        self.audio_cap_samples =
+            (audio_rate_hz.max(1.0) as usize).max(1) * MAX_CALL_SECS as usize;
+        self.iq_rate_hz = iq_rate_hz.round().max(1.0) as u32;
+        self.iq_cap_samples = self.iq_rate_hz as usize * MAX_CALL_SECS as usize;
         self.buf.clear();
+        self.iq.clear();
     }
 
     fn push(&mut self, audio: &[f32]) {
-        if self.buf.len() >= self.cap_samples {
+        if self.buf.len() >= self.audio_cap_samples {
             return;
         }
-        let room = self.cap_samples - self.buf.len();
+        let room = self.audio_cap_samples - self.buf.len();
         self.buf.extend(
             audio
                 .iter()
@@ -1648,9 +1690,28 @@ impl CallRecorder {
         );
     }
 
-    fn stop(&mut self) -> (Vec<i16>, u64) {
+    fn push_iq(&mut self, iq: &[num_complex::Complex32]) {
+        let have = self.iq.len() / 2;
+        if have >= self.iq_cap_samples {
+            return;
+        }
+        let room = self.iq_cap_samples - have;
+        self.iq.extend(iq.iter().take(room).flat_map(|x| {
+            [
+                (x.re.clamp(-1.0, 1.0) * 32_000.0) as i16,
+                (x.im.clamp(-1.0, 1.0) * 32_000.0) as i16,
+            ]
+        }));
+    }
+
+    fn stop(&mut self) -> (Vec<i16>, Vec<i16>, u32, u64) {
         self.active = false;
-        (std::mem::take(&mut self.buf), self.started_ms)
+        (
+            std::mem::take(&mut self.buf),
+            std::mem::take(&mut self.iq),
+            self.iq_rate_hz,
+            self.started_ms,
+        )
     }
 }
 
@@ -1682,7 +1743,7 @@ fn flush_scan_rec(
     if !rec.active {
         return;
     }
-    let (buf, started) = rec.stop();
+    let (buf, iq, iq_rate_hz, started) = rec.stop();
     let (mode, rate) = meta.unwrap_or((ScanMode::Nfm, fallback_rate));
     let rate = rate.max(1);
     let peak = call_peak(&buf);
@@ -1698,15 +1759,31 @@ fn flush_scan_rec(
                 freq_hz: freq,
                 rate_hz: rate,
                 samples: buf.len(),
+                iq_rate_hz,
+                iq_samples: iq.len() / 2,
                 peak,
                 encrypted: false,
                 decrypted: false,
+                peak_snr_db: None,
+                freq_error_hz: None,
+                voiced_fraction: None,
                 algorithm: None,
+                key_id: None,
                 tone: None,
+                mdc: None,
+                digital_protocol: None,
+                color_code: None,
+                slot: None,
                 source_id: None,
                 target_id: None,
+                group: None,
+                manufacturer: None,
+                service_options: None,
+                emergency: false,
+                talker_alias: None,
                 error_pct: None,
                 audio: buf,
+                iq,
             },
         );
         *next_id += 1;
@@ -4173,14 +4250,17 @@ fn run_sdr(
                                         _ => None,
                                     })
                                     .unwrap_or(fs_chain);
-                                scan_recs[i].start(rate, now_ms());
+                                scan_recs[i].start(rate, fs_chain, now_ms());
                                 scan_rec_meta[i] = Some((*ev_mode, rate.round().max(1.0) as u32));
                             }
                             CallEvent::Ended(summary) => {
                                 if !scan_recs[i].active {
                                     continue;
                                 }
-                                let (buf, started) = scan_recs[i].stop();
+                                if let Some(Some(slot)) = scan_slots.get(i) {
+                                    scan_recs[i].push_iq(&slot.chain_iq);
+                                }
+                                let (buf, iq, iq_rate_hz, started) = scan_recs[i].stop();
                                 let digital = summary.digital.as_ref();
                                 file_call(
                                     &calls,
@@ -4194,17 +4274,43 @@ fn run_sdr(
                                             .map(|(_, r)| r)
                                             .unwrap_or(8_000),
                                         samples: buf.len(),
+                                        iq_rate_hz,
+                                        iq_samples: iq.len() / 2,
                                         peak: call_peak(&buf),
                                         encrypted: digital.is_some_and(|d| d.encrypted),
                                         decrypted: digital.is_some_and(|d| d.decrypted),
+                                        peak_snr_db: summary
+                                            .peak_snr_db
+                                            .is_finite()
+                                            .then_some(summary.peak_snr_db),
+                                        freq_error_hz: summary
+                                            .freq_error_hz
+                                            .is_finite()
+                                            .then_some(summary.freq_error_hz),
+                                        voiced_fraction: summary
+                                            .voiced_fraction
+                                            .is_finite()
+                                            .then_some(summary.voiced_fraction),
                                         algorithm: digital
                                             .and_then(|d| d.algorithm_id)
                                             .map(|a| format!("0x{a:02X}")),
+                                        key_id: digital.and_then(|d| d.key_id),
                                         tone: summary.tone.as_ref().map(|t| t.label()),
+                                        mdc: summary.mdc.as_ref().map(|m| m.label()),
+                                        digital_protocol: digital.map(|d| d.protocol.clone()),
+                                        color_code: digital.and_then(|d| d.color_code),
+                                        slot: digital.and_then(|d| d.slot),
                                         source_id: digital.and_then(|d| d.source_id),
                                         target_id: digital.and_then(|d| d.target_id),
+                                        group: digital.and_then(|d| d.group),
+                                        manufacturer: digital.and_then(|d| d.manufacturer.clone()),
+                                        service_options: digital.and_then(|d| d.service_options),
+                                        emergency: digital.is_some_and(|d| d.emergency),
+                                        talker_alias: digital
+                                            .and_then(|d| d.talker_alias.clone()),
                                         error_pct: digital.and_then(|d| d.bit_error_pct),
                                         audio: buf,
+                                        iq,
                                     },
                                 );
                                 next_call_id += 1;
@@ -4221,6 +4327,7 @@ fn run_sdr(
                             if scan_recs[i].active
                                 && let Some(Some(slot)) = scan_slots.get(i)
                             {
+                                scan_recs[i].push_iq(&slot.chain_iq);
                                 let audio = match rs.mode {
                                     ScanMode::P25 => slot.p25.as_ref().map(|rx| rx.audio()),
                                     ScanMode::Dmr => slot.dmr.as_ref().map(|rx| rx.audio()),
@@ -4237,11 +4344,12 @@ fn run_sdr(
                             // so it ends where the talking did.
                                 if rs.analog_open {
                                     if !scan_recs[i].active {
-                                        scan_recs[i].start(fs_chain, now_ms());
+                                        scan_recs[i].start(fs_chain, fs_chain, now_ms());
                                         scan_rec_meta[i] =
                                             Some((rs.mode, (fs_chain as u32).max(1)));
                                     }
                                 if let Some(Some(slot)) = scan_slots.get(i) {
+                                    scan_recs[i].push_iq(&slot.chain_iq);
                                     match rs.mode {
                                         ScanMode::Nfm => scan_recs[i].push(&slot.nfm_voice),
                                         ScanMode::Am => scan_recs[i].push(&slot.am_audio),
@@ -4249,13 +4357,16 @@ fn run_sdr(
                                     }
                                 }
                             } else if scan_recs[i].active {
-                                let (buf, started) = scan_recs[i].stop();
+                                let (buf, mut iq, iq_rate_hz, started) = scan_recs[i].stop();
                                 let rate = scan_rec_meta[i]
                                     .map(|(_, r)| r)
                                     .unwrap_or(fs_chain as u32)
                                     .max(1);
                                 let trim = (rs.trailing_s * rate as f32).round() as usize;
                                 let kept = &buf[..buf.len().saturating_sub(trim)];
+                                let iq_trim =
+                                    (rs.trailing_s * iq_rate_hz as f32).round() as usize * 2;
+                                iq.truncate(iq.len().saturating_sub(iq_trim));
                                 let peak = call_peak(kept);
                                 let duration = kept.len() as f32 / rate as f32;
                                 // A blip of squelch with no voice behind it
@@ -4267,6 +4378,11 @@ fn run_sdr(
                                         .and_then(|s| s.as_ref())
                                         .map(|s| s.freq_hz)
                                         .unwrap_or(inspect_hz);
+                                    let snr_db = scan_slots
+                                        .get(i)
+                                        .and_then(|s| s.as_ref())
+                                        .map(|s| s.snr_db)
+                                        .filter(|v| v.is_finite());
                                     file_call(
                                         &calls,
                                         RecordedCall {
@@ -4277,15 +4393,31 @@ fn run_sdr(
                                             freq_hz: freq,
                                             rate_hz: rate,
                                             samples: kept.len(),
+                                            iq_rate_hz,
+                                            iq_samples: iq.len() / 2,
                                             peak,
                                             encrypted: false,
                                             decrypted: false,
+                                            peak_snr_db: snr_db,
+                                            freq_error_hz: None,
+                                            voiced_fraction: None,
                                             algorithm: None,
+                                            key_id: None,
                                             tone: None,
+                                            mdc: None,
+                                            digital_protocol: None,
+                                            color_code: None,
+                                            slot: None,
                                             source_id: None,
                                             target_id: None,
+                                            group: None,
+                                            manufacturer: None,
+                                            service_options: None,
+                                            emergency: false,
+                                            talker_alias: None,
                                             error_pct: None,
                                             audio: kept.to_vec(),
+                                            iq,
                                         },
                                     );
                                     next_call_id += 1;
@@ -4624,15 +4756,16 @@ fn run_sdr(
                         Demod::Nxdn { rx } => rx.audio_rate(),
                         _ => fs_chain,
                     };
-                    rec_voice.start(rec_rate, now_ms());
+                    rec_voice.start(rec_rate, fs_chain, now_ms());
                 }
                 if rec_voice.active {
                     rec_voice.push(&audio_buf);
+                    rec_voice.push_iq(&inspect_iq);
                 }
                 if let Some(CallEvent::Ended(summary)) = &event
                     && rec_voice.active
                 {
-                    let (buf, started) = rec_voice.stop();
+                    let (buf, iq, iq_rate_hz, started) = rec_voice.stop();
                     let digital = summary.digital.as_ref();
                     // Same scaling `call_peak` documents: recorder stores
                     // full-scale-fraction * 28 000, so / 28 000 here too.
@@ -4653,17 +4786,42 @@ fn run_sdr(
                         freq_hz: inspect_hz,
                         rate_hz: demod.audio_rate(fs_chain).round() as u32,
                         samples: buf.len(),
+                        iq_rate_hz,
+                        iq_samples: iq.len() / 2,
                         peak,
                         encrypted: digital.is_some_and(|d| d.encrypted),
                         decrypted: digital.is_some_and(|d| d.decrypted),
+                        peak_snr_db: summary
+                            .peak_snr_db
+                            .is_finite()
+                            .then_some(summary.peak_snr_db),
+                        freq_error_hz: summary
+                            .freq_error_hz
+                            .is_finite()
+                            .then_some(summary.freq_error_hz),
+                        voiced_fraction: summary
+                            .voiced_fraction
+                            .is_finite()
+                            .then_some(summary.voiced_fraction),
                         algorithm: digital
                             .and_then(|d| d.algorithm_id)
                             .map(|a| format!("0x{a:02X}")),
+                        key_id: digital.and_then(|d| d.key_id),
                         tone: summary.tone.as_ref().map(|t| t.label()),
+                        mdc: summary.mdc.as_ref().map(|m| m.label()),
+                        digital_protocol: digital.map(|d| d.protocol.clone()),
+                        color_code: digital.and_then(|d| d.color_code),
+                        slot: digital.and_then(|d| d.slot),
                         source_id: digital.and_then(|d| d.source_id),
                         target_id: digital.and_then(|d| d.target_id),
+                        group: digital.and_then(|d| d.group),
+                        manufacturer: digital.and_then(|d| d.manufacturer.clone()),
+                        service_options: digital.and_then(|d| d.service_options),
+                        emergency: digital.is_some_and(|d| d.emergency),
+                        talker_alias: digital.and_then(|d| d.talker_alias.clone()),
                         error_pct: digital.and_then(|d| d.bit_error_pct),
                         audio: buf,
+                        iq,
                     };
                     next_call_id += 1;
                     file_call(&calls, record);
