@@ -781,3 +781,91 @@ readout replaced them.
 
 Upstream `scannerd` was not modified. Changes made here have not been sent
 back to it.
+
+## Authorized P25 voice keys
+
+In the web interface, select **P25**, tune the frequency you want to monitor,
+and open **P25 channel key** below the receiver controls. Choose ADP/RC4,
+DES-OFB, AES-256-OFB, or AES-128-OFB, enter the over-the-air **key ID in hex**,
+and enter the full hexadecimal key. **Save key** applies the key at the next
+P25 voice block without restarting. Saving again replaces the channel key;
+**Remove channel key** removes it.
+
+Web-entered keys are scoped to the displayed frequency, rounded to the nearest
+Hz. They are saved in a separate private file alongside the selected settings
+file (`usdr.p25-keys.json` for `usdr.toml`, mode `0600` on Unix), and restored
+on startup. The browser receives only configured/not-configured status, key
+type, and key ID; it never receives the saved key value. The entry field clears
+after submission and when changing channels. Keys are not saved in browser
+storage or the ordinary settings TOML.
+
+A web-configured channel key overrides startup-file keys on that frequency.
+Its type and key ID must match the call. Removing it restores startup-file key
+lookup; if neither source has a matching key, encrypted voice stays muted.
+
+The command-line key-file option remains available:
+
+Start uSDR with `--voice-keys /path/to/keys.toml` to load operator-supplied keys
+before any receivers start. Without a matching algorithm and over-the-air key
+ID, encrypted calls remain muted. Key IDs are not frequencies or talkgroup IDs.
+The key file is separate from browser settings, is never exposed by the web API,
+and must be private on Unix (`chmod 600 /path/to/keys.toml`). Restart after edits.
+
+```toml
+[[keys]]
+protocol = "p25"
+algorithm = 0xaa
+key_id = 0x1234
+key = "0001020304" # public example only; replace with your actual key
+```
+
+| Algorithm | ALGID | Key length in hex digits |
+| --- | --- | --- |
+| Motorola ADP / RC4 | `0xaa` | 10 |
+| DES-OFB | `0x81` | 16 (including DES parity bits) |
+| AES-256-OFB | `0x84` | 64 |
+| AES-128-OFB | `0x89` | 32 |
+
+The three algorithms supported by boatbod OP25 (ADP, DES-OFB, AES-256) are
+covered by byte-for-byte reference vectors for Phase 1 and Phase 2. AES-128 is
+an additional uSDR algorithm and is not part of that OP25 comparison.
+
+Existing boatbod OP25 JSON key files are also accepted by `--voice-keys`:
+
+```json
+{"0x1234": {"algid": "0xaa", "key": [0, 1, 2, 3, 4]}}
+```
+
+JSON IDs, algorithms, and bytes can use decimal numbers or hexadecimal strings.
+Short JSON key arrays are padded with leading zeros as in OP25. TOML hex keys
+require the full length, including leading zeros. Invalid files fail startup
+without printing key material. Oversized keys are rejected rather than truncated.
+
+If a key still produces no intelligible audio, check the received ALGID and KID,
+key length/leading zeros, and whether clear P25 reception works at the same
+signal quality. A configured key cannot be authenticated by P25 voice encryption;
+the `decrypted` flag means the key was applied, not proof that it is correct.
+For an interoperability report, include phase, ALGID, KID and an authorized
+capture if available; do not put real keys in issues. Use the dedicated key form or private key file.
+The reference revision and reproduction procedure are in
+[the crypto test notes](tools/p25-crypto/README.md).
+
+For a Phase 2 traffic frequency, also supply the system identifiers and the
+**zero-based** timeslot (0 or 1), then select P25 mode and tune that frequency:
+
+```sh
+usdr --voice-keys /path/to/keys.json \
+  --p25-phase2 '851.0125,0xbee00,0x123,0x293,0'
+```
+
+The fields are MHz, WACN, system ID, NAC, and slot. Decimal integers and `0x`
+hexadecimal integers are accepted. Repeat `--p25-phase2` for other frequencies;
+only one selected timeslot per frequency is supported. Other frequencies retain
+Phase 1 reception. These settings select a receiver; they are not key material.
+Phase 2 keys use the same key-file format as Phase 1. Unknown encryption state
+is muted until a PTT or repeated ESS establishes the call state.
+
+This provides explicitly configured Phase 2 reception, **not automatic Phase 2
+trunk-following parity** with OP25. Live RF interoperability still needs an
+authorized capture or a radio test; synthetic I/Q tests cover the connected
+receiver path and missing-key muting.

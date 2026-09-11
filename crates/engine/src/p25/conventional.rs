@@ -73,6 +73,7 @@ pub struct TrunkGrant {
 pub struct P25ChannelReceiver {
     pub spec: P25Spec,
     chain: DecodeChain,
+    phase2: Option<super::phase2::live::LiveReceiver>,
     afc: Afc,
     front: C4fmFrontEnd,
     detector: FrameDetector,
@@ -109,7 +110,10 @@ pub struct P25ChannelReceiver {
 
 impl P25ChannelReceiver {
     pub fn new(spec: P25Spec, fs_in: f64, span_center_hz: f64) -> Self {
-        let mut out = Self::build(spec, DecodeChain::new(fs_in, C4FM_BANDWIDTH_HZ, CHANNEL_RATE));
+        let mut out = Self::build(
+            spec,
+            DecodeChain::new(fs_in, C4FM_BANDWIDTH_HZ, CHANNEL_RATE),
+        );
         out.retune(span_center_hz);
         out
     }
@@ -123,12 +127,16 @@ impl P25ChannelReceiver {
     /// symbol-timing constant is unchanged. The AFC base is zero: the
     /// carrier arrives at DC and only residual ±2.5 kHz tracking remains.
     pub fn new_on_channel(spec: P25Spec, channel_fs: f64) -> Self {
-        Self::build(spec, DecodeChain::new(channel_fs, C4FM_BANDWIDTH_HZ, CHANNEL_RATE))
+        Self::build(
+            spec,
+            DecodeChain::new(channel_fs, C4FM_BANDWIDTH_HZ, CHANNEL_RATE),
+        )
     }
 
     fn build(spec: P25Spec, chain: DecodeChain) -> Self {
         let fs_chan = chain.fs_out();
         Self {
+            phase2: super::phase2::live::LiveReceiver::configured(spec.freq_hz, fs_chan),
             chain,
             afc: Afc::new(0.0, 2_500.0),
             front: C4fmFrontEnd::new(fs_chan),
@@ -167,6 +175,9 @@ impl P25ChannelReceiver {
     }
 
     pub fn reset(&mut self) {
+        if let Some(p2) = &mut self.phase2 {
+            *p2 = super::phase2::live::LiveReceiver::new(p2.config, self.chain.fs_out());
+        }
         self.detector = FrameDetector::with_payload();
         self.cqpsk.reset();
         self.cqpsk_detector = FrameDetector::with_payload();
@@ -186,7 +197,7 @@ impl P25ChannelReceiver {
         self.offset_sum = 0.0;
         self.offset_n = 0;
         self.cqpsk_idle_blocks = 0;
-          self.plan = crate::p25::ChannelPlan::new();
+        self.plan = crate::p25::ChannelPlan::new();
         self.latest_grant = None;
         self.grants.clear();
     }
@@ -204,6 +215,9 @@ impl P25ChannelReceiver {
     }
 
     pub fn locked(&self) -> bool {
+        if let Some(p2) = &self.phase2 {
+            return p2.locked();
+        }
         self.nac.is_some()
     }
 
@@ -241,13 +255,18 @@ impl P25ChannelReceiver {
         if self.baseband.is_empty() {
             return None;
         }
+        if self.phase2.is_some() {
+            return self.process_phase2(snr_db);
+        }
         self.front.process(&self.baseband, &mut self.discriminator);
         let mut frames = self.detector.push(&self.discriminator);
         // The linear CQPSK path is a second, parallel receiver. While the
         // C4FM path is producing BCH-valid frames it can only burn half the
         // per-block DSP applying symbols nobody reads — so pause it while
         // C4FM is healthy and re-arm the moment that stops being true.
-        let c4fm_healthy = frames.iter().any(|frame| frame.bch_ok && frame.duid.is_known());
+        let c4fm_healthy = frames
+            .iter()
+            .any(|frame| frame.bch_ok && frame.duid.is_known());
         if c4fm_healthy {
             self.cqpsk_idle_blocks = 0;
         } else {
@@ -265,7 +284,10 @@ impl P25ChannelReceiver {
         // A clean C4FM path wins when both happen to correlate. Otherwise the
         // linear CQPSK path supplies the exact same NID/payload contract to
         // the rest of the receiver.
-        if !frames.iter().any(|frame| frame.bch_ok && frame.duid.is_known()) {
+        if !frames
+            .iter()
+            .any(|frame| frame.bch_ok && frame.duid.is_known())
+        {
             frames.extend(cqpsk_frames);
         }
         let mut event = None;
@@ -288,48 +310,7 @@ impl P25ChannelReceiver {
                 }
                 Duid::Ldu1 | Duid::Ldu2 => {
                     heard_voice = true;
-                    if frame.duid == Duid::Ldu1 {
-                        // A damaged LC must not erase good call state from a
-                        // preceding LDU1. In particular, losing the protected
-                        // service-options bit here would briefly unmute
-                        // encrypted IMBE and later file the call as clear.
-                        if let Some(link_control) = decode_link_control(&frame) {
-                            self.link_control = Some(link_control);
-                        }
-                        self.decryptor = self.encryption.as_ref().and_then(|ess| {
-                            crate::crypto::VoiceDecryptor::for_p25_phase1(
-                                ess.algorithm_id,
-                                ess.key_id,
-                                &ess.message_indicator,
-                                0,
-                            )
-                        });
-                    } else {
-                        if let Some(encryption) = decode_encryption_sync(&frame) {
-                            self.encryption = Some(encryption);
-                            self.decryptor = self.encryption.as_ref().and_then(|ess| {
-                                crate::crypto::VoiceDecryptor::for_p25_phase1(
-                                    ess.algorithm_id,
-                                    ess.key_id,
-                                    &ess.message_indicator,
-                                    9,
-                                )
-                            });
-                        }
-                    }
-                    // Fail closed until an LC or ESS has actually established
-                    // whether this call is clear. Treating missing signalling
-                    // as clear sent encrypted IMBE to the vocoder during late
-                    // entry and created the garbled recordings seen on NMPD.
-                    let Some((encrypted, decrypted)) = self.voice_security() else {
-                        continue;
-                    };
-                    self.call_decrypted |= decrypted;
-                    let mut pcm = if !encrypted || decrypted {
-                        self.decode_voice(&frame)
-                    } else {
-                        vec![0i16; 9 * 160]
-                    };
+                    let mut pcm = self.decode_secured_voice(&frame);
                     let mut audio = self.resampler.process(&pcm);
                     self.leveler.process(&mut audio);
                     if !self.in_call {
@@ -383,10 +364,16 @@ impl P25ChannelReceiver {
             }
             let (talkgroup, group, source, channel) = match event {
                 crate::p25::TsbkEvent::GroupVoiceGrant {
-                    talkgroup, source, channel, ..
+                    talkgroup,
+                    source,
+                    channel,
+                    ..
                 } => (u32::from(talkgroup), true, source, channel),
                 crate::p25::TsbkEvent::IndividualVoiceGrant {
-                    target, source, channel, ..
+                    target,
+                    source,
+                    channel,
+                    ..
                 } => (target, false, source, channel),
                 _ => continue,
             };
@@ -417,6 +404,150 @@ impl P25ChannelReceiver {
     /// The most recent grant observed on the control channel, for telemetry.
     pub fn latest_grant(&self) -> Option<&TrunkGrant> {
         self.latest_grant.as_ref()
+    }
+
+    fn process_phase2(&mut self, snr_db: f32) -> Option<CallEvent> {
+        let p2 = self.phase2.as_mut().expect("configured Phase 2 receiver");
+        let config = p2.config;
+        let bursts = p2.process(&self.baseband);
+        if p2.locked() {
+            self.nac = Some(config.nac);
+            self.offset_sum += f64::from(p2.offset_hz());
+            self.offset_n += 1;
+        }
+        let mut event = None;
+        let mut heard_voice = false;
+        for decoded in bursts {
+            use super::phase2::MacPdu;
+            if matches!(decoded.mac, Some(MacPdu::EndPushToTalk { .. })) {
+                event = self.end_call().or(event);
+                continue;
+            }
+            if let Some(MacPdu::PushToTalk {
+                source, talkgroup, ..
+            }) = decoded.mac
+            {
+                self.link_control = Some(LinkControl {
+                    format: 0,
+                    manufacturer_id: 0,
+                    manufacturer: "P25".into(),
+                    service_options: 0,
+                    group: true,
+                    target_id: Some(u32::from(talkgroup)),
+                    source_id: Some(source),
+                    protected: false,
+                    emergency: false,
+                    encrypted: decoded.encrypted == Some(true),
+                    priority: 0,
+                    corrected_words: 0,
+                    unreliable_words: 0,
+                });
+            }
+            if let (Some(algorithm), Some(key_id), Some(mi)) = (
+                decoded.algorithm_id,
+                decoded.key_id,
+                decoded.message_indicator,
+            ) {
+                self.encryption = Some(EncryptionSync {
+                    algorithm_id: algorithm,
+                    algorithm: algorithm_name(algorithm).into(),
+                    key_id,
+                    message_indicator: mi,
+                    encrypted: decoded.encrypted == Some(true),
+                    corrected_words: decoded.ess_corrected.unwrap_or(0),
+                    unreliable_words: 0,
+                });
+            }
+            if decoded.voice.is_empty() {
+                continue;
+            }
+            heard_voice = true;
+            self.call_decrypted |= decoded.decrypted;
+            let pcm = if decoded.audio.is_empty() {
+                vec![0; decoded.voice.len() * 160]
+            } else {
+                decoded.audio
+            };
+            let mut audio = self.resampler.process(&pcm);
+            self.leveler.process(&mut audio);
+            if !self.in_call {
+                self.in_call = true;
+                self.call_samples = 0;
+                self.peak_snr_db = snr_db;
+                event = Some(CallEvent::Started);
+            }
+            self.call_samples += audio.len();
+            self.out.append(&mut audio);
+            self.hang_s = 0.0;
+            self.peak_snr_db = self.peak_snr_db.max(snr_db);
+        }
+        if self.in_call && !heard_voice {
+            self.hang_s += self.baseband.len() as f32 / self.chain.fs_out() as f32;
+            if self.hang_s >= HANG_S {
+                event = self.end_call().or(event);
+                if let Some(p2) = &mut self.phase2 {
+                    p2.end_call();
+                }
+            }
+        }
+        event
+    }
+
+    fn decode_secured_voice(&mut self, frame: &Frame) -> Vec<i16> {
+        if frame.duid == Duid::Ldu1 {
+            // A damaged LC must not erase good call state from a
+            // preceding LDU1. In particular, losing the protected
+            // service-options bit here would briefly unmute
+            // encrypted IMBE and later file the call as clear.
+            if let Some(link_control) = decode_link_control(frame) {
+                self.link_control = Some(link_control);
+            }
+        }
+        // LDU2 advertises the NEXT superframe's encryption state.
+        let next_encryption = (frame.duid == Duid::Ldu2)
+            .then(|| decode_encryption_sync(frame))
+            .flatten();
+        self.decryptor = self.encryption.as_ref().and_then(|ess| {
+            crate::crypto::VoiceDecryptor::for_p25_phase1_on_channel(
+                Some(self.spec.freq_hz),
+                ess.algorithm_id,
+                ess.key_id,
+                &ess.message_indicator,
+                if frame.duid == Duid::Ldu1 { 0 } else { 9 },
+            )
+        });
+        // Fail closed until an LC or ESS has actually established
+        // whether this call is clear. Treating missing signalling
+        // as clear sent encrypted IMBE to the vocoder during late
+        // entry and created the garbled recordings seen on NMPD.
+        let (mut encrypted, mut decrypted) = self.voice_security().unwrap_or((true, false));
+        if next_encryption.as_ref().is_some_and(|e| e.encrypted) && self.encryption.is_none() {
+            encrypted = true;
+            decrypted = false;
+        }
+        self.call_decrypted |= decrypted;
+        let pcm = if !encrypted || decrypted {
+            self.decode_voice(frame)
+        } else {
+            vec![0i16; 9 * 160]
+        };
+        if frame.duid == Duid::Ldu2 {
+            if let Some(next) = next_encryption {
+                self.encryption = Some(next);
+            } else if let Some(ess) = &mut self.encryption {
+                crate::crypto::cycle_p25_mi(&mut ess.message_indicator);
+            }
+            self.decryptor = self.encryption.as_ref().and_then(|ess| {
+                crate::crypto::VoiceDecryptor::for_p25_phase1_on_channel(
+                    Some(self.spec.freq_hz),
+                    ess.algorithm_id,
+                    ess.key_id,
+                    &ess.message_indicator,
+                    0,
+                )
+            });
+        }
+        pcm
     }
 
     fn decode_voice(&mut self, frame: &Frame) -> Vec<i16> {
@@ -473,11 +604,13 @@ impl P25ChannelReceiver {
             },
             voiced_fraction: 1.0,
             digital: Some(DigitalCallTelemetry {
-                protocol: nac
-                    .map(|n| format!("P25 Phase 1 NAC ${n:03X}"))
-                    .unwrap_or_else(|| "P25 Phase 1".into()),
+                protocol: format!(
+                    "P25 Phase {} NAC ${:03X}",
+                    if self.phase2.is_some() { 2 } else { 1 },
+                    nac.unwrap_or(0)
+                ),
                 color_code: None,
-                slot: None,
+                slot: self.phase2.as_ref().map(|p| p.config.slot + 1),
                 source_id: lc.as_ref().and_then(|v| v.source_id),
                 target_id: lc.as_ref().and_then(|v| v.target_id),
                 group: lc.as_ref().map(|v| v.group),
@@ -748,13 +881,93 @@ pub fn algorithm_name(id: u8) -> &'static str {
 mod tests {
     use super::*;
 
+    #[test]
+    fn configured_phase2_runs_through_live_channel_audio_and_call_summary() {
+        use super::super::phase2::live::{LiveReceiver, ReceiveConfig, test_iq};
+        crate::crypto::install_test_keys();
+        let config: ReceiveConfig = "851.0125,0xbee00,0x123,0x293,0".parse().unwrap();
+        for key_id in [0xcafe, 0xffff] {
+            let mut receiver = P25ChannelReceiver::new_on_channel(
+                P25Spec {
+                    name: "phase2".into(),
+                    freq_hz: config.frequency_hz,
+                    nac: None,
+                },
+                48_000.0,
+            );
+            receiver.phase2 = Some(LiveReceiver::new(config, 48_000.0));
+            let iq = test_iq(config, key_id);
+            let mut samples = 0;
+            for chunk in iq.chunks(2048) {
+                receiver.process(chunk, 30.0);
+                samples += receiver.audio().len();
+                if key_id == 0xffff {
+                    assert!(receiver.audio().iter().all(|v| *v == 0.0));
+                }
+            }
+            assert!(samples > 1000, "live channel should emit timed PCM");
+            let Some(CallEvent::Ended(summary)) = receiver.finish() else {
+                panic!("no Phase 2 call");
+            };
+            let telemetry = summary.digital.unwrap();
+            assert!(telemetry.protocol.contains("Phase 2"));
+            assert_eq!(telemetry.slot, Some(1));
+            assert!(telemetry.encrypted);
+            assert_eq!(telemetry.decrypted, key_id == 0xcafe);
+        }
+    }
+
+    #[test]
+    fn ldu2_uses_current_key_before_promoting_next_ess() {
+        crate::crypto::install_test_keys();
+        let mut receiver = P25ChannelReceiver::new(
+            P25Spec {
+                name: "test".into(),
+                freq_hz: 154_860_000.0,
+                nac: None,
+            },
+            48_000.0,
+            154_860_000.0,
+        );
+        let frame = ldu_with_signalling(
+            Duid::Ldu2,
+            &[
+                1, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef, 0, 0x84, 0x12, 0x34,
+            ],
+            16,
+        );
+        let mut current = decode_encryption_sync(&frame).unwrap();
+        current.key_id = 0xcafe;
+        current.message_indicator = [0x55; 9];
+        receiver.encryption = Some(current);
+        assert_eq!(receiver.decode_secured_voice(&frame).len(), 1440);
+        assert!(
+            receiver.call_decrypted,
+            "LDU2 must use the old, available key"
+        );
+        assert_eq!(receiver.encryption.as_ref().unwrap().key_id, 0x1234);
+        assert!(receiver.decryptor.is_none(), "next KID is unavailable");
+        receiver.call_decrypted = false;
+        assert!(
+            receiver
+                .decode_secured_voice(&frame)
+                .iter()
+                .all(|s| *s == 0)
+        );
+        assert!(!receiver.call_decrypted);
+    }
+
     /// A control channel that announces a band plan and then grants a
     /// talkgroup must yield a followable frequency — this is the whole point
     /// of decoding a trunked control channel.
     #[test]
     fn tsdu_grants_surface_as_followable_frequencies() {
         let mut rx = P25ChannelReceiver::new(
-            P25Spec { name: "t".into(), freq_hz: 851_000_000.0, nac: None },
+            P25Spec {
+                name: "t".into(),
+                freq_hz: 851_000_000.0,
+                nac: None,
+            },
             960_000.0,
             851_000_000.0,
         );
@@ -823,7 +1036,6 @@ mod tests {
         };
         assert_eq!(g.freq_hz, plan_expected);
     }
-
 
     fn ldu_with_signalling(duid: Duid, bytes: &[u8], information_symbols: usize) -> Frame {
         let bits: Vec<u8> = bytes

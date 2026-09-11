@@ -1460,6 +1460,18 @@
   }
   .health-badge { cursor: default; }
   .health-badge.bad { color: #ff8a7a; border-color: #5a2a26; }
+  .p25-key-form { padding: 12px; margin-top: 8px; border: 1px solid #27323c; border-radius: 5px; background: #0d1319; }
+  .p25-key-fields { display: flex; flex-wrap: wrap; gap: 12px; }
+  .p25-key-fields label { display: flex; flex-direction: column; gap: 5px; font-size: 12px; color: var(--text); }
+  .p25-key-fields input, .p25-key-fields select { padding: 7px 9px; border: 1px solid #425267; border-radius: 4px; background: #080e15; color: var(--text); font: 13px var(--mono); max-width: 100%; box-sizing: border-box; }
+  #p25KeyId { width: 110px; }
+  .p25-key-secret { flex: 1 1 220px; min-width: 0; }
+  .p25-key-note { margin: 6px 0 10px; color: #a9bacb; font-size: 12px; line-height: 1.5; }
+  .p25-key-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; font-size: 12px; }
+  .p25-key-actions button { padding: 7px 10px; }
+  #p25KeyStatus { color: #a9bacb; }
+  #p25KeyStatus[data-error="true"] { color: #fca5a5; }
+  #p25KeyPanel[hidden] { display: none; }
   details.advanced { margin-top: 10px; }
   details.advanced > summary {
     cursor: pointer; list-style: none; user-select: none;
@@ -2809,6 +2821,37 @@
     </div>
 
     <!-- softkeys integrated into top transceiver control deck -->
+
+    <details class="advanced" id="p25KeyPanel" hidden>
+      <summary>P25 channel key · <span id="p25KeyFrequency">—</span></summary>
+      <form id="p25KeyForm" class="p25-key-form" autocomplete="off">
+        <p class="p25-key-note">Configure the key for this frequency. Encrypted calls without a matching key stay muted.</p>
+        <div class="p25-key-fields">
+          <label>Key type
+            <select id="p25KeyType">
+              <option value="170">Motorola ADP / RC4</option>
+              <option value="129">DES-OFB</option>
+              <option value="132">AES-256-OFB</option>
+              <option value="137">AES-128-OFB</option>
+            </select>
+          </label>
+          <label>Key ID (hex)
+            <input id="p25KeyId" type="text" placeholder="1234" maxlength="6" spellcheck="false" autocomplete="off" required aria-describedby="p25KeyIdHelp">
+          </label>
+          <label class="p25-key-secret">Key (hex)
+            <input id="p25KeyValue" type="password" placeholder="Enter key" maxlength="66" spellcheck="false" autocomplete="new-password" required aria-describedby="p25KeyHelp">
+          </label>
+        </div>
+        <p id="p25KeyIdHelp" class="p25-key-note">Use the over-the-air key ID, not a talkgroup ID.</p>
+        <p id="p25KeyHelp" class="p25-key-note">10 hex digits, including leading zeros.</p>
+        <div class="p25-key-actions">
+          <button type="submit" class="sdr-preset-btn" id="p25KeySave" disabled>Save key</button>
+          <button type="button" class="sdr-preset-btn" id="p25KeyRemove" disabled>Remove channel key</button>
+          <span id="p25KeyStatus" role="status" aria-live="polite">Select P25 mode to configure a key.</span>
+        </div>
+        <p class="p25-key-note">Saved privately on the server for this frequency. Applies without restarting. Saved key values are never displayed.</p>
+      </form>
+    </details>
 
     <details class="advanced">
       <summary>Advanced · radio device · front end · calibration · display range</summary>
@@ -7395,6 +7438,7 @@ function updateBandPresetUi() {
 
 function applyModeUi(mode) {
   sdrMode = mode;
+  syncP25KeyPanel();
   // What Stop returns to: the last demodulator that was not the scan.
   if (mode !== 'scan') lastVoiceMode = mode;
   updateSnapHint();
@@ -7624,6 +7668,102 @@ async function centreSpanHz(hz) {
   } catch (e) { $('err').textContent = 'tune failed: ' + e.message; }
 }
 
+// Channel keys are write-only; never put secret values in localStorage or status.
+let p25KeyFrequency = null;
+let p25KeyRequest = 0;
+let p25KeyBusy = false;
+let p25KeyLoaded = false;
+let p25KeyConfigured = false;
+const p25KeyLengths = {170: 10, 129: 16, 132: 64, 137: 32};
+function p25KeyMessage(message, error = false) {
+  $('p25KeyStatus').textContent = message;
+  $('p25KeyStatus').dataset.error = String(error);
+}
+function p25KeyButtons() {
+  $('p25KeySave').disabled = p25KeyBusy || !p25KeyLoaded;
+  for (const id of ['p25KeyType', 'p25KeyId', 'p25KeyValue']) $(id).disabled = p25KeyBusy || !p25KeyLoaded;
+  $('p25KeyRemove').disabled = p25KeyBusy || !p25KeyLoaded || !p25KeyConfigured;
+}
+function p25KeyLengthHint() {
+  $('p25KeyHelp').textContent = `${p25KeyLengths[$('p25KeyType').value]} hex digits, including leading zeros.`;
+  $('p25KeyValue').setCustomValidity('');
+}
+function applyP25KeyStatus(status) {
+  p25KeyConfigured = !!status.configured;
+  if (status.configured) {
+    $('p25KeyType').value = String(status.algorithm);
+    $('p25KeyId').value = status.key_id.toString(16).toUpperCase().padStart(4, '0');
+  }
+  $('p25KeyValue').value = '';
+  $('p25KeyValue').placeholder = status.configured ? 'Enter a replacement key' : 'Enter key';
+  p25KeyLengthHint();
+  p25KeyButtons();
+}
+async function syncP25KeyPanel(force = false) {
+  const visible = sdrMode === 'p25';
+  $('p25KeyPanel').hidden = !visible;
+  const frequency = visible && Number.isFinite(sdrInspectHz) && sdrInspectHz > 0 ? Math.round(sdrInspectHz) : null;
+  if (!force && frequency === p25KeyFrequency) return;
+  p25KeyFrequency = frequency;
+  const request = ++p25KeyRequest;
+  p25KeyLoaded = false;
+  p25KeyConfigured = false;
+  $('p25KeyValue').value = '';
+  $('p25KeyId').value = '';
+  $('p25KeyType').value = '170';
+  p25KeyLengthHint();
+  p25KeyButtons();
+  $('p25KeyFrequency').textContent = frequency ? (frequency / 1e6).toFixed(6) + ' MHz' : '—';
+  if (!frequency) return;
+  p25KeyMessage('Loading channel key status…');
+  try {
+    const response = await fetch('/api/sdr/p25/key?frequency_hz=' + frequency, {cache: 'no-store'});
+    if (!response.ok) throw new Error('Could not load key status. Reopen this panel to retry.');
+    const status = await response.json();
+    if (request !== p25KeyRequest) return;
+    p25KeyLoaded = true;
+    applyP25KeyStatus(status);
+    p25KeyMessage(status.configured ? 'Channel key saved. Enter a new value to replace it.' : 'No channel key saved. Startup key files still apply.');
+  } catch (e) { if (request === p25KeyRequest) p25KeyMessage(e.message, true); }
+}
+async function changeP25Key(action) {
+  if (p25KeyBusy || !p25KeyLoaded || !p25KeyFrequency) return;
+  const frequency = p25KeyFrequency;
+  const request = p25KeyRequest;
+  const body = {frequency_hz: frequency, action};
+  if (action === 'save') {
+    const id = $('p25KeyId').value.trim().replace(/^0x/i, '');
+    const key = $('p25KeyValue').value.trim().replace(/^0x/i, '');
+    const algorithm = Number($('p25KeyType').value);
+    if (!/^[0-9a-f]{1,4}$/i.test(id)) { p25KeyMessage('Key ID must be 1–4 hexadecimal digits (0000–FFFF).', true); return; }
+    if (!/^[0-9a-f]+$/i.test(key) || key.length !== p25KeyLengths[algorithm]) {
+      p25KeyMessage(`This key type requires exactly ${p25KeyLengths[algorithm]} hex digits.`, true); return;
+    }
+    body.entry = {algorithm, key_id: parseInt(id,16), key};
+  }
+  p25KeyBusy = true;
+  p25KeyButtons();
+  p25KeyMessage(action === 'save' ? 'Saving key…' : 'Removing channel key…');
+  $('p25KeyValue').value = '';
+  try {
+    const response = await fetch('/api/sdr/p25/key', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body), cache:'no-store'});
+    if (!response.ok) throw new Error(await response.text() || 'Could not update the channel key.');
+    const status = await response.json();
+    if (request !== p25KeyRequest) return;
+    applyP25KeyStatus(status);
+    p25KeyMessage(action === 'save' ? 'Key saved. Applies at the next voice-frame boundary.' : 'Channel key removed. Startup key files still apply.');
+  } catch (e) { if (request === p25KeyRequest) p25KeyMessage(e.message, true); }
+  finally {
+    if (body.entry) body.entry.key = '';
+    p25KeyBusy = false;
+    p25KeyButtons();
+  }
+}
+$('p25KeyForm').addEventListener('submit', e => { e.preventDefault(); changeP25Key('save'); });
+$('p25KeyRemove').addEventListener('click', () => changeP25Key('remove'));
+$('p25KeyType').addEventListener('change', p25KeyLengthHint);
+$('p25KeyPanel').addEventListener('toggle', () => { if ($('p25KeyPanel').open && !p25KeyLoaded) syncP25KeyPanel(true); });
+
 // ---------- control API ----------
 
 /// POST a control command and surface a rejection. The server answers a
@@ -7708,6 +7848,7 @@ function updateSdrStatus(s) {
   const shown = (s.max_freq_hz - s.min_freq_hz) || s.rate_hz;
   sdrRateHz = shown;
   if (s.inspect_hz) sdrInspectHz = s.inspect_hz;
+  syncP25KeyPanel();
   renderFreq(sdrInspectHz);
   drawSpecScale();
   updateBandPresetUi();

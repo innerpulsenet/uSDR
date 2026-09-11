@@ -7,6 +7,8 @@
 //! and find out what it is.
 
 mod devices;
+mod keys;
+mod p25_keys;
 mod scan;
 mod sdr;
 
@@ -56,6 +58,12 @@ struct Args {
     /// Settings file. Tuning changes made in the browser are saved here.
     #[arg(long)]
     config: Option<PathBuf>,
+    /// Private TOML or OP25 JSON voice key file, loaded before receiver startup.
+    #[arg(long)]
+    voice_keys: Option<PathBuf>,
+    /// Phase 2 channel: MHz,WACN,SYSID,NAC,SLOT (slot 0 or 1). Repeat per frequency.
+    #[arg(long)]
+    p25_phase2: Vec<scannerd_engine::p25::phase2::live::ReceiveConfig>,
     /// List the dongles the driver can see, then exit.
     #[arg(long)]
     devices: bool,
@@ -135,6 +143,7 @@ struct AppState {
     audio: tokio::sync::broadcast::Sender<sdr::AudioFrame>,
     settings: Mutex<Settings>,
     config_path: PathBuf,
+    p25_keys: Mutex<p25_keys::ChannelKeys>,
     shutdown: Notify,
     /// Debounce for settings writes. Dragging a slider or clicking around the
     /// waterfall fires a REST call per step; serialising the TOML and hitting
@@ -176,6 +185,11 @@ impl AppState {
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = Args::parse();
+    if let Some(path) = &args.voice_keys {
+        scannerd_engine::crypto::install_keys(keys::load(path)?).map_err(anyhow::Error::msg)?;
+    }
+    scannerd_engine::p25::phase2::live::install_channels(args.p25_phase2.clone())
+        .map_err(anyhow::Error::msg)?;
     // Count the driver's own I2C fault lines: SoapyRTLSDR reports a gain or
     // tune write as successful whether or not the tuner took it.
     if !scannerd_radio::driver_log::install() {
@@ -196,6 +210,7 @@ async fn main() -> Result<()> {
     let bind = args.bind;
     let config_path = settings_path(args.config)?;
     let mut settings = load_settings(&config_path);
+    let p25_keys = p25_keys::ChannelKeys::load(config_path.with_extension("p25-keys.json"))?;
     if args.serial.is_some() {
         settings.serial = args.serial.clone();
     }
@@ -251,6 +266,7 @@ async fn main() -> Result<()> {
         audio: audio_tx,
         settings: Mutex::new(settings),
         config_path,
+        p25_keys: Mutex::new(p25_keys),
         shutdown: Notify::new(),
         last_settings_write: std::sync::Mutex::new(None),
     });
@@ -264,6 +280,7 @@ async fn main() -> Result<()> {
         .route("/api/sdr/gain", post(post_sdr_gain))
         .route("/api/sdr/rate", post(post_sdr_rate))
         .route("/api/sdr/mode", post(post_sdr_mode))
+        .route("/api/sdr/p25/key", get(p25_keys::get).post(p25_keys::post).layer(DefaultBodyLimit::max(2048)))
         .route("/api/sdr/scan/config", post(post_sdr_scan_config))
         .route("/api/sdr/scan/control", post(post_sdr_scan_control))
         .route("/api/sdr/frontend", post(post_sdr_frontend))

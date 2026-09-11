@@ -69,3 +69,18 @@ It never touches `~/.config/usdr/usdr.toml` and kills its own server.
 - Node 22 has a global `WebSocket`, so CDP needs no npm dependency.
 - The WebSocket never connects (the stub has no `/ws` upgrade), so the header
   shows "reconnecting"; that is expected and does not affect layout.
+
+## P25 key form
+
+```sh
+cargo build -p usdr-server --bin usdr
+node tools/panel-qa/p25-key-smoke.mjs
+```
+
+Starts the real server with a temporary configuration and a deliberately absent
+radio serial, then drives the embedded key form in headless Chrome. Only the
+radio's acknowledged frequency/mode is simulated; key API calls, validation,
+private persistence, replacement, removal, and process restart are real.
+Checks that secrets are absent from responses, ordinary settings, and browser
+storage, rejects cross-origin writes, and captures desktop/narrow screenshots
+in `.hermes/qa/p25-key-*.png`. It does not touch an attached dongle or saved keys.

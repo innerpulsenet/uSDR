@@ -1,14 +1,14 @@
 //! Optional keyed voice decryption.
 //!
-//! Keys are installed by the process from a separate, permission-checked key
-//! file.  This module deliberately has no serde support: key material cannot
-//! accidentally become part of the web settings, status JSON, or call store.
+//! Startup keys come from a private key file; channel-specific keys may also
+//! be updated through the dedicated write-only web form. This module has no
+//! serde support: keys cannot become ordinary settings, status, or call data.
 
 use aes::{Aes128, Aes256};
 use cipher::{BlockEncrypt, KeyInit, generic_array::GenericArray};
 use des::Des;
 use std::collections::HashMap;
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, OnceLock, RwLock};
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
@@ -38,10 +38,11 @@ impl KeyStore {
         key_id: u32,
         key: Vec<u8>,
     ) -> Result<(), &'static str> {
-        if !valid_key_length(protocol, algorithm, key.len()) {
+        let key = Secret(key);
+        if !valid_key_length(protocol, algorithm, key.0.len()) {
             return Err("wrong key length for voice algorithm");
         }
-        self.keys.insert((protocol, algorithm, key_id), Secret(key));
+        self.keys.insert((protocol, algorithm, key_id), key);
         Ok(())
     }
 
@@ -61,6 +62,33 @@ static KEYS: OnceLock<Arc<KeyStore>> = OnceLock::new();
 pub fn install_keys(keys: KeyStore) -> Result<(), &'static str> {
     KEYS.set(Arc::new(keys))
         .map_err(|_| "voice key store is already installed")
+}
+
+// Browser-configured keys override the startup key file only on their channel.
+static CHANNEL_KEYS: OnceLock<RwLock<HashMap<u64, (u8, u16, Secret)>>> = OnceLock::new();
+
+pub fn set_p25_channel_key(
+    frequency_hz: u64,
+    algorithm: u8,
+    key_id: u16,
+    key: Vec<u8>,
+) -> Result<(), &'static str> {
+    let key = Secret(key);
+    if !valid_key_length(Protocol::P25, algorithm, key.0.len()) {
+        return Err("wrong key length for P25 algorithm");
+    }
+    CHANNEL_KEYS
+        .get_or_init(Default::default)
+        .write()
+        .expect("channel keys")
+        .insert(frequency_hz, (algorithm, key_id, key));
+    Ok(())
+}
+
+pub fn remove_p25_channel_key(frequency_hz: u64) {
+    if let Some(keys) = CHANNEL_KEYS.get() {
+        keys.write().expect("channel keys").remove(&frequency_hz);
+    }
 }
 
 fn valid_key_length(protocol: Protocol, algorithm: u8, length: usize) -> bool {
@@ -88,6 +116,7 @@ pub struct VoiceDecryptor {
     bits_left: u8,
     payload_bits: usize,
     skip_bits: usize,
+    phase1_position: Option<usize>,
 }
 
 impl VoiceDecryptor {
@@ -97,10 +126,39 @@ impl VoiceDecryptor {
         key_id: u16,
         message_indicator: &[u8],
     ) -> Option<Self> {
-        let secret = KEYS
-            .get()?
-            .keys
-            .get(&(protocol, algorithm, u32::from(key_id)))?;
+        Self::for_call_on_channel(None, protocol, algorithm, key_id, message_indicator)
+    }
+
+    pub fn for_call_on_channel(
+        frequency_hz: Option<f64>,
+        protocol: Protocol,
+        algorithm: u8,
+        key_id: u16,
+        message_indicator: &[u8],
+    ) -> Option<Self> {
+        let channel_secret = if protocol == Protocol::P25 {
+            frequency_hz.and_then(|frequency| {
+                CHANNEL_KEYS.get().and_then(|keys| {
+                    keys.read()
+                        .expect("channel keys")
+                        .get(&(frequency.round() as u64))
+                        .cloned()
+                })
+            })
+        } else {
+            None
+        };
+        let secret = if let Some((selected_algorithm, selected_id, secret)) = channel_secret {
+            if selected_algorithm != algorithm || selected_id != key_id {
+                return None;
+            }
+            secret
+        } else {
+            KEYS.get()?
+                .keys
+                .get(&(protocol, algorithm, u32::from(key_id)))?
+                .clone()
+        };
         let stream = match (protocol, algorithm) {
             (Protocol::P25, 0xaa) => {
                 let mut seed = Vec::with_capacity(13);
@@ -136,6 +194,7 @@ impl VoiceDecryptor {
         let continuous_49 = protocol == Protocol::Dmr && matches!(algorithm, 0x02 | 0x37);
         let mut out = Self {
             stream,
+            phase1_position: None,
             current: 0,
             bits_left: 0,
             payload_bits: 49,
@@ -152,19 +211,72 @@ impl VoiceDecryptor {
     /// current LDU1/LDU2 superframe.  The FDMA mapping consumes eleven whole
     /// octets per 88-bit IMBE information frame.  Block-cipher OFB mappings
     /// also reserve eleven octets between their mandatory first discarded
-    /// block and voice frame zero; ADP starts voice at RC4 octet zero.
+    /// block and voice frame zero. ADP additionally discards 256 octets.
     pub fn for_p25_phase1(
         algorithm: u8,
         key_id: u16,
         message_indicator: &[u8],
         voice_frame_index: usize,
     ) -> Option<Self> {
-        let mut out = Self::for_call(Protocol::P25, algorithm, key_id, message_indicator)?;
-        let reserved = usize::from(matches!(algorithm, 0x81 | 0x84 | 0x89 | 0xaa)) * 11;
-        let lsd_between_ldus = usize::from(algorithm == 0xaa && voice_frame_index >= 9) * 2;
-        out.discard_octets(reserved + voice_frame_index.saturating_mul(11) + lsd_between_ldus);
+        Self::for_p25_phase1_on_channel(
+            None,
+            algorithm,
+            key_id,
+            message_indicator,
+            voice_frame_index,
+        )
+    }
+
+    pub fn for_p25_phase1_on_channel(
+        frequency_hz: Option<f64>,
+        algorithm: u8,
+        key_id: u16,
+        message_indicator: &[u8],
+        voice_frame_index: usize,
+    ) -> Option<Self> {
+        let mut out = Self::for_call_on_channel(
+            frequency_hz,
+            Protocol::P25,
+            algorithm,
+            key_id,
+            message_indicator,
+        )?;
+        if voice_frame_index >= 18 {
+            return None;
+        }
+        // Each LDU has two LSD octets immediately before its ninth voice word.
+        let lsd = 2 * (voice_frame_index / 9);
+        out.discard_octets(11 + voice_frame_index * 11 + lsd);
+        out.phase1_position = Some(voice_frame_index);
         out.payload_bits = 88;
         out.skip_bits = 0;
+        Some(out)
+    }
+
+    /// Position TDMA voice using its burst index, so missing bursts do not
+    /// shift all subsequent voice words.
+    pub fn for_p25_phase2(
+        algorithm: u8,
+        key_id: u16,
+        mi: &[u8],
+        voice_index: usize,
+    ) -> Option<Self> {
+        Self::for_p25_phase2_on_channel(None, algorithm, key_id, mi, voice_index)
+    }
+
+    pub fn for_p25_phase2_on_channel(
+        frequency_hz: Option<f64>,
+        algorithm: u8,
+        key_id: u16,
+        mi: &[u8],
+        voice_index: usize,
+    ) -> Option<Self> {
+        if voice_index >= 18 {
+            return None;
+        }
+        let mut out =
+            Self::for_call_on_channel(frequency_hz, Protocol::P25, algorithm, key_id, mi)?;
+        out.discard_octets(7 * voice_index);
         Some(out)
     }
 
@@ -204,6 +316,7 @@ impl VoiceDecryptor {
         };
         Some(Self {
             stream,
+            phase1_position: None,
             current: 0,
             bits_left: 0,
             payload_bits,
@@ -228,6 +341,13 @@ impl VoiceDecryptor {
     /// information bits.  Encryption is below the IMBE channel-code layer, so
     /// callers must never apply this operation to the 144-bit air codeword.
     pub fn apply_imbe88(&mut self, frame: &mut [u8; 11]) {
+        if let Some(position) = self.phase1_position.as_mut() {
+            let skip_lsd = *position % 9 == 8;
+            *position += 1;
+            if skip_lsd {
+                self.discard_octets(2);
+            }
+        }
         self.stream.begin_frame();
         for byte in frame {
             *byte ^= self.next_octet();
@@ -624,6 +744,13 @@ fn iv128(protocol: Protocol, mi: &[u8]) -> Option<[u8; 16]> {
     }
 }
 
+/// Predict the next P25 MI when the repeated ESS is damaged.
+pub(crate) fn cycle_p25_mi(mi: &mut [u8; 9]) {
+    let iv = iv128(Protocol::P25, mi).expect("nine-byte MI");
+    mi[..8].copy_from_slice(&iv[8..]);
+    mi[8] = 0;
+}
+
 fn expand_dmr_iv(seed: [u8; 4]) -> [u8; 16] {
     let mut state = u32::from_be_bytes(seed);
     let mut out = [0u8; 16];
@@ -637,8 +764,106 @@ fn expand_dmr_iv(seed: [u8; 4]) -> [u8; 16] {
 }
 
 #[cfg(test)]
+pub(crate) fn install_test_keys() {
+    static INIT: std::sync::Once = std::sync::Once::new();
+    INIT.call_once(|| {
+        let mut keys = KeyStore::new();
+        for (algorithm, size) in [(0xaa, 5), (0x81, 8), (0x84, 32)] {
+            keys.insert(Protocol::P25, algorithm, 0xcafe, (0..size).collect())
+                .unwrap();
+        }
+        install_keys(keys).unwrap();
+    });
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn channel_keys_override_only_their_frequency_and_update_both_phases() {
+        install_test_keys();
+        let frequency = 913127253.0;
+        let mi = [1; 9];
+        let mut baseline = [0; 7];
+        VoiceDecryptor::for_p25_phase2(0xaa, 0xcafe, &mi, 8)
+            .unwrap()
+            .apply_ambe49(&mut baseline);
+        set_p25_channel_key(frequency as u64, 0xaa, 0xcafe, vec![0x55; 5]).unwrap();
+        let mut scoped = [0; 7];
+        VoiceDecryptor::for_p25_phase2_on_channel(Some(frequency), 0xaa, 0xcafe, &mi, 8)
+            .unwrap()
+            .apply_ambe49(&mut scoped);
+        assert_ne!(scoped, baseline);
+        assert!(
+            VoiceDecryptor::for_p25_phase1_on_channel(Some(frequency), 0x84, 0xcafe, &mi, 0)
+                .is_none(),
+            "wrong channel key type must not fall back to global key"
+        );
+        remove_p25_channel_key(frequency as u64);
+        let mut restored = [0; 7];
+        VoiceDecryptor::for_p25_phase2_on_channel(Some(frequency), 0xaa, 0xcafe, &mi, 8)
+            .unwrap()
+            .apply_ambe49(&mut restored);
+        assert_eq!(restored, baseline);
+    }
+
+    #[test]
+    fn p25_matches_boatbod_all_voice_words_both_phases() {
+        install_test_keys();
+        let mi = [0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xf0, 0];
+        for line in include_str!("../tests/fixtures/op25-voice-keystream.txt").lines() {
+            let fields: Vec<_> = line.split_whitespace().collect();
+            let algorithm = u8::from_str_radix(fields[0], 16).unwrap();
+            let expected: Vec<u8> = (0..fields[2].len())
+                .step_by(2)
+                .map(|i| u8::from_str_radix(&fields[2][i..i + 2], 16).unwrap())
+                .collect();
+            let mut got = Vec::new();
+            if fields[1] == "1" {
+                for ldu in [0, 9] {
+                    let mut decryptor =
+                        VoiceDecryptor::for_p25_phase1(algorithm, 0xcafe, &mi, ldu).unwrap();
+                    for _ in 0..9 {
+                        let mut word = [0; 11];
+                        decryptor.apply_imbe88(&mut word);
+                        got.extend(word);
+                    }
+                }
+            } else {
+                let mut decryptor =
+                    VoiceDecryptor::for_call(Protocol::P25, algorithm, 0xcafe, &mi).unwrap();
+                for _ in 0..18 {
+                    let mut word = [0; 7];
+                    decryptor.apply_ambe49(&mut word);
+                    got.extend(word);
+                }
+            }
+            assert_eq!(
+                got, expected,
+                "algorithm {algorithm:02x}, phase {}",
+                fields[1]
+            );
+            // Re-entry after a lost voice burst must equal the same word in
+            // the uninterrupted OP25 sequence, including both LSD boundaries.
+            for index in 0..18 {
+                if fields[1] == "1" {
+                    let mut word = [0; 11];
+                    VoiceDecryptor::for_p25_phase1(algorithm, 0xcafe, &mi, index)
+                        .unwrap()
+                        .apply_imbe88(&mut word);
+                    assert_eq!(&word, &expected[index * 11..(index + 1) * 11]);
+                } else {
+                    let mut word = [0; 7];
+                    VoiceDecryptor::for_p25_phase2(algorithm, 0xcafe, &mi, index)
+                        .unwrap()
+                        .apply_ambe49(&mut word);
+                    assert_eq!(&word, &expected[index * 7..(index + 1) * 7]);
+                }
+            }
+            assert!(VoiceDecryptor::for_call(Protocol::P25, algorithm, 0xffff, &mi).is_none());
+        }
+    }
 
     #[test]
     fn rc4_matches_the_published_key_plaintext_vector() {
@@ -669,6 +894,7 @@ mod tests {
             .wrapping_add(u64::from(key));
         let make = || VoiceDecryptor {
             stream: Stream::Repeat(Repeat::from_word(mask, 48, true)),
+            phase1_position: None,
             current: 0,
             bits_left: 0,
             payload_bits: 48,
@@ -688,6 +914,7 @@ mod tests {
             stream: Stream::Hytera(
                 Hytera::new(&[1, 2, 3, 4, 5], &[0xaa, 0xbb, 0xcc, 0xdd, 0xee]).unwrap(),
             ),
+            phase1_position: None,
             current: 0,
             bits_left: 0,
             payload_bits: 49,
@@ -713,6 +940,7 @@ mod tests {
     fn phase_one_imbe_consumes_exactly_eleven_octets_per_frame() {
         let make = || VoiceDecryptor {
             stream: Stream::Repeat(Repeat::from_bytes(&[0x12, 0x34, 0x56], false)),
+            phase1_position: None,
             current: 0,
             bits_left: 0,
             payload_bits: 88,

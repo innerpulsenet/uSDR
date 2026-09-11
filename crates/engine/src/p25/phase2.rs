@@ -30,6 +30,7 @@ mod acch;
 mod duid;
 mod framer;
 mod isch;
+pub mod live;
 mod scramble;
 pub(crate) mod voice;
 
@@ -155,6 +156,7 @@ pub struct Phase2Receiver {
 /// burst once WACN/SYSID/NAC have been learned from the control channel.
 pub struct Phase2Decoder {
     scrambler: Scrambler,
+    frequency_hz: Option<f64>,
     vocoder: rmbe::Decoder,
     encrypted: Option<bool>,
     algorithm_id: Option<u8>,
@@ -165,6 +167,7 @@ pub struct Phase2Decoder {
     /// Keeping this state permits encryption detection after joining mid-call.
     ess_b: [u8; 16],
     voice_burst_id: i8,
+    first_voice_slot: Option<u8>,
     /// op25/mbelib's smoothed protected-bit error estimate. Unprotected AMBE
     /// bits become unreliable when this remains high even if Golay can still
     /// produce a nearest codeword.
@@ -195,6 +198,7 @@ impl Phase2Decoder {
     pub fn new(wacn: u32, sysid: u16, nac: u16) -> Self {
         Self {
             scrambler: Scrambler::new(wacn, sysid, nac),
+            frequency_hz: None,
             vocoder: rmbe::Decoder::new(),
             encrypted: None,
             algorithm_id: None,
@@ -203,8 +207,14 @@ impl Phase2Decoder {
             decryptor: None,
             ess_b: [0; 16],
             voice_burst_id: -1,
+            first_voice_slot: None,
             voice_error_rate: 0.0,
         }
+    }
+
+    pub fn on_channel(mut self, frequency_hz: f64) -> Self {
+        self.frequency_hz = Some(frequency_hz);
+        self
     }
 
     pub fn decode(&mut self, burst: &Burst) -> DecodedBurst {
@@ -227,13 +237,15 @@ impl Phase2Decoder {
                 self.key_id = Some(*key_id);
                 self.message_indicator = Some(*message_indicator);
                 self.encrypted = Some(algorithm != 0x80);
-                self.decryptor = crate::crypto::VoiceDecryptor::for_call(
+                self.decryptor = crate::crypto::VoiceDecryptor::for_call_on_channel(
+                    self.frequency_hz,
                     crate::crypto::Protocol::P25,
                     algorithm,
                     *key_id,
                     message_indicator,
                 );
                 self.voice_burst_id = -1;
+                self.first_voice_slot = None;
             }
             Some(MacPdu::EndPushToTalk { .. }) => {
                 self.encrypted = None;
@@ -242,28 +254,59 @@ impl Phase2Decoder {
                 self.message_indicator = None;
                 self.decryptor = None;
                 self.voice_burst_id = -1;
+                self.first_voice_slot = None;
             }
             _ => {}
         }
-        let ess_corrected = self.update_ess(burst, kind);
+
+        if matches!(kind, BurstType::Voice4 | BurstType::Voice2) {
+            let id = self.next_voice_burst_id(burst, kind);
+            if kind == BurstType::Voice4
+                && self.first_voice_slot.is_some()
+                && self.voice_burst_id >= 0
+                && self.voice_burst_id < 4
+                && id <= self.voice_burst_id
+            {
+                // The 2V burst (and its next-cycle ESS) was lost entirely.
+                if let Some(mi) = &mut self.message_indicator {
+                    crate::crypto::cycle_p25_mi(mi);
+                }
+                self.ess_b = [0; 16];
+            }
+
+            self.decryptor = self
+                .algorithm_id
+                .zip(self.key_id)
+                .zip(self.message_indicator.as_ref())
+                .and_then(|((algorithm, key), mi)| {
+                    crate::crypto::VoiceDecryptor::for_p25_phase2_on_channel(
+                        self.frequency_hz,
+                        algorithm,
+                        key,
+                        mi,
+                        id as usize * 4,
+                    )
+                });
+        }
         let extracted =
             voice::extract(&burst.payload, kind, burst.superframe_slot, &self.scrambler);
         let voice: Vec<[u8; 7]> = extracted.iter().map(|frame| frame.data).collect();
         let mut audio = Vec::new();
         let mut corrected_bits = 0u32;
         let mut rejected_voice = 0usize;
-        if self.encrypted != Some(true) || self.decryptor.is_some() {
+        if self.encrypted == Some(false) || self.decryptor.is_some() {
             for frame in &extracted {
                 corrected_bits += u32::from(frame.errors);
                 // This is the error-rate estimator and threshold used by op25.
                 self.voice_error_rate =
                     0.95 * self.voice_error_rate + 0.001_064 * f32::from(frame.errors);
                 let reliable = frame.valid && frame.errors <= 4 && self.voice_error_rate <= 0.096;
+                let mut data = frame.data;
+                // Consume every word, including rejected FEC frames.
+                if let Some(decryptor) = &mut self.decryptor {
+                    decryptor.apply_ambe49(&mut data);
+                }
                 if reliable {
-                    let mut data = frame.data;
-                    if let Some(decryptor) = &mut self.decryptor {
-                        decryptor.apply_ambe49(&mut data);
-                    }
                     if let Ok(samples) = self.vocoder.decode(&data) {
                         audio.extend(samples);
                     }
@@ -283,13 +326,16 @@ impl Phase2Decoder {
         }
         // A length-valid rmbe frame is infallible; keep timing intact even if a
         // future implementation adds content validation.
-        if (self.encrypted != Some(true) || self.decryptor.is_some())
+        if (self.encrypted == Some(false) || self.decryptor.is_some())
             && audio.len() < voice.len() * rmbe::SAMPLES_PER_FRAME
         {
             while audio.len() < voice.len() * rmbe::SAMPLES_PER_FRAME {
                 audio.push(0);
             }
         }
+        let decrypted =
+            self.encrypted == Some(true) && self.decryptor.is_some() && !voice.is_empty();
+        let ess_corrected = self.update_ess(burst, kind);
         DecodedBurst {
             kind,
             mac,
@@ -298,7 +344,7 @@ impl Phase2Decoder {
             corrected_bits,
             rejected_voice,
             encrypted: self.encrypted,
-            decrypted: self.encrypted == Some(true) && self.decryptor.is_some(),
+            decrypted,
             algorithm_id: self.algorithm_id,
             key_id: self.key_id,
             message_indicator: self.message_indicator,
@@ -306,16 +352,30 @@ impl Phase2Decoder {
         }
     }
 
+    fn next_voice_burst_id(&self, burst: &Burst, kind: BurstType) -> i8 {
+        if kind == BurstType::Voice2 {
+            return 4;
+        }
+        if let Some(first) = self.first_voice_slot {
+            if burst.superframe_slot < 10 {
+                return ((burst.superframe_slot / 2 + 5 - first) % 5) as i8;
+            }
+        }
+        (self.voice_burst_id + 1).rem_euclid(5)
+    }
+
     /// Accumulate and decode the Phase 2 Encryption Sync Sequence carried in
     /// voice bursts. This is the late-entry path: MAC_PTT may have happened
     /// before tuning to the traffic channel, but ESS repeats every five voice
     /// bursts and supplies ALGID, KID, and the 72-bit message indicator.
     fn update_ess(&mut self, burst: &Burst, kind: BurstType) -> Option<u8> {
-        self.voice_burst_id = match kind {
-            BurstType::Voice4 => (self.voice_burst_id + 1).rem_euclid(5),
-            BurstType::Voice2 => 4,
-            _ => return None,
-        };
+        if !matches!(kind, BurstType::Voice4 | BurstType::Voice2) {
+            return None;
+        }
+        self.voice_burst_id = self.next_voice_burst_id(burst, kind);
+        if kind == BurstType::Voice2 {
+            self.first_voice_slot = Some((burst.superframe_slot / 2 + 1) % 5);
+        }
 
         let mut payload = burst.payload;
         for (i, dibit) in payload.iter_mut().enumerate() {
@@ -340,7 +400,22 @@ impl Phase2Decoder {
             word[16 + i] = hexbits(&payload[at..at + 3]);
             at += if i == 15 { 4 } else { 3 };
         }
-        let corrected = super::rs64::correct(&mut word, 16)?;
+        let corrected = match super::rs64::correct(&mut word, 16) {
+            Some(corrected) => corrected,
+            None => {
+                if let Some(mi) = &mut self.message_indicator {
+                    crate::crypto::cycle_p25_mi(mi);
+                    self.decryptor = crate::crypto::VoiceDecryptor::for_call_on_channel(
+                        self.frequency_hz,
+                        crate::crypto::Protocol::P25,
+                        self.algorithm_id?,
+                        self.key_id?,
+                        mi,
+                    );
+                }
+                return None;
+            }
+        };
         self.ess_b.copy_from_slice(&word[..16]);
 
         let algorithm = normalize_algorithm((word[0] << 2) | (word[1] >> 4));
@@ -357,7 +432,8 @@ impl Phase2Decoder {
         self.key_id = Some(key_id);
         self.message_indicator = Some(mi);
         self.encrypted = Some(algorithm != 0x80);
-        self.decryptor = crate::crypto::VoiceDecryptor::for_call(
+        self.decryptor = crate::crypto::VoiceDecryptor::for_call_on_channel(
+            self.frequency_hz,
             crate::crypto::Protocol::P25,
             algorithm,
             key_id,
@@ -529,6 +605,26 @@ impl Phase2FrontEnd {
 mod tests {
     use super::*;
 
+    #[test]
+    fn unknown_or_missing_keys_mute_and_slot_position_survives_lost_bursts() {
+        let mut decoder = Phase2Decoder::new(0, 0, 0);
+        let mut burst = Burst {
+            superframe_slot: 0,
+            isch: Isch::Sync,
+            payload: [0; PAYLOAD_DIBITS],
+        };
+        assert!(decoder.decode(&burst).audio.is_empty());
+        decoder.encrypted = Some(true);
+        decoder.algorithm_id = Some(0x84);
+        decoder.key_id = Some(0xffff);
+        decoder.message_indicator = Some([1; 9]);
+        assert!(decoder.decode(&burst).audio.is_empty());
+        decoder.first_voice_slot = Some(1);
+        decoder.voice_burst_id = 0;
+        burst.superframe_slot = 6; // Burst one was lost; this is burst two.
+        assert_eq!(decoder.next_voice_burst_id(&burst, BurstType::Voice4), 2);
+    }
+
     /// Modulate dibits as flat-held frequency symbols, the same near-rectangular
     /// pulse the live signal uses and the boxcar matches.
     pub(super) fn modulate(dibits: &[u8], fs: f64) -> Vec<Complex32> {
@@ -683,6 +779,12 @@ mod tests {
         let seed = (0xBEE07, 0x2AB, 0x3A0);
         let scrambler = Scrambler::new(seed.0, seed.1, seed.2);
         let mut decoder = Phase2Decoder::new(seed.0, seed.1, seed.2);
+        crate::crypto::install_test_keys();
+        let mut keyed = Phase2Decoder::new(seed.0, seed.1, seed.2);
+        keyed.encrypted = Some(true);
+        keyed.algorithm_id = Some(0x84);
+        keyed.key_id = Some(0xcafe);
+        keyed.message_indicator = Some([0x55; 9]);
         let mut final_correction = None;
         for burst_no in 0..5 {
             let mut clear = [0u8; PAYLOAD_DIBITS];
@@ -706,18 +808,26 @@ mod tests {
             for (i, dibit) in raw.iter_mut().enumerate() {
                 *dibit = scrambler.apply(10 + i, *dibit);
             }
+            let duid_code = if burst_no < 4 { 0u8 } else { 0x65 };
+            for (i, at) in [0, 37, 122, 159].into_iter().enumerate() {
+                raw[at] = (duid_code >> (6 - 2 * i)) & 3;
+            }
             let burst = Burst {
                 superframe_slot: 0,
                 isch: Isch::Sync,
                 payload: raw,
             };
-            final_correction = decoder.update_ess(
-                &burst,
-                if burst_no < 4 {
-                    BurstType::Voice4
-                } else {
-                    BurstType::Voice2
-                },
+            let late = decoder.decode(&burst);
+            assert!(
+                late.audio.is_empty(),
+                "late entry cannot use next-cycle MI for current voice"
+            );
+            final_correction = late.ess_corrected;
+            let current = keyed.decode(&burst);
+            assert_eq!(
+                current.audio.len(),
+                if burst_no < 4 { 640 } else { 320 },
+                "2V must use current key before promoting unavailable next key"
             );
         }
         assert_eq!(final_correction, Some(3));

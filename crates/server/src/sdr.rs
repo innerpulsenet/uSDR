@@ -143,7 +143,7 @@ pub enum SdrMode {
     /// AX.25 at 1200 baud, POCSAG at 512/1200/2400, and FLEX — so whatever is
     /// in the passband is decoded without having to be told which it is.
     Packet,
-    /// P25 Phase 1 C4FM, decoded to voice through the IMBE vocoder.
+    /// P25 Phase 1, or explicitly configured Phase 2, decoded to voice.
     P25,
     /// DMR Tier II, decoded to voice through the AMBE vocoder.
     Dmr,
@@ -274,7 +274,7 @@ impl SdrMode {
                 "data",
                 "Every packet and paging decoder on the tuned channel: AX.25 1200, POCSAG 512/1200/2400, FLEX",
             ),
-            SdrMode::P25 => ("P25", "voice+data", "P25 Phase 1 C4FM voice through the IMBE vocoder; trunk grants followed"),
+            SdrMode::P25 => ("P25", "voice+data", "P25 Phase 1 voice and configured Phase 2 channels; Phase 1 trunk grants followed"),
             SdrMode::Dmr => ("DMR", "voice+data", "DMR Tier II voice through the AMBE vocoder"),
             SdrMode::Nxdn => ("NXDN", "voice+data", "NXDN48/NXDN96 conventional voice through AMBE+2; Type-C/D call assignments surfaced"),
             SdrMode::Auto => ("AUTO", "voice+data", "Every decoder at once on the tuned channel: classifier, P25, DMR, and all packet/paging paths"),
