@@ -1680,6 +1680,8 @@
   .val { font: 11px var(--mono); color: var(--text); width: 60px; white-space: nowrap; font-weight: 600; }
   .ctl input[type="checkbox"] { accent-color: var(--accent); }
   .ctl .cb { display: flex; align-items: center; gap: 5px; font-size: 11px; color: var(--dim); font-weight: 500; }
+  /* A switch the connected radio does not have is not shown at all. */
+  .ctl .cb[hidden] { display: none; }
 
   #err {
     margin: 12px 0 0; padding: 6px 12px; border-radius: 6px;
@@ -2185,7 +2187,7 @@
                 <div class="fader-vert-wrap" id="faderRfGainWrap">
                   <span class="fader-title">RF GAIN</span>
                   <div class="fader-assembly">
-                    <div class="fader-scale">
+                    <div class="fader-scale" id="faderRfGainScale">
                       <span>50</span>
                       <span>40</span>
                       <span>30</span>
@@ -2671,7 +2673,7 @@
               <div class="fader-vert-wrap" id="faderSpanWrap">
                 <span class="fader-title">SPAN</span>
                 <div class="fader-assembly">
-                  <div class="fader-scale">
+                  <div class="fader-scale" id="faderSpanScale">
                     <span>3.2M</span>
                     <span>2.4M</span>
                     <span>2.05M</span>
@@ -2903,7 +2905,12 @@
       <div class="ctl">
         <span class="cb"><input type="checkbox" id="chkLoOffset"> LO offset</span>
         <span class="cb"><input type="checkbox" id="chkClipGuard"> clip guard</span>
-        <span class="cb" title="With AGC on: use the R820T's own AGC instead of the clip-guarded loop. It is the only path to the tuner's VGA stage (26.5 dB instead of the 16.3 dB fixed under manual gain), so a quiet UHF band drives the ADC properly and weak signals show; on a strong band it overloads — watch for ADC CLIPPING."><input type="checkbox" id="chkTunerAgc"> tuner AGC (VGA)</span>
+        <span class="cb" id="cbTunerAgc" title="With AGC on: use the R820T's own AGC instead of the clip-guarded loop. It is the only path to the tuner's VGA stage (26.5 dB instead of the 16.3 dB fixed under manual gain), so a quiet UHF band drives the ADC properly and weak signals show; on a strong band it overloads — watch for ADC CLIPPING."><input type="checkbox" id="chkTunerAgc"> <span id="lblTunerAgc">tuner AGC (VGA)</span></span>
+      </div>
+      <div class="ctl">
+        <span class="cb" id="cbBiasT" hidden title="Power the antenna port, for a preamp or active antenna on the feedline. Saved with this radio, not with the session. Leave it off for a passive antenna."><input type="checkbox" id="chkBiasT"> bias-T</span>
+        <span class="cb" id="cbRfNotch" hidden title="The RSP's band-stop filters for the AM and FM broadcast bands: keep strong broadcast stations from overloading the front end while listening elsewhere."><input type="checkbox" id="chkRfNotch"> AM/FM notch</span>
+        <span class="cb" id="cbDabNotch" hidden title="The RSP's band-stop filter for the DAB broadcast band."><input type="checkbox" id="chkDabNotch"> DAB notch</span>
       </div>
       <div class="ctl">
         <label for="ppmInput">ppm</label>
@@ -4399,13 +4406,35 @@ function updateVfoTelemetry() {
   }
 }
 
+/// The manual gain range of the connected radio, as the slider carries it:
+/// 0–49.6 dB on an R820T, about 0–100 dB on an RSP, where it also follows
+/// the band.
+function gainSpan() {
+  const slider = $('sdrGainRange');
+  const min = slider ? Number(slider.min) : 0;
+  const max = slider ? Number(slider.max) : 50;
+  return { min: isFinite(min) ? min : 0, max: isFinite(max) && max > min ? max : 50 };
+}
+
+/// Engrave a fader's scale, top of travel first. The labels are spaced
+/// evenly down the well, so each must be the value the cap reads there.
+function setFaderScale(id, labels) {
+  const el = $(id);
+  const key = labels.join('|');
+  if (!el || el.dataset.key === key) return;
+  el.dataset.key = key;
+  el.innerHTML = labels.map(t => `<span>${esc(String(t))}</span>`).join('');
+}
+
 function syncGainUi() {
   const slider = $('sdrGainRange');
   const agc = $('sdrAgc');
   if (!slider) return;
   const isAgc = agc ? agc.checked : false;
   const val = Number(slider.value) || 0;
-  const frac = val / 50.0;
+  const g = gainSpan();
+  const frac = Math.max(0, Math.min(1, (val - g.min) / ((g.max - g.min) || 1)));
+  setFaderScale('faderRfGainScale', [5, 4, 3, 2, 1, 0].map(i => Math.round(g.min + (g.max - g.min) * i / 5)));
   const cap = $('faderRfGainCap');
   if (cap) cap.style.bottom = `${(frac * 100).toFixed(1)}%`;
   const fVal = $('faderRfGainVal');
@@ -4442,7 +4471,31 @@ function syncSquelchUi() {
   if (val) val.textContent = `${Math.round(sdrSquelchDb)} dB`;
 }
 
-const SPAN_RATES = [250000, 1024000, 1536000, 2048000, 2400000, 3200000];
+/// Spans the connected radio offers; the server's list replaces this one.
+let SPAN_RATES = [250000, 1024000, 1536000, 2048000, 2400000, 3200000];
+
+/// 250 kHz, 2.048 MHz: the option label for a span.
+function fmtSpanOption(hz) {
+  return hz < 1e6 ? `${+(hz / 1e3).toFixed(1)} kHz` : `${+(hz / 1e6).toFixed(3)} MHz`;
+}
+
+/// Rebuild the span menu when the radio offers a different set.
+function syncSpanRates(rates) {
+  if (!Array.isArray(rates) || !rates.length) return;
+  const next = rates.map(r => Math.round(r));
+  if (next.length === SPAN_RATES.length && next.every((r, i) => r === SPAN_RATES[i])) return;
+  SPAN_RATES = next;
+  const sel = $('sdrRateSel');
+  if (sel) sel.innerHTML = next.map(r => `<option value="${r}">${fmtSpanOption(r)}</option>`).join('');
+  // The span fader stops at every rate, evenly spaced. Six labels fit the
+  // well; past that, engrave every k-th stop with k dividing the travel, so
+  // each label still sits on its stop instead of crowding into the next.
+  const stops = next.length - 1;
+  let k = 1;
+  while (stops / k + 1 > 6 || stops % k) k++;
+  const short = r => r < 1e6 ? `${+(r / 1e3).toFixed(0)}k` : `${+(r / 1e6).toPrecision(3)}M`;
+  setFaderScale('faderSpanScale', next.filter((_, i) => i % k === 0).reverse().map(short));
+}
 
 function syncSpanKnobUi() {
   const sel = $('sdrRateSel');
@@ -4618,13 +4671,14 @@ function setupRadioDeck() {
       agc.checked = false;
       slider.disabled = false;
     }
+    const g = gainSpan();
     let val;
     if (isDelta) {
-      val = Math.round(Number(slider.value) + frac * 50);
+      val = Math.round(Number(slider.value) + frac * (g.max - g.min));
     } else {
-      val = Math.round(frac * 50);
+      val = Math.round(g.min + frac * (g.max - g.min));
     }
-    val = Math.max(0, Math.min(50, val));
+    val = Math.max(g.min, Math.min(g.max, val));
     slider.value = val;
     const gainValEl = $('sdrGainVal');
     if (gainValEl) gainValEl.textContent = `${val} dB`;
@@ -6913,6 +6967,9 @@ function setupControls() {
   });
   $('chkClipGuard')?.addEventListener('change', (e) => setFrontend({ clip_guard: e.target.checked }));
   $('chkTunerAgc')?.addEventListener('change', (e) => setFrontend({ tuner_agc: e.target.checked }));
+  $('chkBiasT')?.addEventListener('change', (e) => setFrontend({ bias_t: e.target.checked }));
+  $('chkRfNotch')?.addEventListener('change', (e) => setFrontend({ rf_notch: e.target.checked }));
+  $('chkDabNotch')?.addEventListener('change', (e) => setFrontend({ dab_notch: e.target.checked }));
 
   $('btnListen')?.addEventListener('click', () => audioOn ? stopAudio() : startAudio());
   $('btnListenSecondary')?.addEventListener('click', () => audioOn ? stopAudio() : startAudio());
@@ -7867,7 +7924,7 @@ async function loadSdrDevices() {
     const sel = $('sdrRadioSel');
     if (!sel) return;
     sel.innerHTML = list.map(d =>
-      `<option value="${esc(d.serial)}">${esc(d.serial)} · ${esc(d.tuner)}${d.role !== 'free' ? ' (' + esc(d.role) + ')' : ''}</option>`
+      `<option value="${esc(d.serial)}">${esc(d.serial)} · ${esc(d.tuner)}${d.host ? ' @ ' + esc(d.host) : ''}${d.role !== 'free' ? ' (' + esc(d.role) + ')' : ''}</option>`
     ).join('');
     if (sdrStatus && sdrStatus.serial) sel.value = sdrStatus.serial;
   } catch (e) { /* the status line already says if the radio is missing */ }
@@ -7896,11 +7953,17 @@ function updateSdrStatus(s) {
   renderFreq(sdrInspectHz);
   drawSpecScale();
   updateBandPresetUi();
+  syncSpanRates(s.rates_hz);
   if ($('sdrRateSel')) $('sdrRateSel').value = String(Math.round(s.rate_hz));
   // SPAN is the window the panadapter shows (the sample rate minus whatever an
   // off-centre LO hides); RATE on the nameplate is the hardware sample rate.
   if ($('badgeSpan')) $('badgeSpan').textContent = fmtSpanM(shown);
-  if ($('headerTunerBadge') && s.tuner) $('headerTunerBadge').textContent = s.tuner.replace('Rafael Micro ', '');
+  if ($('headerTunerBadge') && s.tuner) {
+    $('headerTunerBadge').textContent = s.tuner.replace('Rafael Micro ', '');
+    $('headerTunerBadge').title = s.host
+      ? `RF front end: ${s.tuner} on ${s.host}, over SoapyRemote`
+      : 'RF Front-End Tuner IC';
+  }
   if ($('headerRateBadge') && s.rate_hz) $('headerRateBadge').textContent = fmtSpanM(s.rate_hz);
   syncSpanKnobUi();
   if ($('sdrRadioSel') && s.serial) $('sdrRadioSel').value = s.serial;
@@ -7960,6 +8023,17 @@ function updateSdrStatus(s) {
   }
   if ($('chkClipGuard')) $('chkClipGuard').checked = !!s.clip_guard;
   if ($('chkTunerAgc')) $('chkTunerAgc').checked = !!s.tuner_agc;
+  // The hardware AGC is a different stage on each radio; say which.
+  const sdrplay = /sdrplay/i.test(s.driver || '');
+  if ($('lblTunerAgc')) $('lblTunerAgc').textContent = sdrplay ? 'IF AGC' : 'tuner AGC (VGA)';
+  if ($('cbTunerAgc') && sdrplay) {
+    $('cbTunerAgc').title = "With AGC on: hand the IF stage to the RSP's own AGC, which holds the ADC at its -30 dBFS setpoint, instead of the clip-guarded loop. The LNA state stays where the gain left it.";
+  }
+  // Switches the radio has, as it reports them; hidden where it has none.
+  for (const [box, wrap, val] of [['chkBiasT', 'cbBiasT', s.bias_t], ['chkRfNotch', 'cbRfNotch', s.rf_notch], ['chkDabNotch', 'cbDabNotch', s.dab_notch]]) {
+    if ($(wrap)) $(wrap).hidden = val == null;
+    if ($(box) && val != null) $(box).checked = !!val;
+  }
   // The pager sweep announces itself in the classifier details line: which
   // channel the dwell is on beats a static "sweeping…" string when pages
   // seem to come from the wrong frequency.
@@ -7986,6 +8060,10 @@ function updateSdrStatus(s) {
   // resets the panel rather than leaving running-state buttons behind.
   renderScan(s.scan || null);
   if ($('sdrAgc')) {
+    if (s.gain_max_db > s.gain_min_db) {
+      $('sdrGainRange').min = String(Math.floor(s.gain_min_db));
+      $('sdrGainRange').max = String(Math.ceil(s.gain_max_db));
+    }
     $('sdrAgc').checked = s.gain_db == null;
     $('sdrGainRange').disabled = s.gain_db == null;
     if (s.gain_db != null) $('sdrGainRange').value = s.gain_db;

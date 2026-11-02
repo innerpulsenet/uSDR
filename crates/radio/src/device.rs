@@ -12,6 +12,14 @@
 //! than a single channel. And the analog filter width is configured explicitly
 //! instead of being derived from an amateur band plan, since a scanner's spans
 //! are set by the system being monitored, not by band edges.
+//!
+//! A device is either a local RTL-SDR or an SDRplay receiver on another host,
+//! reached through SoapyRemote (`driver=remote`). SoapyRemote proxies the
+//! whole Soapy API — gain elements, settings and the stream — so nothing above
+//! this layer knows the difference beyond [`DeviceConfig::remote`] naming the
+//! host. Remote is SDRplay only on purpose: an RTL-SDR's I2C faults are only
+//! visible on the stderr of the process that owns it (see `driver_log`), and
+//! over the network that is the server, not this one.
 
 use crate::fanout::{Fanout, IqBlock};
 use anyhow::{Context, Result};
@@ -44,11 +52,33 @@ pub struct Capabilities {
     pub dab_notch: bool,
     pub iq_correction: bool,
     pub ppm: bool,
+    /// The antenna-port bias-T (`biasT_ctrl`), SDRplay only.
+    pub bias_t: bool,
+    /// Sample rates the driver accepts, as (min, max) pairs; a discrete rate
+    /// is a pair with both ends equal.
+    pub rate_ranges: Vec<(f64, f64)>,
+    /// Lowest and highest frequency the tuner reaches.
+    pub freq_range: Option<(f64, f64)>,
+}
+
+impl Capabilities {
+    /// Whether the driver accepts `rate` exactly, or within one of its ranges.
+    pub fn supports_rate(&self, rate: f64) -> bool {
+        self.rate_ranges
+            .iter()
+            .any(|&(lo, hi)| rate >= lo - 0.5 && rate <= hi + 0.5)
+    }
 }
 
 #[derive(Clone, Debug, Default)]
 pub struct State {
+    /// Gain in dB on the scale `Cmd::Gain` takes. For SDRplay that is the
+    /// combined LNA and IF gain (see [`SdrplayGain`]), not the driver's own
+    /// "overall" value, which runs the other way.
     pub overall_gain: Option<f64>,
+    /// The range `Cmd::Gain` is clamped to. Constant on an RTL-SDR; on an
+    /// SDRplay it follows the band, because the LNA's reductions do.
+    pub gain_range: Option<(f64, f64)>,
     pub rfgr: Option<f64>,
     pub ifgr: Option<f64>,
     pub agc: Option<bool>,
@@ -56,6 +86,11 @@ pub struct State {
     pub rate: Option<f64>,
     pub bandwidth: Option<f64>,
     pub frequency: Option<f64>,
+    /// Front-end switches, read back from the driver. `None` where the
+    /// device has no such switch.
+    pub bias_t: Option<bool>,
+    pub rf_notch: Option<bool>,
+    pub dab_notch: Option<bool>,
 }
 
 #[derive(Clone, Debug)]
@@ -81,6 +116,10 @@ pub enum Cmd {
     Ifgr(f64),
     Agc(bool),
     BiasT(bool),
+    /// SDRplay's AM/FM broadcast band-stop filters.
+    RfNotch(bool),
+    /// SDRplay's DAB band-stop filter.
+    DabNotch(bool),
     Ppm(f64),
     Rate(f64),
     /// Enable or disable the automatic clip guard.
@@ -130,6 +169,16 @@ pub struct DeviceConfig {
     /// "no requirement", in which case the span itself is the only constraint.
     pub cover_hz: f64,
     pub role: Role,
+    /// SoapyRemote URL of the host the device is on (`tcp://mario:55132`),
+    /// or `None` for a dongle on this machine's USB.
+    pub remote: Option<String>,
+    /// Power the antenna port. Off unless asked for: DC on a feedline that
+    /// does not expect it is the wrong default. On where the feedline has a
+    /// preamp that needs it, or the receiver is deaf.
+    pub bias_t: bool,
+    /// SDRplay band-stop filters; `None` leaves the driver's setting alone.
+    pub rf_notch: Option<bool>,
+    pub dab_notch: Option<bool>,
 }
 
 impl DeviceConfig {
@@ -142,12 +191,57 @@ impl DeviceConfig {
             ppm: 0.0,
             cover_hz: 0.0,
             role: Role::Idle,
+            remote: None,
+            bias_t: false,
+            rf_notch: None,
+            dab_notch: None,
         }
     }
 
     /// The Soapy device string this config addresses.
+    ///
+    /// A remote device streams over TCP. SoapyRemote's default is UDP with
+    /// no retransmission, so a lost datagram is lost samples; over the
+    /// tailnet the tunnel's 1280-byte MTU also splits every default-sized
+    /// datagram in two, doubling the odds. TCP on a LAN-latency path costs
+    /// nothing measurable and keeps the sample timeline whole.
     pub fn soapy_args(&self) -> String {
-        format!("driver=rtlsdr,serial={}", self.serial)
+        match &self.remote {
+            None => format!("driver=rtlsdr,serial={}", self.serial),
+            Some(url) => format!(
+                "driver=remote,remote={url},remote:driver=sdrplay,remote:prot=tcp,serial={}",
+                self.serial
+            ),
+        }
+    }
+}
+
+/// SoapyRemote's default port.
+pub const REMOTE_PORT: u16 = 55132;
+
+/// A SoapyRemote URL from what an operator would type: `mario`,
+/// `mario:55132`, or a full `tcp://mario:55132`.
+pub fn remote_url(spec: &str) -> String {
+    let spec = spec.trim();
+    if spec.contains("://") {
+        return spec.to_string();
+    }
+    // A bracketed IPv6 literal carries its own colons; only a colon after
+    // the closing bracket (or in a plain host) is a port.
+    let host_end = spec.rfind(']').map_or(0, |i| i + 1);
+    if spec[host_end..].contains(':') {
+        format!("tcp://{spec}")
+    } else {
+        format!("tcp://{spec}:{REMOTE_PORT}")
+    }
+}
+
+/// The host part of a SoapyRemote URL, for labels.
+pub fn remote_host(url: &str) -> &str {
+    let rest = url.split_once("://").map_or(url, |(_, r)| r);
+    match rest.rfind(':') {
+        Some(i) if !rest[i..].contains(']') => &rest[..i],
+        _ => rest,
     }
 }
 
@@ -343,23 +437,60 @@ pub struct DeviceInfo {
     pub serial: String,
     pub label: String,
     pub tuner: String,
+    /// SoapyRemote URL when the device is on another host.
+    pub remote: Option<String>,
 }
 
-/// Enumerate attached RTL-SDR dongles.
+/// Enumerate attached RTL-SDR dongles, then the SDRplay receivers on each
+/// SoapyRemote host in `remotes` (`mario`, `mario:55132`, or a URL).
 ///
 /// Pinned to `driver=rtlsdr` on purpose: the osmosdr Soapy module is also
 /// installed on this host and will happily claim the same hardware, which makes
 /// enumeration order and device count depend on which module answers first.
-pub fn enumerate() -> Result<Vec<DeviceInfo>> {
+/// Remote enumeration is pinned to `driver=sdrplay` for the same reason and
+/// one more: an unfiltered find makes the server probe every module it has,
+/// network scans included, which takes seconds instead of milliseconds.
+///
+/// A remote that does not answer is skipped, not an error: the local radios
+/// are still worth listing while another host is down.
+pub fn enumerate(remotes: &[String]) -> Result<Vec<DeviceInfo>> {
     let found = soapysdr::enumerate("driver=rtlsdr").context("enumerating rtlsdr devices")?;
-    Ok(found
+    let mut out: Vec<DeviceInfo> = found
         .iter()
         .map(|a| DeviceInfo {
             serial: a.get("serial").unwrap_or_default().to_string(),
             label: a.get("label").unwrap_or_default().to_string(),
             tuner: a.get("tuner").unwrap_or_default().to_string(),
+            remote: None,
         })
-        .collect())
+        .collect();
+    for spec in remotes {
+        let url = remote_url(spec);
+        let Ok(found) =
+            soapysdr::enumerate(format!("driver=remote,remote={url},remote:driver=sdrplay").as_str())
+        else {
+            continue;
+        };
+        out.extend(found.iter().map(|a| {
+            let label = a.get("label").unwrap_or_default().to_string();
+            DeviceInfo {
+                serial: a.get("serial").unwrap_or_default().to_string(),
+                tuner: sdrplay_model(&label).to_string(),
+                label,
+                remote: Some(url.clone()),
+            }
+        }));
+    }
+    Ok(out)
+}
+
+/// The model in an SDRplay enumeration label (`SDRplay Dev0 RSP1A 210304DD98`
+/// → `RSP1A`), which is the closest thing the driver has to a tuner name.
+fn sdrplay_model(label: &str) -> &str {
+    label
+        .split_whitespace()
+        .find(|w| w.starts_with("RSP"))
+        .unwrap_or("SDRplay")
 }
 
 pub struct Device {
@@ -372,6 +503,8 @@ pub struct Device {
     /// Rate the driver actually selected; some backends clamp the request.
     pub rate: f64,
     pub role: Role,
+    /// What the driver said it can do, read once at open.
+    pub caps: Capabilities,
     worker: Option<std::thread::JoinHandle<()>>,
 }
 
@@ -386,13 +519,31 @@ impl Drop for Device {
 
 const MAX_BLOCK: usize = 131072;
 
+/// Delivery interval every block is gathered to. The RTL path gets it from
+/// the driver's USB buffer size; anything else is accumulated to it, because
+/// SoapySDRPlay3 hands over one ~1000-sample packet per read and SoapyRemote
+/// one network frame (1006 samples over TCP). At 2 MS/s that is two
+/// thousand blocks a second, and a 32-deep subscriber queue sized for 20 ms
+/// blocks would then hold 16 ms — one scheduling hiccup from dropping.
+const BLOCK_SECONDS: f64 = 0.020;
+
+/// Opens the stream and returns it with the block size to gather per
+/// delivery.
 fn rx_stream(
     dev: &soapysdr::Device,
     driver: &str,
     rate: f64,
+    remote: bool,
     log_tx: Option<&SyncSender<String>>,
-) -> Result<soapysdr::RxStream<Complex32>> {
+) -> Result<(soapysdr::RxStream<Complex32>, usize)> {
     let mut args = soapysdr::Args::new();
+    let mut block = ((rate * BLOCK_SECONDS).round() as usize).clamp(1024, MAX_BLOCK);
+    if remote {
+        // Over the wire as the RSP's own 16-bit samples, converted to float
+        // here: half the bytes of CF32 and none of the 14-bit ADC's range
+        // lost, which CS8 would throw away.
+        args.set("remote:format", "CS16");
+    }
     if driver.to_ascii_lowercase().contains("rtlsdr") {
         // Target ~20 ms delivery interval (50 Hz) so userspace receives
         // continuous, low-latency sample blocks across all sample rates
@@ -407,6 +558,10 @@ fn rx_stream(
         // and 32 async USB transfers to prevent any underruns or dropped packets.
         args.set("buffers", "48");
         args.set("asyncBuffs", "32");
+        // One USB buffer per read, exactly as before blocks were gathered:
+        // asking for precisely a buffer's worth never leaves a remainder
+        // behind to split the next one.
+        block = bufflen / 2;
         if let Some(log) = log_tx {
             let samples = bufflen / 2;
             let ms = (samples as f64 / rate) * 1000.0;
@@ -415,8 +570,10 @@ fn rx_stream(
             ));
         }
     }
-    dev.rx_stream_args::<Complex32, _>(&[0], args)
-        .map_err(|e| anyhow::anyhow!("rx stream: {e}"))
+    let stream = dev
+        .rx_stream_args::<Complex32, _>(&[0], args)
+        .map_err(|e| anyhow::anyhow!("rx stream: {e}"))?;
+    Ok((stream, block))
 }
 
 pub fn open(cfg: &DeviceConfig) -> Result<Device> {
@@ -460,9 +617,14 @@ pub fn open(cfg: &DeviceConfig) -> Result<Device> {
         cfg.serial, caps.driver, caps.hardware, caps.gain
     ));
 
-    dev.set_sample_rate(Rx, 0, cfg.rate)
+    // A span carried over from another radio may be one this driver does not
+    // have — an RSP's 6 MS/s on an RTL, an RTL's 1.536 MS/s on an RSP. Take
+    // the nearest it does, rather than failing the open and leaving the
+    // server waiting for a radio that is sitting right there.
+    let rate = nearest_rate(&caps, cfg.rate);
+    dev.set_sample_rate(Rx, 0, rate)
         .context("setting sample rate")?;
-    let actual_rate = dev.sample_rate(Rx, 0).unwrap_or(cfg.rate);
+    let actual_rate = dev.sample_rate(Rx, 0).unwrap_or(rate);
     if (actual_rate - cfg.rate).abs() >= 1.0 {
         let _ = log_tx.try_send(format!(
             "{}: requested {:.0} S/s, driver selected {:.0} S/s",
@@ -481,9 +643,15 @@ pub fn open(cfg: &DeviceConfig) -> Result<Device> {
         .context("setting frequency")?;
 
     let mut initial_agc = false;
+    // The gain mode the driver opened in is not ours to inherit: SoapySDRPlay3
+    // opens with the RSP's IF AGC running, and it would quietly override
+    // every IF gain reduction written below.
+    if caps.hardware_agc && dev.gain_mode(Rx, 0).unwrap_or(false) {
+        let _ = set_gain_mode_checked(&dev, false);
+    }
     match cfg.gain {
         Some(g) => {
-            apply_overall_gain(&dev, &caps, &mut initial_agc, g, &log_tx);
+            apply_overall_gain(&dev, &caps, cfg.freq, &mut initial_agc, g, &log_tx);
         }
         None => {
             // "Automatic" gain is a clip-guarded loop on manual gain, never
@@ -498,31 +666,43 @@ pub fn open(cfg: &DeviceConfig) -> Result<Device> {
             if caps.hardware_agc {
                 let _ = set_gain_mode_checked(&dev, false);
             }
-            if let GainControl::Overall { min, max } = caps.gain {
-                let start = auto_gain_start(min, max);
-                apply_overall_gain(&dev, &caps, &mut initial_agc, start, &log_tx);
-                initial_agc = true;
-                let _ = log_tx.try_send(format!(
-                    "{}: auto gain (clip-guarded) starting at {start:.1} dB",
-                    cfg.serial
-                ));
-            }
+            let start = auto_start_for(&caps, cfg.freq);
+            apply_overall_gain(&dev, &caps, cfg.freq, &mut initial_agc, start, &log_tx);
+            initial_agc = true;
+            let _ = log_tx.try_send(format!(
+                "{}: auto gain (clip-guarded) starting at {start:.1} dB",
+                cfg.serial
+            ));
         }
     }
-    let _ = dev.write_setting("biasT_ctrl", "false");
+    let _ = dev.write_setting("biasT_ctrl", if cfg.bias_t { "true" } else { "false" });
+    if caps.bias_t && cfg.bias_t {
+        let _ = log_tx.try_send(format!("{}: bias-T on", cfg.serial));
+    }
+    for (have, want, key) in [
+        (caps.rf_notch, cfg.rf_notch, "rfnotch_ctrl"),
+        (caps.dab_notch, cfg.dab_notch, "dabnotch_ctrl"),
+    ] {
+        if let (true, Some(on)) = (have, want) {
+            let _ = dev.write_setting(key, if on { "true" } else { "false" });
+        }
+    }
 
     publish_state(&dev, &caps, tune, initial_agc, &event_tx);
 
     let serial = cfg.serial.clone();
     let cover_hz = cfg.cover_hz;
+    let remote = cfg.remote.is_some();
     let fan = fanout.clone();
     let log_for_worker = log_tx.clone();
+    let worker_caps = caps.clone();
     let worker = std::thread::spawn(move || {
         if let Err(e) = run(
             dev,
-            caps,
+            worker_caps,
             actual_rate,
             cover_hz,
+            remote,
             tune,
             initial_agc,
             cmd_rx,
@@ -542,6 +722,7 @@ pub fn open(cfg: &DeviceConfig) -> Result<Device> {
         iq: fanout,
         rate: actual_rate,
         role: cfg.role.clone(),
+        caps,
         worker: Some(worker),
     })
 }
@@ -582,6 +763,18 @@ fn inspect(dev: &soapysdr::Device) -> Capabilities {
         ppm: dev
             .list_frequencies(Rx, 0)
             .is_ok_and(|v| v.iter().any(|x| x.eq_ignore_ascii_case("CORR"))),
+        bias_t: has_setting("biasT_ctrl"),
+        rate_ranges: dev
+            .get_sample_rate_range(Rx, 0)
+            .unwrap_or_default()
+            .iter()
+            .map(|r| (r.minimum, r.maximum))
+            .collect(),
+        freq_range: dev.frequency_range(Rx, 0).ok().and_then(|v| {
+            let lo = v.iter().map(|r| r.minimum).reduce(f64::min)?;
+            let hi = v.iter().map(|r| r.maximum).reduce(f64::max)?;
+            Some((lo, hi))
+        }),
     }
 }
 
@@ -618,6 +811,7 @@ fn run(
     caps: Capabilities,
     mut rate: f64,
     cover_hz: f64,
+    remote: bool,
     mut tune: Tuning,
     mut agc_enabled: bool,
     cmd_rx: Receiver<Cmd>,
@@ -625,7 +819,7 @@ fn run(
     log_tx: SyncSender<String>,
     event_tx: SyncSender<Event>,
 ) -> Result<()> {
-    let mut stream = rx_stream(&dev, &caps.driver, rate, Some(&log_tx))?;
+    let (mut stream, mut block_len) = rx_stream(&dev, &caps.driver, rate, remote, Some(&log_tx))?;
     stream.activate(None)?;
     let mut buf = vec![Complex32::new(0.0, 0.0); MAX_BLOCK];
     let mut dropped: u64 = 0;
@@ -646,15 +840,15 @@ fn run(
     let mut guard_wanted = false;
     let mut tuner_agc = false;
     let mut clip_guard = if agc_enabled {
-        match caps.gain {
-            GainControl::Overall { min, max } => {
-                dev.gain(Rx, 0).ok().map(|g| ClipGuard::auto(g, min, max, gain_steps(&caps)))
-            }
-            GainControl::Sdrplay { .. } => None,
-        }
+        let (min, max) = gain_range(&caps, tune.desired);
+        read_gain(&dev, &caps, tune.desired).map(|g| ClipGuard::auto(g, min, max, gain_steps(&caps)))
     } else {
         None
     };
+    // Last gain written, by hand or by a guard. An SDRplay LNA state means a
+    // different reduction in each band, so a tune across a band edge writes
+    // this again to keep the gain the operator chose.
+    let mut gain_target = read_gain(&dev, &caps, tune.desired);
     let mut usb_fails = 0u32;
     let mut tune_fails = 0u32;
 
@@ -674,19 +868,14 @@ fn run(
                 }
                 Ok(Cmd::Gain(g)) => {
                     let mut leave_hw_agc = agc_enabled || tuner_agc;
-                    let ok = apply_overall_gain(&dev, &caps, &mut leave_hw_agc, g, &log_tx);
+                    let ok = apply_overall_gain(&dev, &caps, tune.desired, &mut leave_hw_agc, g, &log_tx);
                     if ok {
                         agc_enabled = false;
-                        let applied = match caps.gain {
-                            GainControl::Overall { min, max } => g.clamp(min, max),
-                            GainControl::Sdrplay { .. } => g,
-                        };
-                        clip_guard = match caps.gain {
-                            GainControl::Overall { min, max } if guard_wanted => {
-                                Some(ClipGuard::new(applied, min, max, gain_steps(&caps)))
-                            }
-                            _ => None,
-                        };
+                        let (min, max) = gain_range(&caps, tune.desired);
+                        let applied = g.clamp(min, max);
+                        gain_target = Some(applied);
+                        clip_guard = guard_wanted
+                            .then(|| ClipGuard::new(applied, min, max, gain_steps(&caps)));
                     }
                     ok
                 }
@@ -712,38 +901,35 @@ fn run(
                         let ok = caps.hardware_agc && set_gain_mode_checked(&dev, true);
                         if ok {
                             clip_guard = None;
-                            let _ = log_tx.try_send("tuner AGC on: LNA, mixer and VGA under the tuner's own control".into());
+                            let _ = log_tx.try_send(hardware_agc_note(&caps).into());
                         } else {
                             let _ = log_tx.try_send("tuner AGC unavailable on this device".into());
                         }
                         ok
                     } else {
                         // Back to the guarded loop from its start gain.
-                        match caps.gain {
-                            GainControl::Overall { min, max } => {
-                                let start = auto_gain_start(min, max);
-                                let mut hw = caps.hardware_agc;
-                                let ok = apply_overall_gain(&dev, &caps, &mut hw, start, &log_tx);
-                                if ok {
-                                    clip_guard = Some(ClipGuard::auto(start, min, max, gain_steps(&caps)));
-                                    let _ = log_tx.try_send(format!(
-                                        "auto gain (clip-guarded) starting at {start:.1} dB"
-                                    ));
-                                }
-                                ok
-                            }
-                            GainControl::Sdrplay { .. } => false,
+                        let (min, max) = gain_range(&caps, tune.desired);
+                        let start = auto_start_for(&caps, tune.desired);
+                        let mut hw = caps.hardware_agc;
+                        let ok = apply_overall_gain(&dev, &caps, tune.desired, &mut hw, start, &log_tx);
+                        if ok {
+                            gain_target = Some(start);
+                            clip_guard = Some(ClipGuard::auto(start, min, max, gain_steps(&caps)));
+                            let _ = log_tx.try_send(format!(
+                                "auto gain (clip-guarded) starting at {start:.1} dB"
+                            ));
                         }
+                        ok
                     }
                 }
                 Ok(Cmd::ClipGuard(on)) => {
                     guard_wanted = on;
                     // Auto gain keeps its own guard whatever the checkbox says.
                     if !agc_enabled {
-                        clip_guard = if !on {
-                            None
-                        } else if let GainControl::Overall { min, max } = caps.gain {
-                            dev.gain(Rx, 0).ok().map(|g| ClipGuard::new(g, min, max, gain_steps(&caps)))
+                        clip_guard = if on {
+                            let (min, max) = gain_range(&caps, tune.desired);
+                            read_gain(&dev, &caps, tune.desired)
+                                .map(|g| ClipGuard::new(g, min, max, gain_steps(&caps)))
                         } else {
                             None
                         };
@@ -758,29 +944,23 @@ fn run(
                         if ok {
                             agc_enabled = true;
                             clip_guard = None;
-                            let _ = log_tx.try_send("tuner AGC on: LNA, mixer and VGA under the tuner's own control".into());
+                            let _ = log_tx.try_send(hardware_agc_note(&caps).into());
                         }
                         ok
                     } else if on {
-                        match caps.gain {
-                            GainControl::Overall { min, max } => {
-                                let start = auto_gain_start(min, max);
-                                let mut hw_agc = agc_enabled && caps.hardware_agc;
-                                let ok = apply_overall_gain(&dev, &caps, &mut hw_agc, start, &log_tx);
-                                if ok {
-                                    agc_enabled = true;
-                                    clip_guard = Some(ClipGuard::auto(start, min, max, gain_steps(&caps)));
-                                    let _ = log_tx.try_send(format!(
-                                        "auto gain (clip-guarded) starting at {start:.1} dB"
-                                    ));
-                                }
-                                ok
-                            }
-                            GainControl::Sdrplay { .. } => {
-                                let _ = log_tx.try_send("auto gain unavailable on this device".into());
-                                false
-                            }
+                        let (min, max) = gain_range(&caps, tune.desired);
+                        let start = auto_start_for(&caps, tune.desired);
+                        let mut hw_agc = agc_enabled && caps.hardware_agc;
+                        let ok = apply_overall_gain(&dev, &caps, tune.desired, &mut hw_agc, start, &log_tx);
+                        if ok {
+                            agc_enabled = true;
+                            gain_target = Some(start);
+                            clip_guard = Some(ClipGuard::auto(start, min, max, gain_steps(&caps)));
+                            let _ = log_tx.try_send(format!(
+                                "auto gain (clip-guarded) starting at {start:.1} dB"
+                            ));
                         }
+                        ok
                     } else {
                         // Leave the gain where the loop had it; the caller
                         // follows with an explicit Gain to set its own.
@@ -793,6 +973,16 @@ fn run(
                     &log_tx,
                     "bias-T",
                     dev.write_setting("biasT_ctrl", if on { "true" } else { "false" }),
+                ),
+                Ok(Cmd::RfNotch(on)) => set_and_log(
+                    &log_tx,
+                    "RF notch",
+                    dev.write_setting("rfnotch_ctrl", if on { "true" } else { "false" }),
+                ),
+                Ok(Cmd::DabNotch(on)) => set_and_log(
+                    &log_tx,
+                    "DAB notch",
+                    dev.write_setting("dabnotch_ctrl", if on { "true" } else { "false" }),
                 ),
                 Ok(Cmd::Ppm(ppm)) => {
                     tune.ppm = ppm;
@@ -832,7 +1022,7 @@ fn run(
                         }
                     }
                     std::thread::sleep(std::time::Duration::from_millis(20));
-                    stream = rx_stream(&dev, &caps.driver, rate, Some(&log_tx))?;
+                    (stream, block_len) = rx_stream(&dev, &caps.driver, rate, remote, Some(&log_tx))?;
                     stream.activate(None)?;
                     ok.is_ok()
                 }
@@ -857,12 +1047,37 @@ fn run(
                 let ok = set_frequency_retrying(&dev, corrected(f, tune.ppm));
                 if ok {
                     tune_fails = 0;
+                    let before = tune.desired;
                     // Only now is this where the radio is.
                     tune.desired = f;
                     // Accepted tune: samples before and after belong to
                     // different RF windows — a new epoch, position restarts.
                     epoch += 1;
                     sample_pos = 0;
+                    // The same LNA state is a different reduction in the new
+                    // band: write the chosen gain again for it, or the dial
+                    // reads one gain while the receiver runs another. Not
+                    // under the RSP's own IF AGC, which owns the IF stage.
+                    let hardware_agc_running = agc_enabled && tuner_agc && clip_guard.is_none();
+                    if sdrplay_band_changed(&caps, before, f) && !hardware_agc_running {
+                        let (min, max) = gain_range(&caps, f);
+                        if let Some(cg) = clip_guard.as_mut() {
+                            cg.min = min;
+                            cg.max = max;
+                            cg.ceiling = if agc_enabled { max } else { cg.ceiling.min(max) };
+                            cg.current = cg.current.clamp(min, max);
+                            gain_target = Some(cg.current);
+                        }
+                        if let Some(g) = gain_target.map(|g| g.clamp(min, max)) {
+                            if set_gain_checked(&dev, &caps, f, g) {
+                                gain_target = Some(g);
+                            } else {
+                                let _ = log_tx.try_send(format!(
+                                    "gain {g:.1} dB failed: not taken after the band change"
+                                ));
+                            }
+                        }
+                    }
                     publish_state(&dev, &caps, tune, agc_enabled, &event_tx);
                 } else {
                     tune_fails = tune_fails.saturating_add(1);
@@ -877,70 +1092,97 @@ fn run(
             }
         }
 
-        match stream.read(&mut [&mut buf[..]], 1_000_000) {
-            Ok(0) => continue,
-            Ok(n) => {
-                usb_fails = 0;
-                for c in &buf[..n] {
-                    let m = c.re.abs().max(c.im.abs());
-                    if m > 0.98 {
-                        clipped += 1;
-                    }
-                    if f64::from(m) > peak {
-                        peak = f64::from(m);
-                    }
-                }
-                counted += n as u64;
-
-                let block = IqBlock {
-                    samples: Arc::from(&buf[..n]),
-                    first_sample: sample_pos,
-                    epoch,
-                };
-                sample_pos += n as u64;
-
-                if fanout.subscriber_count() == 0 {
-                    dropped += 1;
-                } else {
-                    lagged += u64::from(fanout.broadcast(block));
-                }
-
-                if counted >= rate as u64 {
-                    let clipped_fraction = clipped as f64 / counted.max(1) as f64;
-                    if let Some(ref mut cg) = clip_guard
-                        && let Some(new_g) = cg.on_stats(clipped_fraction, peak)
-                    {
-                        // Same retried write as a hand-set gain: on this
-                        // tuner the first attempt routinely stalls and the
-                        // second lands. A single attempt here, logged as a
-                        // failure, tripped the server's fault counter and
-                        // reopened the device every sixteen seconds.
-                        if set_gain_checked(&dev, new_g) {
-                            let _ = log_tx.try_send(format!(
-                                "gain {new_g:.1} dB (clip {clipped_fraction:.4} peak {peak:.2})"
-                            ));
-                            publish_state(&dev, &caps, tune, agc_enabled, &event_tx);
-                        } else {
-                            // Only after every retry: counted by the server
-                            // as a control fault, two of which in a window
-                            // reopen the device — what clears a stalled bus.
-                            let _ = log_tx.try_send(format!(
-                                "gain {new_g:.1} dB failed: tuner did not take the write"
-                            ));
-                            cg.current = cg.current.min(new_g);
-                        }
-                    }
-                    peak = 0.0;
-                    let _ = event_tx.try_send(Event::StreamStats {
-                        dropped_blocks: dropped,
-                        lagged_deliveries: lagged,
-                        clipped_fraction,
-                    });
-                    clipped = 0;
-                    counted = 0;
+        // Gather one delivery's worth (see BLOCK_SECONDS). An error part-way
+        // still delivers what arrived before it, then is dealt with below.
+        let mut n = 0usize;
+        let mut read_err = None;
+        while n < block_len {
+            match stream.read(&mut [&mut buf[n..block_len]], 1_000_000) {
+                Ok(0) => break,
+                Ok(got) => n += got,
+                Err(e) => {
+                    read_err = Some(e);
+                    break;
                 }
             }
-            Err(e) => {
+        }
+        if n > 0 {
+            usb_fails = 0;
+            for c in &buf[..n] {
+                let m = c.re.abs().max(c.im.abs());
+                if m > 0.98 {
+                    clipped += 1;
+                }
+                if f64::from(m) > peak {
+                    peak = f64::from(m);
+                }
+            }
+            counted += n as u64;
+
+            let block = IqBlock {
+                samples: Arc::from(&buf[..n]),
+                first_sample: sample_pos,
+                epoch,
+            };
+            sample_pos += n as u64;
+
+            if fanout.subscriber_count() == 0 {
+                dropped += 1;
+            } else {
+                lagged += u64::from(fanout.broadcast(block));
+            }
+
+            if counted >= rate as u64 {
+                let clipped_fraction = clipped as f64 / counted.max(1) as f64;
+                if let Some(ref mut cg) = clip_guard
+                    && let Some(new_g) = cg.on_stats(clipped_fraction, peak)
+                {
+                    // Same retried write as a hand-set gain: on this
+                    // tuner the first attempt routinely stalls and the
+                    // second lands. A single attempt here, logged as a
+                    // failure, tripped the server's fault counter and
+                    // reopened the device every sixteen seconds.
+                    if set_gain_checked(&dev, &caps, tune.desired, new_g) {
+                        gain_target = Some(new_g);
+                        let _ = log_tx.try_send(format!(
+                            "gain {new_g:.1} dB (clip {clipped_fraction:.4} peak {peak:.2})"
+                        ));
+                        publish_state(&dev, &caps, tune, agc_enabled, &event_tx);
+                    } else {
+                        // Only after every retry: counted by the server
+                        // as a control fault, two of which in a window
+                        // reopen the device — what clears a stalled bus.
+                        let _ = log_tx.try_send(format!(
+                            "gain {new_g:.1} dB failed: tuner did not take the write"
+                        ));
+                        cg.current = cg.current.min(new_g);
+                    }
+                }
+                peak = 0.0;
+                let _ = event_tx.try_send(Event::StreamStats {
+                    dropped_blocks: dropped,
+                    lagged_deliveries: lagged,
+                    clipped_fraction,
+                });
+                clipped = 0;
+                counted = 0;
+            }
+        }
+        match read_err {
+            None => {}
+            // Samples were lost before they reached this thread — the
+            // driver's ring, or remotely the server's — and the device is
+            // fine, so this is not a strike toward reopening it. A new epoch
+            // makes every consumer restart framing rather than splice across
+            // the hole, and counting it as dropped puts it on the stream
+            // health readout.
+            Some(e) if e.code == soapysdr::ErrorCode::Overflow => {
+                dropped += 1;
+                epoch += 1;
+                sample_pos = 0;
+                let _ = log_tx.try_send("stream overflow: samples lost before delivery".into());
+            }
+            Some(e) => {
                 usb_fails += 1;
                 let _ = log_tx.try_send(format!("read error ({usb_fails}/3): {e}"));
                 if usb_fails >= 3 {
@@ -957,10 +1199,12 @@ fn run(
 ///
 /// RTL-SDR reports a wide Soapy range (96 dB on the E4000) but librtlsdr
 /// saturates earlier (52 dB on that chip, 49.6 dB on the R820T). Asking
-/// above the real ceiling is treated as "maximum".
+/// above the real ceiling is treated as "maximum". An SDRplay's gain is the
+/// combined LNA and IF scale of [`SdrplayGain`], at the band `freq_hz` is in.
 fn apply_overall_gain(
     dev: &soapysdr::Device,
     caps: &Capabilities,
+    freq_hz: f64,
     agc_enabled: &mut bool,
     want: f64,
     log: &SyncSender<String>,
@@ -971,13 +1215,11 @@ fn apply_overall_gain(
         }
         std::thread::sleep(std::time::Duration::from_millis(15));
     }
-    let g = match caps.gain {
-        GainControl::Overall { min, max } => snap_gain(gain_steps(caps), want.clamp(min, max)),
-        GainControl::Sdrplay { .. } => want,
-    };
-    let ok = set_gain_checked(dev, g);
+    let (min, max) = gain_range(caps, freq_hz);
+    let g = snap_gain(gain_steps(caps), want.clamp(min, max));
+    let ok = set_gain_checked(dev, caps, freq_hz, g);
     if ok {
-        let got = dev.gain(Rx, 0).unwrap_or(g);
+        let got = read_gain(dev, caps, freq_hz).unwrap_or(g);
         if (want - got).abs() > 0.15 {
             let _ = log.try_send(format!("gain {want:.1} dB → {got:.1} dB"));
         } else {
@@ -999,6 +1241,185 @@ fn auto_gain_start(min: f64, max: f64) -> f64 {
     (min + (max - min) * 0.4).clamp(min, max)
 }
 
+/// Where the auto-gain loop starts on this device.
+///
+/// Not 40% on an SDRplay: on its scale that lands on a deep LNA state, and
+/// SDRplay's measured noise figure there is 40–50 dB — a receiver that
+/// starts deaf and spends half a minute climbing out. It starts instead at
+/// the LNA take-over point (full LNA gain, IF reduced to the take-over
+/// level), which leaves the 14-bit ADC far more headroom than an R820T's
+/// 8 bits had when the 40% rule was set.
+fn auto_start_for(caps: &Capabilities, freq_hz: f64) -> f64 {
+    match sdrplay_gain(caps, freq_hz) {
+        Some(sg) => sg.gain_of(sg.lna_gr.first().map(|_| 0), SDRPLAY_IF_TAKEOVER_DB)
+            .unwrap_or(0.0),
+        None => {
+            let (min, max) = gain_range(caps, freq_hz);
+            auto_gain_start(min, max)
+        }
+    }
+}
+
+/// `want` if the driver takes it, else the closest rate it does.
+fn nearest_rate(caps: &Capabilities, want: f64) -> f64 {
+    caps.rate_ranges
+        .iter()
+        .map(|&(lo, hi)| want.clamp(lo, hi))
+        .min_by(|a, b| (a - want).abs().total_cmp(&(b - want).abs()))
+        .unwrap_or(want)
+}
+
+/// The gain range `Cmd::Gain` is clamped to, at `freq_hz`.
+fn gain_range(caps: &Capabilities, freq_hz: f64) -> (f64, f64) {
+    match (caps.gain.clone(), sdrplay_gain(caps, freq_hz)) {
+        (_, Some(sg)) => (0.0, sg.max_gain()),
+        (GainControl::Overall { min, max }, None) => (min, max),
+        (GainControl::Sdrplay { .. }, None) => (0.0, 0.0),
+    }
+}
+
+/// The gain the hardware is at, on the same scale.
+fn read_gain(dev: &soapysdr::Device, caps: &Capabilities, freq_hz: f64) -> Option<f64> {
+    let Some(sg) = sdrplay_gain(caps, freq_hz) else {
+        return dev.gain(Rx, 0).ok();
+    };
+    let ifgr = dev.gain_element(Rx, 0, "IFGR").ok()?;
+    let state = if sg.lna_gr.is_empty() {
+        None
+    } else {
+        Some(dev.gain_element(Rx, 0, "RFGR").ok()?.round().max(0.0) as usize)
+    };
+    sg.gain_of(state, ifgr)
+}
+
+fn hardware_agc_note(caps: &Capabilities) -> &'static str {
+    if matches!(caps.gain, GainControl::Sdrplay { .. }) {
+        "IF AGC on: IF gain under the RSP's own loop, LNA state held where it was"
+    } else {
+        "tuner AGC on: LNA, mixer and VGA under the tuner's own control"
+    }
+}
+
+/// IF gain reduction the [`SdrplayGain`] split holds while the LNA takes
+/// over. The first 20 dB of reduction from full gain comes off the IF stage,
+/// which costs no noise figure; past that the LNA steps in, because a signal
+/// strong enough to need more is strong enough to be driving the LNA toward
+/// overload (SDRplay's IIP3 rises about 6 dB per LNA state), and then IF
+/// takes the rest once the LNA has nothing left. It is the classic delayed
+/// RF AGC take-over, and IFGR 40 is also where SDRplay's own IF AGC tends to
+/// sit at its -30 dBFS setpoint.
+const SDRPLAY_IF_TAKEOVER_DB: f64 = 40.0;
+
+/// How an SDRplay receiver's two reduction controls make one gain in dB, so
+/// the single RF GAIN control and the clip-guarded loop work on it the way
+/// they do on an RTL-SDR.
+///
+/// The driver has two *reduction* controls: IFGR, 20–59 dB and exact, and
+/// RFGR, an LNA state index whose reduction depends on the band.
+/// SoapySDRPlay3's own overall gain sums the raw numbers — decibels plus an
+/// index — and calls larger *less* gain, so requests on this crate's
+/// higher-is-more scale would run backwards through it.
+///
+/// Gain here is decibels above the deepest reduction used: 0 is everything
+/// reduced, the maximum is LNA state 0 with IFGR at its floor. Like
+/// librtlsdr's R820T table the scale is nominal; see [`rsp1a_lna_gr_db`] for
+/// where its numbers come from. For a model without a table only the IF
+/// stage moves, which is exact, and the LNA state is left alone.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct SdrplayGain {
+    /// LNA reduction per state, dB, ascending; empty when not known.
+    lna_gr: &'static [f64],
+    ifgr_min: f64,
+    ifgr_max: f64,
+}
+
+impl SdrplayGain {
+    fn lna_max(&self) -> f64 {
+        self.lna_gr.last().copied().unwrap_or(0.0)
+    }
+
+    fn max_gain(&self) -> f64 {
+        (self.ifgr_max - self.ifgr_min) + self.lna_max()
+    }
+
+    /// LNA state (`None`: leave it alone) and IFGR that realize `gain_db`.
+    fn split(&self, gain_db: f64) -> (Option<usize>, f64) {
+        let total = self.ifgr_max + self.lna_max() - gain_db.clamp(0.0, self.max_gain());
+        if self.lna_gr.is_empty() {
+            return (None, total.round().clamp(self.ifgr_min, self.ifgr_max));
+        }
+        // The least LNA reduction that keeps IF at or below the take-over
+        // level; past the last state, IF takes everything left. A state
+        // whose step would push IF under its floor is skipped for the one
+        // before it, which realizes the same total exactly.
+        let mut state = self.lna_gr.len() - 1;
+        for (s, &gr) in self.lna_gr.iter().enumerate() {
+            if total - gr <= SDRPLAY_IF_TAKEOVER_DB {
+                state = if total - gr < self.ifgr_min && s > 0 { s - 1 } else { s };
+                break;
+            }
+        }
+        let ifgr = (total - self.lna_gr[state]).round().clamp(self.ifgr_min, self.ifgr_max);
+        (Some(state), ifgr)
+    }
+
+    /// The gain an LNA state and IFGR make; `None` for a state the table
+    /// does not cover, whose reduction is not known.
+    fn gain_of(&self, state: Option<usize>, ifgr: f64) -> Option<f64> {
+        let lna = match state {
+            None => 0.0,
+            Some(s) => *self.lna_gr.get(s)?,
+        };
+        Some(self.ifgr_max + self.lna_max() - (ifgr + lna))
+    }
+}
+
+/// LNA gain reduction for each RSP1A LNA state, in dB, for the band `freq_hz`
+/// is in.
+///
+/// SDRplay's nominal per-band values, cross-checked against the gain SDRplay
+/// measured for every LNA state across frequency in its RSP1A technical
+/// information. The two agree to within about 3 dB for every state listed.
+/// Where they disagree about what a state does — the 420–1000 MHz band
+/// beyond state 3 (the measurement has a different number of states there),
+/// the top state at 60–420 MHz (measured at 296 MHz giving *more* gain than
+/// the state below it) and the top two above 1 GHz (measured in the other
+/// order) — the state is left out rather than guessed at. That costs depth
+/// of reduction in those bands, never accuracy; IF makes up the rest.
+fn rsp1a_lna_gr_db(freq_hz: f64) -> &'static [f64] {
+    const BELOW_60_MHZ: &[f64] = &[0.0, 6.0, 12.0, 18.0, 37.0, 42.0, 61.0];
+    const BELOW_420_MHZ: &[f64] = &[0.0, 6.0, 12.0, 18.0, 20.0, 26.0, 32.0, 38.0, 57.0];
+    const BELOW_1000_MHZ: &[f64] = &[0.0, 7.0, 13.0, 19.0];
+    const ABOVE_1000_MHZ: &[f64] = &[0.0, 6.0, 12.0, 20.0, 26.0, 32.0, 38.0];
+    if freq_hz < 60e6 {
+        BELOW_60_MHZ
+    } else if freq_hz < 420e6 {
+        BELOW_420_MHZ
+    } else if freq_hz < 1000e6 {
+        BELOW_1000_MHZ
+    } else {
+        ABOVE_1000_MHZ
+    }
+}
+
+/// The SDRplay gain model at `freq_hz`, or `None` for an RTL-SDR.
+fn sdrplay_gain(caps: &Capabilities, freq_hz: f64) -> Option<SdrplayGain> {
+    let GainControl::Sdrplay { ifgr_min, ifgr_max, .. } = caps.gain else {
+        return None;
+    };
+    let lna_gr = if caps.hardware.eq_ignore_ascii_case("RSP1A") {
+        rsp1a_lna_gr_db(freq_hz)
+    } else {
+        &[]
+    };
+    Some(SdrplayGain { lna_gr, ifgr_min, ifgr_max })
+}
+
+/// Whether a tune from `a` to `b` crossed an SDRplay LNA band edge.
+fn sdrplay_band_changed(caps: &Capabilities, a: f64, b: f64) -> bool {
+    sdrplay_gain(caps, a) != sdrplay_gain(caps, b)
+}
+
 /// Set the tuner gain, retrying a write the driver reported as taken but
 /// the stderr watcher saw fail. The driver reports success whether or not
 /// the I2C write took; the watcher is what says it did.
@@ -1017,9 +1438,17 @@ fn set_gain_mode_checked(dev: &soapysdr::Device, automatic: bool) -> bool {
     false
 }
 
-fn set_gain_checked(dev: &soapysdr::Device, g: f64) -> bool {
+fn set_gain_checked(dev: &soapysdr::Device, caps: &Capabilities, freq_hz: f64, g: f64) -> bool {
+    let write = || match sdrplay_gain(caps, freq_hz) {
+        None => dev.set_gain(Rx, 0, g).is_ok(),
+        Some(sg) => {
+            let (state, ifgr) = sg.split(g);
+            state.is_none_or(|s| dev.set_gain_element(Rx, 0, "RFGR", s as f64).is_ok())
+                && dev.set_gain_element(Rx, 0, "IFGR", ifgr).is_ok()
+        }
+    };
     for attempt in 0..GAIN_ATTEMPTS {
-        if crate::driver_log::checked(|| dev.set_gain(Rx, 0, g).is_ok()) {
+        if crate::driver_log::checked(write) {
             return true;
         }
         if attempt + 1 < GAIN_ATTEMPTS {
@@ -1099,15 +1528,22 @@ fn publish_state(
         bandwidth: dev.bandwidth(Rx, 0).ok(),
         frequency: achieved.or(Some(tune.desired)),
         ppm: Some(tune.ppm),
+        overall_gain: read_gain(dev, caps, tune.desired),
+        gain_range: Some(gain_range(caps, tune.desired)),
         ..State::default()
     };
-    match caps.gain {
-        GainControl::Overall { .. } => state.overall_gain = dev.gain(Rx, 0).ok(),
-        GainControl::Sdrplay { .. } => {
-            state.rfgr = dev.gain_element(Rx, 0, "RFGR").ok();
-            state.ifgr = dev.gain_element(Rx, 0, "IFGR").ok();
-        }
+    if let GainControl::Sdrplay { .. } = caps.gain {
+        state.rfgr = dev.gain_element(Rx, 0, "RFGR").ok();
+        state.ifgr = dev.gain_element(Rx, 0, "IFGR").ok();
     }
+    let switch = |have: bool, key: &str| {
+        have.then(|| dev.read_setting(key).ok())
+            .flatten()
+            .map(|v| v.eq_ignore_ascii_case("true"))
+    };
+    state.bias_t = switch(caps.bias_t, "biasT_ctrl");
+    state.rf_notch = switch(caps.rf_notch, "rfnotch_ctrl");
+    state.dab_notch = switch(caps.dab_notch, "dabnotch_ctrl");
     let _ = tx.try_send(Event::State(state));
 }
 
@@ -1153,7 +1589,12 @@ fn set_bandwidth(
             .collect();
         options.sort_by(f64::total_cmp);
         options.dedup();
-        choose_bandwidth(&options, rate, cover_hz)
+        // "No requirement" is the whole span here. Asking a continuous range
+        // for zero gets the driver's auto width; asking a list for the
+        // narrowest filter that covers zero got an RSP's 200 kHz filter in
+        // front of a 2 MHz span.
+        let cover = if cover_hz > 0.0 { cover_hz } else { rate };
+        choose_bandwidth(&options, rate, cover)
     };
     dev.set_bandwidth(Rx, 0, want)?;
     let actual = dev.bandwidth(Rx, 0).unwrap_or(want);
@@ -1196,6 +1637,21 @@ mod tests {
                 "chose {got:.0} Hz for a {rate:.0} Hz span"
             );
         }
+    }
+
+    /// Widths SoapySDRPlay3 lists for an RSP1A.
+    const RSP1A_BW: [f64; 8] = [
+        200_000.0, 300_000.0, 600_000.0, 1_536_000.0, 5_000_000.0, 6_000_000.0, 7_000_000.0,
+        8_000_000.0,
+    ];
+
+    /// With no channel to protect, the span is what must stay flat: the
+    /// widest RSP filter that fits under it, never its narrowest.
+    #[test]
+    fn a_whole_span_on_an_rsp_gets_the_widest_filter_that_fits() {
+        assert_eq!(choose_bandwidth(&RSP1A_BW, 2_048_000.0, 2_048_000.0), 1_536_000.0);
+        assert_eq!(choose_bandwidth(&RSP1A_BW, 6_000_000.0, 6_000_000.0), 6_000_000.0);
+        assert_eq!(choose_bandwidth(&RSP1A_BW, 250_000.0, 250_000.0), 200_000.0);
     }
 
     #[test]
@@ -1358,5 +1814,153 @@ mod tests {
     fn config_addresses_a_device_by_serial() {
         let c = DeviceConfig::new("00000003", 155_107_500.0, 2_400_000.0);
         assert_eq!(c.soapy_args(), "driver=rtlsdr,serial=00000003");
+    }
+
+    #[test]
+    fn a_remote_config_addresses_the_sdrplay_on_that_host_over_tcp() {
+        let mut c = DeviceConfig::new("210304DD98", 100e6, 2_048_000.0);
+        c.remote = Some(remote_url("mario"));
+        assert_eq!(
+            c.soapy_args(),
+            "driver=remote,remote=tcp://mario:55132,remote:driver=sdrplay,remote:prot=tcp,serial=210304DD98"
+        );
+    }
+
+    #[test]
+    fn remote_specs_become_urls_and_urls_give_back_their_host() {
+        assert_eq!(remote_url("mario"), "tcp://mario:55132");
+        assert_eq!(remote_url(" mario:6000 "), "tcp://mario:6000");
+        assert_eq!(remote_url("tcp://10.0.0.2:55132"), "tcp://10.0.0.2:55132");
+        assert_eq!(remote_url("[fd7a::1]"), "tcp://[fd7a::1]:55132");
+        assert_eq!(remote_url("[fd7a::1]:7000"), "tcp://[fd7a::1]:7000");
+        assert_eq!(remote_host("tcp://mario:55132"), "mario");
+        assert_eq!(remote_host("tcp://[fd7a::1]:55132"), "[fd7a::1]");
+        assert_eq!(remote_host("tcp://[fd7a::1]"), "[fd7a::1]");
+    }
+
+    #[test]
+    fn the_model_is_read_out_of_an_sdrplay_label() {
+        assert_eq!(sdrplay_model("SDRplay Dev0 RSP1A 210304DD98"), "RSP1A");
+        assert_eq!(sdrplay_model("something else"), "SDRplay");
+    }
+
+    fn rsp1a() -> Capabilities {
+        Capabilities {
+            driver: "SDRplay".into(),
+            hardware: "RSP1A".into(),
+            gain: GainControl::Sdrplay {
+                rfgr_min: 0.0,
+                rfgr_max: 9.0,
+                ifgr_min: 20.0,
+                ifgr_max: 59.0,
+            },
+            hardware_agc: true,
+            agc_setpoint: true,
+            rf_notch: true,
+            dab_notch: true,
+            iq_correction: true,
+            ppm: true,
+            bias_t: true,
+            // What SoapySDRPlay3 reports for an RSP1A.
+            rate_ranges: vec![(250_000.0, 250_000.0), (1e6, 1e6), (2e6, 10.66e6)],
+            freq_range: Some((1e3, 2e9)),
+        }
+    }
+
+    const BANDS_HZ: [f64; 4] = [10e6, 100e6, 460e6, 1200e6];
+
+    /// Every gain on the scale is realized to within the IF stage's 1 dB
+    /// step, by a state the table covers, and the realized gain never goes
+    /// down as the request goes up — in every band.
+    #[test]
+    fn the_sdrplay_gain_scale_round_trips_and_is_monotonic_in_every_band() {
+        let caps = rsp1a();
+        for f in BANDS_HZ {
+            let sg = sdrplay_gain(&caps, f).unwrap();
+            let (lo, hi) = gain_range(&caps, f);
+            assert_eq!(lo, 0.0);
+            assert!((hi - (39.0 + sg.lna_max())).abs() < 1e-9);
+            let mut last = f64::NEG_INFINITY;
+            let mut want = 0.0;
+            while want <= hi {
+                let (state, ifgr) = sg.split(want);
+                assert!((20.0..=59.0).contains(&ifgr), "IFGR {ifgr} at {want} dB, {f} Hz");
+                let got = sg.gain_of(state, ifgr).expect("a state in the table");
+                assert!((got - want).abs() <= 0.5, "{want} dB realized as {got} at {f} Hz");
+                assert!(got >= last - 1e-9, "gain went down at {want} dB, {f} Hz");
+                last = got;
+                want += 0.25;
+            }
+        }
+    }
+
+    /// Reduction comes off the IF stage first and the LNA only past the
+    /// take-over point; the deepest reductions use the LNA's deepest state.
+    #[test]
+    fn the_lna_takes_over_only_after_the_first_twenty_db_of_if_reduction() {
+        let sg = sdrplay_gain(&rsp1a(), 100e6).unwrap();
+        let top = sg.max_gain();
+        assert_eq!(sg.split(top), (Some(0), 20.0));
+        assert_eq!(sg.split(top - 20.0), (Some(0), 40.0));
+        assert_eq!(sg.split(top - 21.0).0, Some(1));
+        assert_eq!(sg.split(0.0), (Some(sg.lna_gr.len() - 1), 59.0));
+    }
+
+    /// An SDRplay's auto gain starts with the LNA wide open, not on the deep
+    /// LNA state 40% of its range would pick.
+    #[test]
+    fn sdrplay_auto_gain_starts_at_the_take_over_point() {
+        let caps = rsp1a();
+        for f in BANDS_HZ {
+            let sg = sdrplay_gain(&caps, f).unwrap();
+            assert_eq!(sg.split(auto_start_for(&caps, f)), (Some(0), 40.0));
+        }
+    }
+
+    #[test]
+    fn a_state_the_table_does_not_cover_reads_as_unknown() {
+        let sg = sdrplay_gain(&rsp1a(), 600e6).unwrap();
+        assert_eq!(sg.gain_of(Some(9), 40.0), None);
+    }
+
+    /// Another SDRplay model moves only its IF stage, which is exact.
+    #[test]
+    fn an_sdrplay_without_a_table_moves_only_the_if_stage() {
+        let mut caps = rsp1a();
+        caps.hardware = "RSPdx".into();
+        let sg = sdrplay_gain(&caps, 100e6).unwrap();
+        assert_eq!(gain_range(&caps, 100e6), (0.0, 39.0));
+        assert_eq!(sg.split(10.0), (None, 49.0));
+        assert_eq!(sg.gain_of(None, 49.0), Some(10.0));
+    }
+
+    #[test]
+    fn band_edges_are_where_the_lna_table_changes() {
+        let caps = rsp1a();
+        assert!(!sdrplay_band_changed(&caps, 100e6, 400e6));
+        assert!(sdrplay_band_changed(&caps, 400e6, 440e6));
+        let mut rtl = rsp1a();
+        rtl.gain = GainControl::Overall { min: 0.0, max: 49.6 };
+        assert!(!sdrplay_band_changed(&rtl, 10e6, 1200e6));
+    }
+
+    #[test]
+    fn rates_are_checked_against_the_driver_ranges() {
+        let caps = rsp1a();
+        assert!(caps.supports_rate(250_000.0));
+        assert!(caps.supports_rate(6e6));
+        assert!(!caps.supports_rate(1_536_000.0));
+    }
+
+    /// A span from the other radio opens at the nearest one this one has.
+    #[test]
+    fn an_unoffered_rate_opens_at_the_nearest_offered_one() {
+        assert_eq!(nearest_rate(&rsp1a(), 1_536_000.0), 2e6);
+        assert_eq!(nearest_rate(&rsp1a(), 2_400_000.0), 2_400_000.0);
+        let mut rtl = rsp1a();
+        // What SoapyRTLSDR reports.
+        rtl.rate_ranges = vec![(225_001.0, 300_000.0), (900_001.0, 3_200_000.0)];
+        assert_eq!(nearest_rate(&rtl, 6e6), 3_200_000.0);
+        assert_eq!(nearest_rate(&rtl, 500_000.0), 300_000.0);
     }
 }

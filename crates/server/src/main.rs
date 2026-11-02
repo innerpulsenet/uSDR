@@ -1,6 +1,7 @@
-//! uSDR — a single-radio spectrum inspector for RTL-SDR hardware.
+//! uSDR — a single-radio spectrum inspector for RTL-SDR hardware, and for an
+//! SDRplay receiver on another host reached through SoapyRemote.
 //!
-//! One dongle, one web page: a live FFT/waterfall over the tuned span, and a
+//! One radio, one web page: a live FFT/waterfall over the tuned span, and a
 //! narrowband inspect chain that runs the same digital classifiers and
 //! protocol decoders the full scanner uses. There is no scanning, no call
 //! recording, and no database — this exists to point a receiver at a signal
@@ -43,9 +44,15 @@ struct Args {
     /// Address to listen on.
     #[arg(long, default_value = "127.0.0.1:8073")]
     bind: SocketAddr,
-    /// Dongle serial to use. Defaults to the first one found.
+    /// Radio serial to use. Defaults to the first one found: USB first, then
+    /// each remote.
     #[arg(long)]
     serial: Option<String>,
+    /// A SoapyRemote host with an SDRplay receiver: `mario`, `mario:55132` or
+    /// `tcp://mario:55132`. Repeat for more than one. Saved to the settings
+    /// file, so it need only be given once.
+    #[arg(long = "remote", value_name = "HOST[:PORT]")]
+    remotes: Vec<String>,
     /// Centre frequency in MHz.
     #[arg(long)]
     freq: Option<f64>,
@@ -64,7 +71,7 @@ struct Args {
     /// Phase 2 channel: MHz,WACN,SYSID,NAC,SLOT (slot 0 or 1). Repeat per frequency.
     #[arg(long)]
     p25_phase2: Vec<scannerd_engine::p25::phase2::live::ReceiveConfig>,
-    /// List the dongles the driver can see, then exit.
+    /// List the radios the drivers can see, then exit.
     #[arg(long)]
     devices: bool,
 }
@@ -79,6 +86,9 @@ struct Args {
 struct Settings {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     serial: Option<String>,
+    /// SoapyRemote hosts searched for an SDRplay receiver, besides USB.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    remotes: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     freq_hz: Option<f64>,
     /// The frequency being *received* — the big readout — as distinct from
@@ -91,6 +101,12 @@ struct Settings {
     rate_hz: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     gain_db: Option<f64>,
+    /// Manual gain last used on each radio that is not the current one, by
+    /// serial; a radio missing here was on auto. One gain does not carry
+    /// between radios: 40 dB is mid-range on an R820T and a deaf, deep LNA
+    /// state on an RSP1A.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    gains: std::collections::BTreeMap<String, f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     mode: Option<sdr::SdrMode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -101,6 +117,11 @@ struct Settings {
     /// Automatic gain via the tuner's own AGC rather than the guarded loop.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     tuner_agc: Option<bool>,
+    /// SDRplay band-stop filters: AM/FM broadcast, and DAB.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    rf_notch: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    dab_notch: Option<bool>,
     /// Voice-scan configuration (range, modes, threshold), applied when the
     /// mode is `scan`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -199,20 +220,25 @@ async fn main() -> Result<()> {
         eprintln!("could not watch driver stderr; tuner writes will be trusted blindly");
     }
 
+    let bind = args.bind;
+    let config_path = settings_path(args.config)?;
+    let mut settings = load_settings(&config_path);
+    if !args.remotes.is_empty() {
+        settings.remotes = args.remotes.clone();
+    }
+
     if args.devices {
-        let found = scannerd_radio::device::enumerate()?;
+        let found = scannerd_radio::device::enumerate(&settings.remotes)?;
         if found.is_empty() {
-            println!("no RTL-SDR devices found");
+            println!("no radios found");
         }
         for d in &found {
-            println!("{}\t{}\t{}", d.serial, d.tuner, d.label);
+            let at = d.remote.as_deref().map_or("usb", scannerd_radio::remote_host);
+            println!("{}\t{}\t{}\t{}", d.serial, d.tuner, at, d.label);
         }
         return Ok(());
     }
 
-    let bind = args.bind;
-    let config_path = settings_path(args.config)?;
-    let mut settings = load_settings(&config_path);
     let p25_keys = p25_keys::ChannelKeys::load(config_path.with_extension("p25-keys.json"))?;
     if args.serial.is_some() {
         settings.serial = args.serial.clone();
@@ -239,6 +265,9 @@ async fn main() -> Result<()> {
         clip_guard: settings.clip_guard.unwrap_or(false),
         tuner_agc: settings.tuner_agc.unwrap_or(false),
         scan: settings.scan.clone(),
+        remotes: settings.remotes.clone(),
+        rf_notch: settings.rf_notch,
+        dab_notch: settings.dab_notch,
     };
 
     // The FFT frames are the bulk of this stream at 25 fps and can reach
@@ -360,13 +389,17 @@ struct DeviceBody {
     serial: String,
     label: String,
     tuner: String,
+    /// Host the radio is on, for one reached over SoapyRemote.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    host: Option<String>,
     /// `sdr` for the dongle this server is using, `free` for anything else the
     /// driver can see.
     role: &'static str,
 }
 
 async fn list_devices(State(st): State<Arc<AppState>>) -> Result<Json<Vec<DeviceBody>>, ApiError> {
-    let found = tokio::task::block_in_place(scannerd_radio::device::enumerate)?;
+    let remotes = st.settings.lock().expect("settings").remotes.clone();
+    let found = tokio::task::block_in_place(|| scannerd_radio::device::enumerate(&remotes))?;
     let in_use = st
         .sdr
         .lock()
@@ -382,6 +415,7 @@ async fn list_devices(State(st): State<Arc<AppState>>) -> Result<Json<Vec<Device
                 "free"
             };
             DeviceBody {
+                host: d.remote.as_deref().map(|r| scannerd_radio::remote_host(r).to_string()),
                 serial: d.serial,
                 label: d.label,
                 tuner: d.tuner,
@@ -390,6 +424,18 @@ async fn list_devices(State(st): State<Arc<AppState>>) -> Result<Json<Vec<Device
         })
         .collect();
     Ok(Json(out))
+}
+
+/// A frequency or rate for a message: `1 kHz`, `2.2 GHz`, `2.048 MHz`.
+fn fmt_hz(hz: f64) -> String {
+    let (v, unit) = match hz.abs() {
+        a if a >= 1e9 => (hz / 1e9, "GHz"),
+        a if a >= 1e6 => (hz / 1e6, "MHz"),
+        a if a >= 1e3 => (hz / 1e3, "kHz"),
+        _ => (hz, "Hz"),
+    };
+    let digits = format!("{v:.3}");
+    format!("{} {unit}", digits.trim_end_matches('0').trim_end_matches('.'))
 }
 
 #[derive(Deserialize)]
@@ -401,10 +447,24 @@ async fn post_sdr_tune(
     State(st): State<Arc<AppState>>,
     Json(req): Json<SdrTuneReq>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    if req.freq_hz < 1.0e6 || req.freq_hz > 2.2e9 {
-        return Err(ApiError::BadRequest(
-            "frequency outside 1 MHz – 2.2 GHz".into(),
-        ));
+    // The radio's own floor where it reaches below 1 MHz (see tune_bounds).
+    let (lo, hi) = st
+        .sdr
+        .lock()
+        .expect("sdr")
+        .as_ref()
+        .map(|s| {
+            let s = s.status.lock().expect("sdr status");
+            (s.tune_min_hz, s.tune_max_hz)
+        })
+        .filter(|&(lo, hi)| hi > lo)
+        .unwrap_or((1.0e6, 2.2e9));
+    if req.freq_hz < lo || req.freq_hz > hi {
+        return Err(ApiError::BadRequest(format!(
+            "frequency outside {} – {}",
+            fmt_hz(lo),
+            fmt_hz(hi)
+        )));
     }
     st.update_settings(|s| s.freq_hz = Some(req.freq_hz));
     if let Some(sdr) = st.sdr.lock().expect("sdr").as_ref() {
@@ -442,8 +502,22 @@ async fn post_sdr_device(
     State(st): State<Arc<AppState>>,
     Json(req): Json<SdrDeviceReq>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    st.update_settings(|s| s.serial = Some(req.serial.clone()));
+    // Park this radio's gain and take up the next one's (auto if it has
+    // none yet) before the switch, so the new radio opens at its own.
+    let mut gain = None;
+    st.update_settings(|s| {
+        if let Some(old) = s.serial.take() {
+            match s.gain_db {
+                Some(g) => s.gains.insert(old, g),
+                None => s.gains.remove(&old),
+            };
+        }
+        s.gain_db = s.gains.remove(&req.serial);
+        gain = s.gain_db;
+        s.serial = Some(req.serial.clone());
+    });
     if let Some(sdr) = st.sdr.lock().expect("sdr").as_ref() {
+        sdr.set_gain(gain)?;
         sdr.switch_device(req.serial.clone())?;
     }
     Ok(Json(
@@ -478,10 +552,36 @@ async fn post_sdr_rate(
     State(st): State<Arc<AppState>>,
     Json(req): Json<SdrRateReq>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    if !(200_000.0..=3_200_000.0).contains(&req.rate_hz) {
-        return Err(ApiError::BadRequest(
-            "rate must be between 200 kHz and 3.2 MHz".into(),
-        ));
+    // Held to the widest span this radio offers, and to a rate its driver
+    // takes: a rejected rate would leave the chains built for one the
+    // samples are not arriving at.
+    let (max, ranges) = st
+        .sdr
+        .lock()
+        .expect("sdr")
+        .as_ref()
+        .map(|s| {
+            let s = s.status.lock().expect("sdr status");
+            let max = s.rates_hz.iter().copied().fold(0.0, f64::max);
+            (max, s.rate_ranges.clone())
+        })
+        .filter(|(max, _)| *max > 0.0)
+        .unwrap_or((3_200_000.0, Vec::new()));
+    if !(200_000.0..=max).contains(&req.rate_hz) {
+        return Err(ApiError::BadRequest(format!(
+            "rate must be between 200 kHz and {}",
+            fmt_hz(max)
+        )));
+    }
+    if !ranges.is_empty()
+        && !ranges
+            .iter()
+            .any(|&(lo, hi)| req.rate_hz >= lo - 0.5 && req.rate_hz <= hi + 0.5)
+    {
+        return Err(ApiError::BadRequest(format!(
+            "this radio does not sample at {}",
+            fmt_hz(req.rate_hz)
+        )));
     }
     st.update_settings(|s| s.rate_hz = Some(req.rate_hz));
     if let Some(sdr) = st.sdr.lock().expect("sdr").as_ref() {
@@ -552,6 +652,10 @@ struct SdrFrontendReq {
     lo_offset: Option<bool>,
     clip_guard: Option<bool>,
     tuner_agc: Option<bool>,
+    /// Saved per radio, with its calibration: it belongs to the feedline.
+    bias_t: Option<bool>,
+    rf_notch: Option<bool>,
+    dab_notch: Option<bool>,
 }
 
 async fn post_sdr_frontend(
@@ -567,7 +671,22 @@ async fn post_sdr_frontend(
     if let Some(on) = req.tuner_agc {
         st.update_settings(|s| s.tuner_agc = Some(on));
     }
+    if let Some(on) = req.rf_notch {
+        st.update_settings(|s| s.rf_notch = Some(on));
+    }
+    if let Some(on) = req.dab_notch {
+        st.update_settings(|s| s.dab_notch = Some(on));
+    }
     if let Some(sdr) = st.sdr.lock().expect("sdr").as_ref() {
+        if let Some(on) = req.bias_t {
+            sdr.set_bias_t(on)?;
+        }
+        if let Some(on) = req.rf_notch {
+            sdr.set_rf_notch(on)?;
+        }
+        if let Some(on) = req.dab_notch {
+            sdr.set_dab_notch(on)?;
+        }
         if let Some(on) = req.lo_offset {
             sdr.set_lo_offset(on)?;
         }

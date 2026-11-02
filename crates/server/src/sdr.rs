@@ -362,6 +362,14 @@ pub struct SdrCfg {
     /// Voice-scan configuration, applied when the mode is `scan`.
     #[serde(default)]
     pub scan: Option<crate::scan::ScanCfg>,
+    /// SoapyRemote hosts to look for an SDRplay receiver on, besides USB.
+    #[serde(default)]
+    pub remotes: Vec<String>,
+    /// SDRplay band-stop filters; `None` leaves the driver's setting.
+    #[serde(default)]
+    pub rf_notch: Option<bool>,
+    #[serde(default)]
+    pub dab_notch: Option<bool>,
 }
 
 impl Default for SdrCfg {
@@ -378,6 +386,9 @@ impl Default for SdrCfg {
             clip_guard: false,
             tuner_agc: false,
             scan: None,
+            remotes: Vec::new(),
+            rf_notch: None,
+            dab_notch: None,
         }
     }
 }
@@ -386,6 +397,38 @@ impl Default for SdrCfg {
 pub struct SdrStatus {
     pub serial: String,
     pub tuner: String,
+    /// Driver key (`rtlsdr`, `SDRplay`), so the page can label controls the
+    /// way this hardware names them.
+    #[serde(default)]
+    pub driver: String,
+    /// Host the radio is on, when it is reached over SoapyRemote.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host: Option<String>,
+    /// The range a manual gain is clamped to. Follows the band on an SDRplay,
+    /// whose LNA reductions do.
+    #[serde(default)]
+    pub gain_min_db: f64,
+    #[serde(default)]
+    pub gain_max_db: f64,
+    /// Spans this radio offers, in S/s.
+    #[serde(default)]
+    pub rates_hz: Vec<f64>,
+    /// What the driver accepts, for validating a requested span.
+    #[serde(skip_serializing)]
+    pub rate_ranges: Vec<(f64, f64)>,
+    /// Centre frequencies a tune request may ask for.
+    #[serde(default)]
+    pub tune_min_hz: f64,
+    #[serde(default)]
+    pub tune_max_hz: f64,
+    /// Front-end switches as the driver reports them; absent where the
+    /// hardware has no such switch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bias_t: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rf_notch: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dab_notch: Option<bool>,
     pub freq_hz: f64,
     pub rate_hz: f64,
     pub gain_db: Option<f64>,
@@ -906,6 +949,9 @@ enum SdrCmd {
     LoOffset(bool),
     ClipGuard(bool),
     TunerAgc(bool),
+    BiasT(bool),
+    RfNotch(bool),
+    DabNotch(bool),
     /// Offsets from the display centre, in Hz, that a spur check identified as
     /// generated inside the receiver.
     Spurs(Vec<f64>),
@@ -1024,6 +1070,24 @@ impl SdrRuntime {
         self.cmd_tx
             .send(SdrCmd::TunerAgc(on))
             .map_err(|e| anyhow::anyhow!("send tuner agc: {e}"))
+    }
+
+    pub fn set_bias_t(&self, on: bool) -> Result<()> {
+        self.cmd_tx
+            .send(SdrCmd::BiasT(on))
+            .map_err(|e| anyhow::anyhow!("send bias-T: {e}"))
+    }
+
+    pub fn set_rf_notch(&self, on: bool) -> Result<()> {
+        self.cmd_tx
+            .send(SdrCmd::RfNotch(on))
+            .map_err(|e| anyhow::anyhow!("send RF notch: {e}"))
+    }
+
+    pub fn set_dab_notch(&self, on: bool) -> Result<()> {
+        self.cmd_tx
+            .send(SdrCmd::DabNotch(on))
+            .map_err(|e| anyhow::anyhow!("send DAB notch: {e}"))
     }
 
     pub fn switch_device(&self, serial: String) -> Result<()> {
@@ -1210,27 +1274,55 @@ fn display_rate_for(rate_hz: f64, lo_on: bool, mode: SdrMode) -> f64 {
     }
 }
 
+/// The SDRplay band-stop filters as the operator left them, applied at every
+/// open so a reopen after a fault comes back the same.
+#[derive(Clone, Copy, Debug, Default)]
+struct Notches {
+    rf: Option<bool>,
+    dab: Option<bool>,
+}
+
+/// Where a radio was found: on this machine's USB, or on a SoapyRemote host.
+fn where_searched(remotes: &[String]) -> String {
+    if remotes.is_empty() {
+        "on USB".into()
+    } else {
+        let hosts: Vec<&str> = remotes.iter().map(|r| device::remote_host(r)).collect();
+        format!("on USB or on {}", hosts.join(", "))
+    }
+}
+
+/// Opens the radio with `serial`, or the first one found: local dongles
+/// first, then each remote. Returns the device, its serial and tuner name,
+/// and the host it is on when remote.
 fn open_sdr(
+    remotes: &[String],
     serial: Option<&str>,
     freq_hz: f64,
     rate_hz: f64,
     gain_db: Option<f64>,
     lo_offset_hz: f64,
-) -> Result<(Device, String, String)> {
-    let all = device::enumerate()?;
+    notches: Notches,
+) -> Result<(Device, String, String, Option<String>)> {
+    let all = device::enumerate(remotes)?;
     if all.is_empty() {
-        bail!("no RTL-SDR device found");
+        bail!("no radio found {}", where_searched(remotes));
     }
     let info = if let Some(s) = serial {
         all.iter()
             .find(|d| d.serial == s)
-            .with_context(|| format!("SDR serial {s} not found on USB"))?
+            .with_context(|| format!("SDR serial {s} not found {}", where_searched(remotes)))?
     } else {
         all.first().unwrap()
     };
     let mut cfg = DeviceConfig::new(&info.serial, freq_hz + lo_offset_hz, rate_hz);
     cfg.gain = gain_db;
-    cfg.ppm = config::load().unwrap_or_default().ppm_for(&info.serial);
+    let cal = config::load().unwrap_or_default();
+    cfg.ppm = cal.ppm_for(&info.serial);
+    cfg.bias_t = cal.bias_t_for(&info.serial);
+    cfg.remote = info.remote.clone();
+    cfg.rf_notch = notches.rf;
+    cfg.dab_notch = notches.dab;
     // With the LO parked off-centre the analog IF has to reach past the
     // offset, or the tuner filters away the half of the span it was moved
     // toward. Zero asks the driver for its widest.
@@ -1241,7 +1333,53 @@ fn open_sdr(
     };
     cfg.role = Role::Sdr;
     let dev = device::open(&cfg)?;
-    Ok((dev, info.serial.clone(), info.tuner.clone()))
+    let host = info.remote.as_deref().map(|r| device::remote_host(r).to_string());
+    Ok((dev, info.serial.clone(), info.tuner.clone(), host))
+}
+
+/// Spans an RTL-SDR offers: what the page has always offered.
+const RTL_SPANS_HZ: [f64; 6] = [250_000.0, 1_024_000.0, 1_536_000.0, 2_048_000.0, 2_400_000.0, 3_200_000.0];
+
+/// Spans an SDRplay offers. Its narrow spans are the rates it decimates to in
+/// hardware (250k, 500k, 1M) rather than the RTL's, which it does not have.
+/// The top is set by this process, not by the RSP, which goes to 10 MS/s:
+/// the worker is one thread carrying the spectrum and every channel chain,
+/// and 6 MS/s is already twice the widest span it had been run at.
+const SDRPLAY_SPANS_HZ: [f64; 9] = [
+    250_000.0, 500_000.0, 1_000_000.0, 2_000_000.0, 2_048_000.0, 3_000_000.0, 4_000_000.0,
+    5_000_000.0, 6_000_000.0,
+];
+
+fn span_rates(caps: &scannerd_radio::Capabilities) -> Vec<f64> {
+    let offered: &[f64] = if matches!(caps.gain, scannerd_radio::GainControl::Sdrplay { .. }) {
+        &SDRPLAY_SPANS_HZ
+    } else {
+        &RTL_SPANS_HZ
+    };
+    offered
+        .iter()
+        .copied()
+        .filter(|&r| caps.rate_ranges.is_empty() || caps.supports_rate(r))
+        .collect()
+}
+
+/// Tune requests are held to 1 MHz – 2.2 GHz, a sanity bound that does not
+/// pretend to know the tuner. A radio that reaches lower — an RSP goes down
+/// to 1 kHz, which is all of LF and MF — lowers the floor to its own.
+fn tune_bounds(caps: &scannerd_radio::Capabilities) -> (f64, f64) {
+    let lo = caps.freq_range.map_or(1e6, |(lo, _)| lo.clamp(1e3, 1e6));
+    (lo, 2.2e9)
+}
+
+/// The status fields that describe the hardware rather than its tuning.
+/// Gain range and the front-end switches follow with the device's first
+/// state report.
+fn describe_radio(s: &mut SdrStatus, dev: &Device, host: Option<String>) {
+    s.driver = dev.caps.driver.clone();
+    s.host = host;
+    s.rates_hz = span_rates(&dev.caps);
+    s.rate_ranges = dev.caps.rate_ranges.clone();
+    (s.tune_min_hz, s.tune_max_hz) = tune_bounds(&dev.caps);
 }
 
 pub fn spawn(
@@ -2628,18 +2766,25 @@ fn run_sdr(
     let mut clip_guard_on = cfg.clip_guard;
     let mut tuner_agc_on = cfg.tuner_agc;
     let mut inspect_hz = current_freq;
+    let remotes = cfg.remotes.clone();
+    let mut notches = Notches {
+        rf: cfg.rf_notch,
+        dab: cfg.dab_notch,
+    };
 
     // Keep trying rather than dying on the spot. The dongle is routinely busy
     // for a moment after a previous run exits, and a server that gives up
     // there stays dead until someone notices and restarts it — with no radio,
     // the recovery loop below never gets to run at all.
-    let (dev, serial, tuner) = loop {
+    let (dev, serial, tuner, host) = loop {
         match open_sdr(
+            &remotes,
             current_serial.as_deref(),
             current_freq,
             current_rate,
             current_gain,
             lo_offset_for(current_rate, lo_offset, current_mode),
+            notches,
         ) {
             Ok(opened) => break opened,
             Err(e) => {
@@ -2707,7 +2852,9 @@ fn run_sdr(
             pager_live_hz: None,
             scan: None,
             flex_diag: None,
+            ..SdrStatus::default()
         };
+        describe_radio(&mut s, &dev, host);
     }
 
     let _ = dev.cmd.send(Cmd::ClipGuard(clip_guard_on));
@@ -3284,6 +3431,45 @@ fn run_sdr(
                     s.tuner_agc = on;
                     let _ = events.send(SdrEvent::Status(s.clone()));
                 }
+                SdrCmd::BiasT(on) => {
+                    // Persist against this radio's serial: whether the port
+                    // needs power is a fact about the feedline on it, like
+                    // its ppm is about its crystal. Saved while the radio is
+                    // offline too, so the next open applies it.
+                    if let Some(serial) = current_serial.clone() {
+                        let mut cfg = config::load().unwrap_or_default();
+                        let tuner = status.lock().unwrap().tuner.clone();
+                        cfg.entry(&serial, &tuner).bias_t = on;
+                        if let Err(e) = config::save(&cfg) {
+                            eprintln!("could not save bias-T: {e:#}");
+                        }
+                    }
+                    if let Some(ref dev) = dev_opt.as_ref().filter(|d| d.caps.bias_t) {
+                        let _ = dev.cmd.send(Cmd::BiasT(on));
+                        // Shown at once; the device's readback confirms it.
+                        let mut s = status.lock().unwrap();
+                        s.bias_t = Some(on);
+                        let _ = events.send(SdrEvent::Status(s.clone()));
+                    }
+                }
+                SdrCmd::RfNotch(on) => {
+                    notches.rf = Some(on);
+                    if let Some(ref dev) = dev_opt.as_ref().filter(|d| d.caps.rf_notch) {
+                        let _ = dev.cmd.send(Cmd::RfNotch(on));
+                        let mut s = status.lock().unwrap();
+                        s.rf_notch = Some(on);
+                        let _ = events.send(SdrEvent::Status(s.clone()));
+                    }
+                }
+                SdrCmd::DabNotch(on) => {
+                    notches.dab = Some(on);
+                    if let Some(ref dev) = dev_opt.as_ref().filter(|d| d.caps.dab_notch) {
+                        let _ = dev.cmd.send(Cmd::DabNotch(on));
+                        let mut s = status.lock().unwrap();
+                        s.dab_notch = Some(on);
+                        let _ = events.send(SdrEvent::Status(s.clone()));
+                    }
+                }
                 SdrCmd::LoOffset(on) => {
                     if on != lo_offset {
                         lo_offset = on;
@@ -3306,14 +3492,20 @@ fn run_sdr(
                         rx_opt = None;
                         dev_opt = None;
                         match open_sdr(
+                            &remotes,
                             Some(&new_serial),
                             current_freq,
                             current_rate,
                             current_gain,
                             lo_offset_for(current_rate, lo_offset, current_mode),
+                            notches,
                         )
                         {
-                            Ok((new_dev, s_serial, s_tuner)) => {
+                            Ok((new_dev, s_serial, s_tuner, s_host)) => {
+                                // The new radio starts from the operator's
+                                // front-end choices, as a reopen does.
+                                let _ = new_dev.cmd.send(Cmd::ClipGuard(clip_guard_on));
+                                let _ = new_dev.cmd.send(Cmd::TunerAgc(tuner_agc_on));
                                 current_serial = Some(s_serial.clone());
                                 // The new device may have clamped the rate;
                                 // rebuild the inspect path for what it
@@ -3343,6 +3535,9 @@ fn run_sdr(
                                     current_mode,
                                 );
                                 let mut s = status.lock().unwrap();
+                                if let Some(ref d) = dev_opt {
+                                    describe_radio(&mut s, d, s_host);
+                                }
                                 s.serial = s_serial;
                                 s.tuner = s_tuner;
                                 s.ppm = ppm;
@@ -3447,13 +3642,15 @@ fn run_sdr(
             rx_opt = None;
             dev_opt = None;
             match open_sdr(
-            current_serial.as_deref(),
-            current_freq,
-            current_rate,
-            current_gain,
-            lo_offset_for(current_rate, lo_offset, current_mode),
-        ) {
-                Ok((new_dev, s_serial, s_tuner)) => {
+                &remotes,
+                current_serial.as_deref(),
+                current_freq,
+                current_rate,
+                current_gain,
+                lo_offset_for(current_rate, lo_offset, current_mode),
+                notches,
+            ) {
+                Ok((new_dev, s_serial, s_tuner, s_host)) => {
                     let _ = new_dev.cmd.send(Cmd::ClipGuard(clip_guard_on));
                     let _ = new_dev.cmd.send(Cmd::TunerAgc(tuner_agc_on));
                     // open() tunes as it goes, so the reopened device is
@@ -3498,10 +3695,21 @@ fn run_sdr(
                         );
                     }
                     let mut s = status.lock().unwrap();
+                    if let Some(ref d) = dev_opt {
+                        describe_radio(&mut s, d, s_host);
+                    }
                     s.serial = s_serial;
                     s.tuner = s_tuner;
                     s.ppm = ppm;
                     s.rate_hz = current_rate;
+                    // It reopened where it was asked to be, which is not
+                    // where the status last said if a tune came in while it
+                    // was down — a radio across a network is down more often
+                    // than one on USB.
+                    let shown = display_rate_for(current_rate, lo_offset, current_mode);
+                    s.freq_hz = current_freq;
+                    s.min_freq_hz = current_freq - shown / 2.0;
+                    s.max_freq_hz = current_freq + shown / 2.0;
                     if !deliberate {
                         s.error = Some(if !wedged {
                             "recovering from a USB fault…".into()
@@ -3584,6 +3792,20 @@ fn run_sdr(
                 scannerd_radio::Event::State(state) => {
                     if let Ok(mut st) = status.lock() {
                         st.gain_now_db = state.overall_gain;
+                        // The gain range follows the band on an SDRplay, and
+                        // the switches are what the driver read back: worth
+                        // a status frame of their own when they move.
+                        let range = state.gain_range.unwrap_or((st.gain_min_db, st.gain_max_db));
+                        let moved = range != (st.gain_min_db, st.gain_max_db)
+                            || (state.bias_t, state.rf_notch, state.dab_notch)
+                                != (st.bias_t, st.rf_notch, st.dab_notch);
+                        (st.gain_min_db, st.gain_max_db) = range;
+                        st.bias_t = state.bias_t;
+                        st.rf_notch = state.rf_notch;
+                        st.dab_notch = state.dab_notch;
+                        if moved {
+                            let _ = events.send(SdrEvent::Status(st.clone()));
+                        }
                     }
                     // The driver reports where the *local oscillator* is. With
                     // the LO parked off-centre that is not the middle of the

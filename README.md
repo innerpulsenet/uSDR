@@ -1,7 +1,8 @@
 # uSDR
 
-A single-radio spectrum inspector for RTL-SDR hardware: one dongle, one web
-page. It is the SDR mode of [`scannerd`](#provenance) lifted out on its own —
+A single-radio spectrum inspector for RTL-SDR hardware, and for an SDRplay
+receiver on another machine (see [Remote SDRplay](#remote-sdrplay-soapyremote)):
+one radio, one web page. It is the SDR mode of [`scannerd`](#provenance) lifted out on its own —
 a live FFT and waterfall over the tuned span, plus a narrowband inspect chain
 that runs the same digital classifiers and protocol decoders the full scanner
 uses.
@@ -247,25 +248,131 @@ Then open <http://127.0.0.1:8073>.
 | Flag | Meaning |
 |---|---|
 | `--bind` | Listen address, default `127.0.0.1:8073` |
-| `--serial` | Dongle serial; defaults to the first one found |
-| `--freq` | Centre frequency in MHz |
-| `--rate` | Span in MHz (0.2 – 3.2) |
+| `--serial` | Radio serial; defaults to the first one found, USB before remote |
+| `--remote` | SoapyRemote host with an SDRplay receiver (`mario`, `mario:55132`); repeatable, saved to the settings file |
+| `--freq` | Center frequency in MHz |
+| `--rate` | Span in MHz (0.2 – 3.2 on an RTL-SDR, to 6 on an SDRplay) |
 | `--gain` | Tuner gain in dB; omit for automatic gain (a clip-guarded loop, see below) |
 | `--config` | Settings file, default `~/.config/usdr/usdr.toml` |
-| `--devices` | List visible dongles and exit |
+| `--devices` | List visible radios, local and remote, and exit |
 
 Tuning, span, gain and device changes made in the browser are written back to
 the settings file, so a restart comes back up where you left off. Measured
-frequency error per dongle lives separately in `~/.config/usdr/devices.toml`.
+frequency error per dongle, and whether its feedline needs the bias-T, live
+separately in `~/.config/usdr/devices.toml`. A manual gain is kept per radio:
+switching radios parks one radio's gain and takes up the other's, because a
+gain in dB does not mean the same thing on two different front ends.
 
 The server has no authentication. It binds to localhost by default and should
 not be exposed to a network you do not control.
+
+## Remote SDRplay (SoapyRemote)
+
+The RSP1A on MARIO is used from here over the network with
+[SoapyRemote](https://github.com/pothosware/SoapyRemote): MARIO runs
+`SoapySDRServer`, and this machine opens `driver=remote`, which proxies the
+whole Soapy API — both gain elements, the notch and bias-T settings, the
+sample rates and the stream. Nothing above `crates/radio` knows the radio is
+remote beyond the host name. The RSP's 16-bit samples go over the wire as
+they are (`CS16`, 8 MB/s at 2 MS/s) and become floats here, so none of the
+14-bit ADC's range is lost on the way. The stream runs over TCP: SoapyRemote's
+UDP default has no retransmission, and over the tailnet's 1280-byte MTU each
+default-sized datagram is split in two, doubling the odds of a hole.
+
+```bash
+./target/release/usdr --remote mario
+```
+
+`--remote` is saved, so later runs find the RSP on their own. With no RTL-SDR
+plugged in it is the radio the server opens; with one, pick it in the
+Advanced drawer's device list, where it shows as `RSP1A @ mario`. Only
+SDRplay receivers are looked for on a remote host. An RTL-SDR's I2C faults
+show up only on the stderr of the process that owns it (see
+[`i2c wr failed=-9`](#i2c-wr-failed-9-and-tuning-that-does-not-take)), and
+across the network that process is the server.
+
+### The server on MARIO
+
+Debian's `soapyremote-server` package with a drop-in,
+`/etc/systemd/system/soapyremote-server.service.d/override.conf`. SoapyRemote
+has no authentication, so the drop-in is the access control:
+
+- It binds to MARIO's Tailscale address only (`100.99.134.33:55132`), and the
+  unit's IP filter (`IPAddressDeny=any`, `IPAddressAllow=localhost
+  100.114.126.106`) admits SCRIBE and nothing else. Add a client by widening
+  `IPAddressAllow`. The filter also blocks the server's SSDP announcements,
+  which is why its journal logs `sendto … Operation not permitted`: the
+  server is not advertised on the LAN.
+- It runs as an unprivileged `soapyremote` system user with
+  `DevicePolicy=closed`, so it can open no device node at all. The SDRplay
+  API client talks to `sdrplay_apiService`, which owns the USB side, so the
+  RSP works, and the three RTL-SDR dongles `scannerd` uses on the same host
+  are out of reach of anything on the network. The user is static rather than
+  `DynamicUser=` because `SoapySDRServer` exits when it cannot reach D-Bus for
+  Avahi, and MARIO has no `nss-systemd` to resolve a dynamic user for D-Bus.
+
+```bash
+ssh mario systemctl status soapyremote-server
+```
+
+```bash
+SoapySDRUtil --find="driver=remote,remote=tcp://mario:55132,remote:driver=sdrplay"
+```
+
+### What changes with an RSP
+
+**Gain.** The RSP has two *reduction* controls: an IF stage, 20–59 dB and
+exact, and an LNA state whose reduction depends on the band. SoapySDRPlay3's
+own "overall gain" sums the two raw numbers and calls larger *less* gain, so
+the radio layer builds its own scale instead: decibels above the deepest
+reduction it uses, so higher is more gain, as on the RTL. The RF GAIN fader's
+range comes from the radio and follows the band (0–96 dB at 100 MHz, 0–58 dB
+at 460 MHz). The first 20 dB of reduction comes off the IF stage, which costs
+no noise figure. Past that the LNA steps in, because a signal strong enough
+to need more is strong enough to be driving the LNA toward overload. Once the
+LNA has nothing left, the IF takes the rest. Automatic gain starts there,
+with the LNA wide open, rather than at 40% of the range: on the RSP's scale
+that is a deep LNA state, where SDRplay measures a 40–50 dB noise figure.
+
+The LNA reductions are SDRplay's nominal per-band values, cross-checked
+against the gain SDRplay measured for each LNA state in its RSP1A technical
+information. Where the two disagree about a state (the 420–1000 MHz band past
+state 3, the top state at 60–420 MHz, and the top two above 1 GHz), the state
+is not used, so those bands reach less deep, never wrongly. Like librtlsdr's
+R820T table the scale is nominal: measured steps differ by a few dB. A
+crossing into another band rewrites the gain for the new band's table.
+Another SDRplay model, with no table here, moves only its IF stage.
+
+**IF AGC.** The "tuner AGC" switch becomes `IF AGC` on an RSP: automatic gain
+handed to the RSP's own IF loop, which holds the ADC at its -30 dBFS setpoint,
+with the LNA state left where the gain put it.
+
+**Bias-T, AM/FM notch, DAB notch.** In the Advanced drawer, shown only for a
+radio that has them, and read back from the driver rather than echoed. Bias-T
+is saved per radio in `devices.toml`, because it belongs to the feedline: on
+MARIO's it powers an inline preamp, without which the receiver is deaf, so it
+is on for the RSP1A. A radio with no entry opens with it off.
+
+**Spans** come from the radio: 250 kHz, 500 kHz, 1 MHz (the rates the RSP
+decimates to in hardware) and 2–6 MHz. The RSP goes to 10 MS/s. The 6 MHz
+ceiling comes from this server, whose worker is one thread carrying the
+spectrum and every channel chain, and 6 MS/s is already twice the widest span
+it had been run at. The analog filter for a whole span is the RSP's widest
+that fits under it (1.536 MHz at 2.048 MS/s). Tuning reaches down to the
+RSP's 1 kHz floor, below the 1 MHz bound kept for other radios.
+
+**Blocks.** SoapySDRPlay3 and SoapyRemote hand over about 1000 samples per
+read. The radio thread gathers them into 20 ms deliveries, matching what the
+RTL path gets from its USB buffer size, so the 32-deep subscriber queues keep
+their 640 ms of slack. A driver overflow, where samples were lost before they
+reached this process, starts a new epoch and counts as a dropped block. It is
+no longer one of the three read errors that reopen the device.
 
 ## HTTP API
 
 | Route | Purpose |
 |---|---|
-| `GET /api/devices` | Dongles the driver can see, and which one is in use |
+| `GET /api/devices` | Radios the drivers can see (with `host` for a remote one), and which one is in use |
 | `GET /api/sdr/status` | Current tuning, span, gain, and sample-loss counters (`droppedBlocks`, `laggedBlocks`, plus `lostSamples`/`gapEvents` from the block timeline metadata) |
 | `GET /api/sdr/modes` | Every accepted mode with label, capability (audio/decode), bandwidth and scope kind |
 | `POST /api/sdr/tune` | `{"freq_hz": …}` — retune the span |
@@ -275,7 +382,7 @@ not be exposed to a network you do not control.
 | `POST /api/sdr/mode` | `{"mode": "nfm" \| "am" \| "wfm" \| "p25" \| "dmr" \| "nxdn" \| "packet" \| "pager" \| "flex" \| "auto" \| "scan"}` |
 | `POST /api/sdr/scan/config` | `{"start_hz": …, "stop_hz": …, "modes": ["am","nfm","p25","dmr"], "threshold_db": …, "resume_delay_s": …}` — voice-scan configuration |
 | `POST /api/sdr/scan/control` | `{"action": "pause" \| "resume" \| "skip" \| "forget"}` |
-| `POST /api/sdr/frontend` | `{"lo_offset": bool, "clip_guard": bool}` |
+| `POST /api/sdr/frontend` | `{"lo_offset": bool, "clip_guard": bool, "tuner_agc": bool}`, and on an SDRplay `"bias_t"`, `"rf_notch"`, `"dab_notch"` |
 | `POST /api/sdr/zoom` | `{"zoom": 1..32}` — display magnification |
 | `POST /api/sdr/ppm` | `{"ppm": …}` — crystal correction |
 | `POST /api/sdr/calibrate` | Derive ppm from the tuned reference carrier |
@@ -514,6 +621,24 @@ Not in this first version: following a trunked control channel's voice grants
 as a scan mode, and a manual per-channel lockout list.
 
 ## Troubleshooting
+
+### `Init() failed: sdrplay_api_Fail`, and the RSP never streams
+
+The SDRplay API service on MARIO is crashing as streaming starts: `journalctl
+-k` on MARIO shows a `sdrplay_apiServ … segfault` for each attempt, with an
+`xhci_hcd … TRB DMA ptr not part of current TD` error from the VM's emulated
+USB controller at the same moment. Enumeration, gain, settings and tuning all
+still work, because none of them touch the stream; `Init()` is the first call
+that does. SoapySDRPlay3 then throws while releasing the device, which aborts
+`SoapySDRServer`, and systemd restarts it five seconds later. Here that reads
+as `radio offline: no radio found on USB or on mario` between reopens.
+
+It is not the network: a plain `SoapySDRUtil --args=driver=sdrplay --rate=2e6`
+on MARIO fails the same way. Restarting `sdrplay.service` and a guest-side
+`usbreset 1df7:3000` did not clear it. It began on 2026-10-31, and the RSP
+streamed in this VM in August and September. The fix is on the hardware side:
+replug or power-cycle the RSP, or look at the hypervisor's USB passthrough for
+it.
 
 ### `i2c wr failed=-9`, and tuning that does not take
 

@@ -9,8 +9,8 @@ pub mod driver_log;
 pub mod fanout;
 
 pub use device::{
-    Capabilities, Cmd, Device, DeviceConfig, DeviceInfo, Event, GainControl, Role, State, cover_hz,
-    cover_hz_offset, enumerate, open,
+    Capabilities, Cmd, Device, DeviceConfig, DeviceInfo, Event, GainControl, REMOTE_PORT, Role,
+    State, cover_hz, cover_hz_offset, enumerate, open, remote_host, remote_url,
 };
 pub use fanout::{ContinuityTracker, Fanout, GapReport, IqBlock};
 

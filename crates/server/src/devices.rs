@@ -3,14 +3,15 @@
 //! Real TOML through serde, deliberately: hfscan hand-parsed its config and
 //! ended up understanding exactly two keys, which is a wart worth not
 //! inheriting. This file holds only what must be *measured* rather than chosen —
-//! frequency error and which feedline a dongle is on. Systems, channels and
-//! talkgroups are a separate concern and get their own file.
+//! frequency error and which feedline a dongle is on, and whether that
+//! feedline needs the bias-T. Systems, channels and talkgroups are a separate
+//! concern and get their own file.
 //!
 //! Copied from `scannerd-store` so this tool does not inherit that crate's
-//! SQLite and Opus dependencies. Kept verbatim apart from the config path, so
-//! re-syncing it upstream stays a straight copy — which is why the
-//! calibration-writing half is allowed to sit here unused: the inspector only
-//! ever reads a ppm value.
+//! SQLite and Opus dependencies. Kept verbatim apart from the config path and
+//! the `bias_t` field, which scannerd has no use for — so re-syncing it
+//! upstream is a straight copy plus that one field, and the
+//! calibration-writing half is allowed to sit here unused.
 #![allow(dead_code)]
 
 use anyhow::{Context, Result};
@@ -35,6 +36,10 @@ pub struct DeviceCal {
     /// Group label shared by dongles found to be on the same feedline.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub antenna: Option<String>,
+    /// Power the antenna port: the feedline has a preamp or active antenna
+    /// that runs on it. uSDR only; see the module notes.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub bias_t: bool,
 }
 
 impl DeviceCal {
@@ -44,6 +49,7 @@ impl DeviceCal {
             tuner: tuner.into(),
             ppm: 0.0,
             antenna: None,
+            bias_t: false,
         }
     }
 }
@@ -91,6 +97,14 @@ impl Config {
             .iter()
             .find(|d| d.serial == serial)
             .map_or(0.0, |d| d.ppm)
+    }
+
+    /// Whether this device's feedline wants the bias-T. Off when unknown.
+    pub fn bias_t_for(&self, serial: &str) -> bool {
+        self.devices
+            .iter()
+            .find(|d| d.serial == serial)
+            .is_some_and(|d| d.bias_t)
     }
 }
 
