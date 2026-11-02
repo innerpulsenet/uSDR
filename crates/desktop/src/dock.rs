@@ -16,10 +16,13 @@ fn mono(t: impl Into<String>, c: egui::Color32) -> RichText {
 pub fn dock(app: &mut App, ui: &mut Ui) {
     // The scope: always in view beside the logs.
     if app.prefs.show_scope {
+        // The logs keep at least 360 px beside the scope, so their tabs
+        // never run under its title.
+        let scope_max = (ui.available_width() - 360.0).clamp(240.0, 800.0);
         let resp = egui::Panel::right("dock-scope")
             .resizable(true)
-            .default_size(app.prefs.scope_width)
-            .size_range(300.0..=800.0)
+            .default_size(app.prefs.scope_width.min(scope_max))
+            .size_range(240.0..=scope_max)
             .frame(egui::Frame::new().inner_margin(egui::Margin { left: 10, right: 0, top: 0, bottom: 0 }))
             .show(ui, |ui| scope(app, ui));
         app.prefs.scope_width = resp.response.rect.width();
@@ -65,10 +68,13 @@ fn decodes(app: &mut App, ui: &mut Ui) {
     // Wrapped rather than split left and right, so a narrow dock moves the
     // keys to a second line instead of drawing them over the chips.
     ui.horizontal_wrapped(|ui| {
-        ui.add(egui::TextEdit::singleline(&mut app.decode_filter).hint_text("filter: protocol, kind or text").desired_width(150.0));
+        ui.add(egui::TextEdit::singleline(&mut app.decode_filter).hint_text("filter decodes").desired_width(150.0))
+            .on_hover_text("Protocol, kind or any text in the summary");
+        ui.spacing_mut().item_spacing.x = 3.0;
         for chip in ["ALL", "FLEX", "POCSAG", "APRS", "P25", "DMR", "NXDN"] {
             let on = if chip == "ALL" { app.decode_filter.is_empty() } else { app.decode_filter.eq_ignore_ascii_case(chip) };
-            if ui.add(egui::Button::selectable(on, RichText::new(chip).font(theme::mono(10.5)))).clicked() {
+            let tally = if chip == "ALL" { theme::AMBER } else { widgets::protocol_color(chip) };
+            if widgets::chip_key(ui, chip, on, tally).clicked() {
                 app.decode_filter = if chip == "ALL" { String::new() } else { chip.to_string() };
             }
         }
@@ -538,7 +544,8 @@ fn scan(app: &mut App, ui: &mut Ui) {
     });
     ui.add_space(4.0);
     ui.horizontal_top(|ui| {
-        ui.vertical(|ui| {
+        // The form scrolls, so a short dock never hides START.
+        egui::ScrollArea::vertical().id_salt("scanform-scroll").max_width(380.0).auto_shrink([true, false]).show(ui, |ui| ui.vertical(|ui| {
             ui.set_width(360.0);
             let f = &mut app.scan_form;
             let mut touched = false;
@@ -567,11 +574,22 @@ fn scan(app: &mut App, ui: &mut Ui) {
                     }
                 });
                 ui.end_row();
+                // The house faders, as everywhere else, rather than egui's own sliders.
                 ui.label(mono("SQUELCH", theme::text_3()));
-                touched |= ui.add(egui::Slider::new(&mut f.threshold_db, 4.0..=20.0).step_by(0.5).suffix(" dB")).changed();
+                let mut v = f.threshold_db as f64;
+                let ch = widgets::Fader { value: &mut v, min: 4.0, max: 20.0, step: 0.5, fine: 0.5, label: "", text: |v| format!("{v:.1} dB"), color: theme::OK, enabled: true, ticks: vec![] }.show_compact(ui).0;
+                if ch {
+                    f.threshold_db = v as f32;
+                    touched = true;
+                }
                 ui.end_row();
                 ui.label(mono("RESUME AFTER", theme::text_3()));
-                touched |= ui.add(egui::Slider::new(&mut f.resume_delay_s, 0.5..=30.0).suffix(" s")).changed();
+                let mut v = f.resume_delay_s as f64;
+                let ch = widgets::Fader { value: &mut v, min: 0.5, max: 30.0, step: 0.5, fine: 0.1, label: "", text: |v| format!("{v:.1} s"), color: theme::OK, enabled: true, ticks: vec![] }.show_compact(ui).0;
+                if ch {
+                    f.resume_delay_s = v as f32;
+                    touched = true;
+                }
                 ui.end_row();
                 for (key, label, lo, hi, def) in [
                     ("slots", "PARALLEL", 1.0, 8.0, 4.0),
@@ -617,7 +635,7 @@ fn scan(app: &mut App, ui: &mut Ui) {
                     }
                 }
             });
-        });
+        }));
         ui.separator();
         ui.vertical(|ui| {
             let skips = st.as_ref().map(|s| s.skip_list.clone()).unwrap_or_default();

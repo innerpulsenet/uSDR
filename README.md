@@ -489,7 +489,8 @@ The window is laid out by what each control acts on:
   and the same controls drive B; `M` and `R` mute and record whichever is driven, and `L|R`
   puts A in the left ear and B in the right. Memories sit under it as one-click chips.
 - **The display toolbar**, above the spectrum, holds what the display shows: span and zoom,
-  averaging, holds, spots, the band plan, range, style and the waterfall. HOLD is on the
+  averaging, holds, spots, the band plan, range, style and the waterfall (folded into one
+  DISPLAY menu when the window is narrow). HOLD is on the
   waterfall itself; held, a timeline beside it drags back through the last five minutes.
 - **The right column** is one column: RF gain, front end, the recorder (with the channel's
   level over the last 20 s, so a burst can be seen before it is saved), the P25 key in P25,

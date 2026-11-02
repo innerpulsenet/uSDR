@@ -888,6 +888,8 @@ impl Panafall {
                 let plate = Rect::from_min_max(pos2(label_x - 8.0, r.top() - 4.0), pos2(r.right() + 4.0, r.bottom() + 4.0));
                 painter.rect_filled(plate, CornerRadius::same(5), alpha(theme::surface_1(), 0.92));
                 painter.galley(pos2(label_x, r.center().y - label.size().y / 2.0), label, theme::WARN);
+                // A hairline between where the display is and where the history starts.
+                painter.line_segment([pos2(ends_x - 6.0, r.top()), pos2(ends_x - 6.0, r.bottom())], Stroke::new(1.0, theme::line_2()));
                 painter.galley(pos2(ends_x, r.center().y - ends.size().y / 2.0), ends, theme::text_3());
                 painter.rect_filled(track, CornerRadius::same(3), theme::surface_4());
                 let back = self.hold.as_ref().map_or(0, |h| h.back.min(max_back));

@@ -19,6 +19,9 @@ fn divider(ui: &mut Ui) {
 }
 
 pub fn toolbar(app: &mut App, ui: &mut Ui) {
+    // Under about 900 px the range, style and waterfall menus fold into
+    // one, so the bar never runs wider than the display it sits over.
+    let narrow = ui.available_width() < 900.0;
     ui.horizontal_centered(|ui| {
         ui.spacing_mut().item_spacing.x = 4.0;
         // Span and zoom.
@@ -69,24 +72,33 @@ pub fn toolbar(app: &mut App, ui: &mut Ui) {
         if widgets::chip_key(ui, "BANDS", v.band_plan, theme::OK).on_hover_text("US allocations along the axis; hover for the name").clicked() {
             v.band_plan = !v.band_plan;
         }
-        ui.menu_button(RichText::new(if v.auto_range { "RANGE AUTO" } else { "RANGE" }).font(theme::mono_bold(10.5)), |ui| {
-            ui.set_min_width(260.0);
-            range(app, ui);
-        });
-        divider(ui);
-        let v = &mut app.prefs.view;
-        ui.menu_button(RichText::new(format!("STYLE {}", v.style.label().to_uppercase())).font(theme::mono_bold(10.5)), |ui| {
-            for st in Style::ALL {
-                if ui.selectable_label(v.style == st, st.label()).clicked() {
-                    v.style = st;
-                    v.palette = st.look().palette;
-                }
-            }
-        });
-        ui.menu_button(RichText::new("WATERFALL").font(theme::mono_bold(10.5)), |ui| {
-            ui.set_min_width(280.0);
-            waterfall(app, ui);
-        });
+        if narrow {
+            ui.menu_button(RichText::new("DISPLAY ▾").font(theme::mono_bold(10.5)), |ui| {
+                ui.set_min_width(280.0);
+                ui.label(small("RANGE"));
+                range(app, ui);
+                ui.separator();
+                ui.label(small("STYLE"));
+                style(app, ui);
+                ui.separator();
+                ui.label(small("WATERFALL"));
+                waterfall(app, ui);
+            })
+            .response
+            .on_hover_text("Range, style and waterfall");
+        } else {
+            ui.menu_button(RichText::new(if v.auto_range { "RANGE AUTO" } else { "RANGE" }).font(theme::mono_bold(10.5)), |ui| {
+                ui.set_min_width(260.0);
+                range(app, ui);
+            });
+            divider(ui);
+            let label = format!("STYLE {}", app.prefs.view.style.label().to_uppercase());
+            ui.menu_button(RichText::new(label).font(theme::mono_bold(10.5)), |ui| style(app, ui));
+            ui.menu_button(RichText::new("WATERFALL").font(theme::mono_bold(10.5)), |ui| {
+                ui.set_min_width(280.0);
+                waterfall(app, ui);
+            });
+        }
         // HOLD lives on the waterfall itself, beside the history it holds.
         // Wide windows carry the memories here rather than on a row of their own.
         if app.prefs.show_memories && app.memories_on_toolbar {
@@ -95,6 +107,16 @@ pub fn toolbar(app: &mut App, ui: &mut Ui) {
             crate::bar::memory_chips(app, ui);
         }
     });
+}
+
+fn style(app: &mut App, ui: &mut Ui) {
+    let v = &mut app.prefs.view;
+    for st in Style::ALL {
+        if ui.selectable_label(v.style == st, st.label()).clicked() {
+            v.style = st;
+            v.palette = st.look().palette;
+        }
+    }
 }
 
 fn span_zoom(app: &mut App, ui: &mut Ui) {

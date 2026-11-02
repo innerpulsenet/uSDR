@@ -312,7 +312,7 @@ fn recorder(app: &mut App, ui: &mut Ui) {
     ui.horizontal(|ui| {
         widgets::chip(ui, if receiving { Tone::Live } else { Tone::Idle }, if receiving { "FILLING" } else { "OFF" });
         let head = if !receiving {
-            format!("off in {}", app.status.mode.label())
+            format!("{} keeps no buffer", app.status.mode.label())
         } else {
             format!("{} · {}S/s", crate::tuning::fmt_mhz(app.inspect_hz(), 3), crate::tuning::fmt_short_hz(app.status.inspect_rate_hz))
         };
@@ -388,12 +388,18 @@ fn radio(app: &mut App, ui: &mut Ui) {
     ui.horizontal(|ui| {
         ui.label(small("DEVICE"));
         let cur = app.devices.iter().find(|d| d.serial == s.serial).map(device_label).unwrap_or_else(|| format!("{} · {}", s.serial, s.radio_label()));
-        egui::ComboBox::from_id_salt("device").selected_text(RichText::new(cur).font(theme::mono(11.0))).width(ui.available_width() - 30.0).show_ui(ui, |ui| {
-            for d in app.devices.clone() {
-                if ui.selectable_label(d.serial == s.serial, device_label(&d)).clicked() && d.serial != s.serial {
-                    app.post("/api/sdr/device", json!({ "serial": d.serial }));
+        // The selector gets what the label and the refresh key leave, in a
+        // space of its own: a truncating combo box fills whatever room its
+        // row has, and a row wider than the column shifts every card in it.
+        let w = (ui.available_width() - 34.0).max(100.0);
+        ui.allocate_ui(egui::vec2(w, 24.0), |ui| {
+            egui::ComboBox::from_id_salt("device").selected_text(RichText::new(cur).font(theme::mono(11.0))).width(w).truncate().show_ui(ui, |ui| {
+                for d in app.devices.clone() {
+                    if ui.selectable_label(d.serial == s.serial, device_label(&d)).clicked() && d.serial != s.serial {
+                        app.post("/api/sdr/device", json!({ "serial": d.serial }));
+                    }
                 }
-            }
+            });
         });
         if crate::app::icon_button(ui, "↻", "Look for radios again").clicked()
             && let Some(l) = &app.link

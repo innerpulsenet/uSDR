@@ -1219,7 +1219,7 @@ impl App {
             }
             let a = self.player.reading();
             if a.queue_ms > 0.0 {
-                small(ui, format!("audio {:.0} ms · {:+.0} ppm", a.queue_ms, a.drift_ppm), theme::text_3());
+                small(ui, format!("audio {:.0} ms · clock {:+.0} ppm", a.queue_ms, a.drift_ppm), theme::text_3());
             } else {
                 small(ui, "audio —".into(), theme::text_3());
             }
@@ -1229,7 +1229,7 @@ impl App {
             if self.have_status {
                 let s = &self.status;
                 small(ui, format!("FFT {}", s.fft_size), theme::text_3());
-                small(ui, format!("ppm {:+.2}", s.ppm), theme::text_3());
+                small(ui, format!("crystal {:+.2} ppm", s.ppm), theme::text_3());
                 if s.inspect_rate_hz > 0.0 {
                     small(ui, format!("ch {}S/s", crate::tuning::fmt_short_hz(s.inspect_rate_hz)), theme::text_3());
                 }
@@ -1521,11 +1521,16 @@ impl App {
                 .frame(egui::Frame::new().fill(theme::surface_1()).inner_margin(egui::Margin::symmetric(14, 4)).stroke(Stroke::new(1.0, theme::line())))
                 .show(ui, |ui| crate::bar::memory_row(self, ui));
         }
+        // The display is the instrument: the column and the dock may not
+        // take more than about a third of the width or two fifths of the
+        // height left for it, so a small window still has a waterfall.
+        let side_max = (ui.available_width() * 0.3).clamp(260.0, 440.0);
+        let dock_max = (ui.available_height() * 0.4).clamp(120.0, 600.0);
         if self.prefs.show_side {
             let resp = egui::Panel::right("side")
                 .resizable(true)
-                .default_size(self.prefs.side_width)
-                .size_range(260.0..=440.0)
+                .default_size(self.prefs.side_width.min(side_max))
+                .size_range(260.0..=side_max)
                 .frame(egui::Frame::new().fill(theme::surface_1()).inner_margin(egui::Margin::same(10)))
                 .show(ui, |ui| {
                     theme::paint_weave(ui.painter(), ui.max_rect().expand(10.0));
@@ -1536,8 +1541,8 @@ impl App {
         if self.prefs.show_dock {
             let resp = egui::Panel::bottom("dock")
                 .resizable(true)
-                .default_size(self.prefs.dock_height)
-                .size_range(120.0..=600.0)
+                .default_size(self.prefs.dock_height.min(dock_max))
+                .size_range(120.0..=dock_max)
                 .frame(egui::Frame::new().fill(theme::surface_1()).inner_margin(egui::Margin::symmetric(10, 8)).stroke(Stroke::new(1.0, theme::line())))
                 .show(ui, |ui| crate::dock::dock(self, ui));
             self.prefs.dock_height = resp.response.rect.height();
@@ -1725,6 +1730,9 @@ mod tests {
         let mut h = harness();
         h.state_mut().app.dock_tab = DockTab::Scan;
         h.run_steps(2);
+        // The form scrolls in a short dock.
+        h.get_by_label("Start scan").scroll_to_me();
+        h.run_steps(3);
         h.get_by_label("Start scan").click();
         h.run_steps(2);
         let posts = drain(&h);
@@ -1795,7 +1803,8 @@ mod tests {
         h.run_steps(3);
         // B's modes are the listener's five; P25 is not among them.
         let role = egui::accesskit::Role::CheckBox;
-        assert!(h.query_by_role_and_label(role, "P25").is_none());
+        // (The one P25 key left is the decode log's filter.)
+        assert_eq!(h.query_all_by_role_and_label(role, "P25").count(), 1);
         h.get_by_role_and_label(role, "AM").click();
         h.run_steps(2);
         assert!(drain(&h).contains(&("/api/sdr/rx2".into(), json!({ "freq_hz": 146.1e6, "mode": "am" }))));
@@ -1867,9 +1876,10 @@ mod tests {
             h.run_steps(1);
             std::thread::sleep(Duration::from_millis(15));
         }
+        // Sent once it settled (a window steady from its first frame sends
+        // it during the harness's own start), and not again while it stays.
         let posts = drain(&h);
-        let bins: Vec<&Value> = posts.iter().filter(|(p, _)| p == "/api/sdr/display").map(|(_, b)| b).collect();
-        assert_eq!(bins.len(), 1, "{posts:?}");
-        assert!(bins[0]["bins"].as_u64().unwrap() > 500);
+        assert!(!posts.iter().any(|(p, _)| p == "/api/sdr/display"), "sent again: {posts:?}");
+        assert!(h.state().app.display_bins_sent > 500);
     }
 }
