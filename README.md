@@ -13,8 +13,9 @@ since the voice scanner arrived, to sweep a band for voice on its own.
 
 ## What it does
 
-The interface follows IC-7300 grammar — centred display, main dial right,
-S-meter — plus a FlexRadio-style log dock beside the case. There is no Po or
+The interface is laid out like a receiver's front panel — audio, gain and
+front-end switches on the left, the display in the middle, the S-meter, tuning
+and recorder on the right — plus a log dock beside the case. There is no Po or
 SWR: this is RX-only.
 
 - **Spectrum and waterfall** over spans from 200 kHz to 3.2 MHz, using the
@@ -146,22 +147,36 @@ SWR: this is RX-only.
 
   The passband drawn on the spectrum and the audio scope's frequency axis both
   follow the mode's real channel width.
-- **Front panel controls.** One visible control per setting; the face copy is
-  canonical. `MONITOR` on the AF bay is the audio switch and volume is the AF
-  knob. `SQL MARK` on the face draws a spectrum threshold line only; `SCAN SQL`
-  in the scan dock is the scanner gate. The `SPAN` fader is the face span
-  control; the ADC rate `<select>` lives under Advanced. The VFO badge reads
-  `IF` for the channel filter width. The memory row (was
-  band presets) with `M.IN` / `M→V` / `CLR` stores a single RX frequency
-  locally — not TX split. Demod keys (`NFM` `AM` `WFM` `P25` `DMR` `NXDN`)
-  pick the detector; function keys (`PACKET` `PAGER` `FLEX` `AUTO` `SCAN`)
-  pick what the receiver does with it.
+- **Front panel controls.** One visible control per setting, grouped by what
+  it does:
+  - **AF · Audio**: `MONITOR` is the one audio switch, and `VOL` a straight
+    fader (keyboard and scroll wheel work on it too).
+  - **RF · Gain & SQL mark**: the RF gain and SQL mark faders, `AGC`, and the
+    two gain-loop switches, `CLIP GUARD` and `IF AGC` (`TUNER AGC` on an
+    RTL-SDR). `SQL MARK` draws a threshold on the spectrum and the S-meter
+    only; `SCAN SQL` in the scan dock is the scanner gate.
+  - **Front end**: `AM/FM NOTCH`, `DAB NOTCH` and `BIAS-T` where the radio has
+    them (hidden where it does not), `SPUR NOTCH`, and `LO OFFSET`. The VFO
+    bar's `NOTCH` readout lists what is really notched.
+  - **Mode**: `DEMOD` keys (`NFM` `AM` `WFM` `P25` `DMR` `NXDN`) pick the
+    detector; `DECODE · SCAN` keys (`PACKET` `PAGER` `FLEX` `AUTO` `SCAN`)
+    pick what the receiver does with it.
+  - **Memory**: eight channels (frequency and mode), kept in the browser.
+    Click to recall; `STORE` and then a slot, or Shift-click a slot, saves the
+    receive frequency and mode into it.
+  - **Span · Zoom · Tune**: the span and zoom faders, `CENTER` and `ZOOM ±`,
+    and a straight tuning strip — drag the scale, or scroll on it, and it
+    moves one tuning step at a time with nothing coasting; the keys beside it
+    step by one or ten.
+
+  The ADC rate `<select>` lives under Advanced. The VFO badge reads `IF` for
+  the channel filter width.
 - **Listening.** Demodulated audio is streamed to the browser as raw PCM over
-  the same WebSocket and played through Web Audio. Press MONITOR to start it —
-  browsers only allow audio to begin inside a user gesture. The face key keeps
-  its legend and shows state on its LED; it never renames to MUTE, and the AF
-  knob pointer always shows volume. Advanced keeps a LISTEN mirror of the same
-  switch. Analog audio is
+  the same WebSocket and played through Web Audio. Browsers only allow audio
+  to begin inside a user gesture, so until the page has been clicked `MONITOR`
+  says `CLICK TO START` rather than claiming a monitor that cannot be heard;
+  after that it reads `ON` or `MUTED`, and `VOL` always shows the level.
+  Analog audio is
   gated on FM quieting, measured in a 4–8 kHz band of the discriminator
   output: a carrier of about 9 dB or better opens the gate at once, a weaker
   one after 1.5 s, and an empty channel is silent rather than static.
@@ -199,10 +214,23 @@ SWR: this is RX-only.
   and every other end-of-call field the demodulator recovered.
 - **Protocol Decode / FEC panel** showing accepted *and* rejected frame
   attempts, so a heuristic label is never presented as a successful decode.
-- **Rolling 20-second capture** of voice audio, discriminator output, and
-  complex I/Q, downloadable as WAV.
-- **Deterministic replay**: push a saved I/Q WAV back through a fresh
-  classifier and get the same decode events, with no radio attached.
+- **Recorder.** The receiver keeps the last 20 seconds of the selected channel
+  all the time, so a signal that went past can still be saved. `SAVE I/Q`
+  writes the channel's complex baseband in the same format as a Last Heard
+  call's IQ export — raw CS16LE (signed 16-bit I then Q, no header), named
+  `usdr-capture-<time>-<MHz>MHz-<rate>sps-cs16le.iq` — with a `.json` beside it
+  carrying `freqHz`, `iqRateHz`, `iqSamples`, `durationS`, `startedMs`, mode
+  and radio. `SAVE AUDIO` and `SAVE DISC` write the demodulated audio and the
+  discriminator as WAV. What the ring holds depends on the mode, and
+  `GET /api/sdr/modes` says so (`capture`): NFM, PACKET, FLEX and AUTO keep all
+  three; AM, P25, DMR, NXDN and SCAN keep the channel I/Q (their audio is at
+  another rate, and is kept per call in Last Heard); WFM and PAGER keep
+  nothing. The recorder offers only what the current mode can save, and says
+  why when it cannot.
+- **Deterministic replay**: push saved I/Q back through a fresh classifier and
+  get the same decode events, with no radio attached. `LOAD I/Q…` takes a
+  CS16LE `.iq` (with its `.json`, or keeping the `…sps-cs16le.iq` name that
+  carries the rate) or an I/Q WAV.
 
 ### Decoders and classifiers included
 
@@ -728,7 +756,16 @@ they represent, so S1–S9 occupies the first 44% of the bar and the overrange
 the rest. Even spacing would put every label somewhere the needle never agrees
 with.
 
-The colour belongs to the scale, not to the reading: the bar carries the
+The meter is a straight segmented bar rather than a needle: it shows one
+quantity, so it gets one scale. Around the bar it draws only what the receiver
+measured — the peak, the channel's noise floor (the caret under the bar) with
+the gap from it to the signal shaded as the SNR, and the `SQL MARK` on the same
+scale, filled while the level is at or above it. The readout gives the S-unit
+reading on the same law (`S7`, `S9+12`), the level in dBFS, the SNR and floor,
+and how far automatic gain has the front end down from its maximum, from the
+gain the radio reports.
+
+The color belongs to the scale, not to the reading: the bar carries the
 gradient and a mask hides the part not reached. Painting it on the fill instead
 made the red section start partway along whatever the fill happened to be, so a
 mid-scale signal showed half a red bar. Red now begins at S9 and nowhere else —
@@ -736,7 +773,7 @@ nothing below −60 dBFS shows any, and above it the red grows with how far over
 the reading is.
 
 Both readouts are smoothed, faster on the way up than on the way down, so the
-last digit settles without the needle being slow to answer a signal. The peak
+last digit settles without the bar being slow to answer a signal. The peak
 marker is not smoothed: it jumps to a new maximum immediately and decays back,
 which is the whole point of it.
 
@@ -912,7 +949,7 @@ on a dead waterfall (see [Troubleshooting](#troubleshooting)).
 multi-mode original.
 
 The web client keeps the original's classifier, decode-log, and I/Q replay
-JavaScript verbatim, and is otherwise new: the IC-7300-style layout, the
+JavaScript verbatim, and is otherwise new: the transceiver-style layout, the
 digit-tuning readout, the spectrum/waterfall renderers, the audio scope, and a
 trimmed WebSocket client that handles only `hello`, `fft`, `decode`, and
 `status`. The frequency preset buttons the original carried are gone; the

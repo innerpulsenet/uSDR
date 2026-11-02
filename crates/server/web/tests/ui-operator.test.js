@@ -61,20 +61,21 @@ test('runSpurCheck finally writes #keySpurLabel, not key.textContent', () => {
   assert.match(fn, /keyLbl\.textContent|keySpurLabel/);
 });
 
-test('LISTEN / MUTE key initializes with MUTE default in markup and top cluster', () => {
+test('MONITOR key boots in the honest waiting state, not a claimed-on monitor', () => {
   const { markup } = readPage();
   assert.match(markup, /id="btnListen"[^>]*title="[^"]*Mute[^"]*"/);
-  assert.match(markup, /id="listenBtnLabel">MUTE<\/span>/);
+  assert.match(markup, /id="listenBtnLabel">CLICK TO START<\/span>/);
 });
 
-test('startAudio/stopAudio toggle between MUTE and MUTED', () => {
+test('startAudio/stopAudio toggle the MONITOR state between ON and MUTED', () => {
   const { script } = readPage();
   const start = script.indexOf('function startAudio');
   const stop = script.indexOf('function stopAudio', start);
   assert.ok(start !== -1 && stop !== -1, 'startAudio/stopAudio must exist');
   const body = script.slice(start, script.indexOf('function onAudioFrame', stop));
-  assert.match(body, /listenBtnLabel[\s\S]*?['"]MUTE['"]/);
+  assert.match(body, /listenBtnLabel[\s\S]*?['"]ON['"]/);
   assert.match(body, /listenBtnLabel[\s\S]*?['"]MUTED['"]/);
+  assert.match(body, /CLICK TO START/);
 });
 
 test('toggleDockLayout calls resizeSdrCanvases and does not reference undefined resizeAllCanvases', () => {

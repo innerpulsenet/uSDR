@@ -413,7 +413,7 @@ test('scope chrome resets the trigger tag colour on kind change', () => {
 // ---------------------------------------------------------------------------
 // 7. Transceiver deck: Standalone AF Gain knob and RF Gain fader.
 // ---------------------------------------------------------------------------
-test('standalone AF Gain knob syncs volume and readout correctly', () => {
+test('volume fader syncs its value and readout', () => {
   const ctx = buildContext();
   run(ctx, `
     audioOn = true;
@@ -421,16 +421,14 @@ test('standalone AF Gain knob syncs volume and readout correctly', () => {
     syncAfVolUi();
   `);
   const readout = run(ctx, `document.getElementById('deckAfVolReadout').textContent`);
-  assert.ok(readout.includes('75%'), `readout should display 75%: ${readout}`);
-  assert.ok(readout.includes('MON ON'), `readout should indicate monitor on: ${readout}`);
-
-  // Test mute
+  assert.strictEqual(readout, '75%', 'the readout carries the level; the MONITOR key carries the state');
+  assert.strictEqual(String(run(ctx, `document.getElementById('volRange').value`)), '75');
+  // The pointer always shows volume, monitor on or off.
   run(ctx, `
     audioOn = false;
     syncAfVolUi();
   `);
-  const mutedReadout = run(ctx, `document.getElementById('deckAfVolReadout').textContent`);
-  assert.ok(mutedReadout.includes('MON OFF'), `readout should indicate monitor off: ${mutedReadout}`);
+  assert.strictEqual(run(ctx, `document.getElementById('deckAfVolReadout').textContent`), '75%');
 });
 
 test('linear faders for RF Gain, Squelch, SPAN and Zoom sync accurately', () => {
@@ -481,22 +479,61 @@ test('linear faders for RF Gain, Squelch, SPAN and Zoom sync accurately', () => 
   assert.strictEqual(run(ctx, `document.getElementById('faderZoomVal').textContent`), '4.0x');
 });
 
-test('Main VFO flywheel setup generates 72 knurling teeth', () => {
+test('tuning strip steps the receive frequency by the raster', () => {
   const ctx = buildContext();
+  // The boot block has already bound the strip; replay a drag on it.
   run(ctx, `
-    setupVfoFlywheel();
+    sdrInspectHz = 146520000;
+    snapOverrideHz = 5000;
+    tuneStripOffset = 0;
+    var fireStrip = (t, x) => (document.getElementById('tuneStrip')._listeners.get(t) || []).forEach(f => f({ clientX: x, pointerId: 1, shiftKey: false }));
+    fireStrip('pointerdown', 200); fireStrip('pointermove', 172);
   `);
-  const knurls = run(ctx, `document.getElementById('vfoKnurlGroup').children.length`);
-  assert.strictEqual(knurls, 72, 'Main VFO flywheel must have 72 precision knurling teeth');
+  assert.strictEqual(run(ctx, `sdrInspectHz`), 146530000, 'dragging the scale 28 px left tunes up two 5 kHz steps');
+  assert.strictEqual(run(ctx, `tuneStripOffset`), 0, 'whole steps are consumed; no residue');
+  run(ctx, `
+    fireStrip('pointermove', 192);
+  `);
+  assert.strictEqual(run(ctx, `sdrInspectHz`), 146525000, 'dragging 20 px right steps back down one');
+  assert.strictEqual(run(ctx, `tuneStripOffset`), 6, 'the part-step stays on the scale until it is let go');
+});
+
+test('I/Q save: the WAV data chunk is found by walking chunks, not assumed at byte 44', () => {
+  const ctx = buildContext();
+  const r = run(ctx, `
+    const iq = [1, -1, 2, -2, 3, -3];
+    const list = 12;                     // a LIST chunk before data
+    const buf = new ArrayBuffer(12 + 24 + 8 + list + 8 + iq.length * 2);
+    const v = new DataView(buf);
+    const w4 = (o, s) => { for (let i = 0; i < 4; i++) v.setUint8(o + i, s.charCodeAt(i)); };
+    w4(0, 'RIFF'); v.setUint32(4, buf.byteLength - 8, true); w4(8, 'WAVE');
+    w4(12, 'fmt '); v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 2, true);
+    v.setUint32(24, 250000, true); v.setUint16(34, 16, true);
+    w4(36, 'LIST'); v.setUint32(40, list, true);
+    const d = 44 + list;
+    w4(d, 'data'); v.setUint32(d + 4, iq.length * 2, true);
+    iq.forEach((s, i) => v.setInt16(d + 8 + i * 2, s, true));
+    const w = parseWav(buf);
+    JSON.stringify({ rate: w.rate, channels: w.channels, off: w.dataOffset, len: w.dataLength,
+      first: new DataView(buf, w.dataOffset, w.dataLength).getInt16(2, true) });
+  `);
+  assert.deepStrictEqual(JSON.parse(r), { rate: 250000, channels: 2, off: 64, len: 12, first: -1 });
 });
 
 test('LISTEN/MUTE and LO OFFSET buttons and VFO telemetry bar sync correctly', () => {
   const ctx = buildContext();
+  // Before any click the browser has no running audio context: the key must
+  // say so instead of claiming an audible monitor.
+  run(ctx, `syncMonitorUi();`);
+  assert.strictEqual(run(ctx, `document.getElementById('listenBtnLabel').textContent`), 'CLICK TO START');
+  assert.strictEqual(run(ctx, `document.getElementById('btnListen').classList.contains('waiting')`), true);
+
   run(ctx, `
     startAudio();
   `);
-  assert.strictEqual(run(ctx, `document.getElementById('listenBtnLabel').textContent`), 'MUTE');
+  assert.strictEqual(run(ctx, `document.getElementById('listenBtnLabel').textContent`), 'ON');
   assert.strictEqual(run(ctx, `document.getElementById('btnListen').classList.contains('on')`), true);
+  assert.strictEqual(run(ctx, `document.getElementById('btnListen').classList.contains('waiting')`), false);
 
   run(ctx, `
     stopAudio();
@@ -504,10 +541,12 @@ test('LISTEN/MUTE and LO OFFSET buttons and VFO telemetry bar sync correctly', (
   assert.strictEqual(run(ctx, `document.getElementById('listenBtnLabel').textContent`), 'MUTED');
   assert.strictEqual(run(ctx, `document.getElementById('btnListen').classList.contains('on')`), false);
 
+  // The LO OFFSET key is a label around #chkLoOffset: the status frame
+  // ticks the box and the key lights from :checked.
   run(ctx, `
     updateSdrStatus({ lo_offset: true });
   `);
-  assert.strictEqual(run(ctx, `document.getElementById('btnLoOffset').classList.contains('on')`), true);
+  assert.strictEqual(run(ctx, `document.getElementById('chkLoOffset').checked`), true);
 
   run(ctx, `
     updateSdrStatus({ freq_error_hz: 245.0 });
@@ -643,18 +682,34 @@ test('WFM scope defaults to 200 kHz passband and toggles to MPX mode', () => {
   assert.ok(axMpx.includes('64kHz'), `axis should display 64kHz in mpx mode, got ${axMpx}`);
 });
 
-test('Quick Memory matrix and DSP controls exist and handle events', () => {
+test('memory bank: STORE then a slot saves the receive frequency and mode', () => {
   const ctx = buildContext();
+  // The boot block has already wired the deck once.
   run(ctx, `
-    setupRadioDeck();
+    sdrInspectHz = 162550000;
+    sdrMode = 'nfm';
+    document.getElementById('btnMemStore').click();
   `);
-  const qmemButtons = run(ctx, `document.querySelectorAll('.qmem-btn').length`);
-  assert.strictEqual(qmemButtons, 8, 'Must have 8 Quick Memory buttons M1-M8');
+  assert.strictEqual(run(ctx, `memArmed`), true, 'STORE arms the bank');
+  run(ctx, `document.querySelectorAll('.band-btn')[1].click();`);
+  assert.strictEqual(run(ctx, `memArmed`), false, 'storing disarms the bank');
+  assert.strictEqual(run(ctx, `document.querySelectorAll('.band-btn')[1].dataset.freq`), '162550000');
+  assert.strictEqual(run(ctx, `document.querySelectorAll('.band-btn')[1].dataset.mode`), 'nfm');
+  // An unarmed click recalls instead of storing.
+  run(ctx, `document.querySelectorAll('.band-btn')[0].click();`);
+  assert.strictEqual(run(ctx, `document.querySelectorAll('.band-btn')[0].dataset.freq`), '121500000');
+});
 
-  // Check DSP buttons
-  assert.ok(run(ctx, `document.getElementById('btnDspNotch') !== null`), 'btnDspNotch must exist');
-  assert.ok(run(ctx, `document.getElementById('btnDspNr') !== null`), 'btnDspNr must exist');
-  assert.ok(run(ctx, `document.getElementById('btnDspSql') !== null`), 'btnDspSql must exist');
+test('dead DSP keys are gone and the NOTCH readout reports only real notches', () => {
+  const markup = fs.readFileSync(PAGE, 'utf8');
+  for (const id of ['btnDspNotch', 'btnDspNr', 'btnDspSql']) {
+    assert.ok(!markup.includes(`id="${id}"`), `${id} changed only its own label — it must not come back`);
+  }
+  const ctx = buildContext();
+  run(ctx, `updateSdrStatus({ rf_notch: true }); sdrSpurOffsets = [12000, -40000]; updateMeter(null, null, -50, -70, null);`);
+  assert.strictEqual(run(ctx, `document.getElementById('vfoNotchVal').textContent`), 'AM/FM · SPUR 2');
+  run(ctx, `updateSdrStatus({ rf_notch: false }); sdrSpurOffsets = []; updateMeter(null, null, -50, -70, null);`);
+  assert.strictEqual(run(ctx, `document.getElementById('vfoNotchVal').textContent`), 'OFF');
 });
 
 test('NFM, AM, Packet, and Pager support passband and demod scope toggles', () => {
@@ -721,3 +776,18 @@ test('NFM, AM, Packet, and Pager support passband and demod scope toggles', () =
   assert.strictEqual(run(ctx, `document.getElementById('scopeModeTag').textContent`), 'PASSBAND (12.5k) ⇄ DISC');
 });
 
+
+test('bar S-meter: S-unit law, and the floor and SNR span follow the measurement', () => {
+  const ctx = buildContext();
+  assert.strictEqual(run(ctx, `sUnitLabel(-60)`), 'S9');
+  assert.strictEqual(run(ctx, `sUnitLabel(-48)`), 'S9+12');
+  assert.strictEqual(run(ctx, `sUnitLabel(-72)`), 'S7');
+  assert.strictEqual(run(ctx, `sUnitLabel(-120)`), 'S0');
+  assert.strictEqual(run(ctx, `sUnitLabel(null)`), 'S—');
+  // S1 at the left end of the well, S9+60 (0 dBFS) at the right.
+  assert.strictEqual(run(ctx, `meterX(meterFrac(-108))`), 10);
+  assert.strictEqual(run(ctx, `meterX(meterFrac(0))`), 290);
+  run(ctx, `meterPhysics.rawDbfs = null; meterPhysics.floorDbfs = null; updateMeter(null, null, -60, -84, null);`);
+  assert.strictEqual(run(ctx, `document.getElementById('meterSUnit').textContent`), 'S9');
+  assert.match(run(ctx, `document.getElementById('meterNum').textContent`), /^SNR 24\.0 dB · FLOOR -84 dBFS/);
+});

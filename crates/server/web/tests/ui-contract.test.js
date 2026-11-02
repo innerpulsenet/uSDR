@@ -16,7 +16,7 @@
 //      needle code mutates;
 //   5. no CSS rule targeting a canvas applies transform/filter/zoom, which
 //      would break the scan-overlay offset math and blur the pixel mapping;
-//   6. the 16 ids attached at boot without a null guard still exist (those
+//   6. the ids attached at boot without a null guard still exist (those
 //      throw and kill the page when lost).
 //
 // Nothing here inspects pixels. Restyle freely; if one of these fails, the
@@ -143,11 +143,13 @@ function collectUnguardedAttachments(script) {
   return ids;
 }
 
-// The 16 ids whose loss throws at boot and kills the page (plan §2.2).
+// The ids whose loss throws at boot and kills the page (plan §2.2).
 const UNGUARDED_BOOT_IDS = [
   'sdrAgc', 'sdrGainRange', 'sdrRadioSel', 'sdrRateSel', 'sdrMinDb', 'sdrMaxDb',
   'volRange', 'keyPeak', 'keyAuto', 'keyFill', 'keyAvg', 'keyCenter', 'keySpur',
   'snapSel', 'ppmInput', 'scanThreshold',
+  // P25 channel-key form, attached unguarded since the keyed-decryption work.
+  'p25KeyForm', 'p25KeyPanel', 'p25KeyRemove', 'p25KeyType',
 ];
 
 // ---------------------------------------------------------------------------
@@ -436,7 +438,7 @@ test('S-meter geometry constants match the SVG viewBox and the mutated ids exist
   const tags = scanTags(markup);
   const svg = tags.find(t => t.attrs.id === 'smeterSvg');
   assert.ok(svg, '#smeterSvg must exist in the markup');
-  assert.strictEqual(svg.attrs.viewbox, '0 0 340 165',
+  assert.strictEqual(svg.attrs.viewbox, '0 0 300 70',
     'a meter redraw must change the SVG viewBox and the JS constants in the same commit');
 
   const constValue = name => {
@@ -444,13 +446,13 @@ test('S-meter geometry constants match the SVG viewBox and the mutated ids exist
     assert.ok(m, `the inline script must still define const ${name}`);
     return Number(m[1]);
   };
-  assert.strictEqual(constValue('METER_PIVOT_X'), 170, 'METER_PIVOT_X must match the dial pivot x');
-  assert.strictEqual(constValue('METER_PIVOT_Y'), 205, 'METER_PIVOT_Y must match the dial pivot y');
-  assert.strictEqual(constValue('METER_ANGLE_MIN'), -40, 'METER_ANGLE_MIN must match the printed arc');
-  assert.strictEqual(constValue('METER_ANGLE_MAX'), 40, 'METER_ANGLE_MAX must match the printed arc');
+  assert.strictEqual(constValue('METER_X0'), 10, 'METER_X0 must match the bar well start');
+  assert.strictEqual(constValue('METER_X1'), 290, 'METER_X1 must match the bar well end');
+  assert.strictEqual(constValue('S9_DBFS'), -60, 'S9 sits at -60 dBFS so S9+60 is full scale');
 
   const ids = markupIds(tags);
-  for (const id of ['meterNeedleGroup', 'meterPeakNeedle', 'meterAgcNeedle', 'meterMask', 'meterPeak', 'meterNum', 'meterClipLed']) {
+  for (const id of ['meterBarFill', 'meterBarHead', 'meterPeakNeedle', 'meterFloorMark', 'meterSnrSpan',
+    'meterSqlMark', 'meterScaleTicks', 'meterSUnit', 'meterDbfs', 'meterNum', 'meterClipLed']) {
     assert.ok(ids.has(id), `#${id} is mutated by the meter code and must stay in the markup`);
   }
 });
@@ -481,9 +483,9 @@ test('no CSS rule targeting a canvas applies transform/filter/zoom', () => {
 });
 
 // ---------------------------------------------------------------------------
-// 6. The 16 unguarded boot listeners still have their elements (plan §2.2).
+// 6. The unguarded boot listeners still have their elements (plan §2.2).
 // ---------------------------------------------------------------------------
-test('the 16 unguarded boot-listener ids still exist', () => {
+test('the unguarded boot-listener ids still exist', () => {
   const { markup, script } = readPage();
   const ids = markupIds(scanTags(markup));
 
@@ -508,10 +510,6 @@ test('the 16 unguarded boot-listener ids still exist', () => {
 const ARGUMENT_WIRED_IDS = [
   // makeFaderDraggable(trackId, …) — the drag surface for each linear fader.
   'faderRfGainTrack', 'faderSqlTrack', 'faderSpanTrack', 'faderZoomTrack',
-  // makeKnobDraggable(wrapId, …) / setKnobPointer(id, …) — the AF knob.
-  'deckAfVolWrap', 'deckAfVolPointer', 'deckAfVolKnurls',
-  // setAgcArc(id, …) — the illuminated AGC arc inside the S-meter.
-  'meterAgcArc',
   // Dock tab ↔ panel table: [tabId, panelId] pairs wired in a loop.
   'tabClassifier', 'panelClassifier', 'tabDecode', 'panelDecode',
   'tabCalls', 'panelCalls', 'tabScan', 'panelScan',

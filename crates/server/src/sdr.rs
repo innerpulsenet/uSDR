@@ -295,6 +295,18 @@ impl SdrMode {
             bandwidth_hz: self.bandwidth_hz(),
             scope_kind: self.scope_kind(),
             symbol_rate_hz: self.symbol_rate_hz(),
+            capture: match self {
+                // The classifier chain: I/Q, its discriminator and the
+                // monitor audio, all at the channel rate.
+                SdrMode::Nfm | SdrMode::Packet | SdrMode::Flex | SdrMode::Auto => {
+                    &["iq", "voice", "discriminator"]
+                }
+                // Audio at another rate (AM, the vocoders) or none (scan
+                // between locks): the channel I/Q only.
+                SdrMode::Am | SdrMode::P25 | SdrMode::Dmr | SdrMode::Nxdn | SdrMode::Scan => &["iq"],
+                // WFM's I/Q is 256 kHz and unreplayable; PAGER walks a bank.
+                SdrMode::Wfm | SdrMode::Pager => &[],
+            },
         }
     }
 
@@ -332,6 +344,9 @@ pub struct ModeCapabilities {
     /// "symbols", or "mpx".
     pub scope_kind: &'static str,
     pub symbol_rate_hz: f32,
+    /// Which rolling-capture kinds this mode fills ("iq", "voice",
+    /// "discriminator"), so the recorder offers only what it can save.
+    pub capture: &'static [&'static str],
 }
 
 /// One block of demodulated audio on its way to the browser.
@@ -4121,6 +4136,12 @@ fn run_sdr(
                     scope_src.clear();
                     scope_src.extend_from_slice(audio);
                 }
+                // The channel I/Q only: AM audio leaves at its own rate, and
+                // the ring holds every kind at one rate (see CaptureBuffer).
+                {
+                    let empty: &[f32] = &[];
+                    capture.lock().expect("SDR capture").append(inspect_hz, fs_chain, &inspect_iq, empty, empty);
+                }
                 ClassificationResult {
                     active: true,
                     modulation: "AM".into(),
@@ -4967,6 +4988,14 @@ fn run_sdr(
                     }
                     _ => (None, false, false),
                 };
+                // The rolling capture keeps this channel's I/Q, so a call
+                // that went past is in the recorder as well as in Last Heard.
+                // Voice is left out: the vocoders run at 8 kHz, not the
+                // ring's channel rate.
+                {
+                    let empty: &[f32] = &[];
+                    capture.lock().expect("SDR capture").append(inspect_hz, fs_chain, &inspect_iq, empty, empty);
+                }
 
                 // Keep the call's audio so it can be replayed. Started arrives
                 // on the same pass that produced the first audio, so the reset
@@ -5881,6 +5910,12 @@ mod tests {
         }
         assert_eq!(by(SdrMode::Wfm).scope_kind, "mpx");
         assert_eq!(by(SdrMode::Nxdn).bandwidth_hz, NXDN_BANDWIDTH_HZ);
+        // The recorder offers what the ring holds in each mode.
+        assert_eq!(by(SdrMode::Nfm).capture, &["iq", "voice", "discriminator"]);
+        for m in [SdrMode::Am, SdrMode::P25, SdrMode::Dmr, SdrMode::Nxdn, SdrMode::Scan] {
+            assert_eq!(by(m).capture, &["iq"], "{m:?} captures channel I/Q only");
+        }
+        assert!(by(SdrMode::Wfm).capture.is_empty() && by(SdrMode::Pager).capture.is_empty());
     }
 
     #[test]
