@@ -15,6 +15,7 @@ use scannerd_engine::{CallEvent, ToneCode};
 use scannerd_engine::leveler::Leveler;
 use scannerd_engine::noisegate::NoiseGate;
 use scannerd_engine::autonotch::AutoNotch;
+use scannerd_engine::ssb::{SSB_HIGH_HZ, SSB_LOW_HZ, Sideband, SsbDemod};
 use scannerd_engine::nbfm::{Demodulated, NbfmDemod};
 use scannerd_engine::nxdn::{NXDN_BANDWIDTH_HZ, NxdnChannelReceiver, NxdnSpec};
 use scannerd_engine::{ClassificationResult, DecodeEvent, SignalClassifier};
@@ -125,6 +126,14 @@ pub const LO_USABLE_FRACTION: f64 = 0.20;
 pub const ZOOM_MAX: f64 = 32.0;
 const ZOOM_TARGET_BINS: usize = 1024;
 
+/// FFT size for a display `bins` wide at `zoom`: more zoom, more bins, so the
+/// window narrows and resolution improves instead of the same bins being
+/// drawn further apart. A power of two, 256..=8192.
+fn fft_size_for(bins: usize, zoom: f64) -> usize {
+    let want = (bins as f64 * zoom).round().clamp(256.0, 8192.0) as usize;
+    want.next_power_of_two().min(8192)
+}
+
 /// What the inspect chain is being used for. This picks the channel width, the
 /// demodulator, and what gets fed the resulting audio.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize, Default)]
@@ -136,6 +145,11 @@ pub enum SdrMode {
     /// Amplitude modulation: HF airband and broadcast. The classifier's FM
     /// discriminators have nothing to say about an envelope-modulated carrier.
     Am,
+    /// Single sideband voice, upper or lower: HF amateur and utility
+    /// traffic. The suppressed carrier is the tuned frequency; the audio is
+    /// the 300-2800 Hz above it (USB) or below it (LSB).
+    Usb,
+    Lsb,
     /// Broadcast FM, for listening. The classifier is not run: none of what it
     /// looks for exists in a 200 kHz music channel.
     Wfm,
@@ -175,6 +189,9 @@ impl SdrMode {
         match self {
             SdrMode::Nfm => INSPECT_BANDWIDTH_HZ,
             SdrMode::Am => AM_BANDWIDTH_HZ,
+            // The voice passband itself, drawn offset from the carrier
+            // (see passband_offset_hz).
+            SdrMode::Usb | SdrMode::Lsb => SSB_HIGH_HZ - SSB_LOW_HZ,
             // What the mode actually DECODES: the walking bank covers this
             // whole span, so the display should shade it — not the 15 kHz of
             // the (idle) per-channel demod chain.
@@ -245,6 +262,28 @@ impl SdrMode {
         }
     }
 
+    /// Where the passband's center sits relative to the tuned frequency:
+    /// zero for every mode except sideband, whose audio is all on one side
+    /// of the suppressed carrier.
+    pub fn passband_offset_hz(self) -> f32 {
+        let center = (SSB_LOW_HZ + SSB_HIGH_HZ) / 2.0;
+        match self {
+            SdrMode::Usb => center,
+            SdrMode::Lsb => -center,
+            _ => 0.0,
+        }
+    }
+
+    /// Width of the inspect chain's channel filter. Sideband needs both sides
+    /// of the carrier into the demodulator, which picks one; everything
+    /// else filters to the width it displays.
+    fn chain_bandwidth_hz(self) -> f32 {
+        match self {
+            SdrMode::Usb | SdrMode::Lsb => 2.0 * SSB_HIGH_HZ + 400.0,
+            _ => self.bandwidth_hz(),
+        }
+    }
+
     fn target_rate(self) -> f64 {
         match self {
             SdrMode::Wfm => WFM_IF_RATE,
@@ -268,6 +307,8 @@ impl SdrMode {
                 "Narrowband FM plus the full digital classifier (CTCSS/DCS/MDC/POCSAG/FLEX/APRS detection)",
             ),
             SdrMode::Am => ("AM", "voice", "Amplitude modulation: airband and broadcast"),
+            SdrMode::Usb => ("USB", "voice", "Upper sideband voice: HF above 10 MHz, VHF/UHF weak-signal"),
+            SdrMode::Lsb => ("LSB", "voice", "Lower sideband voice: HF below 10 MHz"),
             SdrMode::Wfm => ("WFM", "voice", "Broadcast FM; classifier off"),
             SdrMode::Packet => (
                 "PACKET",
@@ -295,6 +336,7 @@ impl SdrMode {
             bandwidth_hz: self.bandwidth_hz(),
             scope_kind: self.scope_kind(),
             symbol_rate_hz: self.symbol_rate_hz(),
+            passband_offset_hz: self.passband_offset_hz(),
             capture: match self {
                 // The classifier chain: I/Q, its discriminator and the
                 // monitor audio, all at the channel rate.
@@ -303,6 +345,9 @@ impl SdrMode {
                 }
                 // Audio at another rate (AM, the vocoders) or none (scan
                 // between locks): the channel I/Q only.
+                // Sideband audio comes out at the channel rate, so the ring
+                // keeps it with the I/Q.
+                SdrMode::Usb | SdrMode::Lsb => &["iq", "voice"],
                 SdrMode::Am | SdrMode::P25 | SdrMode::Dmr | SdrMode::Nxdn | SdrMode::Scan => &["iq"],
                 // WFM's I/Q is 256 kHz and unreplayable; PAGER walks a bank.
                 SdrMode::Wfm | SdrMode::Pager => &[],
@@ -315,6 +360,8 @@ impl SdrMode {
         &[
             SdrMode::Nfm,
             SdrMode::Am,
+            SdrMode::Usb,
+            SdrMode::Lsb,
             SdrMode::Wfm,
             SdrMode::P25,
             SdrMode::Dmr,
@@ -344,6 +391,8 @@ pub struct ModeCapabilities {
     /// "symbols", or "mpx".
     pub scope_kind: &'static str,
     pub symbol_rate_hz: f32,
+    /// Center of the passband relative to the tuned frequency (sideband).
+    pub passband_offset_hz: f32,
     /// Which rolling-capture kinds this mode fills ("iq", "voice",
     /// "discriminator"), so the recorder offers only what it can save.
     pub capture: &'static [&'static str],
@@ -444,6 +493,25 @@ pub struct SdrStatus {
     pub rf_notch: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dab_notch: Option<bool>,
+    /// SDRplay only: the IF AGC's target level (dBFS) and the RSP's own I/Q
+    /// imbalance correction, as the driver reads them back.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agc_setpoint_dbfs: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub iq_correction: Option<bool>,
+    /// Where the gain is: an SDRplay's LNA and IF gain reductions, dB.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rfgr_db: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ifgr_db: Option<f64>,
+    /// The analog IF filter in front of the ADC, the widths the radio
+    /// offers, and whether it was picked by hand rather than from the span.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub if_bandwidth_hz: Option<f64>,
+    #[serde(default)]
+    pub if_bandwidths_hz: Vec<f64>,
+    #[serde(default)]
+    pub if_bandwidth_manual: bool,
     pub freq_hz: f64,
     pub rate_hz: f64,
     pub gain_db: Option<f64>,
@@ -502,6 +570,10 @@ pub struct SdrStatus {
     /// can draw the passband it is actually using.
     #[serde(default)]
     pub bandwidth_hz: f64,
+    /// Where that passband's center sits from the receive frequency: zero
+    /// except in sideband, whose audio is all on one side of the carrier.
+    #[serde(default)]
+    pub passband_offset_hz: f64,
     /// Receiver-generated spurs being notched, as offsets from the display
     /// centre in Hz.
     #[serde(default)]
@@ -611,6 +683,10 @@ pub enum SdrEvent {
         /// Slowly-decaying max-hold trace, for a "what has been there" line.
         #[serde(default)]
         max_hold: Vec<f32>,
+        /// Strongest segment in each bin over this frame's interval, for a
+        /// waterfall that shows bursts at full level.
+        #[serde(default)]
+        wf_peak: Vec<f32>,
         peak_iq: f32,
         inspect_hz: f64,
         classification: Option<ClassificationResult>,
@@ -726,6 +802,7 @@ pub fn encode_fft_frame(ev: &SdrEvent) -> Option<Vec<u8>> {
         rate_hz,
         pwr,
         max_hold,
+        wf_peak,
         peak_iq,
         inspect_hz,
         classification,
@@ -786,6 +863,14 @@ pub fn encode_fft_frame(ev: &SdrEvent) -> Option<Vec<u8>> {
     }
     // v3 appends the classification block last (see encode_classification).
     encode_classification(&mut buf, classification.as_ref());
+    // v4: an optional per-frame peak array for the waterfall, after
+    // everything a v3 reader knows. A v3 reader stops before it.
+    if !wf_peak.is_empty() {
+        buf.extend_from_slice(&(wf_peak.len() as u32).to_le_bytes());
+        for &v in wf_peak {
+            buf.extend_from_slice(&v.to_le_bytes());
+        }
+    }
     Some(buf)
 }
 
@@ -967,11 +1052,18 @@ enum SdrCmd {
     BiasT(bool),
     RfNotch(bool),
     DabNotch(bool),
+    AgcSetpoint(f64),
+    IqCorrection(bool),
+    /// Analog IF filter width; `None` follows the span again.
+    IfBandwidth(Option<f64>),
     /// Offsets from the display centre, in Hz, that a spur check identified as
     /// generated inside the receiver.
     Spurs(Vec<f64>),
     Ppm(f64),
     Zoom(f64),
+    /// About how many bins the browser's spectrum is wide at 1x zoom, so the
+    /// FFT resolves what the screen can show and no more.
+    DisplayBins(usize),
     /// Display averaging mode for the spectrum (weak-signal aid).
     Avg(AvgMode),
     /// Replace the voice-scan configuration (range, modes, threshold).
@@ -1049,6 +1141,12 @@ impl SdrRuntime {
             .map_err(|e| anyhow::anyhow!("send scan control: {e}"))
     }
 
+    pub fn set_display_bins(&self, bins: usize) -> Result<()> {
+        self.cmd_tx
+            .send(SdrCmd::DisplayBins(bins))
+            .map_err(|e| anyhow::anyhow!("send display bins: {e}"))
+    }
+
     pub fn set_zoom(&self, zoom: f64) -> Result<()> {
         self.cmd_tx
             .send(SdrCmd::Zoom(zoom))
@@ -1103,6 +1201,24 @@ impl SdrRuntime {
         self.cmd_tx
             .send(SdrCmd::DabNotch(on))
             .map_err(|e| anyhow::anyhow!("send DAB notch: {e}"))
+    }
+
+    pub fn set_agc_setpoint(&self, dbfs: f64) -> Result<()> {
+        self.cmd_tx
+            .send(SdrCmd::AgcSetpoint(dbfs))
+            .map_err(|e| anyhow::anyhow!("send AGC setpoint: {e}"))
+    }
+
+    pub fn set_iq_correction(&self, on: bool) -> Result<()> {
+        self.cmd_tx
+            .send(SdrCmd::IqCorrection(on))
+            .map_err(|e| anyhow::anyhow!("send I/Q correction: {e}"))
+    }
+
+    pub fn set_if_bandwidth(&self, hz: Option<f64>) -> Result<()> {
+        self.cmd_tx
+            .send(SdrCmd::IfBandwidth(hz))
+            .map_err(|e| anyhow::anyhow!("send IF filter: {e}"))
     }
 
     pub fn switch_device(&self, serial: String) -> Result<()> {
@@ -1394,6 +1510,7 @@ fn describe_radio(s: &mut SdrStatus, dev: &Device, host: Option<String>) {
     s.host = host;
     s.rates_hz = span_rates(&dev.caps);
     s.rate_ranges = dev.caps.rate_ranges.clone();
+    s.if_bandwidths_hz = dev.caps.if_bandwidths.clone();
     (s.tune_min_hz, s.tune_max_hz) = tune_bounds(&dev.caps);
 }
 
@@ -1450,7 +1567,7 @@ pub fn spawn(
 /// out of alignment and the BCH corrector accepts the debris as new address
 /// words, so it invents pages that were never transmitted.
 fn build_inspect(rate_hz: f64, offset_hz: f64, mode: SdrMode) -> (DecodeChain, SignalClassifier) {
-    let mut chain = DecodeChain::new(rate_hz, mode.bandwidth_hz(), mode.target_rate());
+    let mut chain = DecodeChain::new(rate_hz, mode.chain_bandwidth_hz(), mode.target_rate());
     chain.set_offset(offset_hz);
     let mut classifier = SignalClassifier::new(chain.fs_out());
     if mode == SdrMode::Flex {
@@ -1490,6 +1607,10 @@ enum Demod {
     },
     Am {
         demod: scannerd_engine::am::AmDemod,
+        audio: Vec<f32>,
+    },
+    Ssb {
+        demod: SsbDemod,
         audio: Vec<f32>,
     },
     P25 {
@@ -1592,6 +1713,13 @@ impl Demod {
                 demod: scannerd_engine::am::AmDemod::new(fs_out),
                 audio: Vec::new(),
             },
+            SdrMode::Usb | SdrMode::Lsb => Demod::Ssb {
+                demod: SsbDemod::new(
+                    fs_out,
+                    if mode == SdrMode::Usb { Sideband::Upper } else { Sideband::Lower },
+                ),
+                audio: Vec::new(),
+            },
             SdrMode::Wfm => {
                 let decim = (fs_out / 48_000.0).round().max(1.0) as usize;
                 Demod::Wfm {
@@ -1660,6 +1788,10 @@ impl Demod {
             }
             Demod::Flex { flex } => flex.reset(),
             Demod::Am { demod, audio } => {
+                demod.reset();
+                audio.clear();
+            }
+            Demod::Ssb { demod, audio } => {
                 demod.reset();
                 audio.clear();
             }
@@ -2771,6 +2903,9 @@ fn run_sdr(
     let mut current_gain = cfg.gain_db;
     let mut current_mode = cfg.mode;
     let mut current_zoom = 1.0f64;
+    // Bins at 1x zoom. The browser asks for about one bin per device pixel
+    // of its spectrum (see SdrCmd::DisplayBins); 1024 until it does.
+    let mut display_bins = ZOOM_TARGET_BINS;
     // What the operator asked for versus what the tuner confirmed. A retune
     // can fail — this dongle stalls its I2C bus often enough that it will —
     // and everything that labels or extracts a frequency has to follow the
@@ -2861,6 +2996,7 @@ fn run_sdr(
             tuner_agc: tuner_agc_on,
             zoom: current_zoom,
             bandwidth_hz: f64::from(current_mode.bandwidth_hz()),
+            passband_offset_hz: f64::from(current_mode.passband_offset_hz()),
             spurs_hz: Vec::new(),
             freq_error_hz: None,
             pager_sweep: None,
@@ -2881,6 +3017,10 @@ fn run_sdr(
 
     let mut spectrum = Spectrum::new(fft_size);
     let mut pwr: Vec<f32> = Vec::with_capacity(fft_size);
+    // Per-bin peak of each frame's segments. Always sent: whether the
+    // waterfall paints from it is each browser's own choice (WF PEAK), and
+    // a shared switch would let one viewer turn it off under another.
+    let mut pwr_peak: Vec<f32> = Vec::with_capacity(fft_size);
     let mut smoothed: Vec<f32> = Vec::with_capacity(fft_size);
     // One sorted copy of the displayed spectrum per frame, shared by
     // channel_level, carrier_offset_hz and find_peaks. Each used to clone and
@@ -3250,6 +3390,7 @@ fn run_sdr(
                         let mut s = status.lock().unwrap();
                         s.mode = current_mode;
                         s.bandwidth_hz = f64::from(current_mode.bandwidth_hz());
+                        s.passband_offset_hz = f64::from(current_mode.passband_offset_hz());
                         s.lo_offset_hz = lo_offset_for(current_rate, lo_offset, current_mode);
                         let shown = display_rate_for(current_rate, lo_offset, current_mode);
                         s.min_freq_hz = current_freq - shown / 2.0;
@@ -3373,6 +3514,25 @@ fn run_sdr(
                     s.scan = scanner.as_ref().map(|sc| sc.status(scan_t0.elapsed().as_secs_f64()));
                     let _ = events.send(SdrEvent::Status(s.clone()));
                 }
+                SdrCmd::DisplayBins(bins) => {
+                    // Every viewer shares one FFT, and the last to report
+                    // sets it: so a wide screen may raise it, but a phone
+                    // never takes resolution away from everyone else.
+                    let bins = bins.clamp(ZOOM_TARGET_BINS, 4096).next_power_of_two();
+                    if bins != display_bins {
+                        display_bins = bins;
+                        let want = fft_size_for(display_bins, current_zoom);
+                        if want != fft_size {
+                            fft_size = want;
+                            spectrum = Spectrum::new(fft_size);
+                            pwr = Vec::with_capacity(fft_size);
+                            smoothed = Vec::with_capacity(fft_size);
+                            let mut s = status.lock().unwrap();
+                            s.fft_size = fft_size;
+                            let _ = events.send(SdrEvent::Status(s.clone()));
+                        }
+                    }
+                }
                 SdrCmd::Zoom(z) => {
                     let z = z.clamp(1.0, ZOOM_MAX);
                     if (z - current_zoom).abs() > 0.001 {
@@ -3380,10 +3540,7 @@ fn run_sdr(
                         // More zoom, more bins: the window narrows and the FFT
                         // grows with it, so resolution improves instead of the
                         // same bins being drawn further apart.
-                        let want = (ZOOM_TARGET_BINS as f64 * current_zoom)
-                            .round()
-                            .clamp(256.0, 8192.0) as usize;
-                        let want = want.next_power_of_two().min(8192);
+                        let want = fft_size_for(display_bins, current_zoom);
                         if want != fft_size {
                             fft_size = want;
                             spectrum = Spectrum::new(fft_size);
@@ -3483,6 +3640,23 @@ fn run_sdr(
                         let mut s = status.lock().unwrap();
                         s.dab_notch = Some(on);
                         let _ = events.send(SdrEvent::Status(s.clone()));
+                    }
+                }
+                // Driver settings with no state of their own here: the radio
+                // reads them back and the State event updates the status.
+                SdrCmd::AgcSetpoint(db) => {
+                    if let Some(ref dev) = dev_opt.as_ref().filter(|d| d.caps.agc_setpoint) {
+                        let _ = dev.cmd.send(Cmd::AgcSetpoint(db));
+                    }
+                }
+                SdrCmd::IqCorrection(on) => {
+                    if let Some(ref dev) = dev_opt.as_ref().filter(|d| d.caps.iq_correction) {
+                        let _ = dev.cmd.send(Cmd::IqCorrection(on));
+                    }
+                }
+                SdrCmd::IfBandwidth(hz) => {
+                    if let Some(ref dev) = dev_opt.as_ref() {
+                        let _ = dev.cmd.send(Cmd::IfBandwidth(hz));
                     }
                 }
                 SdrCmd::LoOffset(on) => {
@@ -3813,11 +3987,22 @@ fn run_sdr(
                         let range = state.gain_range.unwrap_or((st.gain_min_db, st.gain_max_db));
                         let moved = range != (st.gain_min_db, st.gain_max_db)
                             || (state.bias_t, state.rf_notch, state.dab_notch)
-                                != (st.bias_t, st.rf_notch, st.dab_notch);
+                                != (st.bias_t, st.rf_notch, st.dab_notch)
+                            || (state.iq_correction, state.bandwidth_manual)
+                                != (st.iq_correction, st.if_bandwidth_manual)
+                            || state.agc_setpoint != st.agc_setpoint_dbfs
+                            || state.bandwidth != st.if_bandwidth_hz
+                            || (state.rfgr, state.ifgr) != (st.rfgr_db, st.ifgr_db);
                         (st.gain_min_db, st.gain_max_db) = range;
                         st.bias_t = state.bias_t;
                         st.rf_notch = state.rf_notch;
                         st.dab_notch = state.dab_notch;
+                        st.agc_setpoint_dbfs = state.agc_setpoint;
+                        st.iq_correction = state.iq_correction;
+                        st.rfgr_db = state.rfgr;
+                        st.ifgr_db = state.ifgr;
+                        st.if_bandwidth_hz = state.bandwidth;
+                        st.if_bandwidth_manual = state.bandwidth_manual;
                         if moved {
                             let _ = events.send(SdrEvent::Status(st.clone()));
                         }
@@ -3975,9 +4160,15 @@ fn run_sdr(
         let frame_quantum = (current_rate / f64::from(DEFAULT_FPS)).round().max(1.0) as u64;
         frame_pending_samples += block.len() as u64;
         let frame_due = frame_pending_samples >= frame_quantum;
-        spectrum.ingest(&clean);
+        // Every sample reaches the display: segments are windowed and
+        // averaged as they arrive (Welch, half-overlapped), so a burst
+        // between two frames is in the next one instead of thrown away. The
+        // cap only bounds a late or slow frame, about 30% over full duty.
+        spectrum.ingest_welch(&clean);
         if frame_due {
-            spectrum.power_dbfs(&[], &mut pwr);
+            let full_duty = (current_rate / f64::from(DEFAULT_FPS) / (fft_size as f64 / 2.0)).ceil() as usize;
+            spectrum.set_max_segments_per_take((full_duty * 13 / 10).max(8));
+            spectrum.take_dbfs(&mut pwr, Some(&mut pwr_peak));
         }
 
         // Process channel for classifier. In Scan the chain is purely
@@ -4145,6 +4336,28 @@ fn run_sdr(
                 ClassificationResult {
                     active: true,
                     modulation: "AM".into(),
+                    ..Default::default()
+                }
+            }
+            SdrMode::Usb | SdrMode::Lsb => {
+                // No classifier either: sideband has no carrier to measure
+                // and no FM to discriminate. The demodulator picks the side
+                // and runs its own speech AGC; the audio leaves at the
+                // channel rate, so the rolling capture keeps it as voice.
+                if let Demod::Ssb { demod: ssb, audio } = &mut demod {
+                    ssb.process(&inspect_iq, audio);
+                    audio_buf.extend_from_slice(audio);
+                    scope_src.clear();
+                    scope_src.extend_from_slice(audio);
+                    let empty: &[f32] = &[];
+                    capture
+                        .lock()
+                        .expect("SDR capture")
+                        .append(inspect_hz, fs_chain, &inspect_iq, audio, empty);
+                }
+                ClassificationResult {
+                    active: true,
+                    modulation: if current_mode == SdrMode::Usb { "USB" } else { "LSB" }.into(),
                     ..Default::default()
                 }
             }
@@ -5545,6 +5758,13 @@ fn run_sdr(
             let guard_hz = (shown_rate / shown_buf.len().max(1) as f64 * 3.0).max(4_000.0);
             notch_display(&mut shown_buf, shown_rate, &spurs, guard_hz);
             let shown: &[f32] = &shown_buf;
+            let wf_peak_shown: Vec<f32> = if pwr_peak.len() == n {
+                let mut v = pwr_peak[lo_bin..hi_bin.min(n)].to_vec();
+                notch_display(&mut v, shown_rate, &spurs, guard_hz);
+                v
+            } else {
+                Vec::new()
+            };
             // Update the per-bin floor from this frame before anything reads it.
             let floor = bin_floor.update(shown);
             // The shared sorted copy backs every per-frame measurement below.
@@ -5563,10 +5783,12 @@ fn run_sdr(
                 lo_off + current_rate / 4.0,
                 lo_off - current_rate / 4.0,
             ];
+            // Measured over the passband the mode listens to: for sideband
+            // that is beside the carrier, not centred on it.
             let (channel_dbfs, noise_dbfs) = channel_level(
                 shown,
                 shown_rate,
-                inspect_hz - shown_centre,
+                inspect_hz - shown_centre + f64::from(current_mode.passband_offset_hz()),
                 f64::from(current_mode.bandwidth_hz()),
                 &mut sorted_scratch,
             );
@@ -5816,6 +6038,7 @@ fn run_sdr(
                     averaged.clone()
                 },
                 max_hold: max_hold.clone(),
+                wf_peak: wf_peak_shown,
                 peak_iq,
                 inspect_hz,
                 classification: Some(classification),
@@ -5988,6 +6211,7 @@ mod tests {
             rate_hz: 1_048_576.0,
             pwr: vec![0.0; 64],
             max_hold: vec![0.0; 64],
+            wf_peak: Vec::new(),
             peak_iq: 0.25,
             inspect_hz: 155_000_000.0,
             classification: Some(ClassificationResult {

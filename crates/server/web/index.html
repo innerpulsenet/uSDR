@@ -629,95 +629,11 @@
   .bay-frontend {
     display: flex; flex-direction: column; justify-content: flex-start; gap: 6px;
   }
-  /* Dual Linear Vertical Fader Pair */
-  .fader-pair {
-    display: flex;
-    justify-content: space-around;
-    gap: 6px;
-    padding-top: 1px;
-  }
-  .fader-vert-wrap {
-    flex: 1; display: flex; flex-direction: column; align-items: center;
-  }
-  .fader-title {
-    font: 800 8.5px/1 var(--mono); letter-spacing: 0.1em; color: var(--ink-2);
-    margin-bottom: 4px; text-align: center; text-transform: uppercase;
-    text-shadow: 0 1px 0 #000;
-  }
-  .fader-assembly {
-    display: flex; align-items: center; gap: 4px;
-  }
-  .fader-scale {
-    display: flex; flex-direction: column; justify-content: space-between;
-    height: 72px; font: 700 8.5px/1 var(--mono); color: var(--ink-2);
-    user-select: none; text-align: right;
-  }
-  .fader-scale span {
-    display: flex; align-items: center; justify-content: flex-end; gap: 2px;
-  }
-  .fader-scale span::after {
-    content: ""; width: 3px; height: 1px; background: #2a3a4a;
-  }
-  .fader-well {
-    position: relative;
-    width: 26px; height: 72px;
-    background: #05080c;
-    border: 1px solid var(--panel-split);
-    border-radius: var(--radius-well);
-    box-shadow:
-      inset 0 2px 7px rgba(0,0,0,0.95),
-      inset 0 0 0 1px rgba(0,0,0,0.8),
-      0 1px 0 rgba(255,255,255,0.06);
-    cursor: ns-resize;
-    user-select: none;
-  }
-  .fader-slot {
-    position: absolute; left: 50%; top: 5px; bottom: 5px; width: 3px;
-    transform: translateX(-50%);
-    background: #020305;
-    border-radius: 2px;
-    box-shadow: inset 0 1px 3px #000;
-  }
-  .fader-cap {
-    position: absolute; left: 50%;
-    width: 24px; height: 14px;
-    transform: translate(-50%, 50%);
-    border-radius: 2.5px;
-    background: linear-gradient(180deg, #3e5062 0%, #202b38 20%, #121922 50%, #1c2734 80%, #0a0e14 100%);
-    border: 1px solid #090e14;
-    box-shadow:
-      0 3px 6px rgba(0,0,0,0.85),
-      inset 0 1px 0 rgba(255,255,255,0.22),
-      inset 0 -1px 0 rgba(0,0,0,0.7);
-    display: flex; align-items: center; justify-content: center;
-    pointer-events: none;
-    transition: bottom 40ms linear;
-  }
-  .fader-cap-ribs {
-    position: absolute; inset: 2px 3px;
-    background: repeating-linear-gradient(0deg, transparent, transparent 1.5px, rgba(255,255,255,0.06) 1.5px, rgba(255,255,255,0.06) 2.5px);
-  }
-  .fader-cap-line {
-    position: relative; z-index: 2; width: 100%; height: 1.8px; border-radius: 1px;
-  }
-  .fader-cap-line.led-amber { background: #ffb830; box-shadow: 0 0 5px rgba(255,184,48,0.9); }
-  .fader-cap-line.led-cyan { background: #38bdf8; box-shadow: 0 0 5px rgba(56,189,248,0.9); }
-  .fader-cap-line.led-blue { background: #60a5fa; box-shadow: 0 0 5px rgba(96,165,250,0.9); }
-  .fader-cap-line.led-violet { background: #c084fc; box-shadow: 0 0 5px rgba(192,132,252,0.9); }
-
-  .fader-footer {
-    display: flex; align-items: center; justify-content: space-between; gap: 4px;
-    width: 100%; margin-top: 4px; padding: 0 2px;
-  }
   .fader-val {
     font: 700 8.5px/1 var(--mono); color: var(--lcd-digit); white-space: nowrap;
     background: var(--panel-well); padding: 3px 5px; border-radius: var(--radius-well);
     border: 1px solid var(--panel-split);
     box-shadow: inset 0 1px 2px rgba(0,0,0,0.7);
-  }
-  .fader-sublabel {
-    font: 700 8.5px/1 var(--mono); color: var(--ink-2); letter-spacing: 0.06em; text-transform: uppercase;
-    text-shadow: 0 1px 0 #000;
   }
   .fader-agc-btn, .fader-reset-btn {
     font: 800 8px/1 var(--mono);
@@ -1111,7 +1027,7 @@
     text-shadow: 0 0 6px rgba(76,196,255,0.45);
   }
   .dsp-key.palette-trigger {
-    grid-column: 1 / -1;
+    grid-column: span 3;
   }
   .dsp-tally {
     width: 14px; height: 2px; border-radius: 1px;
@@ -1829,37 +1745,78 @@
     border: 1px solid var(--panel-split); box-shadow: inset 0 1px 2px rgba(0,0,0,0.7);
     font-variant-numeric: tabular-nums;
   }
-  input[type="range"].vol-slider {
+  input[type="range"].vol-slider, input[type="range"].pf-slider {
     -webkit-appearance: none; appearance: none; width: 100%; height: 26px; margin: 0;
-    background: transparent; cursor: ew-resize; --fill: 60%;
+    background: transparent; cursor: ew-resize; --fill: 60%; --pf: 51, 224, 122;
   }
-  .vol-slider::-webkit-slider-runnable-track {
+  .pf-slider { --pf: 255, 184, 48; }
+  .pf-slider.pf-cyan { --pf: 56, 189, 248; }
+  .pf-slider.pf-blue { --pf: 96, 165, 250; }
+  .pf-slider.pf-violet { --pf: 192, 132, 252; }
+  .vol-slider::-webkit-slider-runnable-track, .pf-slider::-webkit-slider-runnable-track {
     height: 8px; border-radius: 3px; border: 1px solid var(--panel-split);
-    background: linear-gradient(90deg, rgba(51,224,122,0.55) 0, rgba(51,224,122,0.55) var(--fill), #05080c var(--fill));
+    background: linear-gradient(90deg, rgba(var(--pf), 0.55) 0, rgba(var(--pf), 0.55) var(--fill), #05080c var(--fill));
     box-shadow: inset 0 2px 4px rgba(0,0,0,0.9);
   }
-  .vol-slider::-moz-range-track {
+  .vol-slider::-moz-range-track, .pf-slider::-moz-range-track {
     height: 8px; border-radius: 3px; border: 1px solid var(--panel-split);
     background: #05080c; box-shadow: inset 0 2px 4px rgba(0,0,0,0.9);
   }
-  .vol-slider::-moz-range-progress { height: 8px; border-radius: 3px; background: rgba(51,224,122,0.55); }
-  .vol-slider::-webkit-slider-thumb {
+  .vol-slider::-moz-range-progress, .pf-slider::-moz-range-progress { height: 8px; border-radius: 3px; background: rgba(var(--pf), 0.55); }
+  .vol-slider::-webkit-slider-thumb, .pf-slider::-webkit-slider-thumb {
     -webkit-appearance: none; width: 14px; height: 22px; margin-top: -8px;
     border-radius: 2.5px; border: 1px solid #090e14;
     background:
-      linear-gradient(90deg, transparent 6px, #33e07a 6px, #33e07a 8px, transparent 8px),
+      linear-gradient(90deg, transparent 6px, rgb(var(--pf)) 6px, rgb(var(--pf)) 8px, transparent 8px),
       repeating-linear-gradient(90deg, transparent 0 1.5px, rgba(255,255,255,0.07) 1.5px 2.5px),
       linear-gradient(180deg, #3e5062 0%, #202b38 25%, #121922 55%, #0a0e14 100%);
     box-shadow: 0 2px 5px rgba(0,0,0,0.85), inset 0 1px 0 rgba(255,255,255,0.22);
   }
-  .vol-slider::-moz-range-thumb {
+  .vol-slider::-moz-range-thumb, .pf-slider::-moz-range-thumb {
     width: 14px; height: 22px; border-radius: 2.5px; border: 1px solid #090e14;
     background:
-      linear-gradient(90deg, transparent 6px, #33e07a 6px, #33e07a 8px, transparent 8px),
+      linear-gradient(90deg, transparent 6px, rgb(var(--pf)) 6px, rgb(var(--pf)) 8px, transparent 8px),
       linear-gradient(180deg, #3e5062 0%, #202b38 25%, #121922 55%, #0a0e14 100%);
     box-shadow: 0 2px 5px rgba(0,0,0,0.85);
   }
-  .vol-slider:focus-visible { outline: 2px solid var(--led-info); outline-offset: 2px; border-radius: 3px; }
+  .vol-slider:focus-visible, .pf-slider:focus-visible { outline: 2px solid var(--led-info); outline-offset: 2px; border-radius: 3px; }
+  /* Under AGC the gain fader shows where the loop has it, dimmed: dragging
+     it takes the gain back by hand. */
+  .pf-slider.pf-auto { opacity: 0.55; }
+
+  .fe-select-row { display: flex; align-items: center; gap: 8px; margin-top: 2px; }
+  .fe-select-row[hidden], .pf-row[hidden] { display: none; }
+  .fe-select {
+    flex: 1; min-width: 0; height: 24px; padding: 0 6px;
+    background: var(--panel-well); color: var(--lcd-digit); border: 1px solid var(--panel-split);
+    border-radius: var(--radius-well); font: 700 10px var(--mono);
+  }
+  .fe-select.manual { color: var(--led-warn); border-color: #5c4310; }
+
+  /* Precision fader row: legend, extra key, value; the track; its scale. */
+  .pf-row {
+    display: grid; grid-template-columns: auto minmax(0, 1fr) auto;
+    grid-template-areas: "label extra val" "slider slider slider" "scale scale scale" "sub sub sub";
+    column-gap: 6px; row-gap: 1px; align-items: center; padding: 3px 0 4px;
+  }
+  .pf-row + .pf-row { border-top: 1px solid rgba(10, 15, 20, 0.8); padding-top: 6px; }
+  .pf-label { grid-area: label; font: 800 9.5px/1 var(--mono); letter-spacing: 0.1em; color: var(--ink-2); text-shadow: 0 1px 0 #000; }
+  .pf-row > .fader-agc-btn, .pf-row > .fader-reset-btn, .pf-row > .pf-note { grid-area: extra; justify-self: start; }
+  .pf-val { grid-area: val; min-width: 54px; text-align: right; font-size: 10.5px; }
+  .pf-slider { grid-area: slider; }
+  .pf-scale { grid-area: scale; position: relative; height: 11px; margin: 0 7px; }
+  .pf-scale span {
+    position: absolute; top: 0; transform: translateX(-50%);
+    font: 700 8.5px/1 var(--mono); color: var(--ink-2); white-space: nowrap;
+  }
+  .pf-scale span:first-child { transform: translateX(-7px); }
+  .pf-scale span:last-child { transform: translateX(calc(-100% + 7px)); }
+  .pf-sub { grid-area: sub; font: 700 9px/1.2 var(--mono); color: var(--lcd-unit); padding-top: 2px; }
+  .pf-note {
+    font: 800 8.5px/1 var(--mono); letter-spacing: 0.06em; color: var(--led-rx);
+    padding: 2px 5px; border-radius: 2px; border: 1px solid #174828; background: #06100a;
+  }
+  .pf-note.warn { color: var(--led-warn); border-color: #5c4310; background: #100c04; }
 
   /* TUNE strip: a straight dial under a fixed hairline. */
   .tune-strip-row { display: grid; grid-template-columns: 30px 30px minmax(0, 1fr) 30px 30px; gap: 4px; align-items: stretch; margin-top: 5px; }
@@ -1980,7 +1937,7 @@
 
   /* MODE: two labelled key groups, one lit key across both. */
   .mode-groups {
-    display: grid; grid-template-columns: minmax(0, 6fr) minmax(0, 5fr); gap: 10px;
+    display: grid; grid-template-columns: minmax(0, 8fr) minmax(0, 5fr); gap: 10px;
   }
   .key-group { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
   .key-group-label {
@@ -1992,7 +1949,7 @@
     content: ""; flex: 1; height: 1px;
     background: linear-gradient(90deg, rgba(255,255,255,0.08), transparent);
   }
-  .mode-keypad.mode-keypad-demod { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+  .mode-keypad.mode-keypad-demod { grid-template-columns: repeat(8, minmax(0, 1fr)); }
   .mode-keypad.mode-keypad-func { grid-template-columns: repeat(5, minmax(0, 1fr)); }
   .mode-keypad .modebtn { min-height: 30px; font-size: 10.5px; letter-spacing: 0.06em; }
   .key-group-func .modebtn { color: #a9bccd; }
@@ -2140,6 +2097,85 @@
   .bm-tick.hi { fill: #ff8a5a; }
   .bar-meter .meter-readouts { justify-content: flex-start; }
 
+
+  /* Advanced drawer */
+  .adv-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 8px; padding: 8px 10px 10px; }
+  .adv-card {
+    display: flex; flex-direction: column; gap: 6px; padding: 7px 9px 9px;
+    background: var(--panel-face); border: 1px solid var(--panel-split); border-radius: var(--radius-assembly);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.05);
+  }
+  .adv-card .sect-head .adv-val { margin-left: auto; order: 2; }
+  .adv-card .pf-row { grid-template-areas: "label slider slider" ; grid-template-columns: 64px 1fr; padding: 0; border: 0; }
+  .adv-card .pf-row .pf-slider { grid-area: slider; }
+  .adv-line { display: flex; align-items: center; gap: 8px; }
+  .adv-val { font: 700 10.5px var(--mono); color: var(--lcd-digit); }
+  .adv-note { margin: 0; font: 600 9.5px/1.35 var(--mono); color: var(--ink-2); }
+  .adv-key { min-height: 24px; padding: 0 10px; font-size: 9.5px; }
+  .num-input {
+    width: 74px; height: 24px; padding: 0 6px; background: var(--panel-well); color: var(--lcd-digit);
+    border: 1px solid var(--panel-split); border-radius: var(--radius-well); font: 700 11px var(--mono);
+  }
+  .num-input:focus-visible, .fe-select:focus-visible { outline: 2px solid var(--led-info); outline-offset: 1px; }
+
+  /* Dock: an empty log is a line of text, not 400 px of black. */
+  .side-col:not(.tall):has(> .side-panel.on .sdr-classifier-log > .data-empty:only-child),
+  .side-col:not(.tall):has(> .side-panel.on .sdr-decode-log > .data-empty:only-child) { min-height: 0; }
+  .side-panel .sdr-classifier-log:has(> .data-empty:only-child),
+  .side-panel .sdr-decode-log:has(> .data-empty:only-child) { flex: 0 0 auto; min-height: 0; height: auto; }
+  .side-panel .data-empty {
+    display: flex; align-items: center; gap: 10px; padding: 14px 12px;
+    font: 600 11px/1.4 var(--mono); color: var(--ink-2);
+  }
+  .side-panel .data-empty::before {
+    content: ""; flex: none; width: 22px; height: 14px; opacity: 0.7;
+    background: linear-gradient(90deg, transparent 0 2px, var(--ink-off) 2px 4px, transparent 4px 7px, var(--ink-off) 7px 9px, transparent 9px 12px, var(--ink-off) 12px 14px, transparent 14px) bottom / 100% 40% no-repeat,
+      linear-gradient(90deg, transparent 0 7px, var(--ink-2) 7px 9px, transparent 9px) bottom / 100% 100% no-repeat;
+  }
+
+
+  /* Scan panel */
+  .scan-form { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 8px; margin-bottom: 8px; }
+  .scan-group {
+    display: flex; flex-direction: column; gap: 6px; padding: 7px 9px 9px;
+    background: var(--panel-face); border: 1px solid var(--panel-split); border-radius: var(--radius-assembly);
+  }
+  .scan-fields { display: flex; flex-wrap: wrap; gap: 6px 12px; }
+  .scan-field { display: flex; align-items: center; gap: 6px; font: 800 9px/1 var(--mono); letter-spacing: 0.08em; color: var(--ink-2); }
+  .scan-field em { font-style: normal; font-weight: 700; color: var(--ink-2); letter-spacing: 0; }
+  .scan-field .num-input { width: 86px; }
+  .scan-modes .fe-key { flex: 1 1 calc(25% - 4px); }
+  .scan-group .pf-row { grid-template-areas: "label extra val" "slider slider slider"; }
+  input[type="range"].scan-slider { grid-area: slider; width: 100%; accent-color: var(--led-info); }
+  .scan-keys { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 6px; }
+  .scan-key { min-height: 28px; padding: 3px 12px; flex-direction: row; gap: 6px; }
+  .scan-key .dsp-tally { margin: 0; width: 6px; height: 6px; border-radius: 50%; }
+  .scan-start { border-color: #174828; }
+
+
+  /* Shortcuts */
+  .help-key {
+    width: 24px; height: 24px; border-radius: 50%; border: 1px solid #080d12;
+    background: var(--key-metal); box-shadow: var(--key-metal-edge);
+    color: var(--ink-1); font: 800 12px/1 var(--mono); cursor: pointer;
+  }
+  .help-key:hover { background: var(--key-metal-hover); }
+  .help-key:focus-visible { outline: 2px solid var(--led-info); outline-offset: 2px; }
+  .help-dialog {
+    max-width: min(760px, calc(100vw - 32px)); width: 100%; padding: 0;
+    background: var(--panel-case); color: var(--text); border: 1px solid var(--panel-bezel);
+    border-radius: var(--radius-panel); box-shadow: 0 24px 60px rgba(0,0,0,0.7);
+  }
+  .help-dialog::backdrop { background: rgba(2, 4, 8, 0.65); }
+  .help-dialog[open] { animation: help-in 160ms ease-out; }
+  @keyframes help-in { from { opacity: 0; transform: translateY(6px); } }
+  .help-head { display: flex; align-items: center; justify-content: space-between; padding: 10px 14px; border-bottom: 1px solid var(--panel-split); font: 800 11px var(--mono); letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-2); }
+  .help-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 4px 18px; padding: 10px 14px 14px; }
+  .help-grid h3 { margin: 6px 0; font: 800 10px var(--mono); letter-spacing: 0.14em; text-transform: uppercase; color: var(--led-info); }
+  .help-grid dl { margin: 0; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr); gap: 5px 10px; }
+  .help-grid dt { font: 700 10.5px/1.35 var(--mono); color: var(--lcd-digit); }
+  .help-grid dd { margin: 0; font: 500 10.5px/1.35 var(--sans); color: var(--ink-2); }
+
   /* ---- Responsive: the face reflows instead of overflowing ---- */
   @media (max-width: 1000px) {
     .mode-groups { grid-template-columns: 1fr; gap: 6px; }
@@ -2153,7 +2189,7 @@
     .panel-left { order: 2; }
     .panel-right { order: 3; display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); align-items: start; gap: 8px; flex-direction: initial; }
     .panel-left { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); align-items: start; height: auto; }
-    .mode-keypad.mode-keypad-demod { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+    .mode-keypad.mode-keypad-demod { grid-template-columns: repeat(8, minmax(0, 1fr)); }
     .mode-keypad.mode-keypad-func { grid-template-columns: repeat(5, minmax(0, 1fr)); }
   }
   @media (max-width: 600px) {
@@ -2164,7 +2200,7 @@
     .brand-status-strip { display: none !important; }
     .rig-brand .sub { display: none; }
     .mode-keypad .modebtn { font-size: 9.5px; min-height: 34px; letter-spacing: 0.02em; }
-    .mode-keypad.mode-keypad-demod { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .mode-keypad.mode-keypad-demod { grid-template-columns: repeat(4, minmax(0, 1fr)); }
     .mode-keypad.mode-keypad-func { grid-template-columns: repeat(3, minmax(0, 1fr)); }
     .mem-store { width: 54px; }
     .vfo-meter-bar { flex-wrap: wrap; row-gap: 4px; }
@@ -2271,6 +2307,7 @@
           <span id="connText">connecting…</span>
         </div>
         <span class="header-clock" id="scrClock">--:--</span>
+        <button type="button" class="help-key" id="btnHelp" title="Keyboard and mouse shortcuts (?)" aria-haspopup="dialog">?</button>
       </div>
     </div>
 
@@ -2304,61 +2341,28 @@
 
               <div class="sect-head"><span class="sect-title">RF · Gain &amp; SQL mark</span></div>
 
-              <!-- Dual Linear Faders: RF GAIN & SQUELCH -->
-              <div class="fader-pair">
-                <!-- RF Gain Vertical Linear Fader -->
-                <div class="fader-vert-wrap" id="faderRfGainWrap">
-                  <span class="fader-title">RF GAIN</span>
-                  <div class="fader-assembly">
-                    <div class="fader-scale" id="faderRfGainScale">
-                      <span>50</span>
-                      <span>40</span>
-                      <span>30</span>
-                      <span>20</span>
-                      <span>10</span>
-                      <span>0</span>
-                    </div>
-                    <div class="fader-well" id="faderRfGainTrack" title="RF Gain: Drag or scroll to adjust. Click AGC to toggle auto mode.">
-                      <div class="fader-slot"></div>
-                      <div class="fader-cap" id="faderRfGainCap" style="bottom: 80%;">
-                        <div class="fader-cap-ribs"></div>
-                        <div class="fader-cap-line led-amber"></div>
-                      </div>
-                    </div>
-                  </div>
-                  <div class="fader-footer">
-                    <button type="button" class="fader-agc-btn on" id="faderAgcBtn" title="Toggle Automatic Gain Control">
-                      <span class="btn-tally led-amber"></span>AGC
-                    </button>
-                    <span class="fader-val" id="faderRfGainVal">auto</span>
-                  </div>
-                </div>
-
-                <!-- Squelch Vertical Linear Fader -->
-                <div class="fader-vert-wrap" id="faderSqlWrap">
-                  <span class="fader-title">SQL MARK</span>
-                  <div class="fader-assembly">
-                    <div class="fader-scale">
-                      <span>-20</span>
-                      <span>-40</span>
-                      <span>-60</span>
-                      <span>-80</span>
-                      <span>-100</span>
-                      <span>-120</span>
-                    </div>
-                    <div class="fader-well" id="faderSqlTrack" title="Squelch: Drag or scroll to adjust threshold level.">
-                      <div class="fader-slot"></div>
-                      <div class="fader-cap" id="faderSqlCap" style="bottom: 45%;">
-                        <div class="fader-cap-ribs"></div>
-                        <div class="fader-cap-line led-cyan"></div>
-                      </div>
-                    </div>
-                  </div>
-                  <div class="fader-footer">
-                    <span class="fader-sublabel">SQL</span>
-                    <span class="fader-val" id="faderSqlVal">-75 dB</span>
-                  </div>
-                </div>
+              <!-- Precision faders: native range inputs, one unit per arrow
+                   key or wheel notch (Shift on the wheel for the finest
+                   step), engraved with the scale they set. -->
+              <div class="pf-row" id="faderRfGainWrap">
+                <label class="pf-label" for="faderRfGain">RF GAIN</label>
+                <button type="button" class="fader-agc-btn on" id="faderAgcBtn" title="Automatic gain: a clip-guarded loop on manual gain"><span class="btn-tally led-amber"></span>AGC</button>
+                <span class="fader-val pf-val" id="faderRfGainVal">auto</span>
+                <input type="range" class="pf-slider" id="faderRfGain" min="0" max="50" step="1" value="40" aria-label="RF gain, dB">
+                <div class="pf-scale" id="faderRfGainScale" aria-hidden="true"></div>
+                <div class="pf-sub" id="gainSplit" hidden></div>
+              </div>
+              <div class="pf-row" id="faderSqlWrap">
+                <label class="pf-label" for="faderSql">SQL MARK</label>
+                <span class="fader-val pf-val" id="faderSqlVal">-75 dB</span>
+                <input type="range" class="pf-slider pf-cyan" id="faderSql" min="-120" max="0" step="1" value="-75" aria-label="Squelch mark, dB">
+                <div class="pf-scale" id="faderSqlScale" aria-hidden="true"></div>
+              </div>
+              <div class="pf-row" id="agcSetpointWrap" hidden>
+                <label class="pf-label" for="faderAgcSetpoint">IF AGC TARGET</label>
+                <span class="fader-val pf-val" id="agcSetpointVal">-30 dBFS</span>
+                <input type="range" class="pf-slider pf-cyan" id="faderAgcSetpoint" min="-60" max="0" step="1" value="-30" aria-label="IF AGC target level, dBFS">
+                <div class="pf-scale" aria-hidden="true"><span style="left:0%">-60</span><span style="left:50%">-30</span><span style="left:100%">0</span></div>
               </div>
               <div class="fe-keys fe-keys-gain" role="group" aria-label="Gain loop">
                 <label class="fe-key" title="Clip guard: let the receiver walk the gain down when the ADC clips, and back up when the band is quiet"><input type="checkbox" id="chkClipGuard"><span class="fe-led"></span><span class="fe-legend">CLIP GUARD</span></label>
@@ -2384,7 +2388,12 @@
                 <span class="fe-legend" id="keySpurLabel">SPUR NOTCH</span>
               </button>
               <label class="fe-key" title="LO off-center offset: park the tuner away from the receive frequency so its DC spike stays outside the channel"><input type="checkbox" id="chkLoOffset"><span class="fe-led"></span><span class="fe-legend">LO OFFSET</span></label>
+              <label class="fe-key" id="cbIqCorr" hidden title="The RSP's own I/Q imbalance correction. uSDR also corrects the image in software, after it; leave both on unless you are measuring one of them."><input type="checkbox" id="chkIqCorr"><span class="fe-led"></span><span class="fe-legend">IQ CORR</span></label>
               <label class="fe-key" id="cbBiasT" hidden title="Power the antenna port, for a preamp or active antenna on the feedline. Saved with this radio, not with the session. Leave it off for a passive antenna."><input type="checkbox" id="chkBiasT"><span class="fe-led led-warn"></span><span class="fe-legend">BIAS-T</span></label>
+            </div>
+            <div class="fe-select-row" id="ifFilterRow" hidden>
+              <label class="pf-label" for="ifFilterSel">IF FILTER</label>
+              <select id="ifFilterSel" class="fe-select" title="The analog filter in front of the ADC. AUTO picks the narrowest that covers the span; a narrower one keeps strong signals outside the span out of the ADC."></select>
             </div>
           </div>
 
@@ -2460,6 +2469,7 @@
                     <span class="vfo-step-badge">TS</span>
                     <select class="vfo-step-select" id="snapSel" title="Tuning raster step">
                       <option value="auto" id="snapOptAuto" selected>AUTO (6.25k)</option>
+                      <option value="10">10 Hz</option>
                       <option value="100">100 Hz</option>
                       <option value="1000">1 kHz</option>
                       <option value="2500">2.5 kHz</option>
@@ -2495,6 +2505,8 @@
                 <div class="mode-keypad mode-keypad-demod" role="group" aria-labelledby="lblDemod">
                   <button type="button" class="modebtn on" data-mode="nfm" title="Narrowband FM (voice)"><span class="mode-tally tally-amber"></span>NFM</button>
                   <button type="button" class="modebtn" data-mode="am" title="Amplitude Modulation (airband & AM broadcast)"><span class="mode-tally tally-amber"></span>AM</button>
+                  <button type="button" class="modebtn" data-mode="usb" title="Upper sideband voice (HF above 10 MHz, VHF/UHF weak signal)"><span class="mode-tally tally-amber"></span>USB</button>
+                  <button type="button" class="modebtn" data-mode="lsb" title="Lower sideband voice (HF below 10 MHz)"><span class="mode-tally tally-amber"></span>LSB</button>
                   <button type="button" class="modebtn" data-mode="wfm" title="Wideband FM (broadcast radio)"><span class="mode-tally tally-cyan"></span>WFM</button>
                   <button type="button" class="modebtn" data-mode="p25" title="APCO Project 25 digital voice"><span class="mode-tally tally-green"></span>P25</button>
                   <button type="button" class="modebtn" data-mode="dmr" title="Digital Mobile Radio voice"><span class="mode-tally tally-green"></span>DMR</button>
@@ -2637,6 +2649,10 @@
                 <span class="dsp-tally led-green"></span>
                 <span id="keyAvgLabel">AVG OFF</span>
               </button>
+              <button type="button" class="dsp-key" id="keyWfPeak" title="Waterfall rows from each frame's strongest moment instead of its average: short bursts (pagers, data, TDMA slots) show at full level">
+                <span class="dsp-tally led-amber"></span>
+                <span>WF PEAK</span>
+              </button>
               <button type="button" class="dsp-key palette-trigger" id="keyPalette" title="Waterfall & Spectrum Palette">
                 <span class="dsp-tally led-amber"></span>
                 <span id="keyPaletteLabel">PALETTE ▾</span>
@@ -2651,59 +2667,19 @@
               <span class="bay-screw-corner"></span>
             </div>
 
-            <!-- Dual Display Faders: SPAN RATE & FFT ZOOM -->
-            <div class="fader-pair">
-              <!-- SPAN Rate Linear Stepped Fader -->
-              <div class="fader-vert-wrap" id="faderSpanWrap">
-                <span class="fader-title">SPAN</span>
-                <div class="fader-assembly">
-                  <div class="fader-scale" id="faderSpanScale">
-                    <span>3.2M</span>
-                    <span>2.4M</span>
-                    <span>2.05M</span>
-                    <span>1.54M</span>
-                    <span>1.02M</span>
-                    <span>250k</span>
-                  </div>
-                  <div class="fader-well" id="faderSpanTrack" title="Span Bandwidth: Drag or scroll to select RF sample rate.">
-                    <div class="fader-slot"></div>
-                    <div class="fader-cap" id="faderSpanCap" style="bottom: 60%;">
-                      <div class="fader-cap-ribs"></div>
-                      <div class="fader-cap-line led-blue"></div>
-                    </div>
-                  </div>
-                </div>
-                <div class="fader-footer">
-                  <span class="fader-sublabel">RATE</span>
-                  <span class="fader-val" id="faderSpanVal">2.048M</span>
-                </div>
-              </div>
-
-              <!-- FFT Zoom Linear Continuous Fader -->
-              <div class="fader-vert-wrap" id="faderZoomWrap">
-                <span class="fader-title">FFT ZOOM</span>
-                <div class="fader-assembly">
-                  <div class="fader-scale">
-                    <span>32x</span>
-                    <span>16x</span>
-                    <span>8x</span>
-                    <span>4x</span>
-                    <span>2x</span>
-                    <span>1x</span>
-                  </div>
-                  <div class="fader-well" id="faderZoomTrack" title="FFT Zoom: Drag or scroll to magnify spectrum. Click 1x RST to reset.">
-                    <div class="fader-slot"></div>
-                    <div class="fader-cap" id="faderZoomCap" style="bottom: 0%;">
-                      <div class="fader-cap-ribs"></div>
-                      <div class="fader-cap-line led-violet"></div>
-                    </div>
-                  </div>
-                </div>
-                <div class="fader-footer">
-                  <button type="button" class="fader-reset-btn" id="faderZoomReset" title="Reset Zoom to 1.0x">1x RST</button>
-                  <span class="fader-val" id="faderZoomVal">1.0x</span>
-                </div>
-              </div>
+            <div class="pf-row" id="faderSpanWrap">
+              <label class="pf-label" for="faderSpan">SPAN</label>
+              <span class="pf-note" id="spanAdcBits" hidden></span>
+              <span class="fader-val pf-val" id="faderSpanVal">2.048M</span>
+              <input type="range" class="pf-slider pf-blue" id="faderSpan" min="0" max="5" step="1" value="3" aria-label="Span">
+              <div class="pf-scale" id="faderSpanScale" aria-hidden="true"></div>
+            </div>
+            <div class="pf-row" id="faderZoomWrap">
+              <label class="pf-label" for="faderZoom">FFT ZOOM</label>
+              <button type="button" class="fader-reset-btn" id="faderZoomReset" title="Reset zoom to 1×">1× RST</button>
+              <span class="fader-val pf-val" id="faderZoomVal">1.0x</span>
+              <input type="range" class="pf-slider pf-violet" id="faderZoom" min="0" max="5" step="0.25" value="0" aria-label="FFT zoom, powers of two">
+              <div class="pf-scale" id="faderZoomScale" aria-hidden="true"><span style="left:0%">1×</span><span style="left:20%">2×</span><span style="left:40%">4×</span><span style="left:60%">8×</span><span style="left:80%">16×</span><span style="left:100%">32×</span></div>
             </div>
 
             <div class="tune-keys" role="group" aria-label="Display position">
@@ -2841,64 +2817,83 @@
     </details>
 
     <details class="advanced">
-      <summary>Advanced · radio device · calibration · display range · span list</summary>
-    <div class="panelrow">
-    <div class="ctlgroup">
-      <span class="grouplabel">Radio</span>
-      <div class="ctl">
-        <label for="sdrRadioSel">Device</label>
-        <select id="sdrRadioSel" style="min-width:200px"></select>
-      </div>
+      <summary>Advanced · radio device · calibration · display range</summary>
+    <!-- Settings that are set once and left: each in its own card, styled
+         like the face. -->
+    <div class="adv-grid">
+      <section class="adv-card" aria-label="Radio">
+        <div class="sect-head"><span class="sect-title">Radio</span></div>
+        <select id="sdrRadioSel" class="fe-select" aria-label="Radio device"></select>
+        <p class="adv-note">Switching radios parks this one's manual gain and takes up the other's.</p>
+      </section>
+      <section class="adv-card" aria-label="Calibration">
+        <div class="sect-head"><span class="sect-title">Calibration</span></div>
+        <div class="adv-line">
+          <label class="pf-label" for="ppmInput">PPM</label>
+          <input type="number" id="ppmInput" class="num-input" step="0.1" min="-200" max="200" value="0">
+          <button type="button" class="dsp-key adv-key" id="btnCalibrate"
+                  title="Tune to a signal whose exact frequency you know, then calibrate from it">calibrate</button>
+        </div>
+        <div class="adv-line"><span class="pf-label">CARRIER ERROR</span><span class="val adv-val" id="freqErrVal">err —</span></div>
+      </section>
+      <section class="adv-card" aria-label="Display range">
+        <div class="sect-head"><span class="sect-title">Display range</span><span class="adv-val" id="sdrRangeVal">-90..-10</span></div>
+        <div class="pf-row">
+          <label class="pf-label" for="sdrMinDb">FLOOR</label>
+          <input type="range" class="pf-slider pf-blue" id="sdrMinDb" min="-120" max="-20" step="2" value="-90" aria-label="Display floor, dB">
+        </div>
+        <div class="pf-row">
+          <label class="pf-label" for="sdrMaxDb">CEILING</label>
+          <input type="range" class="pf-slider pf-blue" id="sdrMaxDb" min="-60" max="0" step="2" value="-10" aria-label="Display ceiling, dB">
+        </div>
+        <p class="adv-note">Moving either turns RNG (auto range) off.</p>
+      </section>
     </div>
-    <div class="ctlgroup">
-      <span class="grouplabel">Calibration</span>
-      <div class="ctl">
-        <label for="ppmInput">ppm</label>
-        <input type="number" id="ppmInput" step="0.1" min="-200" max="200" value="0"
-               style="width:72px; background:#09121a; color:var(--text); border:1px solid #1e3040;
-                      border-radius:4px; padding:3px 6px; font:11px var(--mono)">
-        <button type="button" class="sdr-preset-btn" id="btnCalibrate"
-                title="Tune to a signal whose exact frequency you know, then calibrate from it">calibrate</button>
-        <span class="val" id="freqErrVal" style="width:96px">err —</span>
-      </div>
-    </div>
-
-    <div class="ctlgroup">
-      <span class="grouplabel">Display</span>
-      <div class="ctl">
-        <label>Range</label>
-        <input type="range" id="sdrMinDb" min="-120" max="-20" step="2" value="-90" title="floor dB">
-        <input type="range" id="sdrMaxDb" min="-60" max="0" step="2" value="-10" title="ceiling dB">
-        <span class="val" id="sdrRangeVal">-90..-10</span>
-      </div>
-    </div>
-
-    <div class="ctlgroup">
-      <span class="grouplabel">Span</span>
-      <div class="ctl">
-        <label for="sdrRateSel">Span</label>
-        <select id="sdrRateSel">
-          <option value="250000">250 kHz</option>
-          <option value="1024000">1.024 MHz</option>
-          <option value="1536000">1.536 MHz</option>
-          <option value="2048000" selected>2.048 MHz</option>
-          <option value="2400000">2.4 MHz</option>
-          <option value="3200000">3.2 MHz</option>
-        </select>
-      </div>
-      <div class="ctl">
-        <label>Gain</label>
-        <span class="cb" title="Automatic gain: a clip-guarded loop on manual gain. Walks the gain down within two seconds of ADC clipping and back up, a dB at a time, when the band is quiet. Never the tuner's own AGC, which overloads on a strong band."><input type="checkbox" id="sdrAgc" checked> AGC</span>
-        <input type="range" id="sdrGainRange" min="0" max="50" step="1" value="40" disabled>
-        <span class="val" id="sdrGainVal">auto</span>
-      </div>
-    </div>
-
+    <!-- The face's span and gain faders drive these; they stay as the
+         values the API calls are made from. -->
+    <div hidden>
+      <select id="sdrRateSel">
+        <option value="250000">250 kHz</option>
+        <option value="1024000">1.024 MHz</option>
+        <option value="1536000">1.536 MHz</option>
+        <option value="2048000" selected>2.048 MHz</option>
+        <option value="2400000">2.4 MHz</option>
+        <option value="3200000">3.2 MHz</option>
+      </select>
+      <input type="checkbox" id="sdrAgc" checked>
+      <input type="range" id="sdrGainRange" min="0" max="50" step="1" value="40" disabled>
+      <span id="sdrGainVal">auto</span>
     </div>
     </details>
   </div>
 
   <div id="err"></div>
+
+  <!-- Every gesture the panel answers to, in one place. -->
+  <dialog id="helpDialog" class="help-dialog" aria-labelledby="helpTitle">
+    <div class="help-head"><span id="helpTitle">Shortcuts</span><button type="button" class="palette-popup-close" id="helpClose" aria-label="Close">&times;</button></div>
+    <div class="help-grid">
+      <section><h3>Tune</h3><dl>
+        <dt>Click spectrum / waterfall</dt><dd>Tune to the signal (snapped to the raster)</dd>
+        <dt>Shift + click</dt><dd>Move the span, keep the receive frequency</dd>
+        <dt>Double-click spectrum</dt><dd>Tune and recenter</dd>
+        <dt>Scroll the spectrum</dt><dd>Step the raster · with Alt, sweep a tenth of the span</dd>
+        <dt>Alt + click</dt><dd>Tune off the raster</dd>
+        <dt>Scroll a digit · ↑ ↓</dt><dd>Step that digit</dd>
+        <dt>← →</dt><dd>Select the digit ↑ ↓ steps</dd>
+        <dt>Double-click the readout</dt><dd>Type a frequency</dd>
+        <dt>Tune strip</dt><dd>Drag or scroll: one step a time · « ‹ › » keys: 1 or 10 steps</dd>
+      </dl></section>
+      <section><h3>Panel</h3><dl>
+        <dt>STORE, then a slot</dt><dd>Save the frequency and mode (Shift-click a slot does the same)</dd>
+        <dt>Esc</dt><dd>Cancel STORE · close menus</dd>
+        <dt>Faders</dt><dd>Arrow keys and wheel: one step · Shift + wheel: finer where the fader allows</dd>
+        <dt>F</dt><dd>Tall dock (logs take most of the screen)</dd>
+        <dt>D</dt><dd>Dock beside or below the panel</dd>
+        <dt>?</dt><dd>This list</dd>
+      </dl></section>
+    </div>
+  </dialog>
 
 <aside class="side-col">
     <div class="side-tabs" role="tablist" aria-label="Data panels">
@@ -2920,7 +2915,7 @@
         <span class="sdr-classifier-label">one line per label change · click a frequency to tune</span>
         <button type="button" class="sdr-preset-btn" style="margin-left:auto" onclick="clearSdrClassLog()">clear</button>
       </div>
-      <div id="sdrClassLog" class="sdr-classifier-log"></div>
+      <div id="sdrClassLog" class="sdr-classifier-log"><div class="data-empty">Classified transmissions will be recorded here…</div></div>
     </div>
   </section>
 
@@ -2941,75 +2936,49 @@
       <span class="note" id="scanStateBadge">idle</span>
     </h2>
     <div class="panel-body">
-      <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:baseline; margin-bottom:6px;">
-        <label style="font-size:11px; color:var(--dim)">from
-          <input type="number" id="scanStartMhz" step="0.0001" min="1" max="2200"
-                 style="width:90px; background:#0d1319; color:var(--text); border:1px solid #27323c;
-                        border-radius:4px; padding:4px 6px; font:12px var(--mono); outline:none"> MHz
-        </label>
-        <label style="font-size:11px; color:var(--dim)">to
-          <input type="number" id="scanStopMhz" step="0.0001" min="1" max="2200"
-                 style="width:90px; background:#0d1319; color:var(--text); border:1px solid #27323c;
-                        border-radius:4px; padding:4px 6px; font:12px var(--mono); outline:none"> MHz
-        </label>
+      <div class="scan-form">
+        <section class="scan-group" aria-label="Range">
+          <div class="sect-head"><span class="sect-title">Range</span></div>
+          <div class="scan-fields">
+            <label class="scan-field"><span>FROM</span><input type="number" id="scanStartMhz" class="num-input" step="0.0001" min="1" max="2200"><em>MHz</em></label>
+            <label class="scan-field"><span>TO</span><input type="number" id="scanStopMhz" class="num-input" step="0.0001" min="1" max="2200"><em>MHz</em></label>
+          </div>
+          <div class="fe-keys scan-modes" role="group" aria-label="Modes to listen for">
+            <label class="fe-key"><input type="checkbox" id="scanModeAm"><span class="fe-led"></span><span class="fe-legend">AM</span></label>
+            <label class="fe-key"><input type="checkbox" id="scanModeNfm" checked><span class="fe-led"></span><span class="fe-legend">NFM</span></label>
+            <label class="fe-key"><input type="checkbox" id="scanModeP25" checked><span class="fe-led"></span><span class="fe-legend">P25</span></label>
+            <label class="fe-key"><input type="checkbox" id="scanModeDmr" checked><span class="fe-led"></span><span class="fe-legend">DMR</span></label>
+          </div>
+        </section>
+        <section class="scan-group" aria-label="Gate and timing">
+          <div class="sect-head"><span class="sect-title">Gate &amp; timing</span></div>
+          <div class="pf-row">
+            <label class="pf-label" for="scanThreshold">SCAN SQL</label>
+            <span class="fader-val pf-val" id="scanThresholdVal">8 dB</span>
+            <input type="range" id="scanThreshold" class="scan-slider" min="4" max="20" step="0.5" value="8" aria-label="Scan squelch, dB above floor">
+          </div>
+          <div class="scan-fields">
+            <label class="scan-field"><span>RESUME AFTER</span><input type="number" id="scanResumeS" class="num-input" step="0.5" min="0.5" max="30" value="2"><em>s</em></label>
+            <label class="scan-field" title="How many candidates are test-decoded at the same time. Each listens on its own receivers, so one quiet carrier's dwell no longer hides the call beside it."><span>PARALLEL</span><input type="number" id="scanSlots" class="num-input" step="1" min="1" max="8" value="4"><em>ch</em></label>
+          </div>
+        </section>
+        <section class="scan-group" aria-label="Skips">
+          <div class="sect-head"><span class="sect-title">Skips</span></div>
+          <div class="scan-fields">
+            <label class="scan-field"><span>RE-TEST SKIPPED</span><input type="number" id="scanRetestS" class="num-input" step="5" min="5" max="600" value="60"><em>s</em></label>
+            <label class="scan-field"><span>PARK CONTROL CH</span><input type="number" id="scanCtrlS" class="num-input" step="60" min="30" max="14400" value="1800"><em>s</em></label>
+            <label class="scan-field" title="A carrier that fails this many test-decodes is a birdie: parked long-term so the sweep stops wasting dwells on it"><span>NOISE: PARK AFTER</span><input type="number" id="scanPersistAfter" class="num-input" step="1" min="0" max="10" value="3"><em>fails</em></label>
+            <label class="scan-field"><span>FOR</span><input type="number" id="scanPersistS" class="num-input" step="3600" min="300" max="604800" value="86400"><em>s</em></label>
+          </div>
+        </section>
       </div>
-      <div style="display:flex; gap:12px; flex-wrap:wrap; margin-bottom:6px; font-size:11px; color:var(--dim)">
-        <label><input type="checkbox" id="scanModeAm"> AM</label>
-        <label><input type="checkbox" id="scanModeNfm" checked> NFM</label>
-        <label><input type="checkbox" id="scanModeP25" checked> P25</label>
-        <label><input type="checkbox" id="scanModeDmr" checked> DMR</label>
-      </div>
-      <div style="display:flex; gap:10px; align-items:baseline; margin-bottom:6px; font-size:11px; color:var(--dim)">
-        <label style="flex:1">SCAN SQL
-          <input type="range" id="scanThreshold" min="4" max="20" step="0.5" value="8" style="width:110px; vertical-align:middle">
-          <span id="scanThresholdVal" style="font:11px var(--mono); color:var(--text)">8 dB</span>
-        </label>
-        <label>resume after
-          <input type="number" id="scanResumeS" step="0.5" min="0.5" max="30" value="2"
-                 style="width:52px; background:#0d1319; color:var(--text); border:1px solid #27323c;
-                        border-radius:4px; padding:3px 5px; font:12px var(--mono); outline:none"> s
-        </label>
-      </div>
-      <div style="display:flex; gap:10px; align-items:baseline; margin-bottom:6px; font-size:11px; color:var(--dim)">
-        <label title="How many candidates are test-decoded at the same time. Each listens on its own receivers, so one quiet carrier's dwell no longer hides the call beside it.">
-          parallel channels
-          <input type="number" id="scanSlots" step="1" min="1" max="8" value="4"
-                 style="width:40px; background:#0d1319; color:var(--text); border:1px solid #27323c;
-                        border-radius:4px; padding:3px 5px; font:12px var(--mono); outline:none">
-        </label>
-        <span style="font-size:10px; color:#64748b">tested at once, strongest first</span>
-      </div>
-      <div style="display:flex; gap:10px; align-items:baseline; margin-bottom:6px; font-size:11px; color:var(--dim)">
-        <label>re-test skipped after
-          <input type="number" id="scanRetestS" step="5" min="5" max="600" value="60"
-                 style="width:56px; background:#0d1319; color:var(--text); border:1px solid #27323c;
-                        border-radius:4px; padding:3px 5px; font:12px var(--mono); outline:none"> s
-        </label>
-        <label>park control channels for
-          <input type="number" id="scanCtrlS" step="60" min="30" max="14400" value="1800"
-                 style="width:62px; background:#0d1319; color:var(--text); border:1px solid #27323c;
-                        border-radius:4px; padding:3px 5px; font:12px var(--mono); outline:none"> s
-        </label>
-      </div>
-      <div style="display:flex; gap:10px; align-items:baseline; margin-bottom:6px; font-size:11px; color:var(--dim)">
-        <label title="A carrier that fails this many test-decodes is a birdie: parked long-term so the sweep stops wasting dwells on it">persistent noise: park after
-          <input type="number" id="scanPersistAfter" step="1" min="0" max="10" value="3"
-                 style="width:44px; background:#0d1319; color:var(--text); border:1px solid #27323c;
-                        border-radius:4px; padding:3px 5px; font:12px var(--mono); outline:none"> fails
-        </label>
-        <label>for
-          <input type="number" id="scanPersistS" step="3600" min="300" max="604800" value="86400"
-                 style="width:70px; background:#0d1319; color:var(--text); border:1px solid #27323c;
-                        border-radius:4px; padding:3px 5px; font:12px var(--mono); outline:none"> s
-        </label>
-      </div>
-      <div style="display:flex; gap:6px; flex-wrap:wrap; margin-bottom:6px;">
-          <button type="button" class="sdr-preset-btn" id="scanStartBtn" onclick="startVoiceScan()" style="padding:5px 12px" title="Apply the form and scan">Start scan</button>
-        <button type="button" class="sdr-preset-btn" id="scanStopBtn" onclick="stopScan()" style="padding:5px 12px; display:none" title="Leave scan mode and return to the previous demodulator">Stop</button>
-        <button type="button" class="sdr-preset-btn" id="scanPauseBtn" onclick="scanControl('pause')" style="padding:5px 12px">Pause</button>
-        <button type="button" class="sdr-preset-btn" id="scanResumeBtn" onclick="scanControl('resume')" style="padding:5px 12px">Resume</button>
-        <button type="button" class="sdr-preset-btn" onclick="scanControl('skip')" title="Move on from the channel under test or locked">Skip</button>
-        <button type="button" class="sdr-preset-btn" onclick="scanControl('forget')" title="Re-test every frequency the scanner has learned to pass over">Forget skips</button>
+      <div class="scan-keys">
+        <button type="button" class="dsp-key scan-key scan-start" id="scanStartBtn" onclick="startVoiceScan()" title="Apply the form and scan"><span class="dsp-tally led-green"></span><span id="scanStartLabel">START SCAN</span></button>
+        <button type="button" class="dsp-key scan-key" id="scanStopBtn" onclick="stopScan()" style="display:none" title="Leave scan mode and return to the previous demodulator"><span class="dsp-tally led-amber"></span><span>STOP</span></button>
+        <button type="button" class="dsp-key scan-key" id="scanPauseBtn" onclick="scanControl('pause')"><span class="dsp-tally led-cyan"></span><span>PAUSE</span></button>
+        <button type="button" class="dsp-key scan-key" id="scanResumeBtn" onclick="scanControl('resume')"><span class="dsp-tally led-cyan"></span><span>RESUME</span></button>
+        <button type="button" class="dsp-key scan-key" onclick="scanControl('skip')" title="Move on from the channel under test or locked"><span class="dsp-tally led-cyan"></span><span>SKIP</span></button>
+        <button type="button" class="dsp-key scan-key" onclick="scanControl('forget')" title="Re-test every frequency the scanner has learned to pass over"><span class="dsp-tally led-violet"></span><span>FORGET SKIPS</span></button>
       </div>
       <div id="scanProgress" class="sdr-classifier-subvalue" style="font-size:11px; color:#94a3b8; min-height:15px;">Configure a range and press Start.</div>
       <div style="display:flex; align-items:baseline; margin-top:8px;">
@@ -3126,6 +3095,26 @@ function toggleWideDock() {
 }
 const dwb = document.getElementById('dockWideBtn');
 if (dwb) dwb.addEventListener('click', toggleWideDock);
+// Wired before `$` is defined (further down), so by getElementById.
+function toggleHelp(force) {
+  const d = document.getElementById('helpDialog');
+  if (!d || typeof d.showModal !== 'function') return;
+  const open = force !== undefined ? force : !d.open;
+  if (open && !d.open) d.showModal();
+  else if (!open && d.open) d.close();
+}
+document.getElementById('btnHelp')?.addEventListener('click', () => toggleHelp(true));
+document.getElementById('helpClose')?.addEventListener('click', () => toggleHelp(false));
+document.getElementById('helpDialog')?.addEventListener('click', (e) => {
+  if (e.target === e.currentTarget) toggleHelp(false);
+});
+document.addEventListener('keydown', (e) => {
+  if (e.key !== '?') return;
+  const tag = (document.activeElement && document.activeElement.tagName) || '';
+  if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return;
+  toggleHelp();
+});
+
 document.addEventListener('keydown', (e) => {
   if (e.key !== 'f' && e.key !== 'F') return;
   const tag = (document.activeElement && document.activeElement.tagName) || '';
@@ -3175,6 +3164,15 @@ function esc(s) { return String(s).replace(/[<>&"]/g, c => ({'<':'&lt;','>':'&gt
 // thing that changes.
 const opMode = 'sdr';
 
+function syncRangeFill() {
+  for (const id of ['sdrMinDb', 'sdrMaxDb']) {
+    const el = $(id);
+    if (!el) continue;
+    const f = (Number(el.value) - Number(el.min)) / ((Number(el.max) - Number(el.min)) || 1);
+    el.style.setProperty?.('--fill', `${(Math.max(0, Math.min(1, f)) * 100).toFixed(1)}%`);
+  }
+}
+
 function computeAutoRange(pwr) {
   if (!pwr || !pwr.length) return;
   let sample = [];
@@ -3183,7 +3181,10 @@ function computeAutoRange(pwr) {
   sample.sort((a, b) => a - b);
   const p15 = sample[Math.floor(sample.length * 0.15)];
   const p99 = sample[Math.floor(sample.length * 0.98)];
-  const targetMin = Math.max(-120, Math.min(-30, p15 - 6));
+  // The floor sits just above the bottom of the range. With every sample
+  // averaged it is nearly flat, so 6 dB of headroom here painted the whole
+  // waterfall one bright blue; 2 dB keeps it dark and lets signals stand out.
+  const targetMin = Math.max(-120, Math.min(-30, p15 - 2));
   const targetMax = Math.max(targetMin + 30, Math.min(0, Math.max(p99 + 12, p15 + 40)));
 
   // Continuous exponential smoothing: eliminates discrete vertical step jumps
@@ -3195,6 +3196,7 @@ function computeAutoRange(pwr) {
   if ($('sdrMinDb') && Math.abs(Number($('sdrMinDb').value) - roundMin) >= 1) $('sdrMinDb').value = roundMin;
   if ($('sdrMaxDb') && Math.abs(Number($('sdrMaxDb').value) - roundMax) >= 1) $('sdrMaxDb').value = roundMax;
   if ($('sdrRangeVal')) $('sdrRangeVal').textContent = roundMin + '..' + roundMax;
+  syncRangeFill();
 }
 
 let sdrInspectHz = 155000000;
@@ -4087,6 +4089,7 @@ function cssSize(cv) {
 // far as it is dragged. The wheel moves one step a notch.
 const TUNE_PX_PER_STEP = 14;
 let tuneStripOffset = 0;    // px the scale is dragged past the last whole step
+let tuneStripSig = '';
 
 function fmtTuneLabel(hz, stepHz) {
   const mhz = hz / 1e6;
@@ -4102,6 +4105,10 @@ function renderTuneStrip() {
   const H = 40;
   if (W <= 0) return;
   const stepHz = snapStepHz();
+  // Only redraw when something it shows changed: renderFreq runs per frame.
+  const sig = `${W}|${stepHz}|${sdrInspectHz}|${tuneStripOffset}`;
+  if (sig === tuneStripSig) return;
+  tuneStripSig = sig;
   const base = Math.round(sdrInspectHz / stepHz);
   // Where the receive frequency sits between raster points, plus the drag.
   const frac = (sdrInspectHz / stepHz - base) * TUNE_PX_PER_STEP;
@@ -4196,51 +4203,47 @@ function setKnobArc(id, cx, cy, r, frac) {
 }
 
 
-function makeFaderDraggable(trackId, onFractionChange) {
-  const track = $(trackId);
-  if (!track) return;
-  if (track.dataset.faderBound) return;
-  track.dataset.faderBound = '1';
-  let isDragging = false;
-
-  const updateFromPointer = (e) => {
-    const rect = track.getBoundingClientRect();
-    const h = rect.height || 74;
-    const distFromBottom = rect.bottom - e.clientY;
-    const frac = Math.max(0, Math.min(1.0, distFromBottom / h));
-    onFractionChange(frac, false);
-  };
-
-  track.addEventListener('pointerdown', (e) => {
-    isDragging = true;
-    track.setPointerCapture(e.pointerId);
-    updateFromPointer(e);
-  });
-
-  track.addEventListener('pointermove', (e) => {
-    if (!isDragging) return;
-    updateFromPointer(e);
-  });
-
-  const endDrag = (e) => {
-    if (isDragging) {
-      isDragging = false;
-      try { track.releasePointerCapture(e.pointerId); } catch (_) {}
-    }
-  };
-  track.addEventListener('pointerup', endDrag);
-  track.addEventListener('pointercancel', endDrag);
-
-  track.addEventListener('wheel', (e) => {
-    e.preventDefault();
-    const delta = (e.deltaY < 0 ? 1 : -1) * (e.shiftKey ? 0.02 : 0.06);
-    onFractionChange(delta, true);
-  }, { passive: false });
-}
 
 // Hardware band-stops as the last status frame reported them (feeds the
 // NOTCH readout in the VFO bar).
 const frontNotches = { rf: false, dab: false };
+
+/// The SDRplay-only controls, from what the radio reports: the IF filter
+/// list, the IF AGC target, and where the gain is (LNA state, IF reduction).
+function syncRadioExtras(s) {
+  const sel = $('ifFilterSel');
+  const row = $('ifFilterRow');
+  if (sel && row && Array.isArray(s.if_bandwidths_hz)) {
+    const list = s.if_bandwidths_hz.filter(w => w > 0 && (!s.rate_hz || w <= s.rate_hz * 1.001));
+    row.hidden = list.length === 0;
+    const fmt = w => w >= 1e6 ? `${+(w / 1e6).toFixed(3)} MHz` : `${+(w / 1e3).toFixed(0)} kHz`;
+    const now = s.if_bandwidth_hz ? fmt(s.if_bandwidth_hz) : '—';
+    const html = [`<option value="0">AUTO · ${now}</option>`, ...list.map(w => `<option value="${w}">${fmt(w)}</option>`)].join('');
+    if (sel.dataset.html !== html) { sel.innerHTML = html; sel.dataset.html = html; }
+    if (document.activeElement !== sel) sel.value = s.if_bandwidth_manual && s.if_bandwidth_hz ? String(s.if_bandwidth_hz) : '0';
+    sel.classList.toggle('manual', !!s.if_bandwidth_manual);
+  }
+  const wrap = $('agcSetpointWrap');
+  if (wrap) {
+    wrap.hidden = s.agc_setpoint_dbfs == null;
+    if (s.agc_setpoint_dbfs != null) {
+      setFader('faderAgcSetpoint', s.agc_setpoint_dbfs);
+      const v = $('agcSetpointVal');
+      if (v) v.textContent = `${Math.round(s.agc_setpoint_dbfs)} dBFS`;
+    }
+    // The target only acts while the RSP's own AGC is running.
+    const live = !!s.tuner_agc && s.gain_db == null;
+    $('faderAgcSetpoint')?.classList.toggle('pf-auto', !live);
+    wrap.title = live ? 'The level the RSP IF AGC holds the ADC at' : 'Acts only with AGC and IF AGC both on';
+  }
+  const split = $('gainSplit');
+  if (split) {
+    split.hidden = s.rfgr_db == null && s.ifgr_db == null;
+    if (!split.hidden) {
+      split.textContent = `LNA STATE ${s.rfgr_db == null ? '—' : Math.round(s.rfgr_db)} · IF REDUCTION ${s.ifgr_db == null ? '—' : Math.round(s.ifgr_db) + ' dB'}`;
+    }
+  }
+}
 
 function fmtRateShort(hz) {
   return hz >= 1e6 ? `${+(hz / 1e6).toFixed(2)}M` : `${+(hz / 1e3).toFixed(1)}k`;
@@ -4253,6 +4256,7 @@ function updateVfoTelemetry() {
   let bwLabel = '12.5k';
   if (sdrMode === 'wfm') { bw = '200k · FLAT'; bwLabel = '200k'; }
   else if (sdrMode === 'am') { bw = '6.0k · MID'; bwLabel = '6.0k'; }
+  else if (sdrMode === 'usb' || sdrMode === 'lsb') { bw = `2.5k · ${sdrMode.toUpperCase()}`; bwLabel = '2.5k'; }
   else if (sdrMode === 'packet' || sdrMode === 'flex') { bw = '25.0k · SHARP'; bwLabel = '25.0k'; }
   else if (sdrMode === 'pager') { bw = '12.5k · SHARP'; bwLabel = '12.5k'; }
   const fBadge = $('vfoFilterBadge');
@@ -4288,12 +4292,56 @@ function gainSpan() {
 
 /// Engrave a fader's scale, top of travel first. The labels are spaced
 /// evenly down the well, so each must be the value the cap reads there.
-function setFaderScale(id, labels) {
+/// Engrave a precision fader's scale: each label sits at the fraction of
+/// travel where the thumb reads that value.
+function setFaderScale(id, ticks) {
   const el = $(id);
-  const key = labels.join('|');
+  const key = ticks.map(t => `${t.frac}:${t.label}`).join('|');
   if (!el || el.dataset.key === key) return;
   el.dataset.key = key;
-  el.innerHTML = labels.map(t => `<span>${esc(String(t))}</span>`).join('');
+  el.innerHTML = ticks.map(t => `<span style="left:${(t.frac * 100).toFixed(2)}%">${esc(String(t.label))}</span>`).join('');
+}
+
+/// Set a precision fader's value and its lit fill, without fighting a drag.
+function setFader(id, value) {
+  const el = $(id);
+  if (!el) return;
+  if (el !== document.activeElement || !el.dataset.dragging) el.value = String(value);
+  const min = Number(el.min), max = Number(el.max);
+  const frac = max > min ? (Number(el.value) - min) / (max - min) : 0;
+  el.style.setProperty?.('--fill', `${(Math.max(0, Math.min(1, frac)) * 100).toFixed(1)}%`);
+}
+
+/// The wheel moves a precision fader one step a notch (Shift: a quarter
+/// step where the fader allows it), and fires the same input event a drag
+/// does.
+function fineWheel(id, fineStep) {
+  const el = $(id);
+  if (!el) return;
+  el.addEventListener('wheel', (e) => {
+    e.preventDefault();
+    const step = e.shiftKey && fineStep ? fineStep : Number(el.step) || 1;
+    const v = Number(el.value) + (e.deltaY < 0 ? step : -step);
+    el.value = String(Math.max(Number(el.min), Math.min(Number(el.max), v)));
+    el.dispatchEvent(new Event('input'));
+    el.dispatchEvent(new Event('change'));
+  }, { passive: false });
+  el.addEventListener('pointerdown', () => { el.dataset.dragging = '1'; });
+  const up = () => { delete el.dataset.dragging; };
+  el.addEventListener('pointerup', up);
+  el.addEventListener('pointercancel', up);
+}
+
+/// Run `fn` at most every `ms`, always ending on the latest value.
+function trailingThrottle(fn, ms) {
+  let last = 0, timer = 0, args = null;
+  return (...a) => {
+    args = a;
+    const now = Date.now();
+    clearTimeout(timer);
+    if (now - last >= ms) { last = now; fn(...args); }
+    else timer = setTimeout(() => { last = Date.now(); fn(...args); }, ms - (now - last));
+  };
 }
 
 function syncGainUi() {
@@ -4303,10 +4351,11 @@ function syncGainUi() {
   const isAgc = agc ? agc.checked : false;
   const val = Number(slider.value) || 0;
   const g = gainSpan();
-  const frac = Math.max(0, Math.min(1, (val - g.min) / ((g.max - g.min) || 1)));
-  setFaderScale('faderRfGainScale', [5, 4, 3, 2, 1, 0].map(i => Math.round(g.min + (g.max - g.min) * i / 5)));
-  const cap = $('faderRfGainCap');
-  if (cap) cap.style.bottom = `${(frac * 100).toFixed(1)}%`;
+  setFaderScale('faderRfGainScale', [0, 1, 2, 3, 4].map(i => ({ frac: i / 4, label: Math.round(g.min + (g.max - g.min) * i / 4) })));
+  const fader = $('faderRfGain');
+  if (fader) { fader.min = String(g.min); fader.max = String(g.max); }
+  setFader('faderRfGain', val);
+  fader?.classList.toggle('pf-auto', isAgc);
   const fVal = $('faderRfGainVal');
   if (fVal) fVal.textContent = isAgc ? 'auto' : `${Math.round(val)} dB`;
   const agcBtn = $('faderAgcBtn');
@@ -4331,13 +4380,13 @@ function updateAfVolReadout() {
 }
 
 function syncSquelchUi() {
-  const cap = $('faderSqlCap');
   const val = $('faderSqlVal');
   const min = (typeof sdrMinDb === 'number') ? sdrMinDb : -120;
   const max = (typeof sdrMaxDb === 'number') ? sdrMaxDb : 0;
-  const range = (max - min) || 1;
-  const frac = Math.max(0, Math.min(1.0, (sdrSquelchDb - min) / range));
-  if (cap) cap.style.bottom = `${(frac * 100).toFixed(1)}%`;
+  const fader = $('faderSql');
+  if (fader) { fader.min = String(min); fader.max = String(max); }
+  setFader('faderSql', sdrSquelchDb);
+  setFaderScale('faderSqlScale', [0, 1, 2, 3, 4].map(i => ({ frac: i / 4, label: Math.round(min + (max - min) * i / 4) })));
   if (val) val.textContent = `${Math.round(sdrSquelchDb)} dB`;
 }
 
@@ -4357,14 +4406,38 @@ function syncSpanRates(rates) {
   SPAN_RATES = next;
   const sel = $('sdrRateSel');
   if (sel) sel.innerHTML = next.map(r => `<option value="${r}">${fmtSpanOption(r)}</option>`).join('');
-  // The span fader stops at every rate, evenly spaced. Six labels fit the
-  // well; past that, engrave every k-th stop with k dividing the travel, so
-  // each label still sits on its stop instead of crowding into the next.
+  // The span fader stops at every rate, evenly spaced. Label every stop
+  // that fits (about one per 40 px of travel), always the two ends.
   const stops = next.length - 1;
-  let k = 1;
-  while (stops / k + 1 > 6 || stops % k) k++;
+  const fader = $('faderSpan');
+  if (fader) fader.max = String(stops);
   const short = r => r < 1e6 ? `${+(r / 1e3).toFixed(0)}k` : `${+(r / 1e6).toPrecision(3)}M`;
-  setFaderScale('faderSpanScale', next.filter((_, i) => i % k === 0).reverse().map(short));
+  const k = Math.max(1, Math.ceil(stops / 5));
+  setFaderScale('faderSpanScale', next.map((r, i) => ({ i, r }))
+    .filter(({ i }) => i % k === 0 || i === stops)
+    .filter(({ i }, j, arr) => !(i !== stops && arr.length > 1 && stops - i < k))
+    .map(({ i, r }) => ({ frac: stops ? i / stops : 0, label: short(r) })));
+}
+
+/// The RSP1A's ADC resolution falls as the sample rate rises (SDRplay's
+/// published figures: 14 bits to 6.048 MS/s, 12 to 8.064, 10 to 9.216, then
+/// 8). A hardware spec, not a measurement, and shown only on that radio.
+function rsp1aAdcBits(rate) {
+  if (rate <= 6.048e6) return 14;
+  if (rate <= 8.064e6) return 12;
+  if (rate <= 9.216e6) return 10;
+  return 8;
+}
+function syncAdcBits(rate) {
+  const el = $('spanAdcBits');
+  if (!el) return;
+  const rsp1a = typeof sdrStatus !== 'undefined' && sdrStatus && /RSP1A/i.test(sdrStatus.tuner || '');
+  el.hidden = !rsp1a;
+  if (!rsp1a) return;
+  const bits = rsp1aAdcBits(rate);
+  el.textContent = `${bits}-BIT ADC`;
+  el.classList.toggle('warn', bits < 14);
+  el.title = `RSP1A ADC resolution at this span (SDRplay specification): ${bits} bits`;
 }
 
 function syncSpanKnobUi() {
@@ -4374,11 +4447,10 @@ function syncSpanKnobUi() {
   if (idx < 0) {
     idx = SPAN_RATES.reduce((best, r, i) => Math.abs(r - curRate) < Math.abs(SPAN_RATES[best] - curRate) ? i : best, 0);
   }
-  const frac = idx / Math.max(1, SPAN_RATES.length - 1);
-  const cap = $('faderSpanCap');
-  if (cap) cap.style.bottom = `${(frac * 100).toFixed(1)}%`;
+  setFader('faderSpan', idx);
   const val = $('faderSpanVal');
   if (val) val.textContent = fmtSpanM(curRate);
+  syncAdcBits(curRate);
   updateDspReadout();
 }
 
@@ -4461,9 +4533,7 @@ document.addEventListener('keydown', (e) => {
 });
 
 function syncZoomUi() {
-  const frac = Math.max(0, Math.min(1, Math.log2(sdrZoom || 1) / 5.0));
-  const cap = $('faderZoomCap');
-  if (cap) cap.style.bottom = `${(frac * 100).toFixed(1)}%`;
+  setFader('faderZoom', Math.max(0, Math.min(5, Math.log2(sdrZoom || 1))));
   const val = $('faderZoomVal');
   if (val) val.textContent = (sdrZoom && sdrZoom > 1.05) ? `${sdrZoom.toFixed(1)}x` : '1.0x';
   updateDspReadout();
@@ -4787,30 +4857,22 @@ function setupRadioDeck() {
     v.dispatchEvent(new Event('input'));
   }, { passive: false });
 
-  // 2. Precision Linear Vertical Faders
-  // RF Gain Fader (Bay 1)
-  makeFaderDraggable('faderRfGainTrack', (frac, isDelta) => {
+  // 2. Precision faders. Gain commits at most every 150 ms while dragging
+  // (and always the final value); the span, which reopens the stream,
+  // commits once the operator stops; zoom follows smoothly.
+  const commitGain = trailingThrottle((v) => setSdrGain(v), 150);
+  $('faderRfGain')?.addEventListener('input', (e) => {
     const slider = $('sdrGainRange');
     const agc = $('sdrAgc');
     if (!slider) return;
-    if (agc && agc.checked) {
-      agc.checked = false;
-      slider.disabled = false;
-    }
-    const g = gainSpan();
-    let val;
-    if (isDelta) {
-      val = Math.round(Number(slider.value) + frac * (g.max - g.min));
-    } else {
-      val = Math.round(g.min + frac * (g.max - g.min));
-    }
-    val = Math.max(g.min, Math.min(g.max, val));
-    slider.value = val;
+    if (agc && agc.checked) { agc.checked = false; slider.disabled = false; }
+    slider.value = e.target.value;
     const gainValEl = $('sdrGainVal');
-    if (gainValEl) gainValEl.textContent = `${val} dB`;
-    setSdrGain(val);
+    if (gainValEl) gainValEl.textContent = `${e.target.value} dB`;
+    commitGain(Number(e.target.value));
     syncGainUi();
   });
+  fineWheel('faderRfGain');
 
   $('faderAgcBtn')?.addEventListener('click', () => {
     const agc = $('sdrAgc');
@@ -4824,66 +4886,45 @@ function setupRadioDeck() {
     syncGainUi();
   });
 
-  // Squelch Fader (Bay 1)
-  makeFaderDraggable('faderSqlTrack', (frac, isDelta) => {
-    const min = (typeof sdrMinDb === 'number') ? sdrMinDb : -120;
-    const max = (typeof sdrMaxDb === 'number') ? sdrMaxDb : 0;
-    const range = (max - min) || 1;
-    if (isDelta) {
-      sdrSquelchDb = Math.round(sdrSquelchDb + frac * range);
-    } else {
-      sdrSquelchDb = Math.round(min + frac * range);
-    }
-    sdrSquelchDb = Math.max(min, Math.min(max, sdrSquelchDb));
+  $('faderSql')?.addEventListener('input', (e) => {
+    sdrSquelchDb = Number(e.target.value);
     syncSquelchUi();
     scheduleHoverPaint();
   });
+  fineWheel('faderSql');
 
-  // SPAN Rate Fader (Bay 4)
-  const stepSpanRate = (dir) => {
-    const sel = $('sdrRateSel');
-    const curRate = sel ? Number(sel.value) : sdrRateHz;
-    let idx = SPAN_RATES.indexOf(curRate);
-    if (idx < 0) {
-      idx = SPAN_RATES.reduce((best, r, i) => Math.abs(r - curRate) < Math.abs(SPAN_RATES[best] - curRate) ? i : best, 0);
-    }
-    const nextIdx = Math.max(0, Math.min(SPAN_RATES.length - 1, idx + dir));
-    if (nextIdx !== idx) {
-      const newRate = SPAN_RATES[nextIdx];
-      setSdrRate(newRate);
-      if (sel) sel.value = String(newRate);
-      syncSpanKnobUi();
-    }
-  };
-
-  makeFaderDraggable('faderSpanTrack', (frac, isDelta) => {
-    if (isDelta) {
-      stepSpanRate(frac > 0 ? 1 : -1);
-    } else {
+  let spanTimer = 0;
+  $('faderSpan')?.addEventListener('input', (e) => {
+    const idx = Number(e.target.value);
+    const rate = SPAN_RATES[Math.max(0, Math.min(SPAN_RATES.length - 1, idx))];
+    // Preview the stop while moving; reopen the stream once it rests.
+    const val = $('faderSpanVal');
+    if (val) val.textContent = fmtSpanM(rate);
+    syncAdcBits(rate);
+    setFader('faderSpan', idx);
+    clearTimeout(spanTimer);
+    spanTimer = setTimeout(() => {
       const sel = $('sdrRateSel');
-      const idx = Math.max(0, Math.min(SPAN_RATES.length - 1, Math.round(frac * (SPAN_RATES.length - 1))));
-      const newRate = SPAN_RATES[idx];
       const curRate = sel ? Number(sel.value) : sdrRateHz;
-      if (newRate !== curRate) {
-        setSdrRate(newRate);
-        if (sel) sel.value = String(newRate);
+      if (rate !== curRate) {
+        setSdrRate(rate);
+        if (sel) sel.value = String(rate);
         syncSpanKnobUi();
       }
-    }
+    }, 450);
   });
+  fineWheel('faderSpan');
 
-  // FFT Zoom Fader (Bay 4)
-  makeFaderDraggable('faderZoomTrack', (frac, isDelta) => {
-    if (isDelta) {
-      const factor = frac > 0 ? 1.25 : (1 / 1.25);
-      setZoom(Math.max(1, Math.min(32, sdrZoom * factor)));
-    } else {
-      let z = Math.pow(2, frac * 5.0);
-      if (z < 1.08) z = 1;
-      setZoom(Math.max(1, Math.min(32, z)));
-    }
-    syncZoomUi();
+  const commitZoom = trailingThrottle((z) => setZoom(z), 120);
+  $('faderZoom')?.addEventListener('input', (e) => {
+    let z = Math.pow(2, Number(e.target.value));
+    if (z < 1.04) z = 1;
+    setFader('faderZoom', Number(e.target.value));
+    const val = $('faderZoomVal');
+    if (val) val.textContent = z > 1.05 ? `${z.toFixed(1)}x` : '1.0x';
+    commitZoom(Math.max(1, Math.min(32, z)));
   });
+  fineWheel('faderZoom', 0.05);
 
   $('faderZoomReset')?.addEventListener('click', () => {
     setZoom(1);
@@ -4974,6 +5015,7 @@ function initSdrCanvas() {
 function resizeSdrCanvases() {
   if (!sdrSpecCanvas || !sdrWfCanvas) return;
   fitCanvas(sdrSpecCanvas, sdrSpecCtx);
+  scheduleDisplayBins();
 
   const dpr = window.devicePixelRatio || 1;
   const rect = sdrWfCanvas.getBoundingClientRect();
@@ -5371,15 +5413,18 @@ function drawSdrSpectrum(pwr) {
   const ix = xForFreq(sdrInspectHz, W);
   if (ix >= -20 && ix <= W + 20) {
     const halfBw = (sdrBandwidthHz / 2 / sdrRateHz) * W;
+    // The passband is centred on the carrier except in sideband, where it
+    // sits wholly above (USB) or below (LSB) it.
+    const pcx = xForFreq(sdrInspectHz + sdrPassbandOffsetHz, W);
     const wide = halfBw * 2 > W * 0.25;
     ctx.fillStyle = wide ? 'rgba(43,255,106,0.05)' : 'rgba(43,255,106,0.12)';
-    ctx.fillRect(ix - halfBw, 0, halfBw * 2, H);
+    ctx.fillRect(pcx - halfBw, 0, halfBw * 2, H);
 
     // Sculpted IF filter top with skirt roll-off
     ctx.strokeStyle = 'rgba(43,255,106,0.85)';
     ctx.lineWidth = 1.4;
     ctx.beginPath();
-    const rx0 = ix - halfBw, rx1 = ix + halfBw;
+    const rx0 = pcx - halfBw, rx1 = pcx + halfBw;
     ctx.moveTo(Math.max(0, rx0 - 6), 26);
     ctx.quadraticCurveTo(rx0, 6, rx0 + Math.min(6, halfBw), 6);
     ctx.lineTo(rx1 - Math.min(6, halfBw), 6);
@@ -5420,13 +5465,13 @@ function drawSdrSpectrum(pwr) {
     ctx.strokeStyle = '#2bff6a';
     ctx.lineWidth = 0.8;
     ctx.beginPath();
-    if (ctx.roundRect) ctx.roundRect(ix - bwW / 2, 26, bwW, 14, 2);
-    else ctx.rect(ix - bwW / 2, 26, bwW, 14);
+    if (ctx.roundRect) ctx.roundRect(pcx - bwW / 2, 26, bwW, 14, 2);
+    else ctx.rect(pcx - bwW / 2, 26, bwW, 14);
     ctx.fill();
     ctx.stroke();
     ctx.fillStyle = '#2bff6a';
     ctx.textAlign = 'center';
-    ctx.fillText(badgeText, ix, 36.5);
+    ctx.fillText(badgeText, pcx, 36.5);
   }
 
   // Voice-scan held calls & test markers
@@ -5609,6 +5654,33 @@ function syncWaterfallAxis(centreHz, spanHz) {
 
 let sdrTempImg = null;
 
+let sdrWfShape = null;
+let sdrWfShiftDb = 0;
+
+// The FFT follows the spectrum's width in device pixels (the server rounds
+// to a power of two, 1024..4096 at 1x, never below 1024 so a narrow viewer
+// cannot coarsen everyone's): resolve what the screen can show. Debounced so a window drag sends one request.
+let displayBinsSent = 0, displayBinsTimer = 0;
+function scheduleDisplayBins() {
+  clearTimeout(displayBinsTimer);
+  displayBinsTimer = setTimeout(() => {
+    const bins = sdrSpecCanvas ? sdrSpecCanvas.width : 0;
+    if (bins >= 64 && bins !== displayBinsSent) {
+      displayBinsSent = bins;
+      sdrPost('/api/sdr/display', { bins }, 'display').catch(() => { displayBinsSent = 0; });
+    }
+  }, 400);
+}
+
+function setWfPeak(on) {
+  sdrWfPeak = on;
+  try { localStorage.setItem('usdr_wf_peak', on ? '1' : '0'); } catch {}
+  $('keyWfPeak')?.classList.toggle('on', on);
+}
+// Waterfall rows from each frame's peak segment instead of its average
+// (bursts at full level). Kept per browser.
+let sdrWfPeak = (() => { try { return localStorage.getItem('usdr_wf_peak') === '1'; } catch { return false; } })();
+
 function drawSdrWaterfallRow(pwr) {
   if (!sdrWfCtx || !sdrWfCanvas) return;
   const N = pwr.length;
@@ -5624,31 +5696,45 @@ function drawSdrWaterfallRow(pwr) {
     return;
   }
 
-  if (sdrTempCanvas.width !== N || sdrTempCanvas.height !== 1) {
-    sdrTempCanvas.width = N; sdrTempCanvas.height = 1;
+  // One row pixel per device pixel when there are more bins than pixels,
+  // each the STRONGEST bin it covers: nearest-neighbor scaling dropped a
+  // quarter of the bins at 1024 bins over 760 px, and a narrow carrier
+  // could fall between pixels and vanish from the history.
+  const cols = Math.min(N, targetW);
+  if (sdrTempCanvas.width !== cols || sdrTempCanvas.height !== 1) {
+    sdrTempCanvas.width = cols; sdrTempCanvas.height = 1;
     sdrTempImg = null;
   }
-  if (!sdrTempImg || sdrTempImg.width !== N) {
-    sdrTempImg = sdrTempCtx.createImageData(N, 1);
+  if (!sdrTempImg || sdrTempImg.width !== cols) {
+    sdrTempImg = sdrTempCtx.createImageData(cols, 1);
   }
   const img = sdrTempImg;
   const data = img.data;
   const lut = sdrColorLut || buildSdrLut(sdrPalette);
   const range = (sdrMaxDb - sdrMinDb) || 1;
-  // Gamma tone-shaping (0.86) pulls faint whisper signals up from the noise floor
-  const gamma = 0.86;
-  for (let i = 0; i < N; i++) {
-    const norm = Math.min(1, Math.max(0, (pwr[i] - sdrMinDb) / range));
-    const shaped = Math.pow(norm, gamma);
-    const li = Math.min(255, Math.floor(shaped * 255)) * 4;
-    const pi = i * 4;
+  // The tone curve (gamma 0.86, pulling faint signals up from the floor)
+  // is folded into a 256-entry index table, built once per range change.
+  if (!sdrWfShape) {
+    sdrWfShape = new Uint16Array(256);
+    for (let k = 0; k < 256; k++) sdrWfShape[k] = Math.min(255, Math.floor(Math.pow(k / 255, 0.86) * 255)) * 4;
+  }
+  const shape = sdrWfShape;
+  const per = N / cols;
+  for (let c = 0; c < cols; c++) {
+    const b0 = Math.floor(c * per);
+    const b1 = Math.max(b0 + 1, Math.floor((c + 1) * per));
+    let v = pwr[b0];
+    for (let b = b0 + 1; b < b1 && b < N; b++) if (pwr[b] > v) v = pwr[b];
+    const k = Math.min(255, Math.max(0, Math.floor(((v - sdrWfShiftDb - sdrMinDb) / range) * 255)));
+    const li = shape[k];
+    const pi = c * 4;
     data[pi] = lut[li]; data[pi + 1] = lut[li + 1]; data[pi + 2] = lut[li + 2]; data[pi + 3] = 255;
   }
   sdrTempCtx.putImageData(img, 0, 0);
 
   sdrWfCtx.drawImage(sdrWfCanvas, 0, 0, W, H - 1, 0, 1, W, H - 1);
   sdrWfCtx.imageSmoothingEnabled = false;
-  sdrWfCtx.drawImage(sdrTempCanvas, 0, 0, N, 1, 0, 0, W, 1);
+  sdrWfCtx.drawImage(sdrTempCanvas, 0, 0, cols, 1, 0, 0, W, 1);
 }
 /// Voice-scan markers over the waterfall: the same amber "under test"
 /// brackets the spectrum draws, plus one faint green line for the tuned
@@ -5696,7 +5782,7 @@ function drawScanOverlay() {
 
   // 2. Translucent passband guide beam projected through the waterfall history
   if (sdrInspectHz != null && sdrRateHz) {
-    const ix = xForFreq(sdrInspectHz, W);
+    const ix = xForFreq(sdrInspectHz + sdrPassbandOffsetHz, W);
     const halfBw = (sdrBandwidthHz / 2 / sdrRateHz) * W;
     if (ix >= -halfBw - 4 && ix <= W + halfBw + 4) {
       const rx0 = ix - halfBw, rx1 = ix + halfBw;
@@ -5849,6 +5935,12 @@ function setScopeChrome(kind) {
       titleText = 'NFM AUDIO SCOPE';
       modeText = 'AUDIO (4.0kHz) ⇄ PASSBAND';
     }
+    trigText = 'AUTO ZERO-CROSS';
+  } else if (sdrMode === 'usb' || sdrMode === 'lsb') {
+    // The demodulated sideband audio, 0-4 kHz: the 300-2800 Hz voice
+    // passband sits inside it.
+    titleText = `${sdrMode.toUpperCase()} AUDIO SCOPE`;
+    modeText = 'AUDIO (4.0kHz) · 300–2800 Hz';
     trigText = 'AUTO ZERO-CROSS';
   } else if (sdrMode === 'am') {
     if (scopeSubModes.am === 'passband') {
@@ -6876,6 +6968,7 @@ function setupControls() {
     sdrMaxDb = Number($('sdrMaxDb').value);
     if (sdrMaxDb <= sdrMinDb + 10) { sdrMaxDb = sdrMinDb + 10; $('sdrMaxDb').value = sdrMaxDb; }
     $('sdrRangeVal').textContent = sdrMinDb + '..' + sdrMaxDb;
+    syncRangeFill();
     syncSquelchUi();
     if (sdrLastPwr.length) drawSdrSpectrum(sdrLastPwr);
   };
@@ -6914,6 +7007,8 @@ function setupControls() {
     ['slow', 'AVG 0.5s'],
     ['deep', 'AVG 2s'],
   ];
+  $('keyWfPeak')?.addEventListener('click', () => setWfPeak(!sdrWfPeak));
+  $('keyWfPeak')?.classList.toggle('on', sdrWfPeak);
   $('keyAvg').addEventListener('click', () => {
     avgIdx = (avgIdx + 1) % AVG_MODES.length;
     const [mode, label] = AVG_MODES[avgIdx];
@@ -7004,6 +7099,16 @@ function setupControls() {
   $('chkBiasT')?.addEventListener('change', (e) => setFrontend({ bias_t: e.target.checked }));
   $('chkRfNotch')?.addEventListener('change', (e) => setFrontend({ rf_notch: e.target.checked }));
   $('chkDabNotch')?.addEventListener('change', (e) => setFrontend({ dab_notch: e.target.checked }));
+  $('chkIqCorr')?.addEventListener('change', (e) => setFrontend({ iq_correction: e.target.checked }));
+  $('ifFilterSel')?.addEventListener('change', (e) => setFrontend({ if_bandwidth: Number(e.target.value) || 0 }));
+  const commitSetpoint = trailingThrottle((v) => setFrontend({ agc_setpoint: v }), 200);
+  $('faderAgcSetpoint')?.addEventListener('input', (e) => {
+    setFader('faderAgcSetpoint', Number(e.target.value));
+    const v = $('agcSetpointVal');
+    if (v) v.textContent = `${e.target.value} dBFS`;
+    commitSetpoint(Number(e.target.value));
+  });
+  fineWheel('faderAgcSetpoint');
 
   $('btnListen')?.addEventListener('click', toggleMonitor);
   $('volRange').addEventListener('input', (e) => {
@@ -7061,8 +7166,28 @@ function paintSdrWaterfallBacklog(frames) {
     sdrRateHz = m.rateHz;
     if (sdrAutoRange) computeAutoRange(m.pwr);
     syncWaterfallAxis(m.centerHz, m.rateHz);
-    drawSdrWaterfallRow(m.pwr);
+    drawSdrWaterfallRow(waterfallRowOf(m));
   }
+}
+
+/// The row a frame paints into the waterfall: its per-frame peak when that
+/// is switched on (and the server sent one), otherwise its average.
+function waterfallRowOf(m) {
+  if (!(sdrWfPeak && m.wfPeak && m.wfPeak.length === m.pwr.length)) {
+    sdrWfShiftDb = 0;
+    return m.pwr;
+  }
+  // The strongest of a frame's segments reads above its average even on
+  // pure noise. Paint peak rows shifted down by that typical excess (the
+  // median difference, smoothed), so the floor keeps its shade and what
+  // lights up is a burst, not the statistics of the maximum.
+  const n = m.pwr.length, step = Math.max(1, Math.floor(n / 128));
+  const d = [];
+  for (let i = 0; i < n; i += step) d.push(m.wfPeak[i] - m.pwr[i]);
+  d.sort((a, b) => a - b);
+  const med = d[d.length >> 1] || 0;
+  sdrWfShiftDb += (med - sdrWfShiftDb) * 0.1;
+  return m.wfPeak;
 }
 
 function onSdrFft(m) {
@@ -7093,7 +7218,7 @@ function paintSdrFft(m) {
   syncWaterfallAxis(m.centerHz, m.rateHz);
   drawSpecScale();
   drawSdrSpectrum(m.pwr);
-  drawSdrWaterfallRow(m.pwr);
+  drawSdrWaterfallRow(waterfallRowOf(m));
   drawScanOverlay();
   drawScope(m.scope, m.scopeRateHz, m.scopeKind, m.symbolRateHz);
   noteClipping(m.peakIq);
@@ -7428,6 +7553,8 @@ let sdrMode = 'nfm';
 // scan itself updates this.
 let lastVoiceMode = 'nfm';
 let sdrBandwidthHz = 25000;
+// Passband center relative to the receive frequency (sideband only).
+let sdrPassbandOffsetHz = 0;
 // Offsets from the display centre, in Hz, that a spur check found to be
 // internal to the receiver.
 let sdrSpurOffsets = [];
@@ -7681,7 +7808,7 @@ async function setSdrMode(mode) {
 //   am      service-aware: 8.33 kHz inside the airband (118–137 MHz),
 //           10 kHz on the broadcast band (the Americas' AM raster) — a
 //           fixed 9 kHz step lands between channels on both services.
-const SNAP_STEPS = { wfm: 100000, nfm: 6250, p25: 6250, dmr: 6250, nxdn: 6250, packet: 2500, pager: 25000, flex: 2500, scan: 6250 };
+const SNAP_STEPS = { usb: 100, lsb: 100, wfm: 100000, nfm: 6250, p25: 6250, dmr: 6250, nxdn: 6250, packet: 2500, pager: 25000, flex: 2500, scan: 6250 };
 
 /// AM has two rasters depending on the service being tuned: the airband's
 /// 8.33 kHz channels and broadcast's 10 kHz (9 kHz outside the Americas).
@@ -7992,6 +8119,7 @@ function updateSdrStatus(s) {
   if ($('sdrRadioSel') && s.serial) $('sdrRadioSel').value = s.serial;
   if (s.mode && s.mode !== sdrMode) applyModeUi(s.mode);
   if (s.bandwidth_hz) sdrBandwidthHz = s.bandwidth_hz;
+  if ('passband_offset_hz' in s) sdrPassbandOffsetHz = Number(s.passband_offset_hz) || 0;
   if ($('headerBwBadge')) {
     const bw = sdrBandwidthHz;
     $('headerBwBadge').textContent = bw >= 1000 ? (bw / 1000).toFixed(bw % 1000 ? 1 : 0) + 'k' : bw + 'Hz';
@@ -8052,14 +8180,15 @@ function updateSdrStatus(s) {
     $('cbTunerAgc').title = "With AGC on: hand the IF stage to the RSP's own AGC, which holds the ADC at its -30 dBFS setpoint, instead of the clip-guarded loop. The LNA state stays where the gain left it.";
   }
   // Switches the radio has, as it reports them; hidden where it has none.
-  for (const [box, wrap, val] of [['chkBiasT', 'cbBiasT', s.bias_t], ['chkRfNotch', 'cbRfNotch', s.rf_notch], ['chkDabNotch', 'cbDabNotch', s.dab_notch]]) {
+  for (const [box, wrap, val] of [['chkBiasT', 'cbBiasT', s.bias_t], ['chkRfNotch', 'cbRfNotch', s.rf_notch], ['chkDabNotch', 'cbDabNotch', s.dab_notch], ['chkIqCorr', 'cbIqCorr', s.iq_correction]]) {
     if ($(wrap)) $(wrap).hidden = val == null;
     if ($(box) && val != null) $(box).checked = !!val;
   }
+  syncRadioExtras(s);
   if ('rf_notch' in s) frontNotches.rf = !!s.rf_notch;
   if ('dab_notch' in s) frontNotches.dab = !!s.dab_notch;
   if ($('feReadout') && s.tuner) {
-    const on = [...document.querySelectorAll('.fe-key:not([hidden]) input')].filter(i => i.checked).length;
+    const on = [...document.querySelectorAll('.bay-fe .fe-key:not([hidden]) input')].filter(i => i.checked).length;
     $('feReadout').textContent = `${s.tuner.replace('Rafael Micro ', '')} · ${on ? on + ' ON' : 'ALL OFF'}`;
   }
   // The ring fills while the receiver is delivering samples in a mode that
@@ -8211,7 +8340,7 @@ function renderScan(sc) {
   // only while a scan exists.
   const running = !!sc;
   if ($('scanStartBtn')) {
-    $('scanStartBtn').textContent = running ? 'Apply' : 'Start scan';
+    $('scanStartLabel').textContent = running ? 'APPLY' : 'START SCAN';
   }
   if ($('scanStopBtn')) $('scanStopBtn').style.display = running ? '' : 'none';
   if ($('scanPauseBtn')) $('scanPauseBtn').style.display = sc && sc.state !== 'paused' ? '' : 'none';
@@ -8380,6 +8509,10 @@ function connect() {
   }
 
   ws.onopen = () => {
+    // Display preferences live in the browser: a (re)started server hears
+    // them again on every connect.
+    displayBinsSent = 0;
+    scheduleDisplayBins();
     const c = $('conn');
     if (c) {
       c.innerHTML = '<span class="conn-beacon connected"></span>connected';
@@ -8501,6 +8634,16 @@ function onSdrFftBinary(buf, view) {
   } else {
     off += 1;
   }
+  // v4: an optional per-frame peak array for the waterfall, after
+  // everything a v3 frame carries.
+  let wfPeak = null;
+  if (off + 4 <= view.byteLength) {
+    const n = u32();
+    if (n && off + n * 4 <= view.byteLength) {
+      wfPeak = new Float32Array(n);
+      for (let i = 0; i < n; i++) { wfPeak[i] = view.getFloat32(off, true); off += 4; }
+    }
+  }
 
   onSdrFft({
     centerHz,
@@ -8517,6 +8660,7 @@ function onSdrFftBinary(buf, view) {
     noiseDbfs,
     pwr,
     maxHold,
+    wfPeak,
   });
 }
 

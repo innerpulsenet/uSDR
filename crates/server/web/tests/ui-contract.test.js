@@ -344,13 +344,13 @@ test('key and panel class contracts keep their counts and data attributes', () =
   const count = cls => tags.filter(t => hasClass(t, cls)).length;
   const withAttrs = (cls, attrs) => tags.filter(t => hasClass(t, cls) && attrs.every(a => t.attrs[a] !== undefined));
 
-  assert.strictEqual(withAttrs('modebtn', ['data-mode']).length, 11,
-    '.modebtn[data-mode] buttons (click → setSdrMode(dataset.mode)) must stay 11');
+  assert.strictEqual(withAttrs('modebtn', ['data-mode']).length, 13,
+    '.modebtn[data-mode] buttons (click → setSdrMode(dataset.mode)) must stay 13');
   assert.strictEqual(withAttrs('band-btn', ['data-freq', 'data-mode']).length, 8,
     '.band-btn[data-freq][data-mode] presets (click → tune + mode) must stay 8');
   assert.strictEqual(count('side-tab'), 5, '.side-tab dock tabs must stay 5');
   assert.ok(count('dsp-key') >= 7, `.dsp-key buttons must stay at least 7 (found ${count('dsp-key')})`);
-  assert.strictEqual(count('fader-well'), 4, '.fader-well tracks must stay 4');
+  assert.strictEqual(count('pf-slider'), 7, '.pf-slider precision faders (gain, SQL mark, IF AGC target, span, zoom, display floor and ceiling) must stay 7');
   assert.strictEqual(count('deck-bay'), 4, '.deck-bay panels must stay 4');
   const protoChips = withAttrs('proto-chip', ['data-proto']);
   assert.ok(protoChips.length >= 1, '.proto-chip[data-proto] decode filters must exist');
@@ -508,8 +508,6 @@ test('the unguarded boot-listener ids still exist', () => {
 // because it is the argument of a call that binds behavior to that element.
 // ---------------------------------------------------------------------------
 const ARGUMENT_WIRED_IDS = [
-  // makeFaderDraggable(trackId, …) — the drag surface for each linear fader.
-  'faderRfGainTrack', 'faderSqlTrack', 'faderSpanTrack', 'faderZoomTrack',
   // Dock tab ↔ panel table: [tabId, panelId] pairs wired in a loop.
   'tabClassifier', 'panelClassifier', 'tabDecode', 'panelDecode',
   'tabCalls', 'panelCalls', 'tabScan', 'panelScan',

@@ -60,6 +60,122 @@ pub struct Spectrum {
     /// radio block, and a fresh `vec![0; size]` each time was ~125
     /// allocations a second at the default span.
     acc: Vec<f32>,
+    /// FFT scratch, so `Fft::process` does not allocate one per segment.
+    scratch: Vec<Complex32>,
+    /// Streaming full-duty Welch state behind `ingest_welch` / `take_dbfs`.
+    welch: Welch,
+}
+
+/// Largest stride the late-take guard will escalate to. Past this a missing
+/// `take_dbfs` is a caller bug, and a bounded blind spot is better than an
+/// overflowing one.
+const MAX_STRIDE: usize = 1 << 16;
+
+/// Accumulators for the streaming estimator. Kept apart from `pending`/`acc`
+/// so the snapshot path (`ingest` + `power_dbfs`) and the full-duty path do
+/// not disturb each other if a caller mixes them.
+struct Welch {
+    /// Samples of the segment being assembled; always `< size` between calls.
+    pending: Vec<Complex32>,
+    /// Samples still to discard before the next segment starts (stride > 1).
+    skip: usize,
+    /// Per-bin sum of |X|² over the segments since the last take (unshifted).
+    sum: Vec<f32>,
+    /// Per-bin maximum of |X|² over the same segments (unshifted).
+    peak: Vec<f32>,
+    /// Segments folded into `sum`/`peak` since the last take.
+    nseg: usize,
+    /// Samples ingested since the last take, and in the interval before it:
+    /// the latter is the forecast the segment budget is planned against.
+    seen: usize,
+    last_seen: usize,
+    /// Segment budget per take; 0 = unlimited.
+    cap: usize,
+    /// Current hop and stride: the next segment starts `hop * stride`
+    /// samples after the previous one.
+    hop: usize,
+    stride: usize,
+    /// Late-take guard: once `nseg` reaches `next_escalate` the segment rate
+    /// halves, and the next threshold is `escalate_step` further on (the step
+    /// itself halves each time, so a missed take costs at most ~2x cap).
+    next_escalate: usize,
+    escalate_step: usize,
+}
+
+impl Welch {
+    fn new(size: usize) -> Self {
+        let mut w = Self {
+            pending: Vec::with_capacity(size),
+            skip: 0,
+            sum: vec![0.0; size],
+            peak: vec![0.0; size],
+            nseg: 0,
+            seen: 0,
+            last_seen: 0,
+            cap: 0,
+            hop: 0,
+            stride: 1,
+            next_escalate: 0,
+            escalate_step: 0,
+        };
+        w.plan(size);
+        w
+    }
+
+    /// Choose hop and stride for the coming interval from the length of the
+    /// last one, so a capped budget is spread across the whole interval
+    /// instead of being spent on its first few milliseconds.
+    fn plan(&mut self, size: usize) {
+        let half = (size / 2).max(1);
+        self.hop = half;
+        self.stride = 1;
+        self.next_escalate = self.cap;
+        self.escalate_step = (self.cap / 2).max(1);
+        if self.cap > 0 && self.last_seen > 0 && self.last_seen / half > self.cap {
+            // Overlap would overrun the budget: drop it first, since a 50%
+            // overlapped segment adds little independent information.
+            self.hop = size;
+            let slots = self.last_seen / size;
+            if slots > self.cap {
+                // Still over: process every `stride`-th segment so the
+                // budget samples the whole interval evenly.
+                self.stride = slots.div_ceil(self.cap).min(MAX_STRIDE);
+            }
+        }
+        // A skip left by a late-take escalation must not blind the new
+        // interval for longer than the new plan itself would.
+        let advance = self.hop * self.stride;
+        self.skip = self.skip.min(advance.saturating_sub(size));
+    }
+
+    /// Late-take guard: halve the segment rate (first by dropping overlap,
+    /// then by doubling the stride).
+    fn escalate(&mut self, size: usize) {
+        if self.hop < size {
+            self.hop = size;
+        } else {
+            self.stride = (self.stride * 2).min(MAX_STRIDE);
+        }
+        self.next_escalate = self.next_escalate.saturating_add(self.escalate_step);
+        self.escalate_step = (self.escalate_step / 2).max(1);
+    }
+
+    fn reset_acc(&mut self) {
+        self.sum.fill(0.0);
+        self.peak.fill(0.0);
+        self.nseg = 0;
+    }
+}
+
+/// fftshift `src` into `out` as dB of `src * scale`.
+fn shift_db(src: &[f32], out: &mut Vec<f32>, scale: f32) {
+    let n = src.len();
+    out.clear();
+    out.resize(n, 0.0);
+    let half = n / 2;
+    for (i, o) in out.iter_mut().enumerate() {
+        *o = 10.0 * (src[(i + half) % n] * scale + 1e-20).log10();
+    }
 }
 
 #[allow(dead_code)]
@@ -73,6 +189,7 @@ impl Spectrum {
         let fft = planner.plan_fft_forward(size);
         let window = win.coeffs(size);
         let win_sum: f32 = window.iter().sum();
+        let scratch = vec![Complex32::new(0.0, 0.0); fft.get_inplace_scratch_len()];
         Self {
             fft,
             win_sum,
@@ -81,6 +198,8 @@ impl Spectrum {
             buf: vec![Complex32::new(0.0, 0.0); size],
             pending: Vec::with_capacity(size * 2),
             acc: vec![0.0f32; size],
+            scratch,
+            welch: Welch::new(size),
         }
     }
 
@@ -88,10 +207,7 @@ impl Spectrum {
         self.size
     }
 
-    /// Average the periodogram over every whole segment available, returning dB.
-    ///
-    /// Samples are carried across calls so the FFT can be larger than one IQ
-    /// block — that is what makes high-resolution views possible. If a full
+    /// The analysis window coefficients.
     pub fn window(&self) -> &[f32] {
         &self.window
     }
@@ -134,9 +250,161 @@ impl Spectrum {
     /// Drop buffered and accumulated display samples — after a break in the
     /// sample timeline the pending Welch window would otherwise average
     /// across a hole that never existed on the air.
+    ///
+    /// Also resets the streaming (`ingest_welch`) accumulators, its partial
+    /// segment, and the interval forecast the segment cap plans against — a
+    /// break usually means a retune or rate change, so the old forecast is
+    /// no better than none.
     pub fn clear(&mut self) {
         self.buf.fill(Complex32::new(0.0, 0.0));
         self.pending.clear();
+        let w = &mut self.welch;
+        w.pending.clear();
+        w.skip = 0;
+        w.reset_acc();
+        w.seen = 0;
+        w.last_seen = 0;
+        w.plan(self.size);
+    }
+
+    /// Streaming, full-duty Welch estimate: window and FFT every complete
+    /// segment as samples arrive, instead of a snapshot of the newest few.
+    ///
+    /// Segments hop by `size / 2` and the incomplete tail is carried to the
+    /// next call, so block boundaries are invisible: feeding a signal in one
+    /// call or in arbitrary pieces gives identical results. At most
+    /// `size - 1` samples are held between calls — nothing is buffered per
+    /// interval. Each segment adds its |X|² into a per-bin sum and a per-bin
+    /// maximum, read and reset by [`take_dbfs`](Self::take_dbfs).
+    ///
+    /// The cost is one FFT per `size / 2` samples unless a budget is set with
+    /// [`set_max_segments_per_take`](Self::set_max_segments_per_take).
+    /// Allocation-free once constructed.
+    pub fn ingest_welch(&mut self, mut input: &[Complex32]) {
+        let n = self.size;
+        self.welch.seen = self.welch.seen.saturating_add(input.len());
+        while !input.is_empty() {
+            let w = &mut self.welch;
+            if w.skip > 0 {
+                let k = w.skip.min(input.len());
+                w.skip -= k;
+                input = &input[k..];
+                continue;
+            }
+            let k = (n - w.pending.len()).min(input.len());
+            w.pending.extend_from_slice(&input[..k]);
+            input = &input[k..];
+            if w.pending.len() == n {
+                self.welch_segment();
+            }
+        }
+    }
+
+    /// Emit the streaming estimate accumulated since the last take, then
+    /// reset it. Returns the number of segments it covers.
+    ///
+    /// `avg_out` receives the averaged periodogram and `peak_out`, if given,
+    /// the per-bin maximum over the individual segments — a burst too short
+    /// to lift the average much still reaches full height there. Both are in
+    /// calibrated dBFS with the same reference and fftshift as
+    /// [`power_dbfs`](Self::power_dbfs) (0 dBFS = full-scale complex
+    /// exponential). On noise alone the peak trace sits above the average by
+    /// roughly the expected maximum of `n` exponentials: about 8 dB at 400
+    /// segments.
+    ///
+    /// When no segment has completed since the last take, the outputs are
+    /// left exactly as they were (so the caller keeps showing the previous
+    /// frame) — except that an empty vector is filled with -140 dBFS, as
+    /// `power_dbfs` does — and 0 is returned. The pending samples and the
+    /// interval forecast are kept in that case, so a slow stream is not
+    /// penalized for being polled often.
+    pub fn take_dbfs(&mut self, avg_out: &mut Vec<f32>, peak_out: Option<&mut Vec<f32>>) -> usize {
+        let nseg = self.welch.nseg;
+        if nseg == 0 {
+            if avg_out.is_empty() {
+                avg_out.resize(self.size, -140.0);
+            }
+            if let Some(p) = peak_out {
+                if p.is_empty() {
+                    p.resize(self.size, -140.0);
+                }
+            }
+            return 0;
+        }
+        let reference = 1.0 / (self.win_sum * self.win_sum);
+        shift_db(&self.welch.sum, avg_out, reference / nseg as f32);
+        if let Some(p) = peak_out {
+            shift_db(&self.welch.peak, p, reference);
+        }
+        let w = &mut self.welch;
+        w.reset_acc();
+        w.last_seen = w.seen;
+        w.seen = 0;
+        w.plan(self.size);
+        nseg
+    }
+
+    /// Bound the streaming estimator's cost: at most about `n` FFTs per
+    /// [`take_dbfs`](Self::take_dbfs) interval (0 = unlimited, the default).
+    ///
+    /// The budget is planned from the length of the previous interval, so
+    /// the processed segments are spread across the whole interval rather
+    /// than spent on its start: if 50%-overlapped segments would exceed `n`,
+    /// overlap is dropped (hop = size); if non-overlapped segments still
+    /// would, only every `k`-th segment is processed, with `k` chosen so the
+    /// count fits. A burst anywhere in the interval that lasts at least
+    /// `(k + 1) * size` samples is therefore guaranteed to land in a whole
+    /// processed segment, and shorter ones still have a proportional chance.
+    ///
+    /// If the cap is reached anyway — the first interval, which has no
+    /// forecast, or a take that came late — the rate is halved on the spot
+    /// (first by dropping overlap, then by doubling the stride), and halved
+    /// again at each further `n/2`, `n/4`, ... segments. One interval
+    /// therefore never costs more than about `2 * n` segments however late
+    /// the take, while still sampling the remainder of the interval.
+    pub fn set_max_segments_per_take(&mut self, n: usize) {
+        self.welch.cap = n;
+        self.welch.plan(self.size);
+        // Respect a budget already partly spent in this interval.
+        if n > 0 && self.welch.nseg >= n {
+            let size = self.size;
+            self.welch.escalate(size);
+        }
+    }
+
+    /// Window, FFT and fold in the full segment held in `welch.pending`, then
+    /// advance to the next segment start.
+    fn welch_segment(&mut self) {
+        let n = self.size;
+        let Self {
+            fft,
+            window,
+            buf,
+            scratch,
+            welch: w,
+            ..
+        } = self;
+        for ((b, &x), &c) in buf.iter_mut().zip(w.pending.iter()).zip(window.iter()) {
+            *b = x * c;
+        }
+        fft.process_with_scratch(buf, scratch);
+        for ((s, p), b) in w.sum.iter_mut().zip(w.peak.iter_mut()).zip(buf.iter()) {
+            let v = b.norm_sqr();
+            *s += v;
+            *p = p.max(v);
+        }
+        w.nseg += 1;
+        if w.cap > 0 && w.nseg >= w.next_escalate {
+            w.escalate(n);
+        }
+        let advance = w.hop * w.stride;
+        if advance < n {
+            w.pending.copy_within(advance.., 0);
+            w.pending.truncate(n - advance);
+        } else {
+            w.pending.clear();
+            w.skip = advance - n;
+        }
     }
 
     /// Average periodogram returning calibrated dBFS (0 dBFS = full scale CW tone).
@@ -179,7 +447,7 @@ impl Spectrum {
             for i in 0..self.size {
                 self.buf[i] = seg[i] * self.window[i];
             }
-            self.fft.process(&mut self.buf);
+            self.fft.process_with_scratch(&mut self.buf, &mut self.scratch);
             for i in 0..self.size {
                 self.acc[i] += self.buf[i].norm_sqr();
             }
@@ -193,13 +461,7 @@ impl Spectrum {
 
     /// fftshift the accumulated periodogram into dB with `scale`.
     fn emit(&mut self, out: &mut Vec<f32>, scale: f32) {
-        out.clear();
-        out.resize(self.size, 0.0);
-        let half = self.size / 2;
-        for i in 0..self.size {
-            let src = (i + half) % self.size;
-            out[i] = 10.0 * (self.acc[src] * scale + 1e-20).log10();
-        }
+        shift_db(&self.acc, out, scale);
     }
 }
 
@@ -2057,3 +2319,233 @@ mod frontend_audit {
     }
 }
 
+
+#[cfg(test)]
+mod welch_stream {
+    use super::*;
+
+    fn noise(rng: &mut u32) -> f32 {
+        *rng ^= *rng << 13;
+        *rng ^= *rng >> 17;
+        *rng ^= *rng << 5;
+        (*rng as f32 / u32::MAX as f32) - 0.5
+    }
+
+    /// White noise at about -95 dBFS per bin (size 1024), plus a tone of
+    /// `amp` at exact bin `bin` of a `size`-point FFT over `[on, off)`.
+    fn burst_iq(len: usize, size: usize, bin: f32, amp: f32, on: usize, off: usize, seed: u32) -> Vec<Complex32> {
+        let mut rng = seed;
+        (0..len)
+            .map(|i| {
+                let n = Complex32::new(noise(&mut rng), noise(&mut rng)) * 0.001;
+                if (on..off).contains(&i) {
+                    let ph = 2.0 * PI * bin * i as f32 / size as f32;
+                    n + Complex32::from_polar(amp, ph)
+                } else {
+                    n
+                }
+            })
+            .collect()
+    }
+
+    fn median(v: &[f32]) -> f32 {
+        let mut s = v.to_vec();
+        s.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        s[s.len() / 2]
+    }
+
+    fn std_dev(v: &[f32]) -> f32 {
+        let m = v.iter().sum::<f32>() / v.len() as f32;
+        (v.iter().map(|x| (x - m) * (x - m)).sum::<f32>() / v.len() as f32).sqrt()
+    }
+
+    /// The server's pattern on the old path: `ingest` every block, one
+    /// `power_dbfs` snapshot at the end of the frame interval.
+    fn old_path(iq: &[Complex32], size: usize, block: usize) -> Vec<f32> {
+        let mut s = Spectrum::new(size);
+        for b in iq.chunks(block) {
+            s.ingest(b);
+        }
+        let mut out = Vec::new();
+        s.power_dbfs(&[], &mut out);
+        out
+    }
+
+    fn new_path(iq: &[Complex32], size: usize, block: usize) -> (Vec<f32>, Vec<f32>, usize) {
+        let mut s = Spectrum::new(size);
+        for b in iq.chunks(block) {
+            s.ingest_welch(b);
+        }
+        let (mut avg, mut peak) = (Vec::new(), Vec::new());
+        let n = s.take_dbfs(&mut avg, Some(&mut peak));
+        (avg, peak, n)
+    }
+
+    /// (a) A 2 ms burst in the middle of a 40 ms frame at 5 MS/s.
+    #[test]
+    fn mid_interval_burst_reaches_the_display() {
+        let (size, fs) = (1024usize, 5e6f32);
+        let len = (0.040 * fs) as usize; // 200,000
+        let (on, off) = ((0.019 * fs) as usize, (0.021 * fs) as usize);
+        let bin = 205.0;
+        let iq = burst_iq(len, size, bin, 0.1, on, off, 0x1234_5678); // -20 dBFS
+        let at = bin as usize + size / 2;
+
+        let old = old_path(&iq, size, 8192);
+        let (avg, peak, nseg) = new_path(&iq, size, 8192);
+        let floor = median(&avg);
+        println!(
+            "burst bin: old {:.1} dBFS, new avg {:.1}, new peak {:.1}; floor {:.1}; {} segments",
+            old[at], avg[at], peak[at], floor, nseg
+        );
+        assert_eq!(nseg, 1 + (len - size) / (size / 2));
+        assert!(old[at] < floor + 6.0, "old path should miss the burst: {:.1}", old[at]);
+        assert!((peak[at] + 20.0).abs() < 0.5, "peak should read the burst level: {:.1}", peak[at]);
+        // Duty 2/40 is -13 dB; the average is attenuated by about that.
+        let duty_db = 10.0 * (2.0f32 / 40.0).log10();
+        assert!(
+            (avg[at] - (-20.0 + duty_db)).abs() < 1.5,
+            "avg should show the burst attenuated by duty: {:.1}",
+            avg[at]
+        );
+        assert!(avg[at] > floor + 40.0);
+    }
+
+    /// (b) The floor is far steadier when every sample contributes.
+    #[test]
+    fn full_duty_floor_is_steadier() {
+        let size = 1024;
+        let iq = burst_iq(200_000, size, 0.0, 0.0, 0, 0, 0xdead_beef);
+        let old = old_path(&iq, size, 8192);
+        let (avg, _, nseg) = new_path(&iq, size, 8192);
+        let (so, sn) = (std_dev(&old), std_dev(&avg));
+        println!("white-noise per-bin std dev: old {so:.3} dB, new {sn:.3} dB ({nseg} segments)");
+        assert!(sn < so / 4.0, "old {so:.3} dB vs new {sn:.3} dB");
+        // Both estimate the same floor.
+        assert!((median(&old) - median(&avg)).abs() < 1.5);
+    }
+
+    /// (c) Calibration matches `power_dbfs`: full-scale tone at a bin center.
+    #[test]
+    fn full_scale_tone_reads_zero_dbfs() {
+        let size = 1024;
+        let k = 100usize;
+        let iq: Vec<Complex32> = (0..size * 20)
+            .map(|i| Complex32::from_polar(1.0, 2.0 * PI * k as f32 * i as f32 / size as f32))
+            .collect();
+        let (avg, peak, _) = new_path(&iq, size, 4096);
+        let old = old_path(&iq, size, 4096);
+        let at = k + size / 2;
+        let argmax = avg.iter().enumerate().max_by(|a, b| a.1.partial_cmp(b.1).unwrap()).unwrap().0;
+        assert_eq!(argmax, at);
+        for (name, v) in [("avg", avg[at]), ("peak", peak[at]), ("old", old[at])] {
+            assert!(v.abs() < 0.05, "{name} reads {v:.3} dBFS");
+        }
+    }
+
+    /// (d) A cap bounds the work per take and still spreads it over the
+    /// whole interval: bursts at either end of a 40 ms frame at 10 MS/s.
+    #[test]
+    fn capped_budget_is_bounded_and_spread() {
+        let (size, fs, cap) = (1024usize, 10e6f32, 100usize);
+        let len = (0.040 * fs) as usize; // 400,000: 781 overlapped slots
+        let ms = |t: f32| (t * fs / 1000.0) as usize;
+        let bin = 300.0;
+        let at = bin as usize + size / 2;
+        let mut s = Spectrum::new(size);
+        s.set_max_segments_per_take(cap);
+        let (mut avg, mut peak) = (Vec::new(), Vec::new());
+        // Interval 1 has no forecast (late-take guard); 2 and 3 are planned.
+        let cases = [(0.5, 2.5), (0.5, 2.5), (37.0, 39.0)];
+        for (i, &(t0, t1)) in cases.iter().enumerate() {
+            let iq = burst_iq(len, size, bin, 0.1, ms(t0), ms(t1), 0x5151 + i as u32);
+            for b in iq.chunks(10_007) {
+                s.ingest_welch(b);
+            }
+            let n = s.take_dbfs(&mut avg, Some(&mut peak));
+            println!(
+                "interval {}: {n} segments (cap {cap}), burst {t0}-{t1} ms peak {:.1} dBFS, floor {:.1}",
+                i + 1,
+                peak[at],
+                median(&avg)
+            );
+            assert!(n <= 2 * cap + 32, "guard should bound the first interval: {n}");
+            if i > 0 {
+                assert!(n <= cap && n >= cap * 3 / 4, "planned interval used {n} of {cap}");
+            }
+            assert!((peak[at] + 20.0).abs() < 1.0, "burst missed: {:.1}", peak[at]);
+            assert!(s.welch.pending.len() < size);
+        }
+        // A take that never comes: still bounded, and still sampling.
+        let iq = burst_iq(len * 10, size, 0.0, 0.0, 0, 0, 77);
+        s.ingest_welch(&iq);
+        let n = s.take_dbfs(&mut avg, None);
+        println!("10x late take: {n} segments");
+        assert!(n > cap && n <= 2 * cap + 32, "{n}");
+    }
+
+    /// (e) Arbitrary block sizes give exactly the one-shot result.
+    #[test]
+    fn remainder_carries_across_odd_blocks() {
+        let size = 1024;
+        let len = 50_000;
+        let iq = burst_iq(len, size, 37.5, 0.3, 10_000, 30_000, 99);
+        let (avg1, peak1, n1) = new_path(&iq, size, len);
+
+        let mut s = Spectrum::new(size);
+        let sizes = [1usize, 7, 333, 1023, 1025, 4097, 2, 511, 512, 513];
+        let (mut pos, mut k) = (0, 0);
+        while pos < len {
+            let end = (pos + sizes[k % sizes.len()]).min(len);
+            s.ingest_welch(&iq[pos..end]);
+            assert!(s.welch.pending.len() < size);
+            pos = end;
+            k += 1;
+        }
+        let (mut avg2, mut peak2) = (Vec::new(), Vec::new());
+        let n2 = s.take_dbfs(&mut avg2, Some(&mut peak2));
+        assert_eq!(n1, 1 + (len - size) / (size / 2));
+        assert_eq!(n1, n2);
+        assert_eq!(avg1, avg2);
+        assert_eq!(peak1, peak2);
+
+        // Nothing new: outputs untouched, 0 returned. Then clear() resets.
+        let before = avg2.clone();
+        assert_eq!(s.take_dbfs(&mut avg2, Some(&mut peak2)), 0);
+        assert_eq!(avg2, before);
+        s.ingest_welch(&iq[..size - 1]);
+        s.clear();
+        s.ingest_welch(&iq[..1]);
+        assert_eq!(s.take_dbfs(&mut avg2, None), 0);
+        assert_eq!(s.welch.pending.len(), 1);
+    }
+
+    /// Cost per segment of the streaming path, for choosing a cap.
+    /// `cargo test -p scannerd-dsp --release -- --ignored --nocapture bench_welch`
+    #[test]
+    #[ignore]
+    fn bench_welch_segment_cost() {
+        for size in [1024usize, 2048, 8192] {
+            let iq = burst_iq(1 << 22, size, 10.0, 0.1, 0, 1 << 22, 3);
+            let mut s = Spectrum::new(size);
+            s.ingest_welch(&iq[..1 << 20]); // warm up
+            let mut out = Vec::new();
+            s.take_dbfs(&mut out, None);
+            let mut best = f64::MAX;
+            let mut nseg = 0;
+            for _ in 0..3 {
+                let t = std::time::Instant::now();
+                s.ingest_welch(&iq);
+                let el = t.elapsed().as_secs_f64();
+                nseg = s.take_dbfs(&mut out, None);
+                best = best.min(el / nseg as f64);
+            }
+            let us = best * 1e6;
+            let per_s_10m = 10e6 / (size / 2) as f64;
+            println!(
+                "size {size:>5}: {us:6.2} us/segment; full duty at 10 MS/s = {per_s_10m:.0} seg/s = {:.1}% of a core ({nseg} segs/run)",
+                us * per_s_10m / 1e4
+            );
+        }
+    }
+}

@@ -54,6 +54,9 @@ pub struct Capabilities {
     pub ppm: bool,
     /// The antenna-port bias-T (`biasT_ctrl`), SDRplay only.
     pub bias_t: bool,
+    /// Discrete analog IF filter widths the driver offers, narrowest first.
+    /// Empty where it offers a continuous range or none.
+    pub if_bandwidths: Vec<f64>,
     /// Sample rates the driver accepts, as (min, max) pairs; a discrete rate
     /// is a pair with both ends equal.
     pub rate_ranges: Vec<(f64, f64)>,
@@ -91,6 +94,12 @@ pub struct State {
     pub bias_t: Option<bool>,
     pub rf_notch: Option<bool>,
     pub dab_notch: Option<bool>,
+    /// SDRplay IF AGC target, dBFS, and the RSP's own I/Q correction, as
+    /// read back from the driver.
+    pub agc_setpoint: Option<f64>,
+    pub iq_correction: Option<bool>,
+    /// The analog IF filter was set by hand rather than from the span.
+    pub bandwidth_manual: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -120,6 +129,13 @@ pub enum Cmd {
     RfNotch(bool),
     /// SDRplay's DAB band-stop filter.
     DabNotch(bool),
+    /// SDRplay IF AGC target level, dBFS (-60..0). Only acts while the IF
+    /// AGC is running.
+    AgcSetpoint(f64),
+    /// SDRplay's own I/Q imbalance correction (`iqcorr_ctrl`).
+    IqCorrection(bool),
+    /// Analog IF filter width, Hz; `None` returns to choosing it from the span.
+    IfBandwidth(Option<f64>),
     Ppm(f64),
     Rate(f64),
     /// Enable or disable the automatic clip guard.
@@ -639,6 +655,7 @@ pub fn open(cfg: &DeviceConfig) -> Result<Device> {
     let tune = Tuning {
         desired: cfg.freq,
         ppm: cfg.ppm,
+        if_bw: None,
     };
     dev.set_frequency(Rx, 0, corrected(tune.desired, tune.ppm), ())
         .context("setting frequency")?;
@@ -765,6 +782,18 @@ fn inspect(dev: &soapysdr::Device) -> Capabilities {
             .list_frequencies(Rx, 0)
             .is_ok_and(|v| v.iter().any(|x| x.eq_ignore_ascii_case("CORR"))),
         bias_t: has_setting("biasT_ctrl"),
+        if_bandwidths: {
+            let ranges = dev.bandwidth_range(Rx, 0).unwrap_or_default();
+            let discrete = ranges.iter().all(|r| r.maximum <= r.minimum + r.minimum.abs().max(1.0) * 1e-6);
+            let mut v: Vec<f64> = if discrete {
+                ranges.iter().map(|r| r.maximum).filter(|v| *v > 0.0).collect()
+            } else {
+                Vec::new()
+            };
+            v.sort_by(f64::total_cmp);
+            v.dedup();
+            v
+        },
         rate_ranges: dev
             .get_sample_rate_range(Rx, 0)
             .unwrap_or_default()
@@ -792,6 +821,8 @@ struct Tuning {
     /// for the same frequency again a real retry rather than a no-op.
     desired: f64,
     ppm: f64,
+    /// Analog IF filter asked for by hand; `None` while it follows the span.
+    if_bw: Option<f64>,
 }
 
 /// The frequency to request so the signal at `desired` lands on centre.
@@ -985,6 +1016,30 @@ fn run(
                     "DAB notch",
                     dev.write_setting("dabnotch_ctrl", if on { "true" } else { "false" }),
                 ),
+                Ok(Cmd::AgcSetpoint(db)) => set_and_log(
+                    &log_tx,
+                    "IF AGC setpoint",
+                    dev.write_setting("agc_setpoint", format!("{:.0}", db.clamp(-60.0, 0.0)).as_str()),
+                ),
+                Ok(Cmd::IqCorrection(on)) => set_and_log(
+                    &log_tx,
+                    "I/Q correction",
+                    dev.write_setting("iqcorr_ctrl", if on { "true" } else { "false" }),
+                ),
+                Ok(Cmd::IfBandwidth(want)) => {
+                    // A filter wider than the sample rate lets everything
+                    // outside the span alias into it: never honoured.
+                    tune.if_bw = want.filter(|w| *w <= rate * 1.001);
+                    match tune.if_bw {
+                        Some(w) => {
+                            let ok = set_and_log(&log_tx, "IF filter", dev.set_bandwidth(Rx, 0, w));
+                            let actual = dev.bandwidth(Rx, 0).unwrap_or(w);
+                            let _ = log_tx.try_send(format!("analog bandwidth {actual:.0} Hz (manual)"));
+                            ok
+                        }
+                        None => set_bandwidth(&dev, rate, cover_hz, &log_tx).is_ok(),
+                    }
+                }
                 Ok(Cmd::Ppm(ppm)) => {
                     tune.ppm = ppm;
                     let ok = set_frequency_retrying(&dev, corrected(tune.desired, tune.ppm));
@@ -1016,7 +1071,12 @@ fn run(
                         sample_pos = 0;
                         let _ = log_tx.try_send(format!("sample rate {rate:.0} S/s"));
                         std::thread::sleep(std::time::Duration::from_millis(15));
-                        if let Err(e) = set_bandwidth(&dev, rate, cover_hz, &log_tx) {
+                        // A hand-picked filter survives a span change only
+                        // while it still fits inside the new span.
+                        tune.if_bw = tune.if_bw.filter(|w| *w <= rate * 1.001);
+                        if let Some(w) = tune.if_bw {
+                            let _ = dev.set_bandwidth(Rx, 0, w);
+                        } else if let Err(e) = set_bandwidth(&dev, rate, cover_hz, &log_tx) {
                             let _ = log_tx.try_send(format!(
                                 "analog bandwidth after rate change unavailable: {e}"
                             ));
@@ -1531,6 +1591,7 @@ fn publish_state(
         ppm: Some(tune.ppm),
         overall_gain: read_gain(dev, caps, tune.desired),
         gain_range: Some(gain_range(caps, tune.desired)),
+        bandwidth_manual: tune.if_bw.is_some(),
         ..State::default()
     };
     if let GainControl::Sdrplay { .. } = caps.gain {
@@ -1545,6 +1606,12 @@ fn publish_state(
     state.bias_t = switch(caps.bias_t, "biasT_ctrl");
     state.rf_notch = switch(caps.rf_notch, "rfnotch_ctrl");
     state.dab_notch = switch(caps.dab_notch, "dabnotch_ctrl");
+    state.iq_correction = switch(caps.iq_correction, "iqcorr_ctrl");
+    state.agc_setpoint = caps
+        .agc_setpoint
+        .then(|| dev.read_setting("agc_setpoint").ok())
+        .flatten()
+        .and_then(|v| v.trim().parse::<f64>().ok());
     let _ = tx.try_send(Event::State(state));
 }
 
@@ -1862,6 +1929,7 @@ mod tests {
             iq_correction: true,
             ppm: true,
             bias_t: true,
+            if_bandwidths: RSP1A_BW.to_vec(),
             // What SoapySDRPlay3 reports for an RSP1A.
             rate_ranges: vec![(250_000.0, 250_000.0), (1e6, 1e6), (2e6, 10.66e6)],
             freq_range: Some((1e3, 2e9)),

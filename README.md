@@ -18,6 +18,14 @@ front-end switches on the left, the display in the middle, the S-meter, tuning
 and recorder on the right — plus a log dock beside the case. There is no Po or
 SWR: this is RX-only.
 
+- **Every sample reaches the display.** Each frame is a Welch average of
+  every half-overlapped segment since the last one, so the floor is smooth
+  (0.2 dB of bin-to-bin ripple on noise, from 2 dB) and a 2 ms burst between
+  frames is in the next frame instead of thrown away; full duty at 10 MS/s
+  costs under 5% of a core. `WF PEAK` paints the waterfall from each frame's
+  strongest segment instead, so pager, data and TDMA bursts show at full
+  level. Waterfall rows keep the strongest bin per pixel when the FFT is
+  wider than the screen, and the FFT size follows the screen's width.
 - **Spectrum and waterfall** over spans from 200 kHz to 3.2 MHz, using the
   `HAM` black → navy → blue → cyan → white waterfall ramp, with peak hold,
   trace fill, and auto or manual dB range.
@@ -120,12 +128,13 @@ SWR: this is RX-only.
   moves as text updates. The decode and classification logs prepend rows, so
   they also hold your scroll position against the new rows rather than sliding
   the content up under you.
-- **Eleven modes**, switchable from the screen:
+- **Thirteen modes**, switchable from the screen:
 
   | Mode | What it does |
   |---|---|
   | `NFM` | Narrowband FM with the full digital classifier |
   | `AM` | Envelope-detected AM with AGC — HF airband and broadcast |
+  | `USB` / `LSB` | Single sideband voice for HF: the 300–2800 Hz above (USB) or below (LSB) the suppressed carrier, the opposite side 50 dB down, with a speech AGC (fast attack, 400 ms hang, 15 dB/s release). Tunes on a 100 Hz raster; the passband is drawn beside the carrier |
   | `WFM` | 200 kHz broadcast FM, 75 µs de-emphasis, for listening |
   | `P25` | P25 Phase 1 C4FM decoded to voice through the IMBE vocoder |
   | `DMR` | DMR Tier II decoded to voice through the AMBE vocoder |
@@ -155,15 +164,28 @@ SWR: this is RX-only.
     two gain-loop switches, `CLIP GUARD` and `IF AGC` (`TUNER AGC` on an
     RTL-SDR). `SQL MARK` draws a threshold on the spectrum and the S-meter
     only; `SCAN SQL` in the scan dock is the scanner gate.
-  - **Front end**: `AM/FM NOTCH`, `DAB NOTCH` and `BIAS-T` where the radio has
-    them (hidden where it does not), `SPUR NOTCH`, and `LO OFFSET`. The VFO
-    bar's `NOTCH` readout lists what is really notched.
+  - **Front end**: `AM/FM NOTCH`, `DAB NOTCH`, `IQ CORR` and `BIAS-T` where
+    the radio has them (hidden where it does not), `SPUR NOTCH`, `LO OFFSET`,
+    and on an SDRplay the `IF FILTER` (AUTO, or one of the RSP's analog
+    filters by hand). The VFO bar's `NOTCH` readout lists what is really
+    notched. On an SDRplay the gain fader also shows where the gain is (LNA
+    state and IF reduction, as the driver reports them), `IF AGC TARGET` sets
+    the level the RSP's own AGC holds, and the span shows the RSP1A's ADC
+    resolution at that rate (14 bits to 6 MS/s, falling to 8 at 10 MS/s, from
+    SDRplay's specification). Measured here, the RSP's own I/Q correction made
+    no difference above the floor: a −62 dBFS station's mirror read the noise
+    floor (−88 dBFS) with it on or off, because uSDR corrects the image in
+    software as well.
   - **Mode**: `DEMOD` keys (`NFM` `AM` `WFM` `P25` `DMR` `NXDN`) pick the
     detector; `DECODE · SCAN` keys (`PACKET` `PAGER` `FLEX` `AUTO` `SCAN`)
     pick what the receiver does with it.
   - **Memory**: eight channels (frequency and mode), kept in the browser.
     Click to recall; `STORE` and then a slot, or Shift-click a slot, saves the
     receive frequency and mode into it.
+  - **Faders** are straight precision sliders: one step per arrow key or wheel
+    notch (1 dB of gain, one span, a quarter-octave of zoom), labeled with the
+    scale they set. Gain commits at most every 150 ms while dragging, and a
+    span change waits until the fader rests.
   - **Span · Zoom · Tune**: the span and zoom faders, `CENTER` and `ZOOM ±`,
     and a straight tuning strip — drag the scale, or scroll on it, and it
     moves one tuning step at a time with nothing coasting; the keys beside it
@@ -416,8 +438,9 @@ no longer one of the three read errors that reopen the device.
 | `POST /api/sdr/mode` | `{"mode": "nfm" \| "am" \| "wfm" \| "p25" \| "dmr" \| "nxdn" \| "packet" \| "pager" \| "flex" \| "auto" \| "scan"}` |
 | `POST /api/sdr/scan/config` | `{"start_hz": …, "stop_hz": …, "modes": ["am","nfm","p25","dmr"], "threshold_db": …, "resume_delay_s": …}` — voice-scan configuration |
 | `POST /api/sdr/scan/control` | `{"action": "pause" \| "resume" \| "skip" \| "forget"}` |
-| `POST /api/sdr/frontend` | `{"lo_offset": bool, "clip_guard": bool, "tuner_agc": bool}`, and on an SDRplay `"bias_t"`, `"rf_notch"`, `"dab_notch"` |
+| `POST /api/sdr/frontend` | `{"lo_offset": bool, "clip_guard": bool, "tuner_agc": bool}`, and on an SDRplay `"bias_t"`, `"rf_notch"`, `"dab_notch"`, `"iq_correction"` (bool), `"agc_setpoint"` (−60..0 dBFS, the IF AGC target) and `"if_bandwidth"` (Hz from the radio's list; 0 returns the analog IF filter to following the span) |
 | `POST /api/sdr/zoom` | `{"zoom": 1..32}` — display magnification |
+| `POST /api/sdr/display` | `{"bins": n}` — the spectrum's width in device pixels; the FFT follows it (a power of two, 1024–4096 at 1×: a wide screen can raise it, a narrow one never lowers it for other viewers) |
 | `POST /api/sdr/ppm` | `{"ppm": …}` — crystal correction |
 | `POST /api/sdr/calibrate` | Derive ppm from the tuned reference carrier |
 | `POST /api/sdr/spurs` | `{"offsets_hz": [...]}` — offsets from centre to notch |

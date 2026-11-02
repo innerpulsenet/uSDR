@@ -326,6 +326,7 @@ async fn main() -> Result<()> {
         .route("/api/sdr/spurs", post(post_sdr_spurs))
         .route("/api/sdr/ppm", post(post_sdr_ppm))
         .route("/api/sdr/zoom", post(post_sdr_zoom))
+        .route("/api/sdr/display", post(post_sdr_display))
         .route("/api/sdr/avg", post(post_sdr_avg))
         .route("/api/sdr/calibrate", post(post_sdr_calibrate))
         .route("/api/sdr/status", get(get_sdr_status))
@@ -656,6 +657,12 @@ struct SdrFrontendReq {
     bias_t: Option<bool>,
     rf_notch: Option<bool>,
     dab_notch: Option<bool>,
+    /// SDRplay IF AGC target, dBFS (-60..0).
+    agc_setpoint: Option<f64>,
+    /// The RSP's own I/Q imbalance correction.
+    iq_correction: Option<bool>,
+    /// Analog IF filter, Hz; 0 returns it to following the span.
+    if_bandwidth: Option<f64>,
 }
 
 async fn post_sdr_frontend(
@@ -695,6 +702,18 @@ async fn post_sdr_frontend(
         }
         if let Some(on) = req.tuner_agc {
             sdr.set_tuner_agc(on)?;
+        }
+        if let Some(db) = req.agc_setpoint {
+            if !(-60.0..=0.0).contains(&db) {
+                return Err(ApiError::BadRequest("agc_setpoint must be -60..0 dBFS".into()));
+            }
+            sdr.set_agc_setpoint(db)?;
+        }
+        if let Some(on) = req.iq_correction {
+            sdr.set_iq_correction(on)?;
+        }
+        if let Some(hz) = req.if_bandwidth {
+            sdr.set_if_bandwidth((hz > 0.0).then_some(hz))?;
         }
     }
     Ok(Json(serde_json::json!({ "ok": true })))
@@ -750,6 +769,27 @@ async fn post_sdr_avg(
         sdr.set_avg(mode)?;
     }
     Ok(Json(serde_json::json!({ "ok": true, "mode": req.mode })))
+}
+
+#[derive(Deserialize)]
+struct SdrDisplayReq {
+    /// The spectrum's width in device pixels; the FFT follows it.
+    bins: Option<usize>,
+}
+
+async fn post_sdr_display(
+    State(st): State<Arc<AppState>>,
+    Json(req): Json<SdrDisplayReq>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    if req.bins.is_some_and(|b| !(64..=16384).contains(&b)) {
+        return Err(ApiError::BadRequest("bins must be 64..16384".into()));
+    }
+    if let Some(sdr) = st.sdr.lock().expect("sdr").as_ref() {
+        if let Some(b) = req.bins {
+            sdr.set_display_bins(b)?;
+        }
+    }
+    Ok(Json(serde_json::json!({ "ok": true })))
 }
 
 async fn post_sdr_zoom(

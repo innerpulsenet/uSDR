@@ -32,6 +32,7 @@ pub mod rs;
 pub mod same;
 pub mod smartnet;
 pub mod squelch;
+pub mod ssb;
 pub mod timing;
 pub mod uat;
 

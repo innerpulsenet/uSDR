@@ -431,7 +431,7 @@ test('volume fader syncs its value and readout', () => {
   assert.strictEqual(run(ctx, `document.getElementById('deckAfVolReadout').textContent`), '75%');
 });
 
-test('linear faders for RF Gain, Squelch, SPAN and Zoom sync accurately', () => {
+test('precision faders for RF Gain, Squelch, SPAN and Zoom sync accurately', () => {
   const ctx = buildContext();
   // 1. RF Gain Fader & AGC button
   run(ctx, `
@@ -439,7 +439,7 @@ test('linear faders for RF Gain, Squelch, SPAN and Zoom sync accurately', () => 
     document.getElementById('sdrAgc').checked = false;
     syncGainUi();
   `);
-  assert.strictEqual(run(ctx, `document.getElementById('faderRfGainCap').style.bottom`), '70.0%');
+  assert.strictEqual(String(run(ctx, `document.getElementById('faderRfGain').value`)), '35');
   assert.strictEqual(run(ctx, `document.getElementById('faderRfGainVal').textContent`), '35 dB');
   assert.strictEqual(run(ctx, `document.getElementById('faderAgcBtn').classList.contains('on')`), false);
 
@@ -458,8 +458,7 @@ test('linear faders for RF Gain, Squelch, SPAN and Zoom sync accurately', () => 
     sdrSquelchDb = -40;
     syncSquelchUi();
   `);
-  // (-40 - (-100)) / 100 = 60%
-  assert.strictEqual(run(ctx, `document.getElementById('faderSqlCap').style.bottom`), '60.0%');
+  assert.strictEqual(String(run(ctx, `document.getElementById('faderSql').value`)), '-40');
   assert.strictEqual(run(ctx, `document.getElementById('faderSqlVal').textContent`), '-40 dB');
 
   // 3. SPAN Rate Fader
@@ -474,8 +473,8 @@ test('linear faders for RF Gain, Squelch, SPAN and Zoom sync accurately', () => 
     sdrZoom = 4.0;
     syncZoomUi();
   `);
-  // log2(4) / 5 = 2 / 5 = 40%
-  assert.strictEqual(run(ctx, `document.getElementById('faderZoomCap').style.bottom`), '40.0%');
+  // The zoom fader runs in powers of two: 4x is 2.
+  assert.strictEqual(String(run(ctx, `document.getElementById('faderZoom').value`)), '2');
   assert.strictEqual(run(ctx, `document.getElementById('faderZoomVal').textContent`), '4.0x');
 });
 
