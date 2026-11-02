@@ -17,13 +17,20 @@ pub enum Colormap {
     Glacier,
     /// Perceptually even, for reading levels rather than spotting signals.
     Viridis,
+    /// The classic panadapter ramp: black through blue, cyan, green and
+    /// yellow to red.
+    Classic,
+    /// A green CRT phosphor.
+    Green,
 }
 
 impl Colormap {
-    pub const ALL: [Colormap; 5] = [
+    pub const ALL: [Colormap; 7] = [
         Colormap::Ember,
+        Colormap::Classic,
         Colormap::Ham,
         Colormap::Phosphor,
+        Colormap::Green,
         Colormap::Glacier,
         Colormap::Viridis,
     ];
@@ -35,6 +42,8 @@ impl Colormap {
             Colormap::Phosphor => "Phosphor",
             Colormap::Glacier => "Glacier",
             Colormap::Viridis => "Viridis",
+            Colormap::Classic => "Classic",
+            Colormap::Green => "Green",
         }
     }
 
@@ -72,6 +81,24 @@ impl Colormap {
                 (0.80, [0x31, 0xbf, 0xe7]),
                 (0.92, [0x8c, 0xdf, 0xfb]),
                 (1.00, [0xf0, 0xfb, 0xff]),
+            ],
+            Colormap::Classic => &[
+                (0.00, [0x00, 0x00, 0x04]),
+                (0.20, [0x00, 0x14, 0x5c]),
+                (0.38, [0x00, 0x4c, 0xc8]),
+                (0.52, [0x00, 0xb0, 0xf0]),
+                (0.66, [0x10, 0xd8, 0x70]),
+                (0.78, [0xf0, 0xe0, 0x10]),
+                (0.90, [0xff, 0x70, 0x00]),
+                (1.00, [0xff, 0x24, 0x24]),
+            ],
+            Colormap::Green => &[
+                (0.00, [0x01, 0x05, 0x02]),
+                (0.25, [0x03, 0x26, 0x10]),
+                (0.50, [0x08, 0x70, 0x2e]),
+                (0.75, [0x28, 0xe0, 0x68]),
+                (0.92, [0xa8, 0xff, 0xc8]),
+                (1.00, [0xf2, 0xff, 0xf6]),
             ],
             Colormap::Viridis => &[
                 (0.00, [0x44, 0x01, 0x54]),

@@ -169,8 +169,14 @@ fn mode_grid(app: &mut App, ui: &mut Ui) {
 }
 
 fn filter(app: &mut App, ui: &mut Ui) {
-    let lo = app.status.filter_low_hz as f32;
-    let hi = app.status.filter_high_hz as f32;
+    // Servers before API 2 report no edges; derive them from the passband
+    // they do report rather than show zeros.
+    let (lo, hi) = if app.status.filter_high_hz > app.status.filter_low_hz {
+        (app.status.filter_low_hz as f32, app.status.filter_high_hz as f32)
+    } else {
+        let (c, w) = (app.status.passband_offset_hz as f32, app.status.bandwidth_hz as f32);
+        (c - w / 2.0, c + w / 2.0)
+    };
     let width = (hi - lo).max(0.0);
     let k = |v: f32| if v.abs() >= 10_000.0 { format!("{:.0}k", v / 1000.0) } else { format!("{:.2}k", v / 1000.0) };
     ui.horizontal(|ui| {
@@ -752,6 +758,9 @@ fn display(app: &mut App, ui: &mut Ui) {
         if widgets::key(ui, "RANGE AUTO", v.auto_range, theme::OK).clicked() {
             v.auto_range = !v.auto_range;
         }
+        if widgets::key(ui, "BAND PLAN", v.band_plan, theme::OK).on_hover_text("US allocations along the frequency axis; hover the display for the name").clicked() {
+            v.band_plan = !v.band_plan;
+        }
         if widgets::key(ui, "WF PEAK", v.wf_peak, theme::VIOLET).on_hover_text("Paint the waterfall from each frame's strongest segment, so bursts show at full level").clicked() {
             v.wf_peak = !v.wf_peak;
         }
@@ -765,6 +774,13 @@ fn display(app: &mut App, ui: &mut Ui) {
             v.floor_db = fl as f32;
             v.ceiling_db = (ce as f32).max(v.floor_db + 10.0);
         }
+    }
+    ui.label(small("STYLE"));
+    let labels: Vec<&str> = crate::spectrum::Style::ALL.iter().map(|s| s.label()).collect();
+    let cur = crate::spectrum::Style::ALL.iter().position(|s| *s == v.style).unwrap_or(0);
+    if let Some(i) = widgets::segmented(ui, &labels, cur) {
+        v.style = crate::spectrum::Style::ALL[i];
+        v.palette = v.style.look().palette;
     }
     ui.label(small("WATERFALL"));
     ui.horizontal(|ui| {

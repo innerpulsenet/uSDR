@@ -49,10 +49,77 @@ pub struct RxB {
     pub note: Option<String>,
 }
 
+/// A look for the panadapter: background, trace, fill, holds, and the
+/// waterfall palette that goes with them.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum Style {
+    /// The house look: an amber trace on the ground, ember waterfall.
+    #[default]
+    Ember,
+    /// The classic panadapter: a white trace over a blue fill on deep navy,
+    /// and the blue-to-red waterfall.
+    Classic,
+    /// Cyan on the ground, the glacier waterfall.
+    Glacier,
+    /// A green CRT phosphor.
+    Phosphor,
+}
+
+pub struct Look {
+    /// Background top and bottom; `None` takes the theme's surfaces.
+    pub bg: Option<(Color32, Color32)>,
+    pub fill: Color32,
+    pub glow: Color32,
+    pub core: Color32,
+    pub peak: Color32,
+    pub max_hold: Color32,
+    pub palette: Colormap,
+}
+
+impl Style {
+    pub const ALL: [Style; 4] = [Style::Ember, Style::Classic, Style::Glacier, Style::Phosphor];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Style::Ember => "Ember",
+            Style::Classic => "Classic",
+            Style::Glacier => "Glacier",
+            Style::Phosphor => "Phosphor",
+        }
+    }
+
+    pub fn look(self) -> Look {
+        let rgb = |h: u32| Color32::from_rgb((h >> 16) as u8, (h >> 8) as u8, h as u8);
+        match self {
+            Style::Ember => Look { bg: None, fill: theme::AMBER, glow: theme::AMBER, core: rgb(0xffe4bd), peak: theme::CYAN, max_hold: theme::VIOLET, palette: Colormap::Ember },
+            Style::Classic => Look {
+                bg: Some((rgb(0x0d1a2e), rgb(0x02050b))),
+                fill: rgb(0x2f7dff),
+                glow: rgb(0x6fb6ff),
+                core: rgb(0xf2f8ff),
+                peak: rgb(0xffe14a),
+                max_hold: rgb(0xff8ad8),
+                palette: Colormap::Classic,
+            },
+            Style::Glacier => Look { bg: None, fill: theme::CYAN, glow: theme::CYAN, core: rgb(0xe6fbff), peak: theme::AMBER, max_hold: theme::VIOLET, palette: Colormap::Glacier },
+            Style::Phosphor => Look {
+                bg: Some((rgb(0x07120a), rgb(0x010402))),
+                fill: rgb(0x39ff8a),
+                glow: rgb(0x39ff8a),
+                core: rgb(0xd2ffe2),
+                peak: rgb(0xffe14a),
+                max_hold: rgb(0x52e3ff),
+                palette: Colormap::Green,
+            },
+        }
+    }
+}
+
 /// Display preferences the panafall reads each frame.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct View {
+    pub style: Style,
     pub palette: Colormap,
     pub peak_hold: bool,
     pub fill: bool,
@@ -68,11 +135,14 @@ pub struct View {
     pub split: f32,
     pub sql_mark: Option<f32>,
     pub show_peaks: bool,
+    /// The allocation strip along the frequency axis.
+    pub band_plan: bool,
 }
 
 impl Default for View {
     fn default() -> Self {
         Self {
+            style: Style::Ember,
             palette: Colormap::Ember,
             peak_hold: true,
             fill: true,
@@ -86,11 +156,34 @@ impl Default for View {
             split: 0.42,
             sql_mark: None,
             show_peaks: true,
+            band_plan: true,
         }
     }
 }
 
 const WF_ROWS: usize = 768;
+/// The replay history: five minutes of rows at the server's 25 fps, each
+/// kept as 1024 columns of 0.75 dB steps from −160 dBFS (about 8 MB).
+const ARCH_ROWS: usize = 7_500;
+const ARCH_W: usize = 1024;
+const ARCH_STEP_DB: f32 = 0.75;
+const ARCH_FLOOR_DB: f32 = -160.0;
+
+/// One waterfall row in the replay history, with where and when it was.
+struct ArchRow {
+    utc: std::time::SystemTime,
+    lo_hz: f64,
+    hi_hz: f64,
+    q: Vec<u8>,
+}
+
+/// The waterfall held for replay: how many rows back from the newest the
+/// top of the display is, and the picture of that stretch.
+pub struct Hold {
+    back: usize,
+    shown: Option<(usize, usize, (f32, f32, Colormap), u64)>,
+    tex: Option<egui::TextureHandle>,
+}
 const WF_MAX_COLS: usize = 4096;
 
 pub struct Panafall {
@@ -144,6 +237,10 @@ pub struct Panafall {
     edge_drag: Option<EdgeDrag>,
     /// The second receiver, when one is listening.
     pub rx_b: Option<RxB>,
+    archive: VecDeque<ArchRow>,
+    /// Rows archived so far, to tell when the held picture is stale.
+    archived: u64,
+    pub hold: Option<Hold>,
     /// Where each receiver's flag was drawn last frame (A, B), for clicks.
     flags: [Option<Rect>; 2],
 }
@@ -216,6 +313,9 @@ impl Default for Panafall {
             edge_drag: None,
             rx_b: None,
             flags: [None, None],
+            archive: VecDeque::new(),
+            archived: 0,
+            hold: None,
         }
     }
 }
@@ -362,6 +462,23 @@ impl Panafall {
             *out = row_src[a..b].iter().copied().fold(f32::MIN, f32::max) - self.wf_shift_db;
         }
         self.wf_time[self.wf_head] = now;
+        // The replay history: strongest bin per column, quantized.
+        let q = (0..ARCH_W)
+            .map(|c| {
+                let a = c * n / ARCH_W;
+                let b = ((c + 1) * n / ARCH_W).max(a + 1).min(n);
+                let v = row_src[a.min(n - 1)..b].iter().copied().fold(f32::MIN, f32::max) - self.wf_shift_db;
+                ((v - ARCH_FLOOR_DB) / ARCH_STEP_DB).clamp(0.0, 255.0) as u8
+            })
+            .collect();
+        self.archive.push_front(ArchRow {
+            utc: std::time::SystemTime::now(),
+            lo_hz: f.center_hz - f.rate_hz / 2.0,
+            hi_hz: f.center_hz + f.rate_hz / 2.0,
+            q,
+        });
+        self.archive.truncate(ARCH_ROWS);
+        self.archived += 1;
         self.wf_count = (self.wf_count + 1).min(WF_ROWS);
         self.wf_new_rows.push_back(self.wf_head);
         if self.wf_new_rows.len() > 64 {
@@ -374,6 +491,87 @@ impl Panafall {
         }
         self.last_row_at = now;
         self.last_frame = Some(Instant::now());
+    }
+
+    pub fn toggle_hold(&mut self) {
+        self.hold = match self.hold {
+            Some(_) => None,
+            None => Some(Hold { back: 0, shown: None, tex: None }),
+        };
+    }
+
+    /// How far back the held waterfall is, in seconds.
+    pub fn held_age(&self) -> Option<f64> {
+        let h = self.hold.as_ref()?;
+        let newest = self.archive.front()?.utc;
+        let row = self.archive.get(h.back)?.utc;
+        Some(newest.duration_since(row).map(|d| d.as_secs_f64()).unwrap_or(0.0))
+    }
+
+    /// The held waterfall: the archived rows from `back` downward, mapped to
+    /// the display's current frequency axis, with UTC times beside them.
+    fn draw_held(&mut self, ui: &mut Ui, wf: Rect, time_axis: Rect, view: &View) {
+        let rows_vis = (wf.height().round() as usize).clamp(1, 2048);
+        let (black, top) = self.wf_levels(view);
+        let lut = view.palette.lut();
+        let lo = self.center_hz - self.span_hz / 2.0;
+        let span = self.span_hz.max(1.0);
+        let max_back = self.archive.len().saturating_sub(rows_vis.min(self.archive.len()));
+        let Some(h) = self.hold.as_mut() else { return };
+        h.back = h.back.min(max_back);
+        let key = (h.back, rows_vis, (black, top, view.palette), (lo as u64) ^ (span as u64).rotate_left(32));
+        if h.shown != Some(key) || h.tex.is_none() {
+            let scale = 1023.0 / (top - black).max(1.0);
+            let mut px = Vec::with_capacity(ARCH_W * rows_vis);
+            for r in 0..rows_vis {
+                match self.archive.get(h.back + r) {
+                    Some(row) => {
+                        let w = (row.hi_hz - row.lo_hz).max(1.0);
+                        for c in 0..ARCH_W {
+                            let hz = lo + c as f64 / (ARCH_W - 1) as f64 * span;
+                            let src = (hz - row.lo_hz) / w * (ARCH_W - 1) as f64;
+                            if src < 0.0 || src > (ARCH_W - 1) as f64 {
+                                px.push(theme::ink());
+                                continue;
+                            }
+                            let v = row.q[src as usize] as f32 * ARCH_STEP_DB + ARCH_FLOOR_DB;
+                            let k = ((v - black) * scale).clamp(0.0, 1023.0) as usize;
+                            px.push(lut[self.tone[k] as usize]);
+                        }
+                    }
+                    None => px.extend(std::iter::repeat_n(theme::ink(), ARCH_W)),
+                }
+            }
+            let img = egui::ColorImage::new([ARCH_W, rows_vis], px);
+            let opts = egui::TextureOptions::LINEAR;
+            match &mut h.tex {
+                Some(t) => t.set(img, opts),
+                None => h.tex = Some(ui.ctx().load_texture("waterfall-held", img, opts)),
+            }
+            h.shown = Some(key);
+        }
+        let painter = ui.painter_at(wf);
+        if let Some(t) = &h.tex {
+            painter.image(t.id(), wf, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+        }
+        // Wall-clock times on the held rows, about every 60 px.
+        let p = ui.painter();
+        p.rect_filled(time_axis, CornerRadius::ZERO, theme::surface_1());
+        let row_px = wf.height() / rows_vis as f32;
+        let every = (60.0 / row_px).ceil() as usize;
+        for i in (0..rows_vis).step_by(every.max(1)) {
+            let Some(row) = self.archive.get(h.back + i) else { break };
+            let y = wf.top() + i as f32 * row_px;
+            let secs = row.utc.duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+            p.line_segment([pos2(time_axis.left(), y), pos2(time_axis.left() + 4.0, y)], Stroke::new(1.0, theme::text_3()));
+            p.text(
+                pos2(time_axis.right() - 2.0, y + 1.0),
+                Align2::RIGHT_TOP,
+                format!("{:02}:{:02}", (secs / 60) % 60, secs % 60),
+                theme::mono(9.5),
+                theme::text_2(),
+            );
+        }
     }
 
     fn shift_waterfall(&mut self, frac: f64) {
@@ -499,13 +697,15 @@ impl Panafall {
 
         // ---- backgrounds
         painter.rect_filled(full, CornerRadius::ZERO, theme::ink());
+        let look = view.style.look();
+        let (bg_top, bg_bottom) = look.bg.unwrap_or((theme::surface_2(), theme::ink()));
         let bg = Mesh {
             indices: vec![0, 1, 2, 2, 1, 3],
             vertices: vec![
-                crate::brand::vtx(pan.left_top(), theme::surface_2()),
-                crate::brand::vtx(pan.right_top(), theme::surface_2()),
-                crate::brand::vtx(pan.left_bottom(), theme::ink()),
-                crate::brand::vtx(pan.right_bottom(), theme::ink()),
+                crate::brand::vtx(pan.left_top(), bg_top),
+                crate::brand::vtx(pan.right_top(), bg_top),
+                crate::brand::vtx(pan.left_bottom(), bg_bottom),
+                crate::brand::vtx(pan.right_bottom(), bg_bottom),
             ],
             texture_id: egui::TextureId::default(),
         };
@@ -581,9 +781,23 @@ impl Panafall {
             f += f_step;
         }
 
+        // ---- the band plan, as a colored edge along the top of the axis
+        if view.band_plan {
+            let lo = self.hz_for(pan.left(), pan);
+            let hi = self.hz_for(pan.right(), pan);
+            for b in crate::bandplan::within(lo, hi) {
+                let x0 = self.x_for(b.lo_hz, pan).max(pan.left());
+                let x1 = self.x_for(b.hi_hz, pan).min(pan.right());
+                let r = Rect::from_min_max(pos2(x0, axis.top() + 1.0), pos2(x1.max(x0 + 2.0), axis.top() + 4.0));
+                painter.rect_filled(r, CornerRadius::ZERO, alpha(b.kind.color(), 0.75));
+            }
+        }
+
         // ---- waterfall
         self.upload(&ctx, view);
-        if let Some(tex) = &self.wf_tex {
+        if self.hold.is_some() {
+            self.draw_held(ui, wf, time_axis, view);
+        } else if let Some(tex) = &self.wf_tex {
             let rows_vis = (wf.height().round() as usize).clamp(1, WF_ROWS);
             let row_px = wf.height() / rows_vis as f32;
             // Smooth scroll: the newest row slides in over one row interval.
@@ -641,6 +855,38 @@ impl Panafall {
             }
         }
 
+        // ---- replay controls on the waterfall: HOLD when live; when held,
+        // how far back, and LIVE (ember: the live state) to return.
+        {
+            let held = self.held_age();
+            let label = if held.is_some() { "LIVE" } else { "HOLD" };
+            let g = painter.layout_no_wrap(label.into(), theme::mono_bold(10.5), Color32::PLACEHOLDER);
+            let r = Rect::from_min_size(pos2(wf.right() - g.size().x - 22.0, wf.top() + 8.0), g.size() + vec2(14.0, 8.0));
+            let b = ui.interact(r, resp.id.with("hold"), Sense::click());
+            let hover = b.hovered();
+            let (fill, stroke, text_c) = if held.is_some() {
+                (theme::ACTION, theme::ACTION, Color32::WHITE)
+            } else {
+                (alpha(theme::surface_3(), if hover { 0.95 } else { 0.8 }), theme::line_2(), theme::text())
+            };
+            painter.rect(r, CornerRadius::same(3), fill, Stroke::new(1.0, stroke), egui::StrokeKind::Inside);
+            painter.galley(r.min + vec2(7.0, 4.0), g, text_c);
+            if let Some(age) = held {
+                let m = (age / 60.0).floor();
+                let s = age - m * 60.0;
+                painter.text(
+                    pos2(r.left() - 8.0, r.center().y),
+                    Align2::RIGHT_CENTER,
+                    format!("HELD · −{m:.0}:{s:04.1} · wheel to scroll back"),
+                    theme::mono(10.5),
+                    theme::WARN,
+                );
+            }
+            if b.on_hover_text(if held.is_some() { "Back to the live waterfall (H)" } else { "Hold the waterfall to look back up to five minutes (H)" }).clicked() {
+                self.toggle_hold();
+            }
+        }
+
         // ---- the trace, decimated to one point per pixel column (the
         // strongest bin under it, so a narrow carrier never vanishes).
         let n = self.smooth.len();
@@ -672,9 +918,9 @@ impl Panafall {
                 for p in &line {
                     let i = mesh.vertices.len() as u32;
                     let h = ((pan.bottom() - p.y) / pan.height()).clamp(0.0, 1.0);
-                    let top_c = theme::lerp(theme::alpha(theme::AMBER, 0.10), theme::alpha(theme::AMBER, 0.55), h);
+                    let top_c = theme::lerp(theme::alpha(look.fill, 0.10), theme::alpha(look.fill, 0.55), h);
                     mesh.colored_vertex(*p, top_c);
-                    mesh.colored_vertex(pos2(p.x, pan.bottom()), alpha(theme::AMBER, 0.0));
+                    mesh.colored_vertex(pos2(p.x, pan.bottom()), alpha(look.fill, 0.0));
                     if i >= 2 {
                         mesh.add_triangle(i - 2, i - 1, i);
                         mesh.add_triangle(i - 1, i + 1, i);
@@ -689,7 +935,7 @@ impl Panafall {
                         pos2(x, self.y_for(column(&self.max_hold, c), pan))
                     })
                     .collect();
-                pan_painter.add(Shape::line(pts, Stroke::new(1.0, alpha(theme::VIOLET, 0.35))));
+                pan_painter.add(Shape::line(pts, Stroke::new(1.0, alpha(look.max_hold, 0.35))));
             }
             if view.peak_hold && self.peak.len() == n {
                 let pts: Vec<Pos2> = (0..cols)
@@ -698,10 +944,10 @@ impl Panafall {
                         pos2(x, self.y_for(column(&self.peak, c), pan))
                     })
                     .collect();
-                pan_painter.add(Shape::line(pts, Stroke::new(1.0, alpha(theme::CYAN, 0.5))));
+                pan_painter.add(Shape::line(pts, Stroke::new(1.0, alpha(look.peak, 0.5))));
             }
-            pan_painter.add(Shape::line(line.clone(), Stroke::new(3.2, alpha(theme::AMBER, 0.22))));
-            pan_painter.add(Shape::line(line.clone(), Stroke::new(1.25, Color32::from_rgb(0xff, 0xe4, 0xbd))));
+            pan_painter.add(Shape::line(line.clone(), Stroke::new(3.2, alpha(look.glow, 0.22))));
+            pan_painter.add(Shape::line(line.clone(), Stroke::new(1.25, look.core)));
         }
 
         // ---- spurs being notched
@@ -926,10 +1172,15 @@ impl Panafall {
             } else {
                 None
             };
-            let text = match level {
+            let mut text = match level {
                 Some(l) if pan.contains(p) => format!("{} MHz · {l:.1} dBFS", crate::tuning::fmt_mhz(landing, 4)),
                 _ => format!("{} MHz", crate::tuning::fmt_mhz(landing, 4)),
             };
+            if view.band_plan
+                && let Some(b) = crate::bandplan::within(landing, landing + 1.0).next()
+            {
+                text.push_str(&format!("\n{} · {}", b.name, b.kind.name()));
+            }
             let g = painter.layout_no_wrap(text, theme::mono(11.0), theme::text());
             let mut r = Rect::from_min_size(pos2(p.x + 12.0, p.y + 14.0), g.size() + vec2(12.0, 8.0));
             if r.right() > full.right() - 4.0 {
@@ -954,7 +1205,13 @@ impl Panafall {
 
             // Wheel: tune by the step and recenter (a dial turn); Ctrl zooms.
             let scroll = crate::widgets::wheel(ui);
-            if scroll != 0.0 && !db_resp.hovered() {
+            if scroll != 0.0 && self.hold.is_some() && wf.contains(p) {
+                // Held: the wheel walks back through time, a second a notch.
+                if let Some(h) = self.hold.as_mut() {
+                    let d = (scroll.round() as i64) * 25;
+                    h.back = (h.back as i64 + d).max(0) as usize;
+                }
+            } else if scroll != 0.0 && !db_resp.hovered() {
                 self.scroll_accum += scroll;
                 let notches = self.scroll_accum.trunc();
                 if notches != 0.0 {
@@ -1146,6 +1403,15 @@ impl Panafall {
             if ui.checkbox(&mut mark, "Squelch mark").changed() {
                 view.sql_mark = mark.then_some(self.floor_est + 10.0);
             }
+            ui.menu_button("Style", |ui| {
+                for st in Style::ALL {
+                    if ui.selectable_label(view.style == st, st.label()).clicked() {
+                        view.style = st;
+                        view.palette = st.look().palette;
+                        ui.close();
+                    }
+                }
+            });
             ui.menu_button("Palette", |ui| {
                 for m in Colormap::ALL {
                     if ui.selectable_label(view.palette == m, m.label()).clicked() {
@@ -1472,6 +1738,29 @@ mod tests {
         let acts = &h.state().acts;
         assert!(matches!(acts.last(), Some(Act::Filter(lo, hi)) if *lo < 0.0 && (*lo + *hi).abs() < 1.0), "{acts:?}");
         assert!(!acts.iter().any(|a| matches!(a, Act::Center(_) | Act::Tune { .. })), "an edge drag neither pans nor tunes: {acts:?}");
+    }
+
+    #[test]
+    fn a_held_waterfall_scrolls_back_through_time() {
+        let mut h = harness();
+        // Forty seconds of frames, 25 a second: more than the waterfall shows.
+        for i in 0..1000 {
+            let mut f = h.state().frame.clone();
+            f.pwr[(i / 10) % 1024] = -30.0;
+            h.state_mut().pan.push(&f, &View::default(), i as f64 * 0.04);
+        }
+        h.state_mut().pan.toggle_hold();
+        h.run_steps(2);
+        assert_eq!(h.state().pan.held_age(), Some(0.0));
+        let wf = h.state().pan.regions.unwrap()[1];
+        // Five notches up: five seconds back (by row count; the test's rows
+        // arrive faster than real time, so the clock age is near zero).
+        wheel(&mut h, wf.center(), 5.0, Modifiers::NONE);
+        h.run_steps(1);
+        assert_eq!(h.state().pan.hold.as_ref().map(|x| x.back), Some(125));
+        assert!(h.state().acts.is_empty(), "scrolling the held waterfall never tunes");
+        h.state_mut().pan.toggle_hold();
+        assert!(h.state().pan.hold.is_none());
     }
 
     #[test]

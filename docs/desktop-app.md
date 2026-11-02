@@ -82,37 +82,26 @@ draw-in, a beat only while waiting, and none at all with reduced motion on.
 
 ## Status
 
-First build merged 2026-11-02. Verified against the live RSP1A: the stream (25 fps,
-audio, status, decodes), every panel rendering, reconnect, the web page's view-only
-veil, and the 409 guard. Not yet exercised by hand: tuning gestures, mode and gain
-changes, captures, P25 keys, scan control.
+Merged as of 2026-11-02, with 42 headless UI tests (egui_kittest) driving the real widgets and
+checking the exact requests they send, plus server and engine tests for the new routes.
 
-## Roadmap
+Done since the first build:
 
-**1. Prove the controls, close the parity gaps.**
-- A hands-on pass over every gesture and control on the live radio, and egui_kittest
-  tests for the readout, faders and tuning math so regressions show up in `cargo test`.
-- The web page's tune strip (drag-to-tune ticks), the SQL MARK fader, the slicer pane
-  beside the eye (level bells, scatter, dibit tape), the pager's ±1.6/±4.8 kHz marks,
-  decode-log expand/collapse with an anchored scroll, file dialogs for LOAD I/Q and save
-  locations, and memory names that can be edited.
+- **Parity with the web page:** drag-to-tune strip, SQL MARK fader and meter caret, the slicer
+  beside the eye, pager deviation marks, expandable decode rows that hold the reading position,
+  native file dialogs, renameable memories.
+- **Server features:** adjustable filters (sideband width and shift, AM/NFM/WFM width; digital
+  modes keep theirs), an API version with feature list, and a second receiver (NFM, AM, USB,
+  LSB, WFM) inside the span with its own audio stream.
+- **The app:** receiver B as a second slice (its own flag, meter, audio and applet), span lock,
+  passband edges that drag, spectrum styles (Ember, Classic, Glacier, Phosphor), a five-minute
+  waterfall replay with UTC times, a band-plan strip, connection diagnostics with sparklines, a
+  View menu (compact layout, text size, 60/30 fps).
 
-**2. Polish the instrument.**
-- Spectrum style presets: trace, fill, background and waterfall palette as one choice,
-  including a blue-and-white classic panadapter look. (Named for what it looks like,
-  never for the product it resembles.)
-- Waterfall time machine: freeze, scroll back through minutes with UTC labels, LIVE to
-  return. The waterfall's color mapping in a GPU shader, which also takes the CPU from
-  about 23% of a core to a few percent.
-- A network diagnostics popover behind the signal bars (RTT history, drops as a
-  percentage), a compact mode, saved window layouts, and font scaling.
-- A band-plan strip with decode spots as dots and hover notes.
+## What is left
 
-**3. Features that need the server.**
-- Filter width and passband shift, so the passband edges can be dragged.
-- A version handshake, so the app says plainly when it and the server disagree.
-- More than one receiver in a span, each with its own flag.
-
-**4. Windows 11.**
-- CI that builds and tests Linux and Windows on every push, a Windows build with the
-  icon embedded, and an installer.
+- **Windows 11:** CI that builds and tests Linux and Windows, a Windows build, an installer.
+- **A GPU waterfall shader:** measured, it would not lower CPU (the frame wait dominates, and the
+  30 fps setting halves that); worth doing only if waterfall recolors ever show up in a profile.
+- **The web page** does not show receiver B or the filter controls; it follows both through the
+  status (the passband it draws is the filtered one).

@@ -150,6 +150,11 @@ pub struct App {
     rate_bytes: u64,
     pub fps: f32,
     pub kbps: f32,
+    /// The last two minutes of (fps, KiB/s, API ms), a sample a second.
+    pub history: VecDeque<(f32, f32, f32)>,
+    pub reconnects: u32,
+    pub connected_at: Option<Instant>,
+    pub diagnostics_open: bool,
     pub replay_note: Option<String>,
     pub recorder_busy: Option<String>,
     pub memory_armed: bool,
@@ -173,6 +178,8 @@ impl App {
     /// Everything but connecting and the sound card, so tests can build one.
     pub fn build(ctx: &egui::Context, prefs: Prefs, player: Arc<Player>, player_b: Arc<Player>, server: Option<String>) -> App {
         theme::install(ctx, prefs.ground);
+        ctx.set_zoom_factor(prefs.ui_scale.clamp(0.6, 2.0));
+        crate::anim::set_max_fps(prefs.max_fps);
         egui_extras::install_image_loaders(ctx);
         player_b.set_volume(prefs.volume_b);
         player_b.set_muted(prefs.muted_b);
@@ -243,6 +250,10 @@ impl App {
             rate_bytes: 0,
             fps: 0.0,
             kbps: 0.0,
+            history: VecDeque::new(),
+            reconnects: 0,
+            connected_at: None,
+            diagnostics_open: false,
             replay_note: None,
             recorder_busy: None,
             memory_armed: false,
@@ -479,6 +490,10 @@ impl App {
                 }
             }
             NetEvent::Connected(s, info) => {
+                if self.connected_at.is_some() {
+                    self.reconnects += 1;
+                }
+                self.connected_at = Some(Instant::now());
                 self.conn = Conn::Live;
                 let old = info.as_ref().is_none_or(|i| i.api < proto::API_REVISION);
                 if old && self.server.as_ref().map(|i| i.api) != info.as_ref().map(|i| i.api) {
@@ -779,6 +794,11 @@ impl App {
             self.rate_t = now;
             self.rate_frames = frames;
             self.rate_bytes = bytes;
+            let rtt = l.stats.rtt_us.load(Ordering::Relaxed) as f32 / 1000.0;
+            self.history.push_back((self.fps, self.kbps, rtt));
+            while self.history.len() > 120 {
+                self.history.pop_front();
+            }
         }
     }
 
@@ -817,6 +837,7 @@ impl App {
                 Key::Comma if mods.command => self.settings_open = !self.settings_open,
                 _ if !self.prefs.shortcuts || !self.have_status => {}
                 Key::L if !mods.command => self.prefs.span_lock = !self.prefs.span_lock,
+                Key::H if !mods.command => self.pan.toggle_hold(),
                 Key::B if !mods.command => self.active_b = !self.active_b && self.status.rx2.is_some(),
                 Key::ArrowUp | Key::ArrowDown => {
                     let d = if k == Key::ArrowUp { 1.0 } else { -1.0 };
@@ -957,6 +978,7 @@ impl App {
                 if icon_button(ui, "?", "Shortcuts and gestures (?)").clicked() {
                     self.help_open = !self.help_open;
                 }
+                self.view_menu(ui);
                 let utc = utc_hms();
                 ui.label(egui::RichText::new(format!("{utc} UTC")).font(theme::mono(12.0)).color(theme::text_2()));
                 self.connection_chip(ui);
@@ -991,6 +1013,9 @@ impl App {
                 ui.painter().rect_filled(b, CornerRadius::same(1), if i < bars { theme::OK } else { theme::surface_4() });
             }
         }
+        if resp.interact(Sense::click()).clicked() {
+            self.diagnostics_open = !self.diagnostics_open;
+        }
         resp.on_hover_text(match &self.link {
             Some(l) => format!(
                 "{} · {:.0} fps · {:.0} KiB/s · API {:.1} ms",
@@ -1000,6 +1025,62 @@ impl App {
                 l.stats.rtt_us.load(Ordering::Relaxed) as f32 / 1000.0
             ),
             None => "Not connected".into(),
+        });
+    }
+
+    fn view_menu(&mut self, ui: &mut Ui) {
+        ui.menu_button(egui::RichText::new("View").font(theme::sans_semibold(12.0)), |ui| {
+            ui.set_min_width(220.0);
+            ui.checkbox(&mut self.prefs.show_side, "Applets   S");
+            ui.checkbox(&mut self.prefs.show_dock, "Dock   D");
+            ui.checkbox(&mut self.prefs.show_scope, "Scope applet");
+            ui.checkbox(&mut self.prefs.view.band_plan, "Band plan");
+            ui.checkbox(&mut self.prefs.span_lock, "Span lock   L");
+            ui.separator();
+            if ui.button("Compact: display only").clicked() {
+                self.prefs.show_side = false;
+                self.prefs.show_dock = false;
+                ui.close();
+            }
+            if ui.button("Full layout").clicked() {
+                self.prefs.show_side = true;
+                self.prefs.show_dock = true;
+                ui.close();
+            }
+            if ui.button(if self.fullscreen { "Leave full screen   F11" } else { "Full screen   F11" }).clicked() {
+                self.fullscreen = !self.fullscreen;
+                ui.ctx().send_viewport_cmd(egui::ViewportCommand::Fullscreen(self.fullscreen));
+                ui.close();
+            }
+            ui.separator();
+            ui.horizontal(|ui| {
+                ui.label("Text size");
+                let z = ui.ctx().zoom_factor();
+                if ui.small_button("−").clicked() {
+                    ui.ctx().set_zoom_factor((z - 0.1).max(0.6));
+                }
+                ui.label(egui::RichText::new(format!("{:.0}%", z * 100.0)).font(theme::mono(11.0)));
+                if ui.small_button("+").clicked() {
+                    ui.ctx().set_zoom_factor((z + 0.1).min(2.0));
+                }
+                if ui.small_button("reset").clicked() {
+                    ui.ctx().set_zoom_factor(1.0);
+                }
+            });
+            ui.horizontal(|ui| {
+                ui.label("Frame rate");
+                for fps in [60u32, 30] {
+                    if ui.radio(self.prefs.max_fps == fps, format!("{fps}")).clicked() {
+                        self.prefs.max_fps = fps;
+                        crate::anim::set_max_fps(fps);
+                    }
+                }
+            });
+            ui.separator();
+            if ui.button("Connection diagnostics…").clicked() {
+                self.diagnostics_open = true;
+                ui.close();
+            }
         });
     }
 
@@ -1431,6 +1512,7 @@ impl App {
     /// Lay out the window.
     pub fn draw(&mut self, ui: &mut Ui) {
         let ctx = ui.ctx().clone();
+        self.prefs.ui_scale = ctx.zoom_factor();
         if std::env::var_os("USDR_QA_FPS").is_some() {
             use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
             static N: AtomicU64 = AtomicU64::new(0);
@@ -1508,6 +1590,7 @@ impl App {
             });
         crate::screens::settings_window(self, &ctx);
         crate::screens::help_window(self, &ctx);
+        crate::screens::diagnostics_window(self, &ctx);
         self.toasts_ui(&ctx);
         if !matches!(self.conn, Conn::Live) {
             crate::screens::reconnect_veil(self, &ctx);

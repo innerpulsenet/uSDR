@@ -10,6 +10,7 @@
 mod anim;
 mod app;
 mod audio;
+mod bandplan;
 mod brand;
 mod colormap;
 mod dock;

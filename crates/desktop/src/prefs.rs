@@ -66,6 +66,10 @@ pub struct Prefs {
     pub show_side: bool,
     pub show_dock: bool,
     pub show_scope: bool,
+    /// Text and control size, as egui's zoom factor (Ctrl+= / Ctrl+− / Ctrl+0).
+    pub ui_scale: f32,
+    /// Most frames drawn a second: 60, or 30 to spend less CPU.
+    pub max_fps: u32,
     /// Keyboard tuning shortcuts; off by default so keys stay with widgets.
     pub shortcuts: bool,
     /// The last mode that was not SCAN, for the scan panel's STOP.
@@ -97,6 +101,8 @@ impl Default for Prefs {
             show_dock: true,
             show_scope: true,
             shortcuts: true,
+            ui_scale: 1.0,
+            max_fps: 60,
             last_voice_mode: usdr_proto::Mode::Nfm,
         }
     }
@@ -106,7 +112,12 @@ pub fn dirs() -> Option<directories::ProjectDirs> {
     directories::ProjectDirs::from("net", "innerpulse", "usdr-desktop")
 }
 
+/// `USDR_DESKTOP_PREFS` points at another file (for a second profile, or
+/// for testing without touching the everyday one).
 fn path() -> Option<PathBuf> {
+    if let Some(p) = std::env::var_os("USDR_DESKTOP_PREFS") {
+        return Some(PathBuf::from(p));
+    }
     dirs().map(|d| d.config_dir().join("desktop.toml"))
 }
 
