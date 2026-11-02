@@ -305,6 +305,7 @@ Then open <http://127.0.0.1:8073>.
 | `--gain` | Tuner gain in dB; omit for automatic gain (a clip-guarded loop, see below) |
 | `--config` | Settings file, default `~/.config/usdr/usdr.toml` |
 | `--devices` | List visible radios, local and remote, and exit |
+| `--web` | What the browser page may do: `shared` (default), `yield` (view-only while the desktop app is connected) or `off` (not served); saved to the settings file |
 
 Tuning, span, gain and device changes made in the browser are written back to
 the settings file, so a restart comes back up where you left off. Measured
@@ -450,7 +451,72 @@ no longer one of the three read errors that reopen the device.
 | `GET /api/sdr/calls/{id}/raw.iq` | That call's channelized raw I/Q (`CS16LE`, interleaved I/Q; frequency, rate, and format are returned as `x-usdr-*` headers) |
 | `GET /api/sdr/capture.wav?kind=` | `voice`, `discriminator`, `iq`, or `span` (raw device I/Q at the span rate; the ring is demand-armed — the first request starts the fill, so re-request for the full 12 s) |
 | `POST /api/sdr/replay?frequency_hz=` | Decode a posted I/Q WAV (≤ 16 MiB) |
-| `GET /ws` | JSON stream of `fft`, `decode`, and `status` events |
+| `GET /api/web` | Who is connected (`clients`: kind, name, address, since) and the web policy |
+| `POST /api/web` | `{"policy": "shared" \| "yield" \| "off"}` |
+| `GET /api/memories` | The shared memory bank, or `null` before anyone has stored one |
+| `POST /api/memories` | `{"memories": [{"name", "freq_hz", "mode"}, …]}` (at most 64) — replaces the bank and tells every client |
+| `GET /ws` | Binary FFT and audio frames, and JSON `hello`, `status`, `decode`, `presence` and `memories` events. `?client=desktop&name=<host>` identifies the desktop app |
+
+## Desktop app
+
+`crates/desktop` is a native client for this server, `usdr-desktop`: the
+same receiver, with a console built for it instead of a web page. It runs on
+Linux today and is written to build for Windows 11 too (wgpu draws through
+Vulkan or DX12; cpal plays through PipeWire/ALSA or WASAPI). The radio, the
+DSP and every decoder stay in the server; the app streams the spectrum,
+audio, decodes and status, and sends the operator's changes back.
+
+```bash
+cargo build --release -p usdr-desktop
+```
+
+```bash
+./target/release/usdr-desktop 127.0.0.1:8073
+```
+
+`crates/desktop/packaging/linux/install.sh` installs it for the current user
+with a launcher and icons (the launcher is what gives the window its icon
+under Wayland). `usdr-desktop --probe host:port` connects without a window,
+decodes four seconds of the stream and prints what it saw.
+
+What it has that the page does not:
+
+- **The panafall.** A trace that rises fast and falls slowly, a fill whose
+  heat follows level, peak hold and the server's max hold, decode spots as
+  labels that stack instead of overlapping, and a slice flag at the carrier
+  with the frequency, mode, filter, a meter and what the classifier hears.
+  The waterfall keeps its history in dB, so a palette, black level or
+  contrast change recolors all of it, and it scrolls on the frame clock with
+  a sub-row offset. Its time marks are measured from the rows. Drag the
+  display to pan, drag the dB scale to set the range, drag the bar under the
+  spectrum to resize the two.
+- **The readout.** Every digit is a dial (wheel, or click its upper or lower
+  half); typing starts entry and reads `146.52`, `146520`, `146520000`,
+  `146.520.000`, `7.2m` and `540k`.
+- **Audio** through the sound card with a resampler that follows the
+  server's clock (it reads the drift in ppm), a balance control, playback of
+  the 20 s buffer and of Last Heard calls in place of the live audio, and a
+  local recorder of what you hear (`R`).
+- **Captures** saved straight to disk: I/Q as raw CS16LE with a JSON sidecar,
+  audio and discriminator as WAV. Drop a `.iq` and its `.json` on the window
+  to decode it on the server.
+- **Honest status.** Stream health, ADC clipping, frame rate, throughput,
+  API round trip, the audio queue and clock drift, and who else is connected.
+
+The page and the app stay in step through the server: every change either
+makes comes back to both as a `status` event, and the memory bank is the
+server's, not each browser's. Display preferences (palette, range, holds)
+stay with each client, as each SmartSDR client keeps its own panadapter.
+The app's Settings set the web policy: **Shared**, **View-only** (the page
+follows along under a veil and the server refuses its changes with 409 while
+an app is connected) or **Off** (the page is not served).
+
+Its look is the innerpulse Carbon ground (brushed steel on cool blacks, a
+steel wordmark, glass panels lit from above), with Ink as the alternative,
+and uSDR's own accent, amber, for the receiver's marks; ember is kept for
+the mark, focus and recording. Motion follows the desktop's animation setting
+(KDE's, today) and can be reduced in Settings. The plan it was built to is
+`docs/desktop-app.md`.
 
 ## Architecture
 

@@ -1,0 +1,1288 @@
+//! The application: the connection, the receiver model it keeps current, and
+//! the window it lays out — masthead, VFO bar, panafall, applet column,
+//! dock and status bar.
+
+use crate::audio::Player;
+use crate::brand;
+use crate::meter::Meter;
+use crate::net::{Fetch, Get, Link, NetEvent};
+use crate::prefs::{Memory, Motion, Prefs};
+use crate::scope::Scope;
+use crate::spectrum::{Act, Panafall, SliceFlag};
+use crate::theme::{self, alpha};
+use crate::vfo::{Vfo, VfoAct};
+use crate::widgets::{self, Tone};
+use egui::{Align2, CornerRadius, Rect, Sense, Stroke, Ui, pos2, vec2};
+use serde_json::{Value, json};
+use std::collections::VecDeque;
+use std::sync::Arc;
+use std::sync::atomic::Ordering;
+use std::time::{Duration, Instant, SystemTime};
+use usdr_proto::{self as proto, Call, Classification, Device, FftFrame, Mode, ModeCaps, Presence, Status};
+
+pub enum Conn {
+    Idle,
+    Connecting { attempt: u32, reason: Option<String> },
+    Live,
+}
+
+pub struct DecodeRow {
+    pub at: SystemTime,
+    pub freq_hz: f64,
+    pub ev: proto::DecodeEvent,
+}
+
+pub struct ClassRow {
+    pub at: SystemTime,
+    pub freq_hz: f64,
+    pub c: Classification,
+}
+
+pub struct Toast {
+    pub text: String,
+    pub tone: Tone,
+    pub until: f64,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum DockTab {
+    Decodes,
+    Classifier,
+    Calls,
+    Scan,
+}
+
+/// The spur check walks three steps a second or so apart.
+pub enum SpurCheck {
+    Settle { until: f64, home: f64 },
+    Shifted { until: f64, home: f64, a: Vec<f32> },
+    Back { until: f64, a: Vec<f32>, b: Vec<f32>, rate: f64 },
+}
+
+pub struct App {
+    pub prefs: Prefs,
+    pub link: Option<Link>,
+    pub player: Arc<Player>,
+    pub conn: Conn,
+    pub status: Status,
+    pub have_status: bool,
+    pub modes: Vec<ModeCaps>,
+    pub presence: Presence,
+    pub memories: Option<Vec<Memory>>,
+    pub frame: Option<Box<FftFrame>>,
+    pub pan: Panafall,
+    pub vfo: Vfo,
+    pub meter: Meter,
+    pub scope: Scope,
+    pub decodes: VecDeque<DecodeRow>,
+    pub class_log: VecDeque<ClassRow>,
+    last_class_key: Option<(String, Instant)>,
+    pub held: Option<(Classification, Instant)>,
+    pub calls: Vec<Call>,
+    calls_polled: f64,
+    pub devices: Vec<Device>,
+    pub toasts: Vec<Toast>,
+    pub dock_tab: DockTab,
+    pub decode_filter: String,
+    pub selected_decode: Option<usize>,
+    pub scan_form: proto::ScanCfg,
+    pub scan_touched: bool,
+    pub p25: crate::panels::P25Form,
+    pub settings_open: bool,
+    pub help_open: bool,
+    pub connect_input: String,
+    pub splash: brand::Splash,
+    /// Optimistic receive frequency until the server confirms it.
+    pub inspect_pending: Option<(f64, Instant)>,
+    pub gain_ui: f64,
+    pub zoom_ui: f64,
+    pub span_pending: Option<(f64, f64)>,
+    pub clip_until: f64,
+    pub spur: Option<SpurCheck>,
+    display_bins_sent: usize,
+    display_bins_due: Option<(usize, f64)>,
+    // Rates for the status bar.
+    rate_t: f64,
+    rate_frames: u64,
+    rate_bytes: u64,
+    pub fps: f32,
+    pub kbps: f32,
+    pub replay_note: Option<String>,
+    pub recorder_busy: Option<String>,
+    pub memory_armed: bool,
+    pub audio_devices: Vec<String>,
+    pub fullscreen: bool,
+}
+
+impl App {
+    pub fn new(cc: &eframe::CreationContext<'_>, server: Option<String>) -> App {
+        let prefs = Prefs::load();
+        theme::install(&cc.egui_ctx, prefs.ground);
+        egui_extras::install_image_loaders(&cc.egui_ctx);
+        let player = Player::new(prefs.audio_device.as_deref());
+        player.set_volume(prefs.volume);
+        player.set_muted(prefs.muted);
+        player.set_pan(prefs.pan);
+        let connect_input = server
+            .clone()
+            .or_else(|| prefs.last_server.clone())
+            .unwrap_or_else(|| "127.0.0.1:8073".into());
+        let qa_tab = match std::env::var("USDR_QA_TAB").as_deref() {
+            Ok("calls") => DockTab::Calls,
+            Ok("scan") => DockTab::Scan,
+            Ok("class") => DockTab::Classifier,
+            _ => DockTab::Decodes,
+        };
+        let mut app = App {
+            prefs,
+            link: None,
+            player,
+            conn: Conn::Idle,
+            status: Status::default(),
+            have_status: false,
+            modes: Vec::new(),
+            presence: Presence::default(),
+            memories: None,
+            frame: None,
+            pan: Panafall::default(),
+            vfo: Vfo::default(),
+            meter: Meter::default(),
+            scope: Scope::default(),
+            decodes: VecDeque::new(),
+            class_log: VecDeque::new(),
+            last_class_key: None,
+            held: None,
+            calls: Vec::new(),
+            calls_polled: 0.0,
+            devices: Vec::new(),
+            toasts: Vec::new(),
+            dock_tab: qa_tab,
+            decode_filter: String::new(),
+            selected_decode: None,
+            scan_form: proto::ScanCfg::default(),
+            scan_touched: false,
+            p25: Default::default(),
+            settings_open: false,
+            help_open: false,
+            connect_input,
+            splash: brand::Splash::default(),
+            inspect_pending: None,
+            gain_ui: 0.0,
+            zoom_ui: 1.0,
+            span_pending: None,
+            clip_until: 0.0,
+            spur: None,
+            display_bins_sent: 0,
+            display_bins_due: None,
+            rate_t: 0.0,
+            rate_frames: 0,
+            rate_bytes: 0,
+            fps: 0.0,
+            kbps: 0.0,
+            replay_note: None,
+            recorder_busy: None,
+            memory_armed: false,
+            audio_devices: Player::devices(),
+            fullscreen: false,
+        };
+        if server.is_some() || app.prefs.auto_connect && app.prefs.last_server.is_some() {
+            let s = app.connect_input.clone();
+            app.connect(&cc.egui_ctx, &s);
+        }
+        app
+    }
+
+    pub fn reduce_motion(&self) -> bool {
+        match self.prefs.motion {
+            Motion::Full => false,
+            Motion::Reduced => true,
+            Motion::System => {
+                use std::sync::OnceLock;
+                static SYS: OnceLock<bool> = OnceLock::new();
+                *SYS.get_or_init(crate::prefs::system_reduces_motion)
+            }
+        }
+    }
+
+    pub fn connect(&mut self, ctx: &egui::Context, server: &str) {
+        self.link = Some(Link::open(server, ctx.clone(), self.player.clone()));
+        self.prefs.remember_server(server);
+        self.prefs.save();
+        self.conn = Conn::Connecting { attempt: 1, reason: None };
+        self.have_status = false;
+        self.frame = None;
+        self.pan = Panafall::default();
+        self.display_bins_sent = 0;
+    }
+
+    pub fn disconnect(&mut self) {
+        self.link = None;
+        self.conn = Conn::Idle;
+        self.have_status = false;
+        self.frame = None;
+        self.player.flush();
+    }
+
+    pub fn toast(&mut self, ctx: &egui::Context, tone: Tone, text: impl Into<String>) {
+        let until = ctx.input(|i| i.time) + 5.0;
+        self.toasts.push(Toast { text: text.into(), tone, until });
+        if self.toasts.len() > 4 {
+            self.toasts.remove(0);
+        }
+    }
+
+    pub fn post(&self, path: &str, body: Value) {
+        if let Some(l) = &self.link {
+            l.post(path, body);
+        }
+    }
+
+    // ---------- receiver model ----------
+
+    /// The receive frequency the readout shows: the operator's last request
+    /// until the server has had a moment to confirm it.
+    pub fn inspect_hz(&self) -> f64 {
+        match self.inspect_pending {
+            Some((hz, at)) if at.elapsed() < Duration::from_millis(900) => hz,
+            _ => self.status.inspect_hz,
+        }
+    }
+
+    pub fn mode_caps(&self) -> Option<&ModeCaps> {
+        self.modes.iter().find(|m| m.mode == self.status.mode)
+    }
+
+    pub fn step_hz(&self) -> f64 {
+        self.prefs
+            .step_hz
+            .unwrap_or_else(|| crate::tuning::mode_raster_hz(self.status.mode, self.inspect_hz()))
+    }
+
+    fn span_now(&self) -> (f64, f64) {
+        if self.pan.span_hz > 0.0 {
+            (self.pan.center_hz, self.pan.span_hz)
+        } else {
+            let span = (self.status.max_freq_hz - self.status.min_freq_hz).max(self.status.rate_hz);
+            ((self.status.max_freq_hz + self.status.min_freq_hz) / 2.0, span)
+        }
+    }
+
+    pub fn tune(&mut self, hz: f64, lock: bool) {
+        let bounds = if self.status.tune_max_hz > self.status.tune_min_hz {
+            (self.status.tune_min_hz, self.status.tune_max_hz)
+        } else {
+            (1e6, 2.2e9)
+        };
+        // Zoomed in, the window already follows the receiver; the span
+        // center is the tuner's, so plan against the full span.
+        let (center, span) = if self.status.zoom > 1.01 {
+            (self.status.freq_hz, self.status.rate_hz.max(1.0))
+        } else {
+            self.span_now()
+        };
+        let plan = crate::tuning::plan(hz, center, span, self.status.bandwidth_hz, lock && self.status.zoom <= 1.01, bounds);
+        if let Some(c) = plan.center_hz {
+            self.post("/api/sdr/tune", json!({ "freq_hz": c }));
+        }
+        self.post("/api/sdr/inspect", json!({ "freq_hz": plan.inspect_hz }));
+        self.inspect_pending = Some((plan.inspect_hz, Instant::now()));
+    }
+
+    pub fn center_span(&mut self, hz: f64) {
+        self.post("/api/sdr/tune", json!({ "freq_hz": hz }));
+    }
+
+    pub fn set_mode(&mut self, m: Mode) {
+        if m != Mode::Scan {
+            self.prefs.last_voice_mode = m;
+        }
+        self.status.mode = m;
+        self.post("/api/sdr/mode", json!({ "mode": m.wire() }));
+    }
+
+    pub fn set_zoom(&mut self, z: f64) {
+        let z = if z < 1.04 { 1.0 } else { z.min(32.0) };
+        self.zoom_ui = z;
+        self.post("/api/sdr/zoom", json!({ "zoom": z }));
+    }
+
+    pub fn memories(&self) -> Vec<Memory> {
+        self.memories.clone().unwrap_or_else(crate::prefs::default_memories)
+    }
+
+    pub fn save_memories(&mut self, list: Vec<Memory>) {
+        self.memories = Some(list.clone());
+        self.post("/api/memories", json!({ "memories": list }));
+    }
+
+    fn handle(&mut self, ctx: &egui::Context, ev: NetEvent) {
+        let now = ctx.input(|i| i.time);
+        match ev {
+            NetEvent::Connecting { attempt } => {
+                if !matches!(self.conn, Conn::Live) {
+                    let reason = match &self.conn {
+                        Conn::Connecting { reason, .. } => reason.clone(),
+                        _ => None,
+                    };
+                    self.conn = Conn::Connecting { attempt, reason };
+                }
+            }
+            NetEvent::Connected(s) => {
+                self.conn = Conn::Live;
+                self.apply_status(*s);
+                self.display_bins_sent = 0;
+                if let Some(l) = &self.link {
+                    l.get("/api/sdr/modes", Get::Modes);
+                    l.get("/api/devices", Get::Devices);
+                    l.get("/api/sdr/calls", Get::Calls);
+                    l.get("/api/memories", Get::Memories);
+                }
+                self.player.flush();
+            }
+            NetEvent::Disconnected(reason) => {
+                let was_live = matches!(self.conn, Conn::Live);
+                self.conn = Conn::Connecting { attempt: 0, reason: Some(reason.clone()) };
+                if was_live {
+                    self.toast(ctx, Tone::Warn, "Connection to the server lost. Reconnecting.");
+                }
+            }
+            NetEvent::Fft(f) => {
+                self.pan.push(&f, &self.prefs.view, now);
+                self.meter.feed(f.channel_dbfs, f.noise_dbfs, f.peak_iq);
+                if f.peak_iq >= 0.98 {
+                    self.clip_until = now + 2.5;
+                }
+                self.classify(&f);
+                self.spur_step(&f, now);
+                self.frame = Some(f);
+            }
+            NetEvent::Status(s) => self.apply_status(*s),
+            NetEvent::Decode { inspect_hz, event, at } => {
+                let call = event.kind == "call";
+                self.decodes.push_front(DecodeRow { at, freq_hz: inspect_hz, ev: event });
+                self.decodes.truncate(400);
+                self.selected_decode = self.selected_decode.map(|i| i + 1);
+                if call && let Some(l) = &self.link {
+                    l.get("/api/sdr/calls", Get::Calls);
+                }
+            }
+            NetEvent::Presence(p) => {
+                let before = self.presence.web_count();
+                if p.web_count() > before && self.have_status {
+                    self.toast(ctx, Tone::Idle, "A web page joined this receiver.");
+                }
+                self.presence = p;
+            }
+            NetEvent::Reply { what, result } => self.reply(ctx, what, result),
+            NetEvent::Saved { path, bytes } => {
+                self.recorder_busy = None;
+                self.toast(ctx, Tone::Ok, format!("Saved {} · {:.1} MiB", path.display(), bytes as f64 / 1_048_576.0));
+            }
+            NetEvent::Bytes { what, bytes, headers } => self.bytes(ctx, what, bytes, headers),
+            NetEvent::Failed { what, error } => {
+                self.recorder_busy = None;
+                let msg = if error.trim().is_empty() { "request failed".to_string() } else { error };
+                self.toast(ctx, Tone::Err, format!("{what}: {msg}"));
+            }
+            NetEvent::Refused(msg) => self.toast(ctx, Tone::Warn, msg),
+        }
+    }
+
+    fn apply_status(&mut self, s: Status) {
+        if !self.have_status || (self.gain_ui - s.gain_db.unwrap_or(self.gain_ui)).abs() > 0.01 {
+            if let Some(g) = s.gain_db {
+                self.gain_ui = g;
+            } else if let Some(g) = s.gain_now_db {
+                self.gain_ui = g;
+            }
+        }
+        self.zoom_ui = s.zoom.max(1.0);
+        if let Some((hz, _)) = self.inspect_pending
+            && (hz - s.inspect_hz).abs() < 1.0
+        {
+            self.inspect_pending = None;
+        }
+        if let Some(scan) = &s.scan
+            && !self.scan_touched
+        {
+            self.scan_form = scan.cfg.clone();
+        }
+        if let Some((want, _)) = self.span_pending
+            && (want - s.rate_hz).abs() < 1.0
+        {
+            self.span_pending = None;
+        }
+        self.status = s;
+        self.have_status = true;
+    }
+
+    fn reply(&mut self, ctx: &egui::Context, what: Get, result: Result<Value, String>) {
+        match (what, result) {
+            (Get::Modes, Ok(v)) => {
+                if let Ok(m) = serde_json::from_value::<Vec<ModeCaps>>(v) {
+                    self.modes = m;
+                }
+            }
+            (Get::Devices, Ok(v)) => {
+                if let Ok(d) = serde_json::from_value::<Vec<Device>>(v) {
+                    self.devices = d;
+                }
+            }
+            (Get::Calls, Ok(v)) => {
+                if let Ok(c) = serde_json::from_value::<Vec<Call>>(v) {
+                    self.calls = c;
+                }
+            }
+            (Get::Memories, Ok(v)) => {
+                // Older servers have no bank and answer 404: keep the defaults.
+                if let Some(list) = v.get("memories").filter(|m| !m.is_null())
+                    && let Ok(m) = serde_json::from_value::<Vec<Memory>>(list.clone()) {
+                        self.memories = Some(m);
+                    }
+            }
+            (Get::Memories, Err(_)) => {}
+            (Get::P25Key, Ok(v)) => self.p25.load(v),
+            (Get::P25Key, Err(e)) => self.p25.message = Some((Tone::Err, e)),
+            (Get::Calibrate, Ok(v)) => {
+                let ppm = v.get("ppm").and_then(Value::as_f64).unwrap_or(0.0);
+                let err = v.get("measuredErrorHz").and_then(Value::as_f64).unwrap_or(0.0);
+                let r = v.get("referenceHz").and_then(Value::as_f64).unwrap_or(0.0);
+                self.toast(ctx, Tone::Ok, format!("Calibrated to {ppm:.1} ppm from {} MHz ({err:+.0} Hz error)", crate::tuning::fmt_mhz(r, 5)));
+            }
+            (Get::Calibrate, Err(e)) => self.toast(ctx, Tone::Err, format!("Calibrate: {e}")),
+            (Get::Replay, Ok(v)) => {
+                let hz = v.get("frequencyHz").and_then(Value::as_f64).unwrap_or(self.inspect_hz());
+                let events = v.get("events").and_then(Value::as_array).cloned().unwrap_or_default();
+                for e in &events {
+                    if let Ok(ev) = serde_json::from_value::<proto::DecodeEvent>(e.clone()) {
+                        self.decodes.push_front(DecodeRow { at: SystemTime::now(), freq_hz: hz, ev });
+                    }
+                }
+                let proto_name = v
+                    .pointer("/classification/protocol")
+                    .and_then(Value::as_str)
+                    .unwrap_or("no match")
+                    .to_string();
+                let dur = v.get("durationS").and_then(Value::as_f64).unwrap_or(0.0);
+                self.replay_note = Some(format!("Replay: {dur:.1} s · {} events · {proto_name}", events.len()));
+                self.recorder_busy = None;
+                self.dock_tab = DockTab::Decodes;
+            }
+            (Get::Replay, Err(e)) => {
+                self.recorder_busy = None;
+                self.toast(ctx, Tone::Err, format!("Replay: {e}"));
+            }
+            // Background refreshes: the connection state already says why.
+            (Get::Calls | Get::Devices | Get::Modes, Err(_)) => {}
+        }
+    }
+
+    fn bytes(&mut self, ctx: &egui::Context, what: Fetch, bytes: Vec<u8>, headers: Vec<(String, String)>) {
+        let header = |k: &str| headers.iter().find(|(h, _)| h == k).map(|(_, v)| v.clone());
+        match what {
+            Fetch::PlayCapture | Fetch::CallAudio(_) => {
+                self.recorder_busy = None;
+                match crate::wav::parse(&bytes) {
+                    Some(w) if !w.samples.is_empty() => self.player.play_clip(w.mono(), w.rate),
+                    _ => self.toast(ctx, Tone::Warn, "Nothing to play: the audio buffer is empty on this channel."),
+                }
+            }
+            Fetch::ReplayCapture => {
+                let hz = header("x-usdr-frequency-hz").and_then(|v| v.parse().ok()).unwrap_or(self.inspect_hz());
+                if let Some(l) = &self.link {
+                    l.upload(&format!("/api/sdr/replay?frequency_hz={hz}"), bytes, Get::Replay);
+                }
+            }
+            Fetch::SaveCapture { kind, stem } => {
+                self.recorder_busy = None;
+                let Some(w) = crate::wav::parse(&bytes) else {
+                    self.toast(ctx, Tone::Err, "The capture was not a WAV file.");
+                    return;
+                };
+                if w.samples.is_empty() {
+                    self.toast(ctx, Tone::Warn, "The buffer is empty — the channel was just retuned.");
+                    return;
+                }
+                let freq = header("x-usdr-frequency-hz").and_then(|v| v.parse::<f64>().ok()).unwrap_or(self.inspect_hz());
+                let result = crate::wav::save_capture(&kind, &stem, &w, freq, &self.status);
+                match result {
+                    Ok(path) => {
+                        let secs = w.frames() as f64 / w.rate.max(1) as f64;
+                        self.toast(ctx, Tone::Ok, format!("Saved {} · {secs:.1} s", path.display()));
+                    }
+                    Err(e) => self.toast(ctx, Tone::Err, format!("Saving capture: {e}")),
+                }
+            }
+        }
+    }
+
+    /// The classification log, as the web page keeps it: a row when the
+    /// protocol or channel changes or three seconds pass, and the last real
+    /// detection held for 3.5 s after the signal drops.
+    fn classify(&mut self, f: &FftFrame) {
+        let Some(c) = &f.classification else { return };
+        let real = !matches!(c.protocol.as_str(), "Idle / Noise" | "Noise" | "FLEX Search") && !c.protocol.is_empty();
+        if self.status.mode == Mode::Flex && !c.protocol.contains("FLEX") {
+            return;
+        }
+        if real && c.active {
+            self.held = Some((c.clone(), Instant::now()));
+            let key = format!("{:.4}_{}", f.inspect_hz / 1e6, c.protocol);
+            let due = match &self.last_class_key {
+                Some((k, at)) => *k != key || at.elapsed() > Duration::from_secs(3),
+                None => true,
+            };
+            if due {
+                self.last_class_key = Some((key, Instant::now()));
+                self.class_log.push_front(ClassRow { at: SystemTime::now(), freq_hz: f.inspect_hz, c: c.clone() });
+                self.class_log.truncate(100);
+            }
+        }
+    }
+
+    /// What the receiver is hearing: the live classification, or the last
+    /// real one while it is held.
+    pub fn shown_class(&self) -> (Option<Classification>, &'static str) {
+        let live = self.frame.as_ref().and_then(|f| f.classification.clone());
+        if let Some(c) = &live
+            && c.active
+        {
+            return (live, "ACTIVE");
+        }
+        if let Some((c, at)) = &self.held
+            && at.elapsed() < Duration::from_millis(3500)
+        {
+            return (Some(c.clone()), "HELD");
+        }
+        (live, "IDLE")
+    }
+
+    pub fn start_spur_check(&mut self, now: f64) {
+        if !self.status.spurs_hz.is_empty() {
+            self.post("/api/sdr/spurs", json!({ "offsets_hz": [] }));
+            return;
+        }
+        self.spur = Some(SpurCheck::Settle { until: now + 0.7, home: self.status.freq_hz });
+    }
+
+    fn spur_step(&mut self, f: &FftFrame, now: f64) {
+        let rel = |p: &[f32]| {
+            let mut s = p.to_vec();
+            s.sort_by(|a, b| a.total_cmp(b));
+            let med = s[s.len() / 2];
+            p.iter().map(|v| v - med).collect::<Vec<f32>>()
+        };
+        let Some(state) = self.spur.take() else { return };
+        self.spur = match state {
+            SpurCheck::Settle { until, home } if now >= until && f.pwr.len() > 4 => {
+                let a = rel(&f.pwr);
+                self.center_span(home + f.rate_hz / 8.0);
+                Some(SpurCheck::Shifted { until: now + 1.4, home, a })
+            }
+            SpurCheck::Shifted { until, home, a } if now >= until => {
+                let b = rel(&f.pwr);
+                self.center_span(home);
+                Some(SpurCheck::Back { until: now + 0.9, a, b, rate: f.rate_hz })
+            }
+            SpurCheck::Back { until, a, b, rate } if now >= until => {
+                // A spur moves with the tuner, so it sits in the same bin in
+                // both frames; a real signal moved by an eighth of the span.
+                let n = a.len().min(b.len());
+                let mut offs: Vec<f64> = Vec::new();
+                for i in 2..n.saturating_sub(2) {
+                    if a[i] >= 4.0 && b[i] >= 4.0 {
+                        let off = (i as f64 / (n - 1) as f64 - 0.5) * rate;
+                        if offs.last().is_none_or(|l| off - l > 4.0 * rate / n as f64) {
+                            offs.push(off);
+                        }
+                    }
+                }
+                offs.truncate(32);
+                self.post("/api/sdr/spurs", json!({ "offsets_hz": offs }));
+                None
+            }
+            other => Some(other),
+        };
+    }
+
+    fn rates(&mut self, now: f64) {
+        let Some(l) = &self.link else { return };
+        if now - self.rate_t >= 1.0 {
+            let frames = l.stats.fft_frames.load(Ordering::Relaxed);
+            let bytes = l.stats.bytes.load(Ordering::Relaxed);
+            let dt = (now - self.rate_t) as f32;
+            if self.rate_t > 0.0 {
+                self.fps = (frames - self.rate_frames) as f32 / dt;
+                self.kbps = (bytes - self.rate_bytes) as f32 / dt / 1024.0;
+            }
+            self.rate_t = now;
+            self.rate_frames = frames;
+            self.rate_bytes = bytes;
+        }
+    }
+
+    // ---------- keyboard ----------
+
+    fn shortcuts(&mut self, ctx: &egui::Context) {
+        if ctx.egui_wants_keyboard_input() || self.vfo.editing() {
+            return;
+        }
+        let (keys, mods, text) = ctx.input(|i| {
+            let keys: Vec<egui::Key> = i
+                .events
+                .iter()
+                .filter_map(|e| match e {
+                    egui::Event::Key { key, pressed: true, .. } => Some(*key),
+                    _ => None,
+                })
+                .collect();
+            let text: String = i
+                .events
+                .iter()
+                .filter_map(|e| match e {
+                    egui::Event::Text(t) => Some(t.clone()),
+                    _ => None,
+                })
+                .collect();
+            (keys, i.modifiers, text)
+        });
+        use egui::Key;
+        for k in keys {
+            match k {
+                Key::F11 => {
+                    self.fullscreen = !self.fullscreen;
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(self.fullscreen));
+                }
+                Key::Comma if mods.command => self.settings_open = !self.settings_open,
+                _ if !self.prefs.shortcuts || !self.have_status => {}
+                Key::ArrowUp | Key::ArrowDown => {
+                    let d = if k == Key::ArrowUp { 1.0 } else { -1.0 };
+                    let hz = self.inspect_hz() + self.vfo.step_selected(d);
+                    self.tune(hz, true);
+                }
+                Key::ArrowLeft => self.vfo.move_selection(-1),
+                Key::ArrowRight => self.vfo.move_selection(1),
+                Key::PageUp | Key::PageDown => {
+                    let d = if k == Key::PageUp { 1.0 } else { -1.0 } * if mods.shift { 10.0 } else { 1.0 };
+                    let step = self.step_hz();
+                    let hz = crate::tuning::snap(self.inspect_hz() + d * step, step);
+                    self.tune(hz, true);
+                }
+                Key::M if !mods.command => {
+                    self.prefs.muted = !self.prefs.muted;
+                    self.player.set_muted(self.prefs.muted);
+                }
+                Key::Plus | Key::Equals => self.set_zoom(self.zoom_ui * 2.0),
+                Key::Minus => self.set_zoom(self.zoom_ui / 2.0),
+                Key::C if !mods.command => self.center_span(self.inspect_hz()),
+                Key::D if !mods.command => self.prefs.show_dock = !self.prefs.show_dock,
+                Key::S if !mods.command => self.prefs.show_side = !self.prefs.show_side,
+                Key::R if !mods.command => self.toggle_local_recording(ctx),
+                Key::Space => self.vfo.open_entry(self.inspect_hz(), Some(String::new())),
+                Key::Num1 | Key::Num2 | Key::Num3 | Key::Num4 | Key::Num5 | Key::Num6 | Key::Num7 | Key::Num8 | Key::Num9 if mods.command => {
+                    let idx = k.name().parse::<usize>().unwrap_or(1) - 1;
+                    if let Some(m) = self.memories().get(idx).cloned() {
+                        self.tune(m.freq_hz, true);
+                        self.set_mode(m.mode);
+                    }
+                }
+                _ => {}
+            }
+        }
+        if !self.prefs.shortcuts || mods.command {
+            return;
+        }
+        if text == "?" {
+            self.help_open = !self.help_open;
+        } else if let Some(c) = text.chars().next().filter(|c| c.is_ascii_digit() || *c == '.') {
+            // Typing a number starts frequency entry with it.
+            self.vfo.open_entry(self.inspect_hz(), Some(c.to_string()));
+        }
+    }
+
+    pub fn toggle_local_recording(&mut self, ctx: &egui::Context) {
+        if let Some((path, secs)) = self.player.stop_recording() {
+            self.toast(ctx, Tone::Ok, format!("Recorded {secs:.1} s to {}", path.display()));
+            return;
+        }
+        let stamp = crate::wav::stamp();
+        let path = self.prefs.record_dir().join(format!(
+            "usdr-audio-{stamp}-{}MHz-{}.wav",
+            crate::tuning::fmt_mhz(self.inspect_hz(), 5),
+            self.status.mode.wire()
+        ));
+        if let Err(e) = self.player.start_recording(path) {
+            self.toast(ctx, Tone::Err, format!("Could not start recording: {e}"));
+        }
+    }
+
+    fn display_bins(&mut self, ctx: &egui::Context, width_px: f32, now: f64) {
+        let bins = (width_px * ctx.pixels_per_point()).round() as usize;
+        if bins < 64 || bins == self.display_bins_sent {
+            self.display_bins_due = None;
+            return;
+        }
+        match self.display_bins_due {
+            Some((b, at)) if b == bins && now >= at => {
+                self.post("/api/sdr/display", json!({ "bins": bins.min(16384) }));
+                self.display_bins_sent = bins;
+                self.display_bins_due = None;
+            }
+            Some((b, _)) if b == bins => {}
+            _ => self.display_bins_due = Some((bins, now + 0.4)),
+        }
+        if self.display_bins_due.is_some() {
+            ctx.request_repaint_after(Duration::from_millis(450));
+        }
+    }
+
+    // ---------- layout ----------
+
+    fn masthead(&mut self, ui: &mut Ui) {
+        let now = ui.input(|i| i.time);
+        ui.horizontal_centered(|ui| {
+            ui.spacing_mut().item_spacing.x = 10.0;
+            let (r, _) = ui.allocate_exact_size(vec2(22.0, 22.0), Sense::hover());
+            brand::mark_static(ui.painter(), r);
+            theme::steel_label(ui, "uSDR", theme::wordmark(20.0));
+            ui.add_space(6.0);
+            let s = &self.status;
+            if self.have_status {
+                ui.label(egui::RichText::new(s.radio_label()).font(theme::mono(11.5)).color(theme::text_2()));
+                sep(ui);
+                annunciator(ui, "RATE", &crate::tuning::fmt_short_hz(s.rate_hz), theme::text());
+                annunciator(ui, "SPAN", &crate::tuning::fmt_short_hz((s.max_freq_hz - s.min_freq_hz).max(0.0)), theme::text());
+                annunciator(ui, "IF BW", &crate::tuning::fmt_short_hz(s.bandwidth_hz), theme::text());
+                if s.lo_offset {
+                    annunciator(ui, "LO", &format!("{:+}", crate::tuning::fmt_short_hz(s.lo_offset_hz)), theme::CYAN);
+                }
+                let (c, _) = self.shown_class();
+                let proto = c.filter(|c| c.active).map(|c| c.protocol).unwrap_or_else(|| "IDLE".into());
+                annunciator(ui, "PROTO", &proto, if proto == "IDLE" { theme::text_3() } else { theme::OK });
+                sep(ui);
+                let streaming = self.pan.last_frame.is_some_and(|t| t.elapsed() < Duration::from_secs(2));
+                if !streaming {
+                    widgets::chip(ui, Tone::Idle, "ADC —");
+                } else if now < self.clip_until {
+                    widgets::chip(ui, Tone::Err, "ADC CLIP");
+                } else {
+                    widgets::chip(ui, Tone::Ok, "ADC OK");
+                }
+                let drops = s.dropped_blocks + s.lagged_blocks;
+                if let Some(e) = &s.error {
+                    widgets::chip(ui, Tone::Err, "NO RADIO").on_hover_text(e.clone());
+                } else if !streaming {
+                    widgets::chip(ui, Tone::Idle, "STREAM —");
+                } else if drops > 0 || s.lost_samples > 0 {
+                    widgets::chip(ui, Tone::Warn, &format!("STREAM {drops} drop · {} gap", s.gap_events))
+                        .on_hover_text(format!("{} lost samples since start", s.lost_samples));
+                } else {
+                    widgets::chip(ui, Tone::Ok, "STREAM OK");
+                }
+                if self.player.reading().recording.is_some() {
+                    widgets::chip(ui, Tone::Live, "REC");
+                }
+            }
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.spacing_mut().item_spacing.x = 10.0;
+                if icon_button(ui, "⚙", "Settings (Ctrl+,)").clicked() {
+                    self.settings_open = !self.settings_open;
+                }
+                if icon_button(ui, "?", "Shortcuts and gestures (?)").clicked() {
+                    self.help_open = !self.help_open;
+                }
+                let utc = utc_hms();
+                ui.label(egui::RichText::new(format!("{utc} UTC")).font(theme::mono(12.0)).color(theme::text_2()));
+                self.connection_chip(ui);
+                self.presence_badge(ui);
+            });
+        });
+        ui.ctx().request_repaint_after(Duration::from_millis(500));
+    }
+
+    fn connection_chip(&mut self, ui: &mut Ui) {
+        let (tone, text) = match &self.conn {
+            Conn::Live => (Tone::Ok, self.link.as_ref().map(|l| l.base.trim_start_matches("http://").to_string()).unwrap_or_default()),
+            Conn::Connecting { attempt, reason } => (
+                Tone::Warn,
+                match reason {
+                    Some(r) if *attempt > 0 => format!("reconnecting · {r}"),
+                    Some(r) => r.clone(),
+                    None => "connecting".into(),
+                },
+            ),
+            Conn::Idle => (Tone::Idle, "not connected".into()),
+        };
+        let text: String = text.chars().take(48).collect();
+        let resp = widgets::chip(ui, tone, &text);
+        // Signal bars: frame rate against the 25 fps the server sends.
+        if let Conn::Live = self.conn {
+            let (r, _) = ui.allocate_exact_size(vec2(18.0, 14.0), Sense::hover());
+            let bars = ((self.fps / 25.0) * 4.0).round().clamp(0.0, 4.0) as usize;
+            for i in 0..4 {
+                let h = 4.0 + i as f32 * 3.0;
+                let b = Rect::from_min_max(pos2(r.left() + i as f32 * 4.5, r.bottom() - h), pos2(r.left() + i as f32 * 4.5 + 3.0, r.bottom()));
+                ui.painter().rect_filled(b, CornerRadius::same(1), if i < bars { theme::OK } else { theme::surface_4() });
+            }
+        }
+        resp.on_hover_text(match &self.link {
+            Some(l) => format!(
+                "{} · {:.0} fps · {:.0} KiB/s · API {:.1} ms",
+                l.base,
+                self.fps,
+                self.kbps,
+                l.stats.rtt_us.load(Ordering::Relaxed) as f32 / 1000.0
+            ),
+            None => "Not connected".into(),
+        });
+    }
+
+    fn presence_badge(&mut self, ui: &mut Ui) {
+        let others: Vec<&proto::ClientInfo> = self
+            .presence
+            .clients
+            .iter()
+            .filter(|c| !(c.kind == "desktop" && c.name == crate::net::hostname()))
+            .collect();
+        if others.is_empty() && self.presence.web == proto::WebPolicy::Shared {
+            return;
+        }
+        let web = self.presence.web_count();
+        let text = match self.presence.web {
+            proto::WebPolicy::Off => "WEB OFF".to_string(),
+            proto::WebPolicy::Yield => format!("WEB VIEW-ONLY · {web}"),
+            proto::WebPolicy::Shared => format!("SHARED · {}", others.len()),
+        };
+        let resp = widgets::chip(ui, Tone::Idle, &text);
+        resp.on_hover_ui(|ui| {
+            ui.label(egui::RichText::new("Connected to this receiver").font(theme::sans_semibold(12.0)));
+            for c in &self.presence.clients {
+                ui.label(egui::RichText::new(format!("{} · {} · {}", c.kind, if c.name.is_empty() { "—" } else { &c.name }, c.addr)).font(theme::mono(11.0)).color(theme::text_2()));
+            }
+            ui.label(egui::RichText::new(format!("Web page: {}", self.presence.web.label())).color(theme::text_3()));
+        });
+    }
+
+    fn vfo_bar(&mut self, ui: &mut Ui) {
+        let mut acts = Vec::new();
+        let hz = self.inspect_hz();
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 14.0;
+            ui.vertical(|ui| {
+                ui.spacing_mut().item_spacing.y = 2.0;
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new("RX").font(theme::mono_bold(10.0)).color(theme::AMBER));
+                    let mode = self.status.mode.label();
+                    ui.label(egui::RichText::new(mode).font(theme::mono_bold(10.0)).color(theme::text()));
+                    ui.label(egui::RichText::new(crate::tuning::fmt_hz(self.status.bandwidth_hz)).font(theme::mono(10.0)).color(theme::text_3()));
+                    let agc = match (self.status.gain_db, self.status.tuner_agc) {
+                        (None, true) => if self.status.is_sdrplay() { "IF AGC".to_string() } else { "TUNER AGC".into() },
+                        (None, false) => "AGC".into(),
+                        (Some(g), _) => format!("MAN {g:.0} dB"),
+                    };
+                    ui.label(egui::RichText::new(agc).font(theme::mono(10.0)).color(theme::text_3()));
+                });
+                self.vfo.ui(ui, hz, 46.0, &mut acts);
+            });
+            ui.add_space(8.0);
+            // Step and jog.
+            ui.vertical(|ui| {
+                ui.spacing_mut().item_spacing.y = 4.0;
+                ui.label(egui::RichText::new("STEP").font(theme::mono(9.5)).color(theme::text_3()));
+                let auto = crate::tuning::mode_raster_hz(self.status.mode, hz);
+                let label = match self.prefs.step_hz {
+                    None => format!("AUTO {}", crate::tuning::fmt_short_hz(auto)),
+                    Some(s) => crate::tuning::fmt_short_hz(s),
+                };
+                let color = if self.prefs.step_hz.is_some() { theme::WARN } else { theme::text() };
+                egui::ComboBox::from_id_salt("step")
+                    .selected_text(egui::RichText::new(label).font(theme::mono(11.5)).color(color))
+                    .width(118.0)
+                    .show_ui(ui, |ui| {
+                        if ui.selectable_label(self.prefs.step_hz.is_none(), format!("Auto · mode raster ({})", crate::tuning::fmt_short_hz(auto))).clicked() {
+                            self.prefs.step_hz = None;
+                        }
+                        for s in crate::tuning::STEPS_HZ {
+                            if ui.selectable_label(self.prefs.step_hz == Some(s), crate::tuning::fmt_hz(s)).clicked() {
+                                self.prefs.step_hz = Some(s);
+                            }
+                        }
+                    });
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 3.0;
+                    for (lbl, n) in [("«", -10.0), ("‹", -1.0), ("›", 1.0), ("»", 10.0)] {
+                        if widgets::action(ui, lbl).on_hover_text(format!("{n:+} step")).clicked() {
+                            let fine = ui.input(|i| i.modifiers.shift);
+                            let st = if fine { (self.step_hz() / 10.0).round().max(100.0) } else { self.step_hz() };
+                            let target = self.inspect_hz() + n * st;
+                            self.tune(target, true);
+                        }
+                    }
+                });
+            });
+            ui.add_space(8.0);
+            // Telemetry segments.
+            let (c, status_word) = self.shown_class();
+            ui.vertical(|ui| {
+                ui.spacing_mut().item_spacing.y = 4.0;
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 16.0;
+                    let rf = self.meter.rf.map_or("—".into(), |d| format!("{d:.1} dBFS"));
+                    crate::vfo::readout(ui, "CH PWR", &rf, theme::text());
+                    let snr = self.meter.snr.map_or("—".into(), |d| format!("{d:.1} dB"));
+                    crate::vfo::readout(ui, "SNR", &snr, theme::text());
+                    let err = self.status.freq_error_hz.map_or("—".into(), |e| {
+                        if e.abs() >= 10_000.0 { format!("{:+.1}k", e / 1000.0) } else { format!("{e:+.0} Hz") }
+                    });
+                    let ec = if self.status.freq_error_hz.is_some_and(|e| e.abs() > 2000.0) { theme::WARN } else { theme::text() };
+                    let r = ui.scope(|ui| crate::vfo::readout(ui, "ERR", &err, ec)).response;
+                    if r.interact(Sense::click()).on_hover_text("Click to calibrate the ppm from this carrier").clicked()
+                        && let Some(l) = &self.link
+                    {
+                        l.post_get("/api/sdr/calibrate", json!({}), Get::Calibrate);
+                    }
+                    let mut notches = Vec::new();
+                    if self.status.rf_notch == Some(true) {
+                        notches.push("AM/FM".to_string());
+                    }
+                    if self.status.dab_notch == Some(true) {
+                        notches.push("DAB".to_string());
+                    }
+                    if !self.status.spurs_hz.is_empty() {
+                        notches.push(format!("SPUR {}", self.status.spurs_hz.len()));
+                    }
+                    let nt = if notches.is_empty() { "OFF".to_string() } else { notches.join(" ") };
+                    crate::vfo::readout(ui, "NOTCH", &nt, if notches.is_empty() { theme::text_3() } else { theme::VIOLET });
+                    if let Some(mark) = self.prefs.view.sql_mark {
+                        let open = self.meter.rf.is_some_and(|r| r >= mark);
+                        crate::vfo::readout(ui, "MARK", if open { "OPEN" } else { "CLOSED" }, if open { theme::OK } else { theme::WARN });
+                    }
+                });
+                ui.horizontal(|ui| {
+                    let (txt, col) = match &c {
+                        Some(c) if status_word != "IDLE" => (
+                            format!("{} · {} · {:.0}%", c.protocol, c.modulation, c.confidence * 100.0),
+                            widgets::protocol_color(&c.protocol),
+                        ),
+                        _ => (mode_idle_text(self.status.mode).to_string(), theme::text_3()),
+                    };
+                    let tone = match status_word {
+                        "ACTIVE" => Tone::Ok,
+                        "HELD" => Tone::Warn,
+                        _ => Tone::Idle,
+                    };
+                    widgets::chip(ui, tone, status_word);
+                    ui.label(egui::RichText::new(txt).font(theme::sans(12.5)).color(col));
+                });
+            });
+        });
+        for a in acts {
+            match a {
+                VfoAct::Step(d) => {
+                    let hz = self.inspect_hz() + d;
+                    self.tune(hz, true);
+                }
+                VfoAct::Set(hz) => self.tune(hz, false),
+            }
+        }
+    }
+
+    fn status_bar(&mut self, ui: &mut Ui) {
+        ui.horizontal_centered(|ui| {
+            ui.spacing_mut().item_spacing.x = 14.0;
+            let small = |ui: &mut Ui, t: String, c| {
+                ui.label(egui::RichText::new(t).font(theme::mono(10.5)).color(c));
+            };
+            if let Some(l) = &self.link {
+                small(ui, format!("{:.0} fps", self.fps), theme::text_2());
+                small(ui, format!("{:.0} KiB/s", self.kbps), theme::text_3());
+                small(ui, format!("API {:.1} ms", l.stats.rtt_us.load(Ordering::Relaxed) as f32 / 1000.0), theme::text_3());
+            }
+            let a = self.player.reading();
+            if a.queue_ms > 0.0 {
+                small(ui, format!("audio {:.0} ms · {:+.0} ppm", a.queue_ms, a.drift_ppm), theme::text_3());
+            } else {
+                small(ui, "audio —".into(), theme::text_3());
+            }
+            if a.underruns > 0 {
+                small(ui, format!("{} underruns", a.underruns), theme::WARN);
+            }
+            if self.have_status {
+                let s = &self.status;
+                small(ui, format!("FFT {}", s.fft_size), theme::text_3());
+                small(ui, format!("ppm {:+.2}", s.ppm), theme::text_3());
+                if s.inspect_rate_hz > 0.0 {
+                    small(ui, format!("ch {}S/s", crate::tuning::fmt_short_hz(s.inspect_rate_hz)), theme::text_3());
+                }
+                if let Some(e) = &s.error {
+                    small(ui, e.clone(), theme::ERR);
+                }
+            }
+            if let Some(e) = self.player.error.lock().unwrap().clone() {
+                small(ui, format!("audio: {e}"), theme::ERR);
+            }
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                brand::credit(ui);
+                if let Some((path, secs)) = &a.recording {
+                    small(ui, format!("● recording {secs:.1} s → {}", path.file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or_default()), theme::EMBER);
+                }
+            });
+        });
+    }
+
+    fn toasts_ui(&mut self, ctx: &egui::Context) {
+        let now = ctx.input(|i| i.time);
+        self.toasts.retain(|t| t.until > now);
+        if self.toasts.is_empty() {
+            return;
+        }
+        egui::Area::new("toasts".into())
+            .anchor(Align2::RIGHT_BOTTOM, vec2(-16.0, -40.0))
+            .order(egui::Order::Foreground)
+            .interactable(false)
+            .show(ctx, |ui| {
+                for t in &self.toasts {
+                    let fade = ((t.until - now) as f32 / 0.4).clamp(0.0, 1.0);
+                    egui::Frame::new()
+                        .fill(alpha(theme::surface_3(), 0.97 * fade))
+                        .stroke(Stroke::new(1.0, alpha(theme::line_2(), fade)))
+                        .corner_radius(CornerRadius::same(5))
+                        .inner_margin(egui::Margin::symmetric(12, 8))
+                        .shadow(egui::Shadow { offset: [0, 6], blur: 18, spread: 0, color: egui::Color32::from_black_alpha((120.0 * fade) as u8) })
+                        .show(ui, |ui| {
+                            ui.set_max_width(460.0);
+                            ui.horizontal(|ui| {
+                                widgets::chip(ui, t.tone, match t.tone {
+                                    Tone::Ok => "OK",
+                                    Tone::Warn => "NOTE",
+                                    Tone::Err => "ERROR",
+                                    Tone::Live => "LIVE",
+                                    Tone::Idle => "INFO",
+                                });
+                                ui.label(egui::RichText::new(&t.text).color(alpha(theme::text(), fade)));
+                            });
+                        });
+                    ui.add_space(6.0);
+                }
+            });
+        crate::anim::more(ctx);
+    }
+
+    fn panafall(&mut self, ui: &mut Ui) {
+        let mut acts = Vec::new();
+        let rec = self.player.reading().recording.is_some();
+        let flag = SliceFlag {
+            freq_hz: self.inspect_hz(),
+            mode: self.status.mode,
+            bandwidth_hz: self.status.bandwidth_hz,
+            meter: self.meter.rf.map(crate::meter::frac).unwrap_or(0.0),
+            s_label: crate::meter::s_label(self.meter.rf),
+            snr_db: self.meter.snr,
+            protocol: self.shown_class().0.filter(|c| c.active).map(|c| c.protocol),
+            recording: rec,
+        };
+        let step = self.step_hz();
+        let rm = self.reduce_motion();
+        let width = ui.available_width() - 44.0;
+        let now = ui.input(|i| i.time);
+        self.display_bins(&ui.ctx().clone(), width, now);
+        self.pan.ui(ui, &self.status, self.frame.as_deref(), &mut self.prefs.view, &flag, step, rm, &mut acts);
+        for a in acts {
+            match a {
+                Act::Tune { hz, lock } => self.tune(hz, lock),
+                Act::Center(hz) => self.center_span(hz),
+                Act::Zoom(z) => self.set_zoom(z),
+                Act::StoreMemory(hz) => {
+                    let mut list = self.memories();
+                    list.push(Memory { name: self.status.mode.label().into(), freq_hz: hz, mode: self.status.mode });
+                    self.save_memories(list);
+                }
+                Act::CopyFreq(hz) => ui.ctx().copy_text(format!("{:.0}", hz)),
+            }
+        }
+    }
+
+    fn dropped(&mut self, ctx: &egui::Context) {
+        let files: Vec<std::path::PathBuf> = ctx.input(|i| i.raw.dropped_files.iter().filter_map(|f| f.path.clone()).collect());
+        if files.is_empty() {
+            return;
+        }
+        match crate::wav::replay_body(&files) {
+            Ok((body, hz)) => {
+                let hz = hz.unwrap_or(self.inspect_hz());
+                if let Some(l) = &self.link {
+                    l.upload(&format!("/api/sdr/replay?frequency_hz={hz}"), body, Get::Replay);
+                    self.recorder_busy = Some("replay".into());
+                }
+            }
+            Err(e) => self.toast(ctx, Tone::Err, format!("Load I/Q: {e}")),
+        }
+    }
+}
+
+fn sep(ui: &mut Ui) {
+    let (r, _) = ui.allocate_exact_size(vec2(1.0, 18.0), Sense::hover());
+    ui.painter().rect_filled(r, CornerRadius::ZERO, theme::line_2());
+}
+
+fn annunciator(ui: &mut Ui, label: &str, value: &str, color: egui::Color32) {
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 4.0;
+        ui.label(egui::RichText::new(label).font(theme::mono(9.5)).color(theme::text_3()));
+        ui.label(egui::RichText::new(value).font(theme::mono_bold(11.0)).color(color));
+    });
+}
+
+pub fn icon_button(ui: &mut Ui, glyph: &str, tip: &str) -> egui::Response {
+    let (r, resp) = ui.allocate_exact_size(vec2(26.0, 24.0), Sense::click());
+    let h = ui.ctx().animate_bool_with_time(resp.id, resp.hovered(), 0.12);
+    ui.painter().rect_filled(r, CornerRadius::same(4), alpha(theme::surface_4(), h));
+    ui.painter().text(r.center(), Align2::CENTER_CENTER, glyph, theme::sans(14.0), theme::lerp(theme::text_2(), theme::text(), h));
+    resp.on_hover_text(tip)
+}
+
+fn mode_idle_text(m: Mode) -> &'static str {
+    match m {
+        Mode::Wfm => "broadcast FM · classifier off",
+        Mode::Am => "envelope detection · no classifier",
+        Mode::Usb | Mode::Lsb => "sideband voice",
+        Mode::P25 | Mode::Dmr | Mode::Nxdn => "searching for sync…",
+        Mode::Auto => "every decoder running on this channel",
+        Mode::Flex => "FLEX search",
+        Mode::Scan => "scanning for voice…",
+        Mode::Pager => "paging sweep",
+        Mode::Packet => "packet and paging decoders",
+        Mode::Nfm => "listening · classifier on",
+    }
+}
+
+pub fn utc_hms() -> String {
+    let secs = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+    format!("{:02}:{:02}:{:02}", (secs / 3600) % 24, (secs / 60) % 60, secs % 60)
+}
+
+pub fn local_hms(t: SystemTime) -> String {
+    // Wall-clock UTC; the decode log is compared against UTC radio logs.
+    let secs = t.duration_since(SystemTime::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+    format!("{:02}:{:02}:{:02}", (secs / 3600) % 24, (secs / 60) % 60, secs % 60)
+}
+
+impl eframe::App for App {
+    fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        let events: Vec<NetEvent> = match &self.link {
+            Some(l) => l.events.try_iter().take(512).collect(),
+            None => Vec::new(),
+        };
+        for ev in events {
+            self.handle(ctx, ev);
+        }
+        let now = ctx.input(|i| i.time);
+        self.rates(now);
+        if self.have_status && matches!(self.conn, Conn::Live) && now - self.calls_polled > 4.0 {
+            self.calls_polled = now;
+            if let Some(l) = &self.link {
+                l.get("/api/sdr/calls", Get::Calls);
+            }
+        }
+        self.shortcuts(ctx);
+        self.dropped(ctx);
+    }
+
+    fn ui(&mut self, ui: &mut Ui, _frame: &mut eframe::Frame) {
+        let ctx = ui.ctx().clone();
+        if std::env::var_os("USDR_QA_FPS").is_some() {
+            use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
+            static N: AtomicU64 = AtomicU64::new(0);
+            static T: std::sync::Mutex<Option<Instant>> = std::sync::Mutex::new(None);
+            let n = N.fetch_add(1, Relaxed) + 1;
+            let mut t = T.lock().unwrap();
+            let start = *t.get_or_insert_with(Instant::now);
+            if start.elapsed() >= Duration::from_secs(2) {
+                eprintln!("ui frames/s {:.1} · repaint causes {:?}", n as f64 / start.elapsed().as_secs_f64(), ctx.repaint_causes());
+                N.store(0, Relaxed);
+                *t = Some(Instant::now());
+            }
+        }
+        let live = self.have_status && matches!(self.conn, Conn::Live | Conn::Connecting { .. }) && self.link.is_some();
+        if !live {
+            crate::screens::connect_screen(self, ui);
+            crate::screens::settings_window(self, &ctx);
+            self.toasts_ui(&ctx);
+            return;
+        }
+
+        egui::Panel::top("masthead")
+            .exact_size(44.0)
+            .frame(egui::Frame::new().fill(theme::surface_1()).inner_margin(egui::Margin::symmetric(14, 0)).stroke(Stroke::new(1.0, theme::line())))
+            .show(ui, |ui| {
+                theme::paint_weave(ui.painter(), ui.max_rect().expand2(vec2(14.0, 0.0)));
+                self.masthead(ui)
+            });
+        egui::Panel::bottom("statusbar")
+            .exact_size(26.0)
+            .frame(egui::Frame::new().fill(theme::surface_1()).inner_margin(egui::Margin::symmetric(14, 0)).stroke(Stroke::new(1.0, theme::line())))
+            .show(ui, |ui| self.status_bar(ui));
+        if self.prefs.show_side {
+            let resp = egui::Panel::right("side")
+                .resizable(true)
+                .default_size(self.prefs.side_width)
+                .size_range(270.0..=460.0)
+                .frame(egui::Frame::new().fill(theme::surface_1()).inner_margin(egui::Margin::same(10)))
+                .show(ui, |ui| {
+                    theme::paint_weave(ui.painter(), ui.max_rect().expand(10.0));
+                    let mut area = egui::ScrollArea::vertical().auto_shrink([false, false]);
+                    // QA: start the applet column scrolled (USDR_QA_SCROLL=px).
+                    if let Some(y) = std::env::var("USDR_QA_SCROLL").ok().and_then(|v| v.parse::<f32>().ok()) {
+                        area = area.vertical_scroll_offset(y);
+                    }
+                    area.show(ui, |ui| {
+                        crate::panels::side(self, ui);
+                    });
+                });
+            self.prefs.side_width = resp.response.rect.width();
+        }
+        if self.prefs.show_dock {
+            let resp = egui::Panel::bottom("dock")
+                .resizable(true)
+                .default_size(self.prefs.dock_height)
+                .size_range(120.0..=600.0)
+                .frame(egui::Frame::new().fill(theme::surface_1()).inner_margin(egui::Margin::symmetric(10, 8)).stroke(Stroke::new(1.0, theme::line())))
+                .show(ui, |ui| crate::dock::dock(self, ui));
+            self.prefs.dock_height = resp.response.rect.height();
+        }
+        egui::CentralPanel::default()
+            .frame(egui::Frame::new().fill(theme::ink()).inner_margin(egui::Margin::same(0)))
+            .show(ui, |ui| {
+                egui::Frame::new()
+                    .fill(theme::surface_1())
+                    .inner_margin(egui::Margin::symmetric(14, 8))
+                    .show(ui, |ui| {
+                        ui.set_width(ui.available_width());
+                        self.vfo_bar(ui);
+                    });
+                // The index tick: this is the active receiver.
+                let r = ui.min_rect();
+                ui.painter().rect_filled(Rect::from_min_size(r.left_top(), vec2(16.0, 2.0)), CornerRadius::ZERO, theme::EMBER);
+                self.panafall(ui);
+            });
+        crate::screens::settings_window(self, &ctx);
+        crate::screens::help_window(self, &ctx);
+        self.toasts_ui(&ctx);
+        if !matches!(self.conn, Conn::Live) {
+            crate::screens::reconnect_veil(self, &ctx);
+        }
+    }
+
+    fn save(&mut self, _storage: &mut dyn eframe::Storage) {
+        self.prefs.save();
+    }
+
+    fn on_exit(&mut self) {
+        let _ = self.player.stop_recording();
+        self.prefs.save();
+    }
+
+    fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
+        theme::ink().to_normalized_gamma_f32()
+    }
+}

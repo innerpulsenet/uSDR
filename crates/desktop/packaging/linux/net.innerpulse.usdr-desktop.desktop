@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=uSDR
+GenericName=SDR receiver console
+Comment=Spectrum, waterfall, audio and decoders from a uSDR server
+Exec=usdr-desktop
+Icon=net.innerpulse.usdr-desktop
+Terminal=false
+Categories=AudioVideo;Audio;HamRadio;Network;
+Keywords=SDR;radio;receiver;waterfall;spectrum;scanner;RSP1A;
+StartupWMClass=net.innerpulse.usdr-desktop
