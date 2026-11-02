@@ -120,10 +120,18 @@ impl Meter {
                 p.add(egui::Shape::closed_line(tri, Stroke::new(1.0, theme::ERR)));
             }
         }
+        // The scale, leaving out any label that would run into the last one
+        // drawn, so a narrow meter thins its scale rather than overprinting.
+        let mut last_right = f32::NEG_INFINITY;
         for (label, db, hi) in [("1", -108.0, false), ("3", -96.0, false), ("5", -84.0, false), ("7", -72.0, false), ("9", -60.0, false), ("+20", -40.0, true), ("+40", -20.0, true), ("+60", 0.0, true)] {
             let tx = bar.left() + bar.width() * frac(db);
-            let align = if db <= -108.0 { Align2::LEFT_TOP } else if db >= 0.0 { Align2::RIGHT_TOP } else { Align2::CENTER_TOP };
-            p.text(pos2(tx, bar.bottom() + 3.0), align, label, theme::mono(9.0), if hi { theme::WARN } else { theme::text_3() });
+            let g = p.layout_no_wrap(label.to_string(), theme::mono(9.0), if hi { theme::WARN } else { theme::text_3() });
+            let x0 = if db <= -108.0 { tx } else if db >= 0.0 { tx - g.size().x } else { tx - g.size().x / 2.0 };
+            if x0 < last_right + 4.0 {
+                continue;
+            }
+            last_right = x0 + g.size().x;
+            p.galley(pos2(x0, bar.bottom() + 3.0), g, theme::text_3());
         }
         if !reduce_motion && (pos - self.rf.map(frac).unwrap_or(0.0)).abs() > 0.002 {
             crate::anim::more(ui.ctx());

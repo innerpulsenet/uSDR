@@ -869,19 +869,42 @@ impl Panafall {
             } else {
                 (alpha(theme::surface_3(), if hover { 0.95 } else { 0.8 }), theme::line_2(), theme::text())
             };
+            if let Some(age) = held {
+                // Held: a timeline of the whole history beside LIVE, its
+                // knob where the display is, to drag or click anywhere along.
+                let rows_vis = (wf.height().round() as usize).clamp(1, 2048);
+                let max_back = self.archive.len().saturating_sub(rows_vis.min(self.archive.len()));
+                let span_s = match (self.archive.front(), self.archive.get(max_back)) {
+                    (Some(a), Some(b)) => a.utc.duration_since(b.utc).map(|d| d.as_secs_f64()).unwrap_or(0.0),
+                    _ => 0.0,
+                };
+                let mmss = |t: f64| format!("−{:.0}:{:04.1}", (t / 60.0).floor(), t - (t / 60.0).floor() * 60.0);
+                let label = painter.layout_no_wrap(format!("HELD {}", mmss(age)), theme::mono_bold(10.5), theme::WARN);
+                let ends = painter.layout_no_wrap(format!("−{:.0}:{:02.0}", (span_s / 60.0).floor(), (span_s % 60.0).floor()), theme::mono(9.5), theme::text_3());
+                let track_w = 180.0f32.min(wf.width() * 0.3);
+                let track = Rect::from_min_size(pos2(r.left() - 12.0 - track_w, r.center().y - 3.0), vec2(track_w, 6.0));
+                let ends_x = track.left() - 8.0 - ends.size().x;
+                let label_x = ends_x - 12.0 - label.size().x;
+                let plate = Rect::from_min_max(pos2(label_x - 8.0, r.top() - 4.0), pos2(r.right() + 4.0, r.bottom() + 4.0));
+                painter.rect_filled(plate, CornerRadius::same(5), alpha(theme::surface_1(), 0.92));
+                painter.galley(pos2(label_x, r.center().y - label.size().y / 2.0), label, theme::WARN);
+                painter.galley(pos2(ends_x, r.center().y - ends.size().y / 2.0), ends, theme::text_3());
+                painter.rect_filled(track, CornerRadius::same(3), theme::surface_4());
+                let back = self.hold.as_ref().map_or(0, |h| h.back.min(max_back));
+                let knob_x = if max_back == 0 { track.right() } else { track.right() - back as f32 / max_back as f32 * track.width() };
+                painter.rect_filled(Rect::from_min_max(pos2(knob_x, track.top()), track.right_bottom()), CornerRadius::same(3), alpha(theme::WARN, 0.35));
+                painter.circle(pos2(knob_x, track.center().y), 6.0, theme::WARN, Stroke::new(1.5, theme::ink()));
+                let t = ui.interact(track.expand2(vec2(6.0, 8.0)), resp.id.with("hold-track"), Sense::click_and_drag());
+                if let Some(p) = t.interact_pointer_pos().filter(|_| t.dragged() || t.clicked()) {
+                    let frac = ((track.right() - p.x) / track.width()).clamp(0.0, 1.0);
+                    if let Some(h) = self.hold.as_mut() {
+                        h.back = (frac * max_back as f32).round() as usize;
+                    }
+                }
+                t.on_hover_text("Drag or click to move through the held history; the wheel steps a second a notch");
+            }
             painter.rect(r, CornerRadius::same(3), fill, Stroke::new(1.0, stroke), egui::StrokeKind::Inside);
             painter.galley(r.min + vec2(7.0, 4.0), g, text_c);
-            if let Some(age) = held {
-                let m = (age / 60.0).floor();
-                let s = age - m * 60.0;
-                painter.text(
-                    pos2(r.left() - 8.0, r.center().y),
-                    Align2::RIGHT_CENTER,
-                    format!("HELD · −{m:.0}:{s:04.1} · wheel to scroll back"),
-                    theme::mono(10.5),
-                    theme::WARN,
-                );
-            }
             if b.on_hover_text(if held.is_some() { "Back to the live waterfall (H)" } else { "Hold the waterfall to look back up to five minutes (H)" }).clicked() {
                 self.toggle_hold();
             }

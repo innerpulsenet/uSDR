@@ -1,5 +1,6 @@
-//! The applet column: meter, mode, audio, gain, front end, display, scope,
-//! recorder and radio, each a collapsible card.
+//! The applet column: gain, front end, the recorder, the P25 key in P25,
+//! the radio and the memories — one column, each a collapsible card, so the
+//! recorder is in view while its 20 seconds are still worth saving.
 
 use crate::app::App;
 use crate::net::{Fetch, Get};
@@ -15,24 +16,45 @@ fn small(t: impl Into<String>) -> RichText {
 
 pub fn side(app: &mut App, ui: &mut Ui) {
     ui.spacing_mut().item_spacing.y = 8.0;
-    let tab = usize::from(app.prefs.tools_tab);
-    if let Some(i) = widgets::segmented(ui, &["RADIO", "TOOLS"], tab) {
-        app.prefs.tools_tab = i == 1;
-    }
     egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-        if app.prefs.tools_tab {
-            widgets::applet(ui, "memories", "Memories", |_| {}, |ui| memories(app, ui));
-            widgets::applet(ui, "recorder", "Recorder · last 20 s", |_| {}, |ui| recorder(app, ui));
-            if app.status.mode == Mode::P25 {
-                widgets::applet(ui, "p25", "P25 channel key", |_| {}, |ui| p25(app, ui));
-            } else {
-                ui.label(small("P25 channel keys appear here in P25 mode."));
-            }
-        } else {
-            widgets::applet(ui, "gain", "RF gain", |_| {}, |ui| gain(app, ui));
-            widgets::applet(ui, "frontend", "Front end", |_| {}, |ui| front_end(app, ui));
-            widgets::applet(ui, "radio", "Radio", |_| {}, |ui| radio(app, ui));
+        widgets::applet(ui, "gain", "RF gain", |_| {}, |ui| gain(app, ui));
+        widgets::applet(ui, "frontend", "Front end", |_| {}, |ui| front_end(app, ui));
+        widgets::applet(ui, "recorder", "Recorder · last 20 s", |_| {}, |ui| recorder(app, ui));
+        if app.status.mode == Mode::P25 {
+            widgets::applet(ui, "p25", "P25 channel key", |_| {}, |ui| p25(app, ui));
         }
+        widgets::applet(ui, "radio", "Radio", |_| {}, |ui| radio(app, ui));
+        // Recall is the memory row's; the bank's storing, renaming and
+        // clearing open here when wanted.
+        widgets::applet_folded(ui, "memory-bank", "Memory bank", |_| {}, |ui| memories(app, ui));
+    });
+}
+
+/// The channel's level over its noise floor across the 20 s the server's
+/// buffer holds, so a burst worth saving can be seen before it is saved.
+fn activity(app: &App, ui: &mut Ui) {
+    let w = ui.available_width();
+    let (r, _) = ui.allocate_exact_size(vec2(w, 30.0), egui::Sense::hover());
+    let p = ui.painter();
+    p.rect_filled(r, egui::CornerRadius::same(3), theme::ink());
+    let now = ui.input(|i| i.time);
+    let x_at = |t: f64| r.right() - ((now - t) / 20.0).clamp(0.0, 1.0) as f32 * r.width();
+    // 0–40 dB over the floor, bottom to top.
+    let y_at = |snr: f32| r.bottom() - 2.0 - (snr / 40.0).clamp(0.0, 1.0) * (r.height() - 4.0);
+    let pts: Vec<egui::Pos2> = app.activity.iter().map(|&(t, ch, nz)| egui::pos2(x_at(t), y_at(ch - nz))).collect();
+    if pts.len() > 1 {
+        crate::spectrum::fill_under(p, &pts, r.bottom(), theme::AMBER, 0.5);
+        p.add(egui::Shape::line(pts, egui::Stroke::new(1.0, theme::AMBER)));
+    } else {
+        p.text(r.center(), egui::Align2::CENTER_CENTER, "nothing measured on this channel yet", theme::mono(9.5), theme::text_3());
+    }
+    ui.horizontal(|ui| {
+        ui.label(small("−20 s"));
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.label(small("now"));
+            ui.add_space(ui.available_width() / 2.0 - 60.0);
+            ui.label(small("level over the floor"));
+        });
     });
 }
 
@@ -296,6 +318,9 @@ fn recorder(app: &mut App, ui: &mut Ui) {
         };
         ui.label(small(head));
     });
+    if receiving {
+        activity(app, ui);
+    }
     let dir = app.prefs.record_dir();
     let busy = app.recorder_busy.clone();
     ui.horizontal_wrapped(|ui| {
@@ -312,14 +337,23 @@ fn recorder(app: &mut App, ui: &mut Ui) {
         }
     });
     ui.horizontal_wrapped(|ui| {
-        ui.add_enabled_ui(has("voice") && busy.is_none(), |ui| {
-            if widgets::action(ui, "PLAY 20 S").on_hover_text("Hear the last 20 s again, in place of the live audio").clicked()
-                && let Some(l) = &app.link
-            {
-                l.fetch("/api/sdr/capture.wav?kind=voice", Fetch::PlayCapture);
-                app.recorder_busy = Some("play".into());
+        let playing = app.player.clip_progress().filter(|_| app.playing == Some(crate::app::Playing::Capture));
+        if let Some(p) = playing {
+            if widgets::action(ui, "■ STOP").on_hover_text("Stop and return to the live audio").clicked() {
+                app.player.stop_clip();
+                app.playing = None;
             }
-        });
+            crate::dock::progress_bar(ui, p, 60.0);
+        } else {
+            ui.add_enabled_ui(has("voice") && busy.is_none(), |ui| {
+                if widgets::action(ui, "PLAY 20 S").on_hover_text("Hear the last 20 s again, in place of the live audio").clicked()
+                    && let Some(l) = &app.link
+                {
+                    l.fetch("/api/sdr/capture.wav?kind=voice", Fetch::PlayCapture);
+                    app.recorder_busy = Some("play".into());
+                }
+            });
+        }
         ui.add_enabled_ui(has("iq") && busy.is_none(), |ui| {
             if widgets::action(ui, "REPLAY I/Q").on_hover_text("Run the last 20 s of I/Q through the decoders again").clicked()
                 && let Some(l) = &app.link

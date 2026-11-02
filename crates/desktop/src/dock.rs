@@ -1,7 +1,7 @@
 //! The dock under the display: the decode log with its inspector, the
 //! classifier log, the calls heard, and the voice scanner.
 
-use crate::app::{App, DockTab, local_hms};
+use crate::app::{App, DockTab, Playing, local_hms};
 use crate::net::Fetch;
 use crate::theme::{self, alpha};
 use crate::widgets::{self, Tone};
@@ -52,25 +52,39 @@ pub fn dock(app: &mut App, ui: &mut Ui) {
     }
 }
 
+/// A fixed-width column of a log row, so the columns after it line up.
+fn cell(ui: &mut Ui, w: f32, t: RichText, sense: egui::Sense) -> egui::Response {
+    ui.allocate_ui_with_layout(vec2(w, 18.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+        ui.set_min_width(w);
+        ui.add(egui::Label::new(t).truncate().sense(sense))
+    })
+    .inner
+}
+
 fn decodes(app: &mut App, ui: &mut Ui) {
-    ui.horizontal(|ui| {
-        ui.add(egui::TextEdit::singleline(&mut app.decode_filter).hint_text("filter: protocol, kind or text").desired_width(220.0));
+    // Wrapped rather than split left and right, so a narrow dock moves the
+    // keys to a second line instead of drawing them over the chips.
+    ui.horizontal_wrapped(|ui| {
+        ui.add(egui::TextEdit::singleline(&mut app.decode_filter).hint_text("filter: protocol, kind or text").desired_width(150.0));
         for chip in ["ALL", "FLEX", "POCSAG", "APRS", "P25", "DMR", "NXDN"] {
             let on = if chip == "ALL" { app.decode_filter.is_empty() } else { app.decode_filter.eq_ignore_ascii_case(chip) };
             if ui.add(egui::Button::selectable(on, RichText::new(chip).font(theme::mono(10.5)))).clicked() {
                 app.decode_filter = if chip == "ALL" { String::new() } else { chip.to_string() };
             }
         }
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if ui.button("Clear").clicked() {
-                app.decodes.clear();
-                app.selected_decode = None;
+        ui.add_space(6.0);
+        if ui.button("Clear").clicked() {
+            app.decodes.clear();
+            app.selected_decode = None;
+        }
+        ui.menu_button(RichText::new("···").font(theme::mono_bold(11.0)), |ui| {
+            if ui.button("Expand all").clicked() {
+                app.decodes.iter_mut().for_each(|d| d.open = true);
+                ui.close();
             }
             if ui.button("Collapse all").clicked() {
                 app.decodes.iter_mut().for_each(|d| d.open = false);
-            }
-            if ui.button("Expand all").clicked() {
-                app.decodes.iter_mut().for_each(|d| d.open = true);
+                ui.close();
             }
         });
     });
@@ -79,7 +93,7 @@ fn decodes(app: &mut App, ui: &mut Ui) {
         .decodes
         .iter()
         .enumerate()
-        .filter(|(_, d)| filter.is_empty() || format!("{} {} {}", d.ev.protocol, d.ev.kind, d.ev.summary).to_lowercase().contains(&filter))
+        .filter(|(_, d)| filter.is_empty() || d.key.contains(&filter))
         .map(|(i, _)| i)
         .collect();
     let total = app.decodes.len();
@@ -87,16 +101,25 @@ fn decodes(app: &mut App, ui: &mut Ui) {
     let list_w = if app.selected_decode.is_some() { avail.x * 0.58 } else { avail.x };
     let mut tune_to = None;
     ui.horizontal_top(|ui| {
-        ui.allocate_ui(vec2(list_w, avail.y), |ui| {
+        // Top-down: inside the row above, a plain allocation would lay the
+        // frames out side by side.
+        ui.allocate_ui_with_layout(vec2(list_w, avail.y), egui::Layout::top_down(egui::Align::Min), |ui| {
             ui.label(mono(if visible.len() == total { format!("{total} frames") } else { format!("{} of {total} frames", visible.len()) }, theme::text_3()));
             // Scrolled into the log, new frames arriving on top push it down
             // by their height, so the rows being read stay where they are.
             let row_h = 24.0;
             let mut area = egui::ScrollArea::vertical().id_salt("decodes").auto_shrink([false, false]);
-            if app.decode_scroll > 1.0 && app.decodes_added > 0 {
+            if app.decode_jump {
+                area = area.vertical_scroll_offset(0.0);
+                app.decode_jump = false;
+            } else if app.decode_scroll > 1.0 && app.decodes_added > 0 {
                 area = area.vertical_scroll_offset(app.decode_scroll + app.decodes_added as f32 * row_h);
             }
             app.decodes_added = 0;
+            // Fixed columns, sized to the longest protocol and kind in view.
+            let char_w = 6.7;
+            let proto_w = visible.iter().map(|&i| app.decodes[i].ev.protocol.chars().count() + 2).max().unwrap_or(5).clamp(5, 10) as f32 * char_w;
+            let kind_w = visible.iter().map(|&i| app.decodes[i].ev.kind.chars().count()).max().unwrap_or(4).clamp(4, 16) as f32 * char_w;
             let mut toggle: Option<usize> = None;
             let out = area.show(ui, |ui| {
                 for &i in &visible {
@@ -108,13 +131,13 @@ fn decodes(app: &mut App, ui: &mut Ui) {
                             if ui.add(egui::Label::new(mono(if d.open { "▾" } else { "▸" }, theme::text_3())).sense(egui::Sense::click())).clicked() {
                                 toggle = Some(i);
                             }
-                            ui.label(mono(local_hms(d.at), theme::text_3()));
-                            if ui.add(egui::Label::new(mono(crate::tuning::fmt_mhz(d.freq_hz, 4), theme::AMBER)).sense(egui::Sense::click())).on_hover_text("Tune here").clicked() {
+                            cell(ui, 8.0 * char_w, mono(local_hms(d.at), theme::text_3()), egui::Sense::hover());
+                            if cell(ui, 9.0 * char_w, mono(crate::tuning::fmt_mhz(d.freq_hz, 4), theme::AMBER), egui::Sense::click()).on_hover_text("Tune here").clicked() {
                                 tune_to = Some(d.freq_hz);
                             }
                             let c = if d.ev.valid { widgets::protocol_color(&d.ev.protocol) } else { theme::ERR };
-                            ui.label(mono(format!("[{}]", d.ev.protocol), c));
-                            ui.label(mono(&d.ev.kind, theme::text_2()));
+                            cell(ui, proto_w, mono(format!("[{}]", d.ev.protocol), c), egui::Sense::hover());
+                            cell(ui, kind_w, mono(&d.ev.kind, theme::text_2()), egui::Sense::hover());
                             ui.add(egui::Label::new(RichText::new(&d.ev.summary).font(theme::sans(12.0)).color(theme::text())).truncate());
                         })
                         .response;
@@ -142,6 +165,23 @@ fn decodes(app: &mut App, ui: &mut Ui) {
                 }
             });
             app.decode_scroll = out.state.offset.y;
+            if app.decode_scroll <= 1.0 {
+                app.decodes_unseen = 0;
+            } else {
+                // Reading older frames: say what has arrived above, and offer the way back.
+                let n = app.decodes_unseen;
+                let text = if n > 0 { format!("↑ {n} new · back to newest") } else { "⏸ scrolled back · back to newest".into() };
+                let g = ui.painter().layout_no_wrap(text.clone(), theme::mono_bold(10.5), egui::Color32::PLACEHOLDER);
+                let r = egui::Rect::from_center_size(egui::pos2(out.inner_rect.center().x, out.inner_rect.top() + 14.0), g.size() + vec2(18.0, 8.0));
+                let b = ui.interact(r, ui.id().with("decode-jump"), egui::Sense::click());
+                let fill = if b.hovered() { theme::AMBER } else { alpha(theme::AMBER, 0.88) };
+                ui.painter().rect_filled(r, egui::CornerRadius::same(10), fill);
+                ui.painter().galley(r.center() - g.size() / 2.0, g, theme::ink());
+                if b.clicked() {
+                    app.decode_jump = true;
+                    app.decodes_unseen = 0;
+                }
+            }
             if let Some(i) = toggle {
                 app.decodes[i].open = !app.decodes[i].open;
             }
@@ -196,6 +236,16 @@ fn decodes(app: &mut App, ui: &mut Ui) {
     }
 }
 
+/// How far through a recording the speaker is, as a slim bar; keeps the
+/// frames coming while it moves.
+pub fn progress_bar(ui: &mut Ui, p: f32, w: f32) {
+    let (r, _) = ui.allocate_exact_size(vec2(w, 4.0), egui::Sense::hover());
+    ui.painter().rect_filled(r, egui::CornerRadius::same(2), theme::ink());
+    let done = egui::Rect::from_min_size(r.min, vec2(r.width() * p.clamp(0.0, 1.0), r.height()));
+    ui.painter().rect_filled(done, egui::CornerRadius::same(2), theme::AMBER);
+    crate::anim::more(ui.ctx());
+}
+
 fn hex_dump(s: &str) -> String {
     let hex: String = s.chars().filter(|c| c.is_ascii_hexdigit()).collect();
     if hex.len() < s.chars().filter(|c| !c.is_whitespace()).count() {
@@ -222,10 +272,25 @@ fn word_dump(s: &str) -> String {
 fn scope(app: &mut App, ui: &mut Ui) {
     let mode = app.status.mode;
     let kind = app.frame.as_ref().map(|f| f.scope_kind).unwrap_or_default();
-    let (title, tag) = app.scope.title(mode, kind);
+    let (title, note) = app.scope.title(mode, kind);
     ui.horizontal(|ui| {
         ui.label(RichText::new(title).font(theme::sans_semibold(12.0)).color(theme::text()));
-        ui.label(RichText::new(format!("{tag} · click to switch")).font(theme::mono(10.0)).color(theme::text_3()));
+        // Every view the mode offers, named, rather than a click that cycles.
+        let views = crate::scope::Scope::views(mode, kind);
+        if views.is_empty() {
+            if let Some(n) = note {
+                ui.label(RichText::new(n).font(theme::mono(10.0)).color(theme::text_3()));
+            }
+        } else {
+            ui.add_space(4.0);
+            ui.spacing_mut().item_spacing.x = 3.0;
+            let cur = app.scope.sub_for(mode);
+            for &v in views {
+                if widgets::chip_key(ui, v.label(), cur == v, theme::AMBER).clicked() {
+                    app.scope.set_view(mode, v);
+                }
+            }
+        }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.spacing_mut().item_spacing.x = 3.0;
             for hz in [25.0f32, 10.0, 5.0] {
@@ -320,6 +385,7 @@ fn calls(app: &mut App, ui: &mut Ui) {
     let dir = app.prefs.record_dir();
     let mut actions: Vec<(u64, &'static str)> = Vec::new();
     let mut tune_to = None;
+    let progress = app.player.clip_progress();
     egui::ScrollArea::vertical().id_salt("calls").auto_shrink([false, false]).show(ui, |ui| {
         for c in &app.calls {
             egui::Frame::new().fill(theme::surface_2()).corner_radius(egui::CornerRadius::same(4)).inner_margin(egui::Margin::symmetric(8, 6)).show(ui, |ui| {
@@ -346,7 +412,15 @@ fn calls(app: &mut App, ui: &mut Ui) {
                             widgets::chip(ui, Tone::Err, "encrypted — muted");
                         } else if c.peak < 0.002 {
                             widgets::chip(ui, Tone::Warn, "no audio decoded");
-                        } else if widgets::action(ui, "▶ play").clicked() {
+                        } else if let (Some(Playing::Call(id)), Some(p)) = (app.playing, progress)
+                            && id == c.id
+                        {
+                            // Playing: the way back to live sits on the call itself.
+                            if widgets::action(ui, "■ stop").on_hover_text("Stop and return to the live audio").clicked() {
+                                actions.push((c.id, "stop"));
+                            }
+                            progress_bar(ui, p, 90.0);
+                        } else if widgets::action(ui, "▶ play").on_hover_text("Play in place of the live audio").clicked() {
                             actions.push((c.id, "play"));
                         }
                     });
@@ -413,6 +487,11 @@ fn calls(app: &mut App, ui: &mut Ui) {
         app.tune(hz, false);
     }
     for (id, what) in actions {
+        if what == "stop" {
+            app.player.stop_clip();
+            app.playing = None;
+            continue;
+        }
         let Some(l) = &app.link else { continue };
         let c = app.calls.iter().find(|c| c.id == id).cloned().unwrap_or_default();
         match what {

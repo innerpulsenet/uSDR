@@ -48,7 +48,7 @@ pub fn receiver_bar(app: &mut App, ui: &mut Ui) {
         ui.painter().rect_filled(r, egui::CornerRadius::ZERO, alpha(theme::VIOLET, 0.05));
     }
     ui.spacing_mut().item_spacing.x = 10.0;
-    // Three fits, widest first. Each row ends in a section that takes what
+    // Four fits, widest first. Each row ends in a section that takes what
     // is left, so no row trails off into empty space.
     if w >= 1840.0 {
         ui.horizontal_top(|ui| {
@@ -68,6 +68,19 @@ pub fn receiver_bar(app: &mut App, ui: &mut Ui) {
             tuning(app, ui, false);
             modes(app, ui);
             filter(app, ui, 250.0);
+            audio(app, ui);
+            meter(app, ui, 230.0, 560.0);
+        });
+    } else if w >= 1500.0 {
+        // The default 1600 px window: still one band, with a smaller
+        // readout, a filter of three presets and its slider, and the meter
+        // taking the rest. Two rows here would cost the waterfall 110 px.
+        ui.horizontal_top(|ui| {
+            switch(app, ui);
+            readout_sized(app, ui, 34.0);
+            tuning(app, ui, false);
+            modes(app, ui);
+            filter(app, ui, (w - 1400.0).clamp(150.0, 250.0));
             audio(app, ui);
             meter(app, ui, 230.0, 560.0);
         });
@@ -122,6 +135,15 @@ fn switch(app: &mut App, ui: &mut Ui) {
                 if widgets::chip_key(ui, "B OFF", false, theme::VIOLET).clicked() {
                     app.rx2_off();
                 }
+                // One ear each, for following two channels at once.
+                let split = app.prefs.pan <= -0.99 && app.prefs.pan_b >= 0.99;
+                if widgets::chip_key(ui, "L|R", split, theme::VIOLET).on_hover_text(if split { "Both receivers back to the center" } else { "A in the left ear, B in the right" }).clicked() {
+                    let (a, b) = if split { (0.0, 0.0) } else { (-1.0, 1.0) };
+                    app.prefs.pan = a;
+                    app.prefs.pan_b = b;
+                    app.player.set_pan(a);
+                    app.player_b.set_pan(b);
+                }
             });
         }
     });
@@ -137,6 +159,10 @@ fn start_b(app: &mut App) {
 }
 
 fn readout(app: &mut App, ui: &mut Ui) {
+    readout_sized(app, ui, 40.0);
+}
+
+fn readout_sized(app: &mut App, ui: &mut Ui, digits_px: f32) {
     let b = app.status.rx2.clone().filter(|_| app.active_b);
     let hz = app.active_hz();
     let mut acts = Vec::new();
@@ -156,7 +182,7 @@ fn readout(app: &mut App, ui: &mut Ui) {
             };
             ui.label(small(agc));
         });
-        app.vfo.ui(ui, hz, 40.0, &mut acts);
+        app.vfo.ui(ui, hz, digits_px, &mut acts);
     });
     for a in acts {
         match a {
@@ -315,11 +341,14 @@ fn filter(app: &mut App, ui: &mut Ui, width_px: f32) {
             }
         };
         let mut set: Option<(f32, f32)> = None;
-        // As many presets as the section has room for, narrowest first.
-        let fit = (((width_px - if custom { 58.0 } else { 0.0 }) / 47.0).floor() as usize).max(2);
+        // As many presets as the section has room for: where some must go,
+        // the ones either side of the width in use stay.
+        let fit = (((width_px - if custom { 58.0 } else { 0.0 }) / 47.0).floor() as usize).max(2).min(presets.len());
+        let near = presets.iter().enumerate().min_by(|a, b| (a.1 - width).abs().total_cmp(&(b.1 - width).abs())).map_or(0, |(i, _)| i);
+        let first = near.saturating_sub(fit / 2).min(presets.len() - fit);
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 3.0;
-            for p in presets.iter().take(fit) {
+            for p in &presets[first..first + fit] {
                 let label = format!("{}k", format!("{:.1}", p / 1000.0).trim_end_matches(".0"));
                 if widgets::chip_key(ui, &label, (width - p).abs() < 1.0, theme::AMBER).clicked() {
                     set = Some(around(*p));
@@ -497,12 +526,16 @@ fn meter(app: &mut App, ui: &mut Ui, min_w: f32, max_w: f32) {
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 6.0;
             ui.label(small(format!("SNR {snr}")));
+            // A narrow meter keeps its room for what is heard; the carrier
+            // error is in the Radio card too, with CALIBRATE.
             let ec = if s.freq_error_hz.is_some_and(|e| e.abs() > 2000.0) { theme::WARN } else { theme::text_3() };
-            let r = ui.add(egui::Label::new(RichText::new(format!("err {err}")).font(theme::mono(10.0)).color(ec)).sense(Sense::click()));
-            if r.on_hover_text("Click to calibrate the ppm from this carrier").clicked()
-                && let Some(l) = &app.link
-            {
-                l.post_get("/api/sdr/calibrate", json!({}), Get::Calibrate);
+            if w >= 330.0 || ec == theme::WARN {
+                let r = ui.add(egui::Label::new(RichText::new(format!("err {err}")).font(theme::mono(10.0)).color(ec)).sense(Sense::click()));
+                if r.on_hover_text("Click to calibrate the ppm from this carrier").clicked()
+                    && let Some(l) = &app.link
+                {
+                    l.post_get("/api/sdr/calibrate", json!({}), Get::Calibrate);
+                }
             }
             if !notches.is_empty() {
                 ui.label(RichText::new(format!("notch {}", notches.join(" "))).font(theme::mono(10.0)).color(theme::VIOLET));

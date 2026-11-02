@@ -32,6 +32,22 @@ pub struct DecodeRow {
     pub ev: proto::DecodeEvent,
     /// Its fields shown inline under the row.
     pub open: bool,
+    /// Protocol, kind and summary in lower case, for the filter.
+    pub key: String,
+}
+
+impl DecodeRow {
+    pub fn new(at: SystemTime, freq_hz: f64, ev: proto::DecodeEvent) -> Self {
+        let key = format!("{} {} {}", ev.protocol, ev.kind, ev.summary).to_lowercase();
+        Self { at, freq_hz, ev, open: false, key }
+    }
+}
+
+/// A recording playing in place of the live audio.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Playing {
+    Call(u64),
+    Capture,
 }
 
 pub struct ClassRow {
@@ -110,6 +126,8 @@ pub struct App {
     pub meter: Meter,
     /// Receiver B's meter, measured from the spectrum over its passband.
     pub meter_b: Meter,
+    /// Receiver B's channel power in the newest frame, for its flag.
+    level_b: Option<(f32, f32)>,
     pub scope: Scope,
     pub decodes: VecDeque<DecodeRow>,
     pub class_log: VecDeque<ClassRow>,
@@ -125,6 +143,17 @@ pub struct App {
     /// so new frames arriving on top do not move what is being read.
     pub decodes_added: usize,
     pub decode_scroll: f32,
+    /// Frames that arrived above the rows being read.
+    pub decodes_unseen: usize,
+    /// Scroll the log back to the newest frame on the next draw.
+    pub decode_jump: bool,
+    /// What the speaker is playing instead of live audio.
+    pub playing: Option<Playing>,
+    /// The channel's level and floor over the last 20 s (time, dBFS, dBFS),
+    /// the span the server's capture buffer holds; cleared on a retune, as
+    /// that buffer is.
+    pub activity: VecDeque<(f64, f32, f32)>,
+    activity_hz: f64,
     /// A memory slot being renamed, and the name so far.
     pub renaming: Option<(usize, String)>,
     /// Files picked in a dialog, arriving from its thread.
@@ -219,6 +248,7 @@ impl App {
             vfo: Vfo::default(),
             meter: Meter::default(),
             meter_b: Meter::default(),
+            level_b: None,
             scope: Scope::default(),
             decodes: VecDeque::new(),
             class_log: VecDeque::new(),
@@ -232,6 +262,11 @@ impl App {
             decode_filter: String::new(),
             decodes_added: 0,
             decode_scroll: 0.0,
+            decodes_unseen: 0,
+            decode_jump: false,
+            playing: None,
+            activity: VecDeque::new(),
+            activity_hz: 0.0,
             renaming: None,
             picked: crossbeam_channel::unbounded(),
             selected_decode: None,
@@ -483,6 +518,16 @@ impl App {
         self.post("/api/memories", json!({ "memories": list }));
     }
 
+    fn push_decode(&mut self, row: DecodeRow) {
+        self.decodes.push_front(row);
+        self.decodes_added += 1;
+        if self.decode_scroll > 1.0 {
+            self.decodes_unseen += 1;
+        }
+        self.decodes.truncate(400);
+        self.selected_decode = self.selected_decode.map(|i| i + 1).filter(|&i| i < self.decodes.len());
+    }
+
     fn handle(&mut self, ctx: &egui::Context, ev: NetEvent) {
         let now = ctx.input(|i| i.time);
         match ev {
@@ -526,13 +571,20 @@ impl App {
             NetEvent::Fft(f) => {
                 self.pan.push(&f, &self.prefs.view, now);
                 self.meter.feed(f.channel_dbfs, f.noise_dbfs, f.peak_iq);
-                if let Some(b) = &self.status.rx2
-                    && let Some((ch, nz)) = proto::channel_level(&f.pwr, f.center_hz, f.rate_hz, b.freq_hz + b.passband_offset_hz, b.bandwidth_hz)
-                {
+                self.level_b = self.status.rx2.as_ref().and_then(|b| proto::channel_level(&f.pwr, f.center_hz, f.rate_hz, b.freq_hz + b.passband_offset_hz, b.bandwidth_hz));
+                if let Some((ch, nz)) = self.level_b {
                     self.meter_b.feed(ch, nz, f.peak_iq);
                 }
                 if f.peak_iq >= 0.98 {
                     self.clip_until = now + 2.5;
+                }
+                if (f.inspect_hz - self.activity_hz).abs() >= 1.0 {
+                    self.activity.clear();
+                    self.activity_hz = f.inspect_hz;
+                }
+                self.activity.push_back((now, f.channel_dbfs, f.noise_dbfs));
+                while self.activity.front().is_some_and(|a| a.0 < now - 20.0) {
+                    self.activity.pop_front();
                 }
                 self.classify(&f);
                 self.spur_step(&f, now);
@@ -541,10 +593,7 @@ impl App {
             NetEvent::Status(s) => self.apply_status(*s),
             NetEvent::Decode { inspect_hz, event, at } => {
                 let call = event.kind == "call";
-                self.decodes.push_front(DecodeRow { at, freq_hz: inspect_hz, ev: event, open: false });
-                self.decodes_added += 1;
-                self.decodes.truncate(400);
-                self.selected_decode = self.selected_decode.map(|i| i + 1);
+                self.push_decode(DecodeRow::new(at, inspect_hz, event));
                 if call && let Some(l) = &self.link {
                     l.get("/api/sdr/calls", Get::Calls);
                 }
@@ -641,8 +690,7 @@ impl App {
                 let events = v.get("events").and_then(Value::as_array).cloned().unwrap_or_default();
                 for e in &events {
                     if let Ok(ev) = serde_json::from_value::<proto::DecodeEvent>(e.clone()) {
-                        self.decodes.push_front(DecodeRow { at: SystemTime::now(), freq_hz: hz, ev, open: false });
-                        self.decodes_added += 1;
+                        self.push_decode(DecodeRow::new(SystemTime::now(), hz, ev));
                     }
                 }
                 let proto_name = v
@@ -670,8 +718,14 @@ impl App {
             Fetch::PlayCapture | Fetch::CallAudio(_) => {
                 self.recorder_busy = None;
                 match crate::wav::parse(&bytes) {
-                    Some(w) if !w.samples.is_empty() => self.player.play_clip(w.mono(), w.rate),
-                    _ => self.toast(ctx, Tone::Warn, "Nothing to play: the audio buffer is empty on this channel."),
+                    Some(w) if !w.samples.is_empty() => {
+                        self.player.play_clip(w.mono(), w.rate);
+                        self.playing = Some(if let Fetch::CallAudio(id) = what { Playing::Call(id) } else { Playing::Capture });
+                    }
+                    _ => {
+                        self.playing = None;
+                        self.toast(ctx, Tone::Warn, "Nothing to play: the audio buffer is empty on this channel.");
+                    }
                 }
             }
             Fetch::ReplayCapture => {
@@ -863,16 +917,28 @@ impl App {
                     let hz = crate::tuning::snap(self.active_hz() + d * step, step);
                     self.tune(hz, true);
                 }
+                // M and R act on the receiver being driven, as the bar's keys do.
                 Key::M if !mods.command => {
-                    self.prefs.muted = !self.prefs.muted;
-                    self.player.set_muted(self.prefs.muted);
+                    if self.active_b && self.status.rx2.is_some() {
+                        self.prefs.muted_b = !self.prefs.muted_b;
+                        self.player_b.set_muted(self.prefs.muted_b);
+                    } else {
+                        self.prefs.muted = !self.prefs.muted;
+                        self.player.set_muted(self.prefs.muted);
+                    }
                 }
                 Key::Plus | Key::Equals => self.set_zoom(self.zoom_ui * 2.0),
                 Key::Minus => self.set_zoom(self.zoom_ui / 2.0),
                 Key::C if !mods.command => self.center_span(self.inspect_hz()),
                 Key::D if !mods.command => self.prefs.show_dock = !self.prefs.show_dock,
                 Key::S if !mods.command => self.prefs.show_side = !self.prefs.show_side,
-                Key::R if !mods.command => self.toggle_local_recording(ctx),
+                Key::R if !mods.command => {
+                    if self.active_b && self.status.rx2.is_some() {
+                        self.toggle_recording_b(ctx);
+                    } else {
+                        self.toggle_local_recording(ctx);
+                    }
+                }
                 Key::Space => self.vfo.open_entry(self.inspect_hz(), Some(String::new())),
                 Key::Num1 | Key::Num2 | Key::Num3 | Key::Num4 | Key::Num5 | Key::Num6 | Key::Num7 | Key::Num8 | Key::Num9 if mods.command => {
                     let idx = k.name().parse::<usize>().unwrap_or(1) - 1;
@@ -963,18 +1029,12 @@ impl App {
             if self.have_status {
                 ui.label(egui::RichText::new(s.radio_label()).font(theme::mono(11.5)).color(theme::text_2()));
                 sep(ui);
+                // The radio's own state only: span, channel width, span lock and
+                // the protocol heard all show in the receiver bar and toolbar.
                 annunciator(ui, "RATE", &crate::tuning::fmt_short_hz(s.rate_hz), theme::text());
-                annunciator(ui, "SPAN", &crate::tuning::fmt_short_hz((s.max_freq_hz - s.min_freq_hz).max(0.0)), theme::text());
-                annunciator(ui, "IF BW", &crate::tuning::fmt_short_hz(s.bandwidth_hz), theme::text());
-                if self.prefs.span_lock {
-                    annunciator(ui, "SPAN", "LOCKED", theme::CYAN);
-                }
                 if s.lo_offset {
                     annunciator(ui, "LO", &format!("{:+}", crate::tuning::fmt_short_hz(s.lo_offset_hz)), theme::CYAN);
                 }
-                let (c, _) = self.shown_class();
-                let proto = c.filter(|c| c.active).map(|c| c.protocol).unwrap_or_else(|| "IDLE".into());
-                annunciator(ui, "PROTO", &proto, if proto == "IDLE" { theme::text_3() } else { theme::OK });
                 sep(ui);
                 let streaming = self.pan.last_frame.is_some_and(|t| t.elapsed() < Duration::from_secs(2));
                 if !streaming {
@@ -995,8 +1055,14 @@ impl App {
                 } else {
                     widgets::chip(ui, Tone::Ok, "STREAM OK");
                 }
-                if self.player.reading().recording.is_some() {
-                    widgets::chip(ui, Tone::Live, "REC");
+                let rec = match (self.player.reading().recording.is_some(), self.player_b.reading().recording.is_some()) {
+                    (true, true) => Some("REC A B"),
+                    (true, false) => Some("REC"),
+                    (false, true) => Some("REC B"),
+                    _ => None,
+                };
+                if let Some(t) = rec {
+                    widgets::chip(ui, Tone::Live, t);
                 }
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -1250,9 +1316,7 @@ impl App {
             bandwidth_hz: b.bandwidth_hz,
             offset_hz: b.passband_offset_hz,
             active: self.active_b,
-            level: self.frame.as_ref().and_then(|f| {
-                proto::channel_level(&f.pwr, f.center_hz, f.rate_hz, b.freq_hz + b.passband_offset_hz, b.bandwidth_hz).map(|l| l.0)
-            }),
+            level: self.level_b.map(|l| l.0),
             note: b.note.clone(),
         });
         self.display_bins(&ui.ctx().clone(), width, now);
@@ -1379,6 +1443,9 @@ impl App {
         }
         let now = ctx.input(|i| i.time);
         self.rates(now);
+        if self.playing.is_some() && self.player.clip_progress().is_none() {
+            self.playing = None;
+        }
         if self.have_status && matches!(self.conn, Conn::Live) && now - self.calls_polled > 4.0 {
             self.calls_polled = now;
             if let Some(l) = &self.link {
@@ -1735,9 +1802,10 @@ mod tests {
         // Its filter is set for its own mode.
         h.state_mut().app.status.rx2.as_mut().unwrap().mode = Mode::Am;
         h.run_steps(2);
-        h.get_by_role_and_label(role, "6k").click();
+        // (A narrow bar keeps the presets beside B's 25 kHz: 10k, 12k, 16k.)
+        h.get_by_role_and_label(role, "10k").click();
         h.run_steps(2);
-        assert!(drain(&h).contains(&("/api/sdr/filter".into(), json!({ "low_hz": -3000.0, "high_hz": 3000.0, "mode": "am" }))));
+        assert!(drain(&h).contains(&("/api/sdr/filter".into(), json!({ "low_hz": -5000.0, "high_hz": 5000.0, "mode": "am" }))));
         // And A comes back with a click.
         h.get_by_role_and_label(role, "A").click();
         h.run_steps(2);
@@ -1745,14 +1813,43 @@ mod tests {
     }
 
     #[test]
-    fn the_right_column_keeps_the_radio_and_the_tools_apart() {
+    fn decode_rows_stack_with_their_columns_aligned() {
         let mut h = harness();
-        assert!(h.query_by_label("BIAS-T").is_some());
-        assert!(h.query_by_label("SAVE I/Q").is_none());
-        h.get_by_label("TOOLS").click();
+        for (p, k, sum) in [("DMR", "burst", "first frame"), ("POCSAG", "alphanumeric", "second frame")] {
+            let ev = proto::DecodeEvent { protocol: p.into(), kind: k.into(), summary: sum.into(), valid: true, fields: Default::default() };
+            h.state().wire.events.send(NetEvent::Decode { inspect_hz: 146.52e6, event: ev, at: SystemTime::now() }).unwrap();
+        }
+        h.run_steps(3);
+        let (a, b) = (h.get_by_label("second frame").rect(), h.get_by_label("first frame").rect());
+        // Newest on top, one under the other, the summaries in one column.
+        assert!(b.top() >= a.bottom() - 1.0, "rows overlap or sit side by side: {a:?} {b:?}");
+        assert!((a.left() - b.left()).abs() < 1.0, "summaries zig-zag: {a:?} {b:?}");
+    }
+
+    #[test]
+    fn m_mutes_the_receiver_being_driven() {
+        let mut h = harness();
+        h.state_mut().app.status.rx2 = Some(proto::SubRx { freq_hz: 146.1e6, mode: Mode::Nfm, bandwidth_hz: 12_500.0, ..Default::default() });
+        h.state_mut().app.active_b = true;
+        let (a, b) = (h.state().app.prefs.muted, h.state().app.prefs.muted_b);
+        h.key_press(egui::Key::M);
         h.run_steps(2);
+        assert_eq!(h.state().app.prefs.muted, a, "A left alone");
+        assert_eq!(h.state().app.prefs.muted_b, !b, "B muted");
+        h.state_mut().app.active_b = false;
+        h.key_press(egui::Key::M);
+        h.run_steps(2);
+        assert_eq!(h.state().app.prefs.muted, !a, "then A");
+    }
+
+    #[test]
+    fn the_right_column_shows_the_radio_and_the_recorder_together() {
+        let mut h = harness();
+        h.run_steps(2);
+        assert!(h.query_by_label("BIAS-T").is_some());
         assert!(h.query_by_label("SAVE I/Q").is_some());
-        assert!(h.query_by_label("BIAS-T").is_none());
+        // The P25 key card only in P25.
+        assert!(h.query_by_label("SAVE KEY").is_none());
     }
 
     #[test]

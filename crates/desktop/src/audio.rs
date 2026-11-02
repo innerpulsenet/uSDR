@@ -153,11 +153,16 @@ impl Player {
         let built = match cfg.sample_format() {
             cpal::SampleFormat::I16 => device.build_output_stream::<i16, _, _>(
                 config,
-                move |out: &mut [i16], _| {
-                    let mut tmp = vec![0f32; out.len()];
-                    fill(&shared, &mut tmp, channels);
-                    for (o, s) in out.iter_mut().zip(tmp) {
-                        *o = (s.clamp(-1.0, 1.0) * 32767.0) as i16;
+                {
+                    // Converted from a buffer kept between callbacks: no
+                    // allocating on the audio thread once it is big enough.
+                    let mut tmp: Vec<f32> = Vec::new();
+                    move |out: &mut [i16], _| {
+                        tmp.resize(out.len(), 0.0);
+                        fill(&shared, &mut tmp, channels);
+                        for (o, s) in out.iter_mut().zip(&tmp) {
+                            *o = (s.clamp(-1.0, 1.0) * 32767.0) as i16;
+                        }
                     }
                 },
                 on_err,
@@ -408,9 +413,8 @@ impl WavWriter {
         Ok(Self { file, path, rate, samples: 0, rate_changes: Vec::new() })
     }
     fn write(&mut self, s: &[i16]) {
-        for v in s {
-            let _ = self.file.write_all(&v.to_le_bytes());
-        }
+        let bytes: Vec<u8> = s.iter().flat_map(|v| v.to_le_bytes()).collect();
+        let _ = self.file.write_all(&bytes);
         self.samples += s.len() as u64;
     }
     fn note_rate_change(&mut self, rate: u32) {

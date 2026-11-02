@@ -486,12 +486,17 @@ The window is laid out by what each control acts on:
 
 - **The receiver bar**, across the top, is the receiver being driven: A or B, the readout and
   tuning, the mode, the filter, the audio and the S-meter. Switch to B (click its flag, or `B`)
-  and the same controls drive B. Memories sit under it as one-click chips.
+  and the same controls drive B; `M` and `R` mute and record whichever is driven, and `L|R`
+  puts A in the left ear and B in the right. Memories sit under it as one-click chips.
 - **The display toolbar**, above the spectrum, holds what the display shows: span and zoom,
-  averaging, holds, spots, the band plan, range, style and the waterfall.
-- **The right column** has two tabs: Radio (RF gain, front end, device and calibration) and
-  Tools (memories, the recorder, P25 keys).
-- **The dock** keeps the logs on the left and the scope always in view on the right.
+  averaging, holds, spots, the band plan, range, style and the waterfall. HOLD is on the
+  waterfall itself; held, a timeline beside it drags back through the last five minutes.
+- **The right column** is one column: RF gain, front end, the recorder (with the channel's
+  level over the last 20 s, so a burst can be seen before it is saved), the P25 key in P25,
+  the radio, and the memory bank (folded; open it to store, rename or clear).
+- **The dock** keeps the logs on the left and the scope always in view on the right, with
+  the views the mode offers (passband, audio, MPX, discriminator) as keys over it. A playing
+  call or replay shows its progress and a stop key where it was started.
 
 What it has that the page does not:
 

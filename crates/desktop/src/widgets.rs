@@ -30,8 +30,17 @@ pub fn eat_scroll(ui: &Ui) {
 
 /// An applet: a mono eyebrow over its controls, collapsible by its header.
 pub fn applet<R>(ui: &mut Ui, id: &str, title: &str, extra: impl FnOnce(&mut Ui), add: impl FnOnce(&mut Ui) -> R) -> Option<R> {
+    applet_opened(ui, id, title, true, extra, add)
+}
+
+/// An applet that starts folded until the operator opens it.
+pub fn applet_folded<R>(ui: &mut Ui, id: &str, title: &str, extra: impl FnOnce(&mut Ui), add: impl FnOnce(&mut Ui) -> R) -> Option<R> {
+    applet_opened(ui, id, title, false, extra, add)
+}
+
+fn applet_opened<R>(ui: &mut Ui, id: &str, title: &str, first_open: bool, extra: impl FnOnce(&mut Ui), add: impl FnOnce(&mut Ui) -> R) -> Option<R> {
     let open_id = ui.make_persistent_id(("applet", id));
-    let mut open = ui.data_mut(|d| *d.get_persisted_mut_or_insert_with(open_id, || true));
+    let mut open = ui.data_mut(|d| *d.get_persisted_mut_or_insert_with(open_id, || first_open));
     let frame = egui::Frame::new()
         .fill(theme::surface_2())
         .stroke(Stroke::new(1.0, theme::line()))
@@ -294,32 +303,6 @@ pub fn chip(ui: &mut Ui, tone: Tone, text: &str) -> Response {
     ui.painter().rect(rect, CornerRadius::same(3), alpha(c, 0.08), Stroke::new(1.0, alpha(c, 0.5)), egui::StrokeKind::Inside);
     ui.painter().galley(rect.min + vec2(6.0, 3.0), g, c);
     resp
-}
-
-/// A segmented selector; returns the newly picked index.
-pub fn segmented(ui: &mut Ui, items: &[&str], selected: usize) -> Option<usize> {
-    let mut picked = None;
-    let n = items.len().max(1);
-    let w = ui.available_width();
-    let (rect, _) = ui.allocate_exact_size(vec2(w, 24.0), Sense::hover());
-    let p = ui.painter();
-    p.rect(rect, CornerRadius::same(theme::RADIUS), theme::ink(), Stroke::new(1.0, theme::line()), egui::StrokeKind::Inside);
-    let cw = rect.width() / n as f32;
-    let id = ui.id().with(("seg", items.first().copied().unwrap_or("")));
-    let x = ui.ctx().animate_value_with_time(id, selected as f32, 0.16);
-    let sel = Rect::from_min_size(pos2(rect.left() + x * cw + 2.0, rect.top() + 2.0), vec2(cw - 4.0, rect.height() - 4.0));
-    ui.painter().rect_filled(sel, CornerRadius::same(3), theme::surface_4());
-    for (i, item) in items.iter().enumerate() {
-        let r = Rect::from_min_size(pos2(rect.left() + i as f32 * cw, rect.top()), vec2(cw, rect.height()));
-        let resp = ui.interact(r, id.with(i), Sense::click());
-        resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::RadioButton, true, i == selected, *item));
-        let c = if i == selected { theme::AMBER } else if resp.hovered() { theme::text() } else { theme::text_2() };
-        ui.painter().text(r.center(), Align2::CENTER_CENTER, *item, theme::mono(10.5), c);
-        if resp.clicked() && i != selected {
-            picked = Some(i);
-        }
-    }
-    picked
 }
 
 pub fn protocol_color(p: &str) -> Color32 {

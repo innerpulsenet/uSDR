@@ -47,8 +47,12 @@ pub struct Scope {
     /// Updates a second.
     pub rate_hz: f32,
     last_update: f64,
-    /// The frame the scope last measured, drawn until the next update.
-    held: Option<FftFrame>,
+    /// What the frame the scope last measured said of itself, drawn
+    /// until the next update.
+    held: Option<(ScopeKind, f32)>,
+    /// The mini waterfall's rows or palette changed since its texture was made.
+    mini_dirty: bool,
+    mini_palette: Option<crate::colormap::Colormap>,
     /// The passband slice, normalized and smoothed across updates.
     pass_smooth: Vec<f32>,
     /// The oscilloscope's recent sweeps, newest first, as (x 0..1, y −1..1).
@@ -78,6 +82,8 @@ impl Default for Scope {
             rate_hz: 10.0,
             last_update: f64::NEG_INFINITY,
             held: None,
+            mini_dirty: true,
+            mini_palette: None,
             pass_smooth: Vec::new(),
             osc: VecDeque::new(),
             eye_two_level: false,
@@ -98,38 +104,58 @@ fn default_sub(mode: Mode) -> Sub {
     }
 }
 
+impl Sub {
+    pub fn label(self) -> &'static str {
+        match self {
+            Sub::Passband => "PASSBAND",
+            Sub::Audio => "AUDIO",
+            Sub::Mpx => "MPX",
+            Sub::Disc => "DISC",
+        }
+    }
+}
+
 impl Scope {
     pub fn sub_for(&self, mode: Mode) -> Sub {
         self.sub.get(&mode).copied().unwrap_or_else(|| default_sub(mode))
     }
 
-    /// The other view this mode offers, if any.
-    pub fn toggle(&mut self, mode: Mode) {
-        let next = match (mode, self.sub_for(mode)) {
-            (Mode::Wfm, Sub::Passband) => Sub::Mpx,
-            (Mode::Wfm, _) => Sub::Passband,
-            (Mode::Nfm | Mode::Am | Mode::Packet, Sub::Passband) => Sub::Audio,
-            (Mode::Nfm | Mode::Am | Mode::Packet, _) => Sub::Passband,
-            (Mode::Pager, Sub::Passband) => Sub::Disc,
-            (Mode::Pager, _) => Sub::Passband,
-            (_, s) => s,
-        };
-        self.sub.insert(mode, next);
-        self.mini_wf.clear();
+    /// The views this mode offers, in the order the selector shows them;
+    /// empty where the scope has only the one.
+    pub fn views(mode: Mode, kind: ScopeKind) -> &'static [Sub] {
+        if kind == ScopeKind::Symbols || mode == Mode::Flex {
+            return &[];
+        }
+        match mode {
+            Mode::Wfm => &[Sub::Passband, Sub::Mpx],
+            Mode::Nfm | Mode::Am | Mode::Packet => &[Sub::Passband, Sub::Audio],
+            Mode::Pager => &[Sub::Passband, Sub::Disc],
+            _ => &[],
+        }
     }
 
-    pub fn title(&self, mode: Mode, kind: ScopeKind) -> (&'static str, String) {
+    pub fn set_view(&mut self, mode: Mode, sub: Sub) {
+        if self.sub_for(mode) != sub {
+            self.sub.insert(mode, sub);
+            self.mini_wf.clear();
+            self.mini_dirty = true;
+        }
+    }
+
+    /// The scope's title, and a note on what it shows where there is no
+    /// choice of view to say it.
+    pub fn title(&self, mode: Mode, kind: ScopeKind) -> (&'static str, Option<&'static str>) {
         let sub = self.sub_for(mode);
         match (mode, kind, sub) {
-            (Mode::Flex, _, _) => ("FLEX 2/4-FSK scope", "eye · slicer".into()),
-            (_, ScopeKind::Symbols, _) => ("Digital eye", "4FSK / C4FM eye".into()),
-            (Mode::Wfm, _, Sub::Mpx) => ("FM multiplex", "MPX ⇄ passband".into()),
-            (Mode::Wfm, _, _) => ("WFM passband", "passband ⇄ MPX".into()),
-            (Mode::Pager, _, Sub::Disc) => ("Pager discriminator", "disc ⇄ passband".into()),
-            (_, _, Sub::Passband) => ("Passband", "passband ⇄ audio".into()),
-            (Mode::Usb | Mode::Lsb, _, _) => ("Sideband audio", "300–2800 Hz".into()),
-            (Mode::Packet, _, _) => ("AFSK audio", "audio ⇄ passband".into()),
-            _ => ("Audio", "audio ⇄ passband".into()),
+            (Mode::Flex, _, _) => ("FLEX 2/4-FSK scope", Some("eye · slicer")),
+            (_, ScopeKind::Symbols, _) => ("Digital eye", Some("4FSK / C4FM eye · slicer")),
+            (Mode::Wfm, _, Sub::Mpx) => ("FM multiplex", None),
+            (Mode::Wfm, _, _) => ("WFM passband", None),
+            (Mode::Pager, _, Sub::Disc) => ("Pager discriminator", None),
+            (_, _, Sub::Passband) => ("Passband", None),
+            (Mode::Usb | Mode::Lsb, _, _) => ("Sideband audio", Some("300–2800 Hz")),
+            (Mode::Packet, _, _) => ("AFSK audio", None),
+            _ => ("Audio", None),
         }
     }
 
@@ -177,7 +203,7 @@ impl Scope {
         palette: crate::colormap::Colormap,
     ) {
         let rect = ui.available_rect_before_wrap();
-        let resp = ui.allocate_rect(rect, Sense::click());
+        ui.allocate_rect(rect, Sense::hover());
         let painter = ui.painter_at(rect);
         painter.rect_filled(rect, CornerRadius::same(4), theme::ink());
         let Some(live) = f else {
@@ -189,7 +215,7 @@ impl Scope {
         let fresh = now - self.last_update >= 1.0 / f64::from(self.rate_hz.max(1.0)) || self.held.is_none();
         if fresh {
             self.last_update = now;
-            self.held = Some(live.clone());
+            self.held = Some((live.scope_kind, live.scope_rate_hz));
             if let Some((p, (lo, hi))) = pass
                 && p.len() > 2
             {
@@ -204,8 +230,7 @@ impl Scope {
                 }
             }
         }
-        let held = self.held.clone();
-        let Some(f) = held.as_ref() else { return };
+        let Some((held_kind, held_rate)) = self.held else { return };
         // The waveform and the eye take every new frame (the server's 25 a
         // second); the rate setting paces only the spectrum and its waterfall.
         let sig = live.scope.iter().take(64).fold(live.scope.len() as u64, |h, &v| h.wrapping_mul(31).wrapping_add(v as u16 as u64));
@@ -219,7 +244,7 @@ impl Scope {
         let right = Rect::from_min_max(pos2(left.right() + gap, plots.top()), plots.max);
         let text_y = rect.bottom() - 1.0;
         let sub = self.sub_for(mode);
-        let symbols = f.scope_kind == ScopeKind::Symbols || mode == Mode::Flex;
+        let symbols = held_kind == ScopeKind::Symbols || mode == Mode::Flex;
         if symbols {
             // Digital: the eye on the left, the slicer on the right.
             grid(&painter, left, 4, 4);
@@ -228,9 +253,6 @@ impl Scope {
             self.slicer(&painter, right, mode);
             painter.text(pos2(left.left() + 4.0, text_y), Align2::LEFT_BOTTOM, &self.level_text, theme::mono(10.0), theme::text_2());
             painter.text(pos2(right.right() - 4.0, text_y), Align2::RIGHT_BOTTOM, &self.time_text, theme::mono(10.0), theme::text_3());
-            if resp.clicked() {
-                self.toggle(mode);
-            }
             return;
         }
 
@@ -246,9 +268,9 @@ impl Scope {
             }
         } else {
             if fresh {
-                self.audio_spectrum(&f.scope);
+                self.audio_spectrum(&live.scope);
             }
-            let max_hz = f.scope_rate_hz.max(1.0) / 2.0;
+            let max_hz = held_rate.max(1.0) / 2.0;
             let tr: Vec<f32> = self.spectrum.iter().map(|d| ((d + 80.0) / 80.0).clamp(0.0, 1.0)).collect();
             let mut ax: Vec<(f32, String)> = (0..=4)
                 .map(|i| (i as f32 / 4.0, format!("{:.1}k", max_hz * i as f32 / 4.0 / 1000.0)))
@@ -293,6 +315,7 @@ impl Scope {
             if fresh {
                 self.mini_wf.push_front(row);
                 self.mini_wf.truncate(MINI_H);
+                self.mini_dirty = true;
             }
         }
         for (t, label) in axis {
@@ -300,30 +323,33 @@ impl Scope {
             let align = if t <= 0.0 { Align2::LEFT_TOP } else if t >= 1.0 { Align2::RIGHT_TOP } else { Align2::CENTER_TOP };
             painter.text(pos2(x, spec.bottom() + 1.0), align, label, theme::mono(9.0), theme::text_3());
         }
-        // Mini waterfall, one small texture rebuilt each frame.
-        let lut = palette.lut();
-        let mut px = Vec::with_capacity(MINI_W * MINI_H);
-        for r in 0..MINI_H {
-            match self.mini_wf.get(r) {
-                Some(row) => px.extend(row.iter().map(|v| lut[(v.clamp(0.0, 1.0) * 255.0) as usize])),
-                None => px.extend(std::iter::repeat_n(theme::ink(), MINI_W)),
+        // Mini waterfall, one small texture rebuilt when a row arrives.
+        if self.mini_dirty || self.mini_palette != Some(palette) || self.mini_tex.is_none() {
+            let lut = palette.lut();
+            let mut px = Vec::with_capacity(MINI_W * MINI_H);
+            for r in 0..MINI_H {
+                match self.mini_wf.get(r) {
+                    Some(row) => px.extend(row.iter().map(|v| lut[(v.clamp(0.0, 1.0) * 255.0) as usize])),
+                    None => px.extend(std::iter::repeat_n(theme::ink(), MINI_W)),
+                }
             }
+            let img = egui::ColorImage::new([MINI_W, MINI_H], px);
+            match &mut self.mini_tex {
+                Some(t) => t.set(img, egui::TextureOptions::LINEAR),
+                None => self.mini_tex = Some(ui.ctx().load_texture("scope-wf", img, egui::TextureOptions::LINEAR)),
+            }
+            self.mini_dirty = false;
+            self.mini_palette = Some(palette);
         }
-        let img = egui::ColorImage::new([MINI_W, MINI_H], px);
-        let tex = self
-            .mini_tex
-            .get_or_insert_with(|| ui.ctx().load_texture("scope-wf", img.clone(), egui::TextureOptions::LINEAR));
-        tex.set(img, egui::TextureOptions::LINEAR);
-        painter.image(tex.id(), mini, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+        if let Some(tex) = &self.mini_tex {
+            painter.image(tex.id(), mini, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+        }
 
         // ---- right: time domain
         grid(&painter, right, 8, 4);
         self.oscilloscope(&painter, right, live, mode == Mode::Pager && sub == Sub::Disc, wave_fresh);
         painter.text(pos2(right.left() + 4.0, text_y), Align2::LEFT_BOTTOM, &self.level_text, theme::mono(10.0), theme::text_2());
         painter.text(pos2(right.right() - 4.0, text_y), Align2::RIGHT_BOTTOM, &self.time_text, theme::mono(10.0), theme::text_3());
-        if resp.clicked() {
-            self.toggle(mode);
-        }
     }
 
     fn oscilloscope(&mut self, painter: &egui::Painter, r: Rect, f: &FftFrame, disc: bool, fresh: bool) {

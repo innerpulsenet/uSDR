@@ -378,9 +378,10 @@ pub fn channel_level(pwr: &[f32], center_hz: f64, rate_hz: f64, channel_hz: f64,
     let lo = lo.clamp(0.0, (n - 1) as f64) as usize;
     let hi = (hi.clamp(0.0, (n - 1) as f64) as usize).max(lo + 1).min(n - 1);
     let sum: f64 = pwr[lo..=hi].iter().map(|&db| 10f64.powf(f64::from(db) / 10.0)).sum();
+    // The median, found without sorting the whole spectrum.
     let mut sorted = pwr.to_vec();
-    sorted.sort_unstable_by(f32::total_cmp);
-    let floor = 10f64.powf(f64::from(sorted[n / 2]) / 10.0) * (hi - lo + 1) as f64;
+    let (_, median, _) = sorted.select_nth_unstable_by(n / 2, f32::total_cmp);
+    let floor = 10f64.powf(f64::from(*median) / 10.0) * (hi - lo + 1) as f64;
     Some(((10.0 * sum.max(1e-30).log10()) as f32, (10.0 * floor.max(1e-30).log10()) as f32))
 }
 

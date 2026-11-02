@@ -47,7 +47,7 @@ server and every change comes back to every client as a `status` event. Display 
 |---|---|
 | VFO readout, TS step, tune strip, «‹›» | VFO applet: digit readout (dimmed leading zeros, wheel/click per digit, type-over), step menu with mode raster, jog strip |
 | Mode keys (13) | Mode grid, grouped Demod / Decode·Scan, raster per mode |
-| Memory bank (8) | Memories applet, server-shared, more than eight |
+| Memory bank (8) | Memory row for recall; Memory bank applet (folded) to store, rename, clear; server-shared, more than eight |
 | RF gain, AGC, IF AGC target, clip guard, tuner/IF AGC, LNA/IF readout | Gain applet with precision faders |
 | Front end: notches, LO offset, IQ corr, bias-T, IF filter, spur notch | Front-end applet |
 | S-meter, CH PWR/SNR/MARK/ERR/NOTCH | Meter applet + slice flag |

@@ -87,10 +87,7 @@ pub fn toolbar(app: &mut App, ui: &mut Ui) {
             ui.set_min_width(280.0);
             waterfall(app, ui);
         });
-        let held = app.pan.hold.is_some();
-        if widgets::chip_key(ui, if held { "LIVE" } else { "HOLD" }, held, theme::EMBER).on_hover_text("Hold the waterfall and scroll back five minutes (H)").clicked() {
-            app.pan.toggle_hold();
-        }
+        // HOLD lives on the waterfall itself, beside the history it holds.
         // Wide windows carry the memories here rather than on a row of their own.
         if app.prefs.show_memories && app.memories_on_toolbar {
             ui.add_space(8.0);
