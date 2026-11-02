@@ -80,7 +80,39 @@ own marks. Ember is kept for the mark, focus and *live* (recording). The connect
 shows the mark received as six carriers into a waterfall. Motion follows the brand: one
 draw-in, a beat only while waiting, and none at all with reduced motion on.
 
-## Later
+## Status
 
-Windows 11 packaging (an `.ico` resource and a portable build), multiple panadapters once
-the server can stream more than one span, and a band-plan strip.
+First build merged 2026-11-02. Verified against the live RSP1A: the stream (25 fps,
+audio, status, decodes), every panel rendering, reconnect, the web page's view-only
+veil, and the 409 guard. Not yet exercised by hand: tuning gestures, mode and gain
+changes, captures, P25 keys, scan control.
+
+## Roadmap
+
+**1. Prove the controls, close the parity gaps.**
+- A hands-on pass over every gesture and control on the live radio, and egui_kittest
+  tests for the readout, faders and tuning math so regressions show up in `cargo test`.
+- The web page's tune strip (drag-to-tune ticks), the SQL MARK fader, the slicer pane
+  beside the eye (level bells, scatter, dibit tape), the pager's ±1.6/±4.8 kHz marks,
+  decode-log expand/collapse with an anchored scroll, file dialogs for LOAD I/Q and save
+  locations, and memory names that can be edited.
+
+**2. Polish the instrument.**
+- Spectrum style presets: trace, fill, background and waterfall palette as one choice,
+  including a blue-and-white classic panadapter look. (Named for what it looks like,
+  never for the product it resembles.)
+- Waterfall time machine: freeze, scroll back through minutes with UTC labels, LIVE to
+  return. The waterfall's color mapping in a GPU shader, which also takes the CPU from
+  about 23% of a core to a few percent.
+- A network diagnostics popover behind the signal bars (RTT history, drops as a
+  percentage), a compact mode, saved window layouts, and font scaling.
+- A band-plan strip with decode spots as dots and hover notes.
+
+**3. Features that need the server.**
+- Filter width and passband shift, so the passband edges can be dragged.
+- A version handshake, so the app says plainly when it and the server disagree.
+- More than one receiver in a span, each with its own flag.
+
+**4. Windows 11.**
+- CI that builds and tests Linux and Windows on every push, a Windows build with the
+  icon embedded, and an installer.
