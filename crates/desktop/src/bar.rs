@@ -34,8 +34,13 @@ fn bay<R>(ui: &mut Ui, label: &str, add: impl FnOnce(&mut Ui) -> R) -> R {
     r
 }
 
+/// Room the mode chips and the audio take, for sizing what is left.
+const MODES_W: f32 = 290.0;
+const AUDIO_W: f32 = 232.0;
+const GAP: f32 = 22.0;
+
 pub fn receiver_bar(app: &mut App, ui: &mut Ui) {
-    let wide = ui.available_width() >= 1980.0;
+    let w = ui.available_width();
     let b_active = app.active_b && app.status.rx2.is_some();
     // A violet wash says, before anything is read, that B is being driven.
     if b_active {
@@ -43,27 +48,41 @@ pub fn receiver_bar(app: &mut App, ui: &mut Ui) {
         ui.painter().rect_filled(r, egui::CornerRadius::ZERO, alpha(theme::VIOLET, 0.05));
     }
     ui.spacing_mut().item_spacing.x = 10.0;
-    if wide {
+    // Three fits, widest first. Each row ends in a section that takes what
+    // is left, so no row trails off into empty space.
+    if w >= 1840.0 {
         ui.horizontal_top(|ui| {
             switch(app, ui);
             readout(app, ui);
-            tuning(app, ui);
+            tuning(app, ui, true);
             modes(app, ui);
-            filter(app, ui);
+            filter(app, ui, 310.0);
             audio(app, ui);
-            meter(app, ui);
+            meter(app, ui, 300.0, 560.0);
+        });
+    } else if w >= 1640.0 {
+        // The tune strip folds away (the jog keys stay); filter and meter narrow.
+        ui.horizontal_top(|ui| {
+            switch(app, ui);
+            readout(app, ui);
+            tuning(app, ui, false);
+            modes(app, ui);
+            filter(app, ui, 250.0);
+            audio(app, ui);
+            meter(app, ui, 230.0, 560.0);
         });
     } else {
         ui.horizontal_top(|ui| {
             switch(app, ui);
             readout(app, ui);
-            tuning(app, ui);
-            meter(app, ui);
+            tuning(app, ui, false);
+            meter(app, ui, 260.0, 760.0);
         });
         ui.add_space(4.0);
+        let filter_w = (w - MODES_W - AUDIO_W - 3.0 * GAP).clamp(230.0, 900.0);
         ui.horizontal_top(|ui| {
             modes(app, ui);
-            filter(app, ui);
+            filter(app, ui, filter_w);
             audio(app, ui);
         });
     }
@@ -150,7 +169,7 @@ fn readout(app: &mut App, ui: &mut Ui) {
     }
 }
 
-fn tuning(app: &mut App, ui: &mut Ui) {
+fn tuning(app: &mut App, ui: &mut Ui, strip: bool) {
     let hz = app.active_hz();
     bay(ui, "STEP", |ui| {
         let auto = crate::tuning::mode_raster_hz(app.status.mode, hz);
@@ -194,7 +213,7 @@ fn tuning(app: &mut App, ui: &mut Ui) {
             };
             jog(ui, app, "«", -10.0);
             jog(ui, app, "‹", -1.0);
-            if let Some(d) = crate::vfo::tune_strip(ui, hz, app.step_hz(), 150.0, 24.0) {
+            if strip && let Some(d) = crate::vfo::tune_strip(ui, hz, app.step_hz(), 150.0, 24.0) {
                 let target = app.active_hz() + d;
                 app.tune(target, true);
             }
@@ -246,7 +265,7 @@ fn modes(app: &mut App, ui: &mut Ui) {
     });
 }
 
-fn filter(app: &mut App, ui: &mut Ui) {
+fn filter(app: &mut App, ui: &mut Ui, width_px: f32) {
     // Receiver B's filter is its mode's, set the same way with its mode named.
     let b = app.status.rx2.clone().filter(|_| app.active_b);
     let (mode, lo, hi) = match &b {
@@ -271,8 +290,8 @@ fn filter(app: &mut App, ui: &mut Ui) {
     let custom = if b.is_some() { range.is_some() && (width - app.modes.iter().find(|c| c.mode == mode).map_or(0.0, |c| c.bandwidth_hz)).abs() > 1.0 } else { app.status.filter_custom };
     let label = format!("FILTER  {} … {}", k(lo), k(hi));
     bay(ui, &label, |ui| {
-        ui.set_min_width(250.0);
-        ui.set_max_width(310.0);
+        ui.set_min_width(width_px);
+        ui.set_max_width(width_px);
         let Some(range) = range else {
             ui.label(small(if app.server.as_ref().is_some_and(|i| i.has("filter")) {
                 format!("{} keeps its decoder's filter", mode.label())
@@ -296,9 +315,11 @@ fn filter(app: &mut App, ui: &mut Ui) {
             }
         };
         let mut set: Option<(f32, f32)> = None;
+        // As many presets as the section has room for, narrowest first.
+        let fit = (((width_px - if custom { 58.0 } else { 0.0 }) / 47.0).floor() as usize).max(2);
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 3.0;
-            for p in presets {
+            for p in presets.iter().take(fit) {
                 let label = format!("{}k", format!("{:.1}", p / 1000.0).trim_end_matches(".0"));
                 if widgets::chip_key(ui, &label, (width - p).abs() < 1.0, theme::AMBER).clicked() {
                     set = Some(around(*p));
@@ -444,12 +465,12 @@ fn audio(app: &mut App, ui: &mut Ui) {
     });
 }
 
-fn meter(app: &mut App, ui: &mut Ui) {
+fn meter(app: &mut App, ui: &mut Ui, min_w: f32, max_w: f32) {
     let is_b = app.active_b && app.status.rx2.is_some();
     let rm = app.reduce_motion();
     let mark = app.prefs.view.sql_mark;
     // The last bay takes whatever width the row has left.
-    let w = (ui.available_width() - 20.0).clamp(300.0, 560.0);
+    let w = (ui.available_width() - 20.0).clamp(min_w, max_w);
     bay(ui, if is_b { "SIGNAL B" } else { "SIGNAL" }, |ui| {
         ui.set_min_width(w);
         ui.set_max_width(w);

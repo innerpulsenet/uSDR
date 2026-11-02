@@ -230,7 +230,7 @@ fn scope(app: &mut App, ui: &mut Ui) {
             ui.spacing_mut().item_spacing.x = 3.0;
             for hz in [25.0f32, 10.0, 5.0] {
                 if widgets::chip_key(ui, &format!("{hz:.0} Hz"), (app.prefs.scope_rate_hz - hz).abs() < 0.1, theme::OK)
-                    .on_hover_text("How often the scope updates")
+                    .on_hover_text("How often the spectrum side updates; the waveform takes every frame")
                     .clicked()
                 {
                     app.prefs.scope_rate_hz = hz;

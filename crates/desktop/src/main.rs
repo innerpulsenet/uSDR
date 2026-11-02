@@ -145,9 +145,20 @@ fn main() -> anyhow::Result<()> {
     if let Some(i) = icon() {
         viewport = viewport.with_icon(std::sync::Arc::new(i));
     }
+    // QA: USDR_QA_SIZE=1740x1000 opens at that size, ignoring the saved one.
+    let qa_size = std::env::var("USDR_QA_SIZE").ok().and_then(|v| {
+        let (w, h) = v.split_once('x')?;
+        Some([w.parse::<f32>().ok()?, h.parse::<f32>().ok()?])
+    });
+    if let Some(sz) = qa_size {
+        // Its own app id, so the window manager does not restore the
+        // everyday window's remembered size over it.
+        viewport = viewport.with_inner_size(sz).with_maximized(false).with_app_id("net.innerpulse.usdr-desktop.qa");
+    }
     let options = eframe::NativeOptions {
         viewport,
         renderer: eframe::Renderer::Wgpu,
+        persist_window: qa_size.is_none(),
         ..Default::default()
     };
     eframe::run_native("uSDR", options, Box::new(move |cc| Ok(Box::new(app::App::new(cc, server)))))

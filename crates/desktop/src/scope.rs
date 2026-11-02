@@ -54,6 +54,8 @@ pub struct Scope {
     /// The oscilloscope's recent sweeps, newest first, as (x 0..1, y −1..1).
     osc: VecDeque<Vec<[f32; 2]>>,
     eye_two_level: bool,
+    /// What the waveform last measured, to take each new frame exactly once.
+    wave_sig: u64,
 }
 
 impl Default for Scope {
@@ -79,6 +81,7 @@ impl Default for Scope {
             pass_smooth: Vec::new(),
             osc: VecDeque::new(),
             eye_two_level: false,
+            wave_sig: 0,
         }
     }
 }
@@ -203,6 +206,11 @@ impl Scope {
         }
         let held = self.held.clone();
         let Some(f) = held.as_ref() else { return };
+        // The waveform and the eye take every new frame (the server's 25 a
+        // second); the rate setting paces only the spectrum and its waterfall.
+        let sig = live.scope.iter().take(64).fold(live.scope.len() as u64, |h, &v| h.wrapping_mul(31).wrapping_add(v as u16 as u64));
+        let wave_fresh = sig != self.wave_sig;
+        self.wave_sig = sig;
         let gap = 8.0;
         // Readouts get a strip of their own under the plots, never over a trace.
         let strip = 16.0;
@@ -216,7 +224,7 @@ impl Scope {
             // Digital: the eye on the left, the slicer on the right.
             grid(&painter, left, 4, 4);
             grid(&painter, right, 8, 4);
-            self.eye(&painter, left, f, mode, fresh);
+            self.eye(&painter, left, live, mode, wave_fresh);
             self.slicer(&painter, right, mode);
             painter.text(pos2(left.left() + 4.0, text_y), Align2::LEFT_BOTTOM, &self.level_text, theme::mono(10.0), theme::text_2());
             painter.text(pos2(right.right() - 4.0, text_y), Align2::RIGHT_BOTTOM, &self.time_text, theme::mono(10.0), theme::text_3());
@@ -310,7 +318,7 @@ impl Scope {
 
         // ---- right: time domain
         grid(&painter, right, 8, 4);
-        self.oscilloscope(&painter, right, f, mode == Mode::Pager && sub == Sub::Disc, fresh);
+        self.oscilloscope(&painter, right, live, mode == Mode::Pager && sub == Sub::Disc, wave_fresh);
         painter.text(pos2(right.left() + 4.0, text_y), Align2::LEFT_BOTTOM, &self.level_text, theme::mono(10.0), theme::text_2());
         painter.text(pos2(right.right() - 4.0, text_y), Align2::RIGHT_BOTTOM, &self.time_text, theme::mono(10.0), theme::text_3());
         if resp.clicked() {
