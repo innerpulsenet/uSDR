@@ -57,7 +57,8 @@ pub enum Fetch {
     SaveCapture { kind: String, stem: PathBuf },
 }
 
-enum Req {
+#[derive(Debug)]
+pub enum Req {
     Post { path: String, body: Value, coalesce: bool },
     Get { path: String, what: Get },
     PostGet { path: String, body: Value, what: Get },
@@ -146,7 +147,30 @@ pub fn hostname() -> String {
         .unwrap_or_else(|| "desktop".into())
 }
 
+/// The other ends of a test link: what the app asked for, and a way to
+/// play the server's side.
+#[cfg(test)]
+pub struct Wire {
+    pub reqs: Receiver<Req>,
+    pub events: Sender<NetEvent>,
+}
+
 impl Link {
+    /// A link with no threads behind it, for tests.
+    #[cfg(test)]
+    pub fn wire() -> (Link, Wire) {
+        let (req_tx, req_rx) = unbounded::<Req>();
+        let (ev_tx, ev_rx) = unbounded::<NetEvent>();
+        let link = Link {
+            base: "http://test:8073".into(),
+            stats: Arc::new(Stats::default()),
+            req: req_tx,
+            events: ev_rx,
+            stop: Arc::new(AtomicBool::new(false)),
+        };
+        (link, Wire { reqs: req_rx, events: ev_tx })
+    }
+
     pub fn open(base: &str, ctx: egui::Context, audio: Arc<dyn AudioSink>) -> Link {
         let base = normalize_base(base);
         let (req_tx, req_rx) = unbounded::<Req>();
@@ -352,6 +376,17 @@ fn plain_error(e: &tungstenite::Error, base: &str) -> String {
     }
 }
 
+/// Which of a batch of queued requests to send: the newest of each control
+/// that a later one supersedes, everything else, all in send order.
+fn newest_only(batch: &[Req]) -> Vec<bool> {
+    (0..batch.len())
+        .map(|i| match batch[i].coalesce_key() {
+            Some(k) => !batch[i + 1..].iter().any(|r| r.coalesce_key().as_deref() == Some(&k)),
+            None => true,
+        })
+        .collect()
+}
+
 fn rest_loop(
     base: String,
     id: u64,
@@ -387,15 +422,7 @@ fn rest_loop(
                 Err(TryRecvError::Disconnected) => return,
             }
         }
-        // Keep the newest of each superseded control, in send order.
-        let mut keep = vec![true; batch.len()];
-        for i in 0..batch.len() {
-            if let Some(k) = batch[i].coalesce_key()
-                && batch[i + 1..].iter().any(|r| r.coalesce_key().as_deref() == Some(&k))
-            {
-                keep[i] = false;
-            }
-        }
+        let keep = newest_only(&batch);
         for (req, keep) in batch.into_iter().zip(keep) {
             if !keep {
                 continue;
@@ -548,4 +575,37 @@ fn json_result(r: Result<ureq::http::Response<ureq::Body>, ureq::Error>) -> Resu
         return Err(if text.is_empty() { format!("HTTP {status}") } else { text });
     }
     serde_json::from_str(&text).map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn post(path: &str, body: Value) -> Req {
+        Req::Post { path: path.into(), body, coalesce: true }
+    }
+
+    #[test]
+    fn a_dragged_control_sends_only_its_last_value() {
+        let batch = vec![
+            post("/api/sdr/gain", serde_json::json!({"gain_db": 10})),
+            post("/api/sdr/frontend", serde_json::json!({"bias_t": true})),
+            post("/api/sdr/gain", serde_json::json!({"gain_db": 11})),
+            post("/api/sdr/frontend", serde_json::json!({"rf_notch": true})),
+            Req::Post { path: "/api/sdr/scan/control".into(), body: serde_json::json!({"action":"skip"}), coalesce: false },
+            Req::Post { path: "/api/sdr/scan/control".into(), body: serde_json::json!({"action":"skip"}), coalesce: false },
+            post("/api/sdr/gain", serde_json::json!({"gain_db": 12})),
+        ];
+        // Gain keeps its last; the two front-end posts set different
+        // switches and both go; scan control is never merged.
+        assert_eq!(newest_only(&batch), vec![false, true, false, true, true, true, true]);
+    }
+
+    #[test]
+    fn server_addresses() {
+        assert_eq!(normalize_base("rsp"), "http://rsp:8073");
+        assert_eq!(normalize_base("10.0.0.5:9000/"), "http://10.0.0.5:9000");
+        assert_eq!(normalize_base("ws://h:1"), "http://h:1");
+        assert_eq!(normalize_base("https://h.example"), "https://h.example:8073");
+    }
 }

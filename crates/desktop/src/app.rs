@@ -117,9 +117,19 @@ pub struct App {
 impl App {
     pub fn new(cc: &eframe::CreationContext<'_>, server: Option<String>) -> App {
         let prefs = Prefs::load();
-        theme::install(&cc.egui_ctx, prefs.ground);
-        egui_extras::install_image_loaders(&cc.egui_ctx);
         let player = Player::new(prefs.audio_device.as_deref());
+        let mut app = App::build(&cc.egui_ctx, prefs, player, server.clone());
+        if server.is_some() || app.prefs.auto_connect && app.prefs.last_server.is_some() {
+            let s = app.connect_input.clone();
+            app.connect(&cc.egui_ctx, &s);
+        }
+        app
+    }
+
+    /// Everything but connecting and the sound card, so tests can build one.
+    pub fn build(ctx: &egui::Context, prefs: Prefs, player: Arc<Player>, server: Option<String>) -> App {
+        theme::install(ctx, prefs.ground);
+        egui_extras::install_image_loaders(ctx);
         player.set_volume(prefs.volume);
         player.set_muted(prefs.muted);
         player.set_pan(prefs.pan);
@@ -133,7 +143,7 @@ impl App {
             Ok("class") => DockTab::Classifier,
             _ => DockTab::Decodes,
         };
-        let mut app = App {
+        App {
             prefs,
             link: None,
             player,
@@ -184,12 +194,7 @@ impl App {
             memory_armed: false,
             audio_devices: Player::devices(),
             fullscreen: false,
-        };
-        if server.is_some() || app.prefs.auto_connect && app.prefs.last_server.is_some() {
-            let s = app.connect_input.clone();
-            app.connect(&cc.egui_ctx, &s);
         }
-        app
     }
 
     pub fn reduce_motion(&self) -> bool {
@@ -1169,6 +1174,30 @@ pub fn local_hms(t: SystemTime) -> String {
 
 impl eframe::App for App {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.tick(ctx);
+    }
+
+    fn ui(&mut self, ui: &mut Ui, _frame: &mut eframe::Frame) {
+        self.draw(ui);
+    }
+
+    fn save(&mut self, _storage: &mut dyn eframe::Storage) {
+        self.prefs.save();
+    }
+
+    fn on_exit(&mut self) {
+        let _ = self.player.stop_recording();
+        self.prefs.save();
+    }
+
+    fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
+        theme::ink().to_normalized_gamma_f32()
+    }
+}
+
+impl App {
+    /// Take what the network delivered, poll, and read the keyboard.
+    pub fn tick(&mut self, ctx: &egui::Context) {
         let events: Vec<NetEvent> = match &self.link {
             Some(l) => l.events.try_iter().take(512).collect(),
             None => Vec::new(),
@@ -1188,7 +1217,8 @@ impl eframe::App for App {
         self.dropped(ctx);
     }
 
-    fn ui(&mut self, ui: &mut Ui, _frame: &mut eframe::Frame) {
+    /// Lay out the window.
+    pub fn draw(&mut self, ui: &mut Ui) {
         let ctx = ui.ctx().clone();
         if std::env::var_os("USDR_QA_FPS").is_some() {
             use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
@@ -1273,16 +1303,191 @@ impl eframe::App for App {
         }
     }
 
-    fn save(&mut self, _storage: &mut dyn eframe::Storage) {
-        self.prefs.save();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::net::{Req, Wire};
+    use egui_kittest::Harness;
+    use egui_kittest::kittest::Queryable;
+
+    struct T {
+        app: App,
+        wire: Wire,
+        ready: bool,
     }
 
-    fn on_exit(&mut self) {
-        let _ = self.player.stop_recording();
-        self.prefs.save();
+    fn rsp_status() -> Status {
+        Status {
+            serial: "210304DD98".into(),
+            tuner: "RSP1A".into(),
+            driver: "SDRplay".into(),
+            host: Some("172.16.0.216".into()),
+            gain_min_db: 0.0,
+            gain_max_db: 96.0,
+            gain_db: Some(22.0),
+            rates_hz: vec![250e3, 500e3, 1e6, 2e6, 5e6],
+            tune_min_hz: 1e3,
+            tune_max_hz: 2.2e9,
+            freq_hz: 146e6,
+            rate_hz: 2e6,
+            min_freq_hz: 145e6,
+            max_freq_hz: 147e6,
+            inspect_hz: 146.52e6,
+            zoom: 1.0,
+            bandwidth_hz: 12_500.0,
+            mode: Mode::Nfm,
+            bias_t: Some(true),
+            rf_notch: Some(false),
+            avg: Some("off".into()),
+            ..Default::default()
+        }
     }
 
-    fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
-        theme::ink().to_normalized_gamma_f32()
+    /// The whole window, connected to a server played by the test.
+    fn harness() -> Harness<'static, T> {
+        let ctx = egui::Context::default();
+        let mut prefs = Prefs::default();
+        prefs.auto_connect = false;
+        let mut app = App::build(&ctx, prefs, Player::silent(), None);
+        let (link, wire) = Link::wire();
+        app.link = Some(link);
+        wire.events.send(NetEvent::Connected(Box::new(rsp_status()))).unwrap();
+        let mut h = Harness::builder().with_size(egui::vec2(1600.0, 1000.0)).build_ui_state(
+            |ui, t: &mut T| {
+                let ctx = ui.ctx().clone();
+                if !t.ready {
+                    theme::install(&ctx, t.app.prefs.ground);
+                    t.ready = true;
+                    return;
+                }
+                t.app.tick(&ctx);
+                t.app.draw(ui);
+            },
+            T { app, wire, ready: false },
+        );
+        h.run_steps(3);
+        drain(&h);
+        h
+    }
+
+    /// The posts the app made since the last call, as (path, body).
+    fn drain(h: &Harness<'static, T>) -> Vec<(String, Value)> {
+        h.state()
+            .wire
+            .reqs
+            .try_iter()
+            .filter_map(|r| match r {
+                Req::Post { path, body, .. } | Req::PostGet { path, body, .. } => Some((path, body)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn mode_keys_post_the_mode() {
+        let mut h = harness();
+        h.get_by_label("WFM").click();
+        h.run_steps(2);
+        assert!(drain(&h).contains(&("/api/sdr/mode".into(), json!({ "mode": "wfm" }))));
+    }
+
+    #[test]
+    fn agc_key_hands_gain_to_the_loop_and_back() {
+        let mut h = harness();
+        h.get_by_label("AGC").click();
+        h.run_steps(2);
+        assert!(drain(&h).contains(&("/api/sdr/gain".into(), json!({ "gain_db": null }))));
+    }
+
+    #[test]
+    fn front_end_switches_post_their_own_field() {
+        let mut h = harness();
+        h.get_by_label("BIAS-T").scroll_to_me();
+        h.run_steps(3);
+        h.get_by_label("BIAS-T").click();
+        h.run_steps(2);
+        assert!(drain(&h).contains(&("/api/sdr/frontend".into(), json!({ "bias_t": false }))));
+    }
+
+    #[test]
+    fn averaging_posts_the_server_mode() {
+        let mut h = harness();
+        h.get_by_label("2 s").scroll_to_me();
+        h.run_steps(3);
+        h.get_by_label("2 s").click();
+        h.run_steps(2);
+        assert!(drain(&h).contains(&("/api/sdr/avg".into(), json!({ "mode": "deep" }))));
+    }
+
+    #[test]
+    fn storing_a_memory_shares_the_bank() {
+        let mut h = harness();
+        h.get_by_label("STORE").click();
+        h.run_steps(2);
+        h.get_by_label("WX").click();
+        h.run_steps(2);
+        let posts = drain(&h);
+        let (_, body) = posts.iter().find(|(p, _)| p == "/api/memories").expect("bank posted");
+        let wx = &body["memories"][3];
+        assert_eq!(wx["freq_hz"], json!(146_520_000.0));
+        assert_eq!(wx["mode"], json!("nfm"));
+        assert_eq!(body["memories"].as_array().unwrap().len(), 8);
+    }
+
+    #[test]
+    fn recalling_a_memory_tunes_and_switches_mode() {
+        let mut h = harness();
+        h.get_by_label("FM BC").click();
+        h.run_steps(2);
+        let posts = drain(&h);
+        assert!(posts.contains(&("/api/sdr/tune".into(), json!({ "freq_hz": 98_100_000.0 }))), "{posts:?}");
+        assert!(posts.contains(&("/api/sdr/inspect".into(), json!({ "freq_hz": 98_100_000.0 }))));
+        assert!(posts.contains(&("/api/sdr/mode".into(), json!({ "mode": "wfm" }))));
+    }
+
+    #[test]
+    fn tuning_inside_the_span_leaves_the_centre_alone() {
+        let mut h = harness();
+        h.state_mut().app.tune(146.3e6, false);
+        let posts = drain(&h);
+        assert_eq!(posts, vec![("/api/sdr/inspect".into(), json!({ "freq_hz": 146.3e6 }))]);
+        assert_eq!(h.state().app.inspect_hz(), 146.3e6);
+    }
+
+    #[test]
+    fn starting_a_scan_sends_the_range_then_the_mode() {
+        let mut h = harness();
+        h.state_mut().app.dock_tab = DockTab::Scan;
+        h.run_steps(2);
+        h.get_by_label("Start scan").click();
+        h.run_steps(2);
+        let posts = drain(&h);
+        let i = posts.iter().position(|(p, _)| p == "/api/sdr/scan/config").expect("config");
+        let j = posts.iter().position(|(p, b)| p == "/api/sdr/mode" && b["mode"] == "scan").expect("mode");
+        assert!(i < j);
+        assert_eq!(posts[i].1["start_hz"], json!(450e6));
+    }
+
+    #[test]
+    fn a_refused_change_says_who_has_the_receiver() {
+        let mut h = harness();
+        h.state().wire.events.send(NetEvent::Refused("uSDR desktop on bench has the receiver".into())).unwrap();
+        h.run_steps(2);
+        assert!(h.state().app.toasts.iter().any(|t| t.text.contains("bench")));
+    }
+
+    #[test]
+    fn display_width_reaches_the_server_once_it_settles() {
+        let mut h = harness();
+        for _ in 0..40 {
+            h.run_steps(1);
+            std::thread::sleep(Duration::from_millis(15));
+        }
+        let posts = drain(&h);
+        let bins: Vec<&Value> = posts.iter().filter(|(p, _)| p == "/api/sdr/display").map(|(_, b)| b).collect();
+        assert_eq!(bins.len(), 1, "{posts:?}");
+        assert!(bins[0]["bins"].as_u64().unwrap() > 500);
     }
 }

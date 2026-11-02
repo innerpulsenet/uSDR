@@ -116,6 +116,9 @@ pub struct Panafall {
     menu_hz: f64,
     pub hover_hz: Option<f64>,
     pub last_frame: Option<Instant>,
+    /// Where the panadapter, waterfall, frequency axis and dB scale were
+    /// drawn last frame.
+    pub regions: Option<[Rect; 4]>,
 }
 
 impl Default for Panafall {
@@ -154,6 +157,7 @@ impl Default for Panafall {
             menu_hz: 0.0,
             hover_hz: None,
             last_frame: None,
+            regions: None,
         }
     }
 }
@@ -433,6 +437,7 @@ impl Panafall {
         let wf = Rect::from_min_max(pos2(full.left(), split_y + axis_h), pos2(full.right() - db_w, full.bottom()));
         let time_axis = Rect::from_min_max(pos2(full.right() - db_w, split_y + axis_h), full.max);
         let painter = ui.painter_at(full);
+        self.regions = Some([pan, wf, axis, db_axis]);
 
         // ---- backgrounds
         painter.rect_filled(full, CornerRadius::ZERO, theme::ink());
@@ -810,7 +815,8 @@ impl Panafall {
                 view.ceiling_db = self.max_db;
                 view.auto_range = false;
             }
-            self.db_drag = Some((db_resp.interact_pointer_pos().map_or(0.0, |p| p.y), view.floor_db, view.ceiling_db));
+            let y0 = ui.input(|i| i.pointer.press_origin()).or(db_resp.interact_pointer_pos()).map_or(0.0, |p| p.y);
+            self.db_drag = Some((y0, view.floor_db, view.ceiling_db));
         }
         if let (Some((y0, f0, c0)), Some(p)) = (self.db_drag, db_resp.interact_pointer_pos())
             && db_resp.dragged()
@@ -899,7 +905,12 @@ impl Panafall {
             // Drag the display to move the span (or, zoomed in, the receiver
             // the zoomed window follows).
             if resp.drag_started() {
-                let x = resp.interact_pointer_pos().map_or(0.0, |p| p.x);
+                // From where the button went down, not where egui decided a
+                // drag had begun a few pixels later.
+                let x = ui
+                    .input(|i| i.pointer.press_origin())
+                    .or(resp.interact_pointer_pos())
+                    .map_or(0.0, |p| p.x);
                 self.drag_origin = Some((if status.zoom > 1.01 { inspect } else { self.center_hz }, x));
             }
             if let (Some((origin, x0)), Some(p)) = (self.drag_origin, resp.interact_pointer_pos())
@@ -1081,5 +1092,171 @@ impl SliceFlag {
         if self.recording {
             painter.circle_filled(pos2(r.right() - 10.0, r.bottom() - 10.0), 4.0, theme::EMBER);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use egui::{Event, Modifiers, PointerButton, TouchPhase};
+    use egui_kittest::Harness;
+
+    struct T {
+        pan: Panafall,
+        view: View,
+        status: Status,
+        frame: FftFrame,
+        acts: Vec<Act>,
+        ready: bool,
+    }
+
+    /// A 2 MHz span at 146 MHz, NFM, flat noise with one carrier.
+    fn harness() -> Harness<'static, T> {
+        let mut pwr = vec![-100.0f32; 1024];
+        pwr[700] = -40.0;
+        let frame = FftFrame { center_hz: 146e6, rate_hz: 2e6, inspect_hz: 146.2e6, pwr, ..Default::default() };
+        let status = Status {
+            freq_hz: 146e6,
+            rate_hz: 2e6,
+            inspect_hz: 146.2e6,
+            bandwidth_hz: 12_500.0,
+            zoom: 1.0,
+            mode: usdr_proto::Mode::Nfm,
+            ..Default::default()
+        };
+        let mut pan = Panafall::default();
+        pan.push(&frame, &View::default(), 0.0);
+        let state = T { pan, view: View::default(), status, frame, acts: Vec::new(), ready: false };
+        let mut h = Harness::builder().with_size(egui::vec2(1000.0, 600.0)).build_ui_state(
+            |ui, t: &mut T| {
+                // The named font families exist from the frame after this.
+                if !t.ready {
+                    crate::theme::install(ui.ctx(), crate::theme::Ground::Carbon);
+                    t.ready = true;
+                    return;
+                }
+                let flag = SliceFlag::default();
+                t.pan.ui(ui, &t.status, Some(&t.frame), &mut t.view, &flag, 6_250.0, true, &mut t.acts);
+            },
+            state,
+        );
+        h.run_steps(2);
+        h
+    }
+
+    fn pan_rect(h: &Harness<'static, T>) -> Rect {
+        h.state().pan.regions.expect("drawn")[0]
+    }
+
+    fn x_of(r: Rect, hz: f64) -> f32 {
+        r.left() + ((hz - 145e6) / 2e6) as f32 * r.width()
+    }
+
+    fn click(h: &mut Harness<'static, T>, p: Pos2, modifiers: Modifiers) {
+        h.event(Event::PointerMoved(p));
+        h.event_modifiers(Event::PointerButton { pos: p, button: PointerButton::Primary, pressed: true, modifiers }, modifiers);
+        h.event_modifiers(Event::PointerButton { pos: p, button: PointerButton::Primary, pressed: false, modifiers }, modifiers);
+        h.run_steps(2);
+    }
+
+    fn wheel(h: &mut Harness<'static, T>, p: Pos2, notches: f32, modifiers: Modifiers) {
+        h.event(Event::PointerMoved(p));
+        h.run_steps(1);
+        h.event_modifiers(
+            Event::MouseWheel { unit: egui::MouseWheelUnit::Line, delta: egui::vec2(0.0, notches), phase: TouchPhase::Move, modifiers },
+            modifiers,
+        );
+        h.run_steps(1);
+    }
+
+    #[test]
+    fn click_tunes_snapped_to_the_raster() {
+        let mut h = harness();
+        let r = pan_rect(&h);
+        // A little above 145.5 MHz; the NFM raster puts it on 145.500.
+        let p = pos2(x_of(r, 145.501e6), r.center().y);
+        click(&mut h, p, Modifiers::NONE);
+        assert_eq!(h.state().acts.first(), Some(&Act::Tune { hz: 145.5e6, lock: false }));
+    }
+
+    #[test]
+    fn alt_click_tunes_off_the_raster() {
+        let mut h = harness();
+        let r = pan_rect(&h);
+        click(&mut h, pos2(x_of(r, 145.5031e6), r.center().y), Modifiers::ALT);
+        let Some(Act::Tune { hz, lock: false }) = h.state().acts.first().cloned() else { panic!("{:?}", h.state().acts) };
+        assert!((hz - 145.5031e6).abs() < 2_500.0 && (hz / 6_250.0).fract() != 0.0);
+    }
+
+    #[test]
+    fn shift_click_moves_the_span_only() {
+        let mut h = harness();
+        let r = pan_rect(&h);
+        click(&mut h, pos2(x_of(r, 145.75e6), r.center().y), Modifiers::SHIFT);
+        assert_eq!(h.state().acts.first(), Some(&Act::Center(145.75e6)));
+    }
+
+    #[test]
+    fn wheel_tunes_by_the_step_and_recentres() {
+        let mut h = harness();
+        let r = pan_rect(&h);
+        wheel(&mut h, r.center(), 2.0, Modifiers::NONE);
+        assert_eq!(h.state().acts, vec![Act::Tune { hz: 146.2e6 + 12_500.0, lock: true }]);
+    }
+
+    #[test]
+    fn ctrl_wheel_zooms() {
+        let mut h = harness();
+        let r = pan_rect(&h);
+        wheel(&mut h, r.center(), 4.0, Modifiers::COMMAND);
+        assert_eq!(h.state().acts, vec![Act::Zoom(2.0)]);
+    }
+
+    #[test]
+    fn dragging_the_display_pans_the_span() {
+        let mut h = harness();
+        let r = pan_rect(&h);
+        let a = r.center();
+        h.event(Event::PointerMoved(a));
+        h.drag_at(a);
+        h.run_steps(1);
+        // A tenth of the width to the right: the span moves down by a tenth.
+        for i in 1..=10 {
+            h.event(Event::PointerMoved(a + egui::vec2(r.width() * 0.01 * i as f32, 0.0)));
+            h.run_steps(1);
+        }
+        h.drop_at(a + egui::vec2(r.width() * 0.1, 0.0));
+        h.run_steps(2);
+        let Some(Act::Center(c)) = h.state().acts.last().cloned() else { panic!("{:?}", h.state().acts) };
+        assert!((c - (146e6 - 0.2e6)).abs() < 5_000.0, "centre {c}");
+    }
+
+    #[test]
+    fn wheel_on_the_db_scale_takes_the_range_off_auto() {
+        let mut h = harness();
+        let db = h.state().pan.regions.unwrap()[3];
+        assert!(h.state().view.auto_range);
+        wheel(&mut h, db.center(), 1.0, Modifiers::NONE);
+        assert!(!h.state().view.auto_range);
+        assert!(h.state().acts.is_empty(), "the dB scale never tunes");
+    }
+
+    #[test]
+    fn waterfall_keeps_its_history_across_a_retune() {
+        let mut pan = Panafall::default();
+        let view = View::default();
+        let mut pwr = vec![-100.0f32; 1024];
+        pwr[512] = -30.0;
+        let f = FftFrame { center_hz: 100e6, rate_hz: 1e6, pwr: pwr.clone(), ..Default::default() };
+        pan.push(&f, &view, 0.0);
+        // The span moves up a quarter: the carrier's old row slides left by
+        // a quarter of the columns instead of the history being blanked.
+        let g = FftFrame { center_hz: 100.25e6, ..f };
+        pan.push(&g, &view, 0.04);
+        let cols = pan.wf_cols;
+        let older = (pan.wf_head + 1) % WF_ROWS;
+        let row = &pan.wf_db[older * cols..(older + 1) * cols];
+        let hot = row.iter().enumerate().max_by(|a, b| a.1.total_cmp(b.1)).unwrap().0;
+        assert!((hot as i64 - 256).abs() <= 2, "carrier now at column {hot}");
     }
 }

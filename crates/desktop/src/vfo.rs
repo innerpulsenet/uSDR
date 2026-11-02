@@ -23,12 +23,14 @@ pub struct Vfo {
     focus_entry: bool,
     scroll_accum: f32,
     pub open_entry_request: bool,
+    /// Where each digit was drawn last frame, GHz first.
+    pub cells: Vec<Rect>,
 }
 
 impl Default for Vfo {
     fn default() -> Self {
         // The 10 kHz digit.
-        Self { selected: 5, entry: None, focus_entry: false, scroll_accum: 0.0, open_entry_request: false }
+        Self { selected: 5, entry: None, focus_entry: false, scroll_accum: 0.0, open_entry_request: false, cells: Vec::new() }
     }
 }
 
@@ -99,6 +101,7 @@ impl Vfo {
         let first_sig = s.find(|c: char| c != '0').unwrap_or(DIGITS - 1).min(3);
         let mut x = rect.left();
         let mut hovered_digit = None;
+        self.cells.clear();
         let pointer = resp.hover_pos();
         for (i, ch) in s.chars().enumerate() {
             if i == 1 || i == 4 || i == 7 {
@@ -114,6 +117,7 @@ impl Vfo {
             }
             let w = widths[i];
             let cell = Rect::from_min_max(pos2(x, rect.top()), pos2(x + w, rect.bottom()));
+            self.cells.push(cell);
             let hot = pointer.is_some_and(|p| cell.contains(p));
             if hot {
                 hovered_digit = Some(i);
@@ -185,4 +189,97 @@ pub fn readout(ui: &mut Ui, label: &str, value: &str, color: egui::Color32) {
         ui.label(egui::RichText::new(value).font(theme::mono_bold(12.5)).color(color));
     });
     let _ = Stroke::NONE;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use egui::{Event, Modifiers, PointerButton, TouchPhase};
+    use egui_kittest::Harness;
+
+    struct T {
+        vfo: Vfo,
+        hz: f64,
+        acts: Vec<VfoAct>,
+        ready: bool,
+    }
+
+    fn harness(hz: f64) -> Harness<'static, T> {
+        let mut h = Harness::builder().with_size(egui::vec2(600.0, 120.0)).build_ui_state(
+            |ui, t: &mut T| {
+                if !t.ready {
+                    crate::theme::install(ui.ctx(), crate::theme::Ground::Carbon);
+                    t.ready = true;
+                    return;
+                }
+                let hz = t.hz;
+                t.vfo.ui(ui, hz, 46.0, &mut t.acts);
+            },
+            T { vfo: Vfo::default(), hz, acts: Vec::new(), ready: false },
+        );
+        h.run_steps(2);
+        h
+    }
+
+    fn steps(h: &Harness<'static, T>) -> Vec<f64> {
+        h.state().acts.iter().map(|a| match a {
+            VfoAct::Step(d) => *d,
+            VfoAct::Set(v) => *v,
+        }).collect()
+    }
+
+    #[test]
+    fn wheel_turns_the_digit_under_the_pointer() {
+        let mut h = harness(146.52e6);
+        // Digit 4 is the 1 MHz digit (G MMM: indices 0..3, then 100 kHz at 4).
+        let c = h.state().vfo.cells[3].center();
+        h.event(Event::PointerMoved(c));
+        h.run_steps(1);
+        h.event(Event::MouseWheel { unit: egui::MouseWheelUnit::Line, delta: egui::vec2(0.0, -1.0), phase: TouchPhase::Move, modifiers: Modifiers::NONE });
+        h.run_steps(1);
+        assert_eq!(steps(&h), vec![-1e6]);
+        assert_eq!(h.state().vfo.selected, 3);
+    }
+
+    #[test]
+    fn upper_half_adds_and_lower_half_takes_away() {
+        let mut h = harness(146.52e6);
+        let cell = h.state().vfo.cells[5];
+        for (y, _) in [(cell.top() + 6.0, 1), (cell.bottom() - 6.0, -1)] {
+            let p = egui::pos2(cell.center().x, y);
+            h.event(Event::PointerMoved(p));
+            h.event(Event::PointerButton { pos: p, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+            h.event(Event::PointerButton { pos: p, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+            h.run_steps(1);
+            // Let the double-click window lapse between the two clicks.
+            h.state_mut().vfo.cells.clear();
+            h.run_steps(1);
+            std::thread::sleep(std::time::Duration::from_millis(400));
+        }
+        assert_eq!(steps(&h), vec![10_000.0, -10_000.0]);
+    }
+
+    #[test]
+    fn typed_entry_sets_the_frequency() {
+        let mut h = harness(146.52e6);
+        h.state_mut().vfo.open_entry(146.52e6, Some(String::new()));
+        h.run_steps(2);
+        h.event(Event::Text("7.2m".into()));
+        h.run_steps(1);
+        h.key_press(egui::Key::Enter);
+        h.run_steps(2);
+        assert_eq!(steps(&h), vec![7.2e6]);
+        assert!(!h.state().vfo.editing());
+    }
+
+    #[test]
+    fn escape_cancels_entry() {
+        let mut h = harness(146.52e6);
+        h.state_mut().vfo.open_entry(146.52e6, None);
+        h.run_steps(2);
+        h.key_press(egui::Key::Escape);
+        h.run_steps(2);
+        assert!(steps(&h).is_empty());
+        assert!(!h.state().vfo.editing());
+    }
 }

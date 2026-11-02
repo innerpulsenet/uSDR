@@ -80,6 +80,8 @@ pub fn key_sized(ui: &mut Ui, label: &str, on: bool, tally: Color32, size: egui:
     let galley = ui.painter().layout_no_wrap(label.to_string(), theme::sans_semibold(11.5), Color32::PLACEHOLDER);
     let w = if size.x > 0.0 { size.x } else { galley.size().x + 30.0 };
     let (rect, resp) = ui.allocate_exact_size(vec2(w, size.y), Sense::click());
+    let enabled = ui.is_enabled();
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, enabled, on, label));
     let t = ui.ctx().animate_bool_with_time(resp.id.with("on"), on, 0.18);
     let hover = ui.ctx().animate_bool_with_time(resp.id.with("hv"), resp.hovered(), 0.12);
     let bg = theme::lerp(theme::surface_3(), theme::surface_4(), hover.max(t * 0.6));
@@ -103,6 +105,8 @@ pub fn key_sized(ui: &mut Ui, label: &str, on: bool, tally: Color32, size: egui:
 pub fn action(ui: &mut Ui, label: &str) -> Response {
     let galley = ui.painter().layout_no_wrap(label.to_string(), theme::sans_semibold(11.5), Color32::PLACEHOLDER);
     let (rect, resp) = ui.allocate_exact_size(vec2(galley.size().x + 20.0, 26.0), Sense::click());
+    let enabled = ui.is_enabled();
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, label));
     let hover = ui.ctx().animate_bool_with_time(resp.id.with("hv"), resp.hovered(), 0.12);
     let p = ui.painter();
     let bg = if resp.is_pointer_button_down_on() { theme::surface_4() } else { theme::lerp(theme::surface_3(), theme::surface_4(), hover) };
@@ -116,6 +120,7 @@ pub fn action(ui: &mut Ui, label: &str) -> Response {
 pub fn primary(ui: &mut Ui, label: &str) -> Response {
     let galley = ui.painter().layout_no_wrap(label.to_uppercase(), theme::sans_semibold(12.0), Color32::WHITE);
     let (rect, resp) = ui.allocate_exact_size(vec2(galley.size().x + 32.0, 32.0), Sense::click());
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, label));
     let hover = ui.ctx().animate_bool_with_time(resp.id.with("hv"), resp.hovered(), 0.12);
     let p = ui.painter();
     p.rect_filled(rect, CornerRadius::same(theme::RADIUS), theme::lerp(theme::ACTION, theme::ACTION_HOVER, hover));
@@ -144,6 +149,8 @@ impl<F: Fn(f64) -> String> Fader<'_, F> {
         let w = ui.available_width();
         let h = if self.ticks.is_empty() { 34.0 } else { 46.0 };
         let (rect, resp) = ui.allocate_exact_size(vec2(w, h), Sense::click_and_drag());
+        let (enabled, value, label) = (self.enabled, *self.value, self.label);
+        resp.widget_info(|| egui::WidgetInfo::slider(enabled, value, label));
         let p = ui.painter();
         let a = if self.enabled { 1.0 } else { 0.5 };
         p.text(rect.left_top(), Align2::LEFT_TOP, self.label, theme::mono(10.0), alpha(theme::text_3(), a));
@@ -203,6 +210,26 @@ impl<F: Fn(f64) -> String> Fader<'_, F> {
                 }
             }
         }
+        // Keyboard: arrows step, Shift for the fine step, while focused.
+        if resp.has_focus() {
+            let (l, r, fine) = ui.input(|i| {
+                (
+                    i.key_pressed(egui::Key::ArrowLeft) || i.key_pressed(egui::Key::ArrowDown),
+                    i.key_pressed(egui::Key::ArrowRight) || i.key_pressed(egui::Key::ArrowUp),
+                    i.modifiers.shift,
+                )
+            });
+            let st = if fine { self.fine } else { self.step };
+            let d = if r { st } else if l { -st } else { 0.0 };
+            if d != 0.0 {
+                let v = (*self.value + d).clamp(self.min, self.max);
+                if (v - *self.value).abs() > 1e-9 {
+                    *self.value = v;
+                    changed = true;
+                }
+            }
+            p.rect_stroke(rect.expand(1.5), CornerRadius::same(theme::RADIUS), Stroke::new(1.0, theme::EMBER), egui::StrokeKind::Outside);
+        }
         let released = resp.drag_stopped();
         (changed, released)
     }
@@ -249,6 +276,7 @@ pub fn segmented(ui: &mut Ui, items: &[&str], selected: usize) -> Option<usize> 
     for (i, item) in items.iter().enumerate() {
         let r = Rect::from_min_size(pos2(rect.left() + i as f32 * cw, rect.top()), vec2(cw, rect.height()));
         let resp = ui.interact(r, id.with(i), Sense::click());
+        resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::RadioButton, true, i == selected, *item));
         let c = if i == selected { theme::AMBER } else if resp.hovered() { theme::text() } else { theme::text_2() };
         ui.painter().text(r.center(), Align2::CENTER_CENTER, *item, theme::mono(10.5), c);
         if resp.clicked() && i != selected {

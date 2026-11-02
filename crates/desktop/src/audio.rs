@@ -73,6 +73,24 @@ pub struct LevelReading {
 }
 
 impl Player {
+    /// A player with no sound card behind it: it queues and records but
+    /// plays nowhere. For tests and for machines without an output.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn silent() -> Arc<Player> {
+        Arc::new(Player {
+            shared: Arc::new(Mutex::new(Shared {
+                volume: 0.8,
+                priming: true,
+                in_rate: 48_000.0,
+                out_rate: 48_000.0,
+                ..Default::default()
+            })),
+            stream: Mutex::new(None),
+            device_name: Mutex::new("none".into()),
+            error: Mutex::new(None),
+        })
+    }
+
     pub fn new(device: Option<&str>) -> Arc<Player> {
         let p = Arc::new(Player {
             shared: Arc::new(Mutex::new(Shared {
