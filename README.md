@@ -498,10 +498,27 @@ returned 48 strong "signals", and the ones at the top all sat at the same
 With masking the same survey returns 6 candidates, and clicking one inspects a
 signal rather than noise.
 
-### LO offset (off by default)
+### LO offset (on by default for an SDRplay, off for an RTL-SDR)
 
-Parking the tuner off-centre so its DC spur falls outside the displayed window
-is the textbook next step, and here it is mostly not worth it.
+The plan depends on the radio. Until the operator sets `LO OFFSET` it follows
+the radio: on for an SDRplay, off for an RTL-SDR.
+
+**SDRplay (zero-IF).** The RSP has no fs/4 spur, only DC, and the DC is the
+problem: measured on the RSP1A at 5 MS/s, with its own DC correction on and
+the software blocker after it, the LO still sits on a steady hump 8–9 dB over
+the floor and 1 dB up 15 kHz out. With the LO on the channel, that hump rides
+along under whatever is tuned. So the LO is parked just past the channel —
+the passband's far edge plus 50 kHz, at least 100 kHz, at most 15% of the
+span — and everything else is shown: 4.8 MHz of a 5 MS/s span in NFM, 4.7 in
+WFM. Measured at the receive frequency after a retune, the excess over the
+floor falls from 8–9 dB to 0.0 ± 0.3 dB. The residue, now a fixed distance
+from the receive frequency, is notched out of the display like a spur. The
+software DC tracker also starts from the first block's mean after a retune
+instead of from zero.
+
+**RTL-SDR.** Parking the tuner off-centre so its DC spur falls outside the
+displayed window is the textbook next step, and here it is mostly not worth
+it.
 
 Offsetting by the obvious quarter-span lands the display centre straight on the
 RTL2832's own **±fs/4 spur**, which measured **11 dB** above the floor —

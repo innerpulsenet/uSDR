@@ -1501,6 +1501,11 @@ pub struct FrontEnd {
     fs: f64,
     dc: Complex32,
     dc_a: f32,
+    /// The DC estimate has been seeded from real samples. After a reset (a
+    /// retune, a reopen) the tuner's offset is a new value; tracking up to it
+    /// from zero through a 2 Hz pole took a few hundred milliseconds, and the
+    /// spike showed at the LO for all of them.
+    dc_seeded: bool,
     iq_fft: Arc<dyn Fft<f32>>,
     iq_ifft: Arc<dyn Fft<f32>>,
     iq_buf: Vec<Complex32>,
@@ -1561,6 +1566,7 @@ impl FrontEnd {
         Self {
             fs,
             dc: Complex32::new(0.0, 0.0),
+            dc_seeded: false,
             // ~2 Hz corner. Slow enough that it is a bias estimate rather
             // than a filter, so it cannot touch a signal even a few tens of
             // hertz off the LO — the region worth recovering in the first place.
@@ -1619,6 +1625,13 @@ impl FrontEnd {
     }
 
     pub fn process(&mut self, iq: &mut [Complex32]) {
+        // Start the tracker on the first block's mean instead of at zero, so
+        // the offset is removed from the first block after a reset.
+        if !self.dc_seeded && !iq.is_empty() {
+            let sum = iq.iter().fold(Complex32::new(0.0, 0.0), |a, &s| a + s);
+            self.dc = sum / iq.len() as f32;
+            self.dc_seeded = true;
+        }
         for s in iq.iter_mut() {
             // --- DC offset: track the mean and subtract it.
             self.dc += (*s - self.dc) * self.dc_a;

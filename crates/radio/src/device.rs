@@ -693,6 +693,16 @@ pub fn open(cfg: &DeviceConfig) -> Result<Device> {
             ));
         }
     }
+    // The driver's own DC correction, where it has one (SDRplay does: it
+    // removes the zero-IF offset before the samples leave the radio). The
+    // software blocker in FrontEnd still runs after it; this just leaves it
+    // less to do. An RTL module offers no such mode.
+    if dev.has_dc_offset_mode(Rx, 0).unwrap_or(false) {
+        match dev.set_dc_offset_mode(Rx, 0, true) {
+            Ok(()) => { let _ = log_tx.try_send(format!("{}: hardware DC correction on", cfg.serial)); }
+            Err(e) => { let _ = log_tx.try_send(format!("{}: hardware DC correction failed: {e}", cfg.serial)); }
+        }
+    }
     let _ = dev.write_setting("biasT_ctrl", if cfg.bias_t { "true" } else { "false" });
     if caps.bias_t && cfg.bias_t {
         let _ = log_tx.try_send(format!("{}: bias-T on", cfg.serial));

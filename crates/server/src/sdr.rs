@@ -415,8 +415,11 @@ pub struct SdrCfg {
     pub fft_size: usize,
     #[serde(default)]
     pub mode: SdrMode,
+    /// `None` until the operator chooses: the radio's LO plan then decides
+    /// (on for a zero-IF receiver, whose plan costs a few hundred kHz of
+    /// span; off for an RTL, whose costs 80% of it).
     #[serde(default)]
-    pub lo_offset: bool,
+    pub lo_offset: Option<bool>,
     #[serde(default)]
     pub clip_guard: bool,
     /// With automatic gain: the tuner's own AGC (VGA included) rather than
@@ -446,7 +449,7 @@ impl Default for SdrCfg {
             ppm: 0.0,
             fft_size: DEFAULT_FFT_SIZE,
             mode: SdrMode::default(),
-            lo_offset: false,
+            lo_offset: None,
             clip_guard: false,
             tuner_agc: false,
             scan: None,
@@ -1381,27 +1384,71 @@ pub fn replay_iq_wav(wav: &[u8], frequency_hz: f64) -> Result<ReplayResult> {
 /// full-span spectrum, whose bins are laid out around the hardware LO, so an
 /// active offset would shift every candidate by `rate * 0.125` and the slots
 /// would tune to empty air.
+/// Which LO-offset plan the open radio needs (see [`set_lo_plan`]).
+static LO_PLAN_ZERO_IF: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Pick the LO-offset plan for the radio just opened.
+///
+/// An RTL-SDR has a spur at ±fs/4 as well as DC, so its plan parks the
+/// window between the two and keeps only [`LO_USABLE_FRACTION`] of the span.
+/// A zero-IF receiver with no such spur (the SDRplay RSPs) only has to keep
+/// DC out of the channel: its plan parks the LO just past the channel and
+/// shows everything else, about 4.8 MHz of a 5 MS/s span instead of 1 MHz.
+fn set_lo_plan(caps: &scannerd_radio::Capabilities) {
+    let zero_if = caps.driver.to_ascii_lowercase().contains("sdrplay");
+    LO_PLAN_ZERO_IF.store(zero_if, std::sync::atomic::Ordering::Relaxed);
+}
+
+fn lo_plan_zero_if() -> bool {
+    LO_PLAN_ZERO_IF.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// The LO offset on the zero-IF plan: the passband's far edge plus 50 kHz,
+/// never under 100 kHz, never over 15% of the span (narrow spans give up
+/// more of their width; from 1 MS/s up the cap never binds). Measured on the
+/// RSP1A at 5 MS/s, the DC residue that survives both its own correction and
+/// the software blocker is a hump 8 dB over the floor at the LO and still
+/// 1 dB up 15 kHz out; anything nearer the LO than that is listened to
+/// through it.
+fn zero_if_offset(rate_hz: f64, mode: SdrMode) -> f64 {
+    let edge = f64::from(mode.bandwidth_hz()) / 2.0 + f64::from(mode.passband_offset_hz()).abs();
+    (edge + 50e3).max(100e3).min(rate_hz * 0.15)
+}
+
 fn lo_active(rate_hz: f64, on: bool, mode: SdrMode) -> bool {
-    on
-        && !matches!(mode, SdrMode::Scan)
-        && f64::from(mode.bandwidth_hz()) <= rate_hz * LO_USABLE_FRACTION / 3.0
+    if !on || matches!(mode, SdrMode::Scan) {
+        return false;
+    }
+    if lo_plan_zero_if() {
+        // DC must land outside the passband with room to spare.
+        let half = f64::from(mode.bandwidth_hz()) / 2.0 + f64::from(mode.passband_offset_hz()).abs();
+        zero_if_offset(rate_hz, mode) >= half + (rate_hz * 0.005).max(5e3)
+    } else {
+        f64::from(mode.bandwidth_hz()) <= rate_hz * LO_USABLE_FRACTION / 3.0
+    }
 }
 
 /// LO offset for a span, or zero when the offset is off or does not fit.
 fn lo_offset_for(rate_hz: f64, on: bool, mode: SdrMode) -> f64 {
-    if lo_active(rate_hz, on, mode) {
-        rate_hz * LO_OFFSET_FRACTION
-    } else {
+    if !lo_active(rate_hz, on, mode) {
         0.0
+    } else if lo_plan_zero_if() {
+        zero_if_offset(rate_hz, mode)
+    } else {
+        rate_hz * LO_OFFSET_FRACTION
     }
 }
 
-/// The span actually shown, which shrinks when the LO is parked off-centre.
+/// The span actually shown, which shrinks when the LO is parked off-centre:
+/// centered on the receive frequency, it can only reach as far as the
+/// nearer edge of the sampled band.
 fn display_rate_for(rate_hz: f64, lo_on: bool, mode: SdrMode) -> f64 {
-    if lo_active(rate_hz, lo_on, mode) {
-        rate_hz * LO_USABLE_FRACTION
-    } else {
+    if !lo_active(rate_hz, lo_on, mode) {
         rate_hz
+    } else if lo_plan_zero_if() {
+        rate_hz - 2.0 * zero_if_offset(rate_hz, mode)
+    } else {
+        rate_hz * LO_USABLE_FRACTION
     }
 }
 
@@ -1426,13 +1473,21 @@ fn where_searched(remotes: &[String]) -> String {
 /// Opens the radio with `serial`, or the first one found: local dongles
 /// first, then each remote. Returns the device, its serial and tuner name,
 /// and the host it is on when remote.
+/// The LO-offset setting as the opener needs it: whether the operator has
+/// chosen (if not, the radio's plan decides and the choice is written back).
+struct LoRequest<'a> {
+    on: &'a mut bool,
+    chosen: bool,
+    mode: SdrMode,
+}
+
 fn open_sdr(
     remotes: &[String],
     serial: Option<&str>,
     freq_hz: f64,
     rate_hz: f64,
     gain_db: Option<f64>,
-    lo_offset_hz: f64,
+    lo: LoRequest<'_>,
     notches: Notches,
 ) -> Result<(Device, String, String, Option<String>)> {
     let all = device::enumerate(remotes)?;
@@ -1446,6 +1501,13 @@ fn open_sdr(
     } else {
         all.first().unwrap()
     };
+    // The LO plan belongs to the radio, so it is settled before the first
+    // tune: RTL dongles are local, SDRplay receivers are reached remotely.
+    LO_PLAN_ZERO_IF.store(info.remote.is_some(), std::sync::atomic::Ordering::Relaxed);
+    if !lo.chosen {
+        *lo.on = lo_plan_zero_if();
+    }
+    let lo_offset_hz = lo_offset_for(rate_hz, *lo.on, lo.mode);
     let mut cfg = DeviceConfig::new(&info.serial, freq_hz + lo_offset_hz, rate_hz);
     cfg.gain = gain_db;
     let cal = config::load().unwrap_or_default();
@@ -1457,7 +1519,7 @@ fn open_sdr(
     // With the LO parked off-centre the analog IF has to reach past the
     // offset, or the tuner filters away the half of the span it was moved
     // toward. Zero asks the driver for its widest.
-    cfg.cover_hz = if lo_offset_hz != 0.0 {
+    cfg.cover_hz = if lo_offset_hz != 0.0 && !lo_plan_zero_if() {
         scannerd_radio::cover_hz_offset(lo_offset_hz, rate_hz * LO_USABLE_FRACTION)
     } else {
         0.0
@@ -1506,6 +1568,7 @@ fn tune_bounds(caps: &scannerd_radio::Capabilities) -> (f64, f64) {
 /// Gain range and the front-end switches follow with the device's first
 /// state report.
 fn describe_radio(s: &mut SdrStatus, dev: &Device, host: Option<String>) {
+    set_lo_plan(&dev.caps);
     s.driver = dev.caps.driver.clone();
     s.host = host;
     s.rates_hz = span_rates(&dev.caps);
@@ -2912,7 +2975,8 @@ fn run_sdr(
     // second one. Believing the request is how the display ends up insisting
     // a station is at 99.1 while the radio is still sitting on 100.
     let mut tuned_freq;
-    let mut lo_offset = cfg.lo_offset;
+    let mut lo_offset_chosen = cfg.lo_offset.is_some();
+    let mut lo_offset = cfg.lo_offset.unwrap_or(false);
     let mut clip_guard_on = cfg.clip_guard;
     let mut tuner_agc_on = cfg.tuner_agc;
     let mut inspect_hz = current_freq;
@@ -2933,7 +2997,7 @@ fn run_sdr(
             current_freq,
             current_rate,
             current_gain,
-            lo_offset_for(current_rate, lo_offset, current_mode),
+            LoRequest { on: &mut lo_offset, chosen: lo_offset_chosen, mode: current_mode },
             notches,
         ) {
             Ok(opened) => break opened,
@@ -3660,6 +3724,7 @@ fn run_sdr(
                     }
                 }
                 SdrCmd::LoOffset(on) => {
+                    lo_offset_chosen = true;
                     if on != lo_offset {
                         lo_offset = on;
                         // The LO itself has to move, and only reopening the
@@ -3686,7 +3751,7 @@ fn run_sdr(
                             current_freq,
                             current_rate,
                             current_gain,
-                            lo_offset_for(current_rate, lo_offset, current_mode),
+                            LoRequest { on: &mut lo_offset, chosen: lo_offset_chosen, mode: current_mode },
                             notches,
                         )
                         {
@@ -3836,7 +3901,7 @@ fn run_sdr(
                 current_freq,
                 current_rate,
                 current_gain,
-                lo_offset_for(current_rate, lo_offset, current_mode),
+                LoRequest { on: &mut lo_offset, chosen: lo_offset_chosen, mode: current_mode },
                 notches,
             ) {
                 Ok((new_dev, s_serial, s_tuner, s_host)) => {
@@ -5757,10 +5822,24 @@ fn run_sdr(
             // wide whatever the span and FFT size are.
             let guard_hz = (shown_rate / shown_buf.len().max(1) as f64 * 3.0).max(4_000.0);
             notch_display(&mut shown_buf, shown_rate, &spurs, guard_hz);
+            // With the LO parked off the channel, its DC residue is a
+            // receiver artifact sitting in plain view a fixed distance from
+            // the receive frequency. Notch it for display like a spur. Never
+            // when the LO is not offset: DC is then the tuned frequency, and
+            // notching it would hide the very signal being received.
+            let dc_rel = tuned_freq + lo_off - shown_centre;
+            // The residue is a hump about ±15 kHz wide (see zero_if_offset).
+            let dc_guard = (shown_rate / shown_buf.len().max(1) as f64 * 1.5).max(15_000.0);
+            if lo_off != 0.0 {
+                notch_display(&mut shown_buf, shown_rate, &[dc_rel], dc_guard);
+            }
             let shown: &[f32] = &shown_buf;
             let wf_peak_shown: Vec<f32> = if pwr_peak.len() == n {
                 let mut v = pwr_peak[lo_bin..hi_bin.min(n)].to_vec();
                 notch_display(&mut v, shown_rate, &spurs, guard_hz);
+                if lo_off != 0.0 {
+                    notch_display(&mut v, shown_rate, &[dc_rel], dc_guard);
+                }
                 v
             } else {
                 Vec::new()
@@ -6139,6 +6218,25 @@ mod tests {
             assert_eq!(by(m).capture, &["iq"], "{m:?} captures channel I/Q only");
         }
         assert!(by(SdrMode::Wfm).capture.is_empty() && by(SdrMode::Pager).capture.is_empty());
+    }
+
+    #[test]
+    fn the_zero_if_lo_plan_keeps_dc_out_of_the_channel_and_most_of_the_span() {
+        LO_PLAN_ZERO_IF.store(true, Ordering::Relaxed);
+        for (mode, rate) in [(SdrMode::Nfm, 5e6), (SdrMode::Wfm, 5e6), (SdrMode::Usb, 2e6), (SdrMode::Nfm, 250e3)] {
+            assert!(lo_active(rate, true, mode), "{mode:?} at {rate}");
+            let off = lo_offset_for(rate, true, mode);
+            let edge = f64::from(mode.bandwidth_hz()) / 2.0 + f64::from(mode.passband_offset_hz()).abs();
+            assert!(off >= edge + 15e3, "{mode:?}: DC hump ({off} Hz) reaches the passband edge ({edge} Hz)");
+            let keep = if rate >= 1e6 { 0.8 } else { 0.65 };
+            assert!(display_rate_for(rate, true, mode) >= rate * keep, "{mode:?} at {rate} keeps most of the span");
+        }
+        assert_eq!(display_rate_for(5e6, true, SdrMode::Nfm), 4.8e6);
+        assert_eq!(display_rate_for(5e6, true, SdrMode::Wfm), 4.7e6);
+        LO_PLAN_ZERO_IF.store(false, Ordering::Relaxed);
+        // The RTL plan is unchanged: fs/8 offset, 20% of the span shown.
+        assert_eq!(lo_offset_for(2.4e6, true, SdrMode::Nfm), 300e3);
+        assert!((display_rate_for(2.4e6, true, SdrMode::Nfm) - 480e3).abs() < 1.0);
     }
 
     #[test]

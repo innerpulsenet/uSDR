@@ -261,7 +261,7 @@ async fn main() -> Result<()> {
         ppm: 0.0,
         fft_size: sdr::DEFAULT_FFT_SIZE,
         mode: settings.mode.unwrap_or_default(),
-        lo_offset: settings.lo_offset.unwrap_or(false),
+        lo_offset: settings.lo_offset,
         clip_guard: settings.clip_guard.unwrap_or(false),
         tuner_agc: settings.tuner_agc.unwrap_or(false),
         scan: settings.scan.clone(),
