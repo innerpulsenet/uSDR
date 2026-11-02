@@ -2216,6 +2216,19 @@
      fades in. Operators who ask for reduced motion get the same panel with
      the animation removed. The needle ballistics are driven by rAF, not CSS,
      and are left alone — they are the instrument, not the decoration. */
+  /* Desktop app presence: a chip beside the connection state, and a veil
+     over the controls while the page yields to the app. */
+  .presence-chip { display:none; margin-right:10px; padding:2px 8px; border-radius:3px;
+    border:1px solid rgba(255,179,71,.45); color:#ffb347; font:600 10px var(--mono);
+    letter-spacing:.08em; white-space:nowrap; }
+  .presence-chip.on { display:inline-block; }
+  .yield-veil { display:none; position:fixed; inset:0; z-index:50; background:rgba(6,9,13,.42);
+    align-items:flex-start; justify-content:center; padding-top:18vh; }
+  .yield-veil.on { display:flex; }
+  .yield-card { background:#10141a; border:1px solid #2a323b; border-radius:6px; padding:18px 22px;
+    max-width:440px; color:#e2eaf0; font:14px var(--sans); box-shadow:0 12px 32px rgba(0,0,0,.5); }
+  .yield-card b { color:#ffb347; }
+  .yield-card small { display:block; margin-top:8px; color:#768ea0; font-size:12px; }
   @media (prefers-reduced-motion: reduce) {
     *, *::before, *::after {
       animation-duration: 0.01ms !important;
@@ -2226,6 +2239,10 @@
 </style>
 </head>
 <body>
+<div class="yield-veil" id="yieldVeil" role="alertdialog" aria-live="polite">
+  <div class="yield-card"><b>uSDR desktop</b> on <span id="yieldName">another computer</span> has the receiver.
+    <small>This page follows along view-only while the app is connected. The app's Settings can share control again.</small></div>
+</div>
 <div class="wrap">
 
   <div class="rig">
@@ -2302,6 +2319,7 @@
         </div>
       </div>
       <div class="brand-status-cluster">
+        <span class="presence-chip" id="presenceChip" title=""></span>
         <div class="conn" id="conn">
           <span class="conn-beacon" id="connBeacon"></span>
           <span id="connText">connecting…</span>
@@ -4606,10 +4624,36 @@ function storeMemSlot(btn, idx) {
     freq: Number(b.dataset.freq), mode: b.dataset.mode, name: b.dataset.name,
   }));
   try { localStorage.setItem(MEM_STORE_KEY, JSON.stringify(slots)); } catch {}
+  // The server keeps the bank for every client, the desktop app included.
+  sdrPost('/api/memories', {
+    memories: slots.filter(m => m.freq > 0 && m.mode)
+      .map(m => ({ name: m.name || m.mode.toUpperCase(), freq_hz: m.freq, mode: m.mode })),
+  }, 'memory').catch(e => { $('err').textContent = 'memory: ' + e.message; });
   btn.classList.remove('stored');
   void btn.offsetWidth;            // restart the confirmation flash
   btn.classList.add('stored');
   setMemArmed(false);
+  updateBandPresetUi();
+}
+
+// The server's bank, when it has one, replaces this browser's own copy.
+function applyServerMemories(list) {
+  if (!Array.isArray(list)) return;
+  const modes = new Set([...document.querySelectorAll('.modebtn')].map(b => b.dataset.mode));
+  const btns = [...document.querySelectorAll('.band-btn')];
+  btns.forEach((btn, idx) => {
+    const m = list[idx];
+    if (!m || !(m.freq_hz > 0) || !modes.has(m.mode)) return;
+    btn.dataset.freq = String(Math.round(m.freq_hz));
+    btn.dataset.mode = m.mode;
+    btn.dataset.name = String(m.name || m.mode.toUpperCase()).slice(0, 8);
+    paintMemSlot(btn);
+  });
+  try {
+    localStorage.setItem(MEM_STORE_KEY, JSON.stringify(btns.map(b => ({
+      freq: Number(b.dataset.freq), mode: b.dataset.mode, name: b.dataset.name,
+    }))));
+  } catch {}
   updateBandPresetUi();
 }
 
@@ -7009,6 +7053,15 @@ function setupControls() {
   ];
   $('keyWfPeak')?.addEventListener('click', () => setWfPeak(!sdrWfPeak));
   $('keyWfPeak')?.classList.toggle('on', sdrWfPeak);
+  // Every client shows the server's averaging, not what it last sent.
+  window.usdrSyncAvg = (mode) => {
+    const i = AVG_MODES.findIndex(([m]) => m === mode);
+    if (i < 0 || i === avgIdx) return;
+    avgIdx = i;
+    const lbl = $('keyAvgLabel') || $('keyAvg');
+    if (lbl) lbl.textContent = AVG_MODES[i][1];
+    $('keyAvg').classList.toggle('on', mode !== 'off');
+  };
   $('keyAvg').addEventListener('click', () => {
     avgIdx = (avgIdx + 1) % AVG_MODES.length;
     const [mode, label] = AVG_MODES[avgIdx];
@@ -8501,7 +8554,7 @@ function connect() {
   try {
     const host = location.host || '127.0.0.1:8073';
     const proto = location.protocol === 'https:' ? 'wss://' : 'ws://';
-    ws = new WebSocket(proto + host + '/ws');
+    ws = new WebSocket(proto + host + '/ws?client=web');
   } catch (err) {
     console.warn('WebSocket connect error:', err);
     setTimeout(connect, 2000);
@@ -8544,7 +8597,11 @@ function connect() {
       return;
     }
     const m = JSON.parse(ev.data);
-    if (m.type === 'hello') {
+    if (m.type === 'presence') {
+      renderPresence(m);
+    } else if (m.type === 'memories') {
+      applyServerMemories(m.memories);
+    } else if (m.type === 'hello') {
       if (m.sdr) { updateSdrStatus(m.sdr); loadSdrDevices(); }
     } else if (m.type === 'fft') {
       onSdrFft(m);
@@ -8555,7 +8612,34 @@ function connect() {
     } else if (m.type === 'status' && m.freq_hz != null) {
       updateSdrStatus(m);
     }
+    if ((m.type === 'status' || m.type === 'hello') && window.usdrSyncAvg) {
+      const st = m.type === 'hello' ? m.sdr : m;
+      if (st && typeof st.avg === 'string') window.usdrSyncAvg(st.avg);
+    }
   };
+}
+
+// The desktop app shares this receiver: say so, and while the server makes
+// the page yield to it, veil the controls so nothing here pretends to work.
+function renderPresence(m) {
+  const desktops = (m.clients || []).filter(c => c.kind === 'desktop');
+  const chip = $('presenceChip');
+  const veil = $('yieldVeil');
+  const names = desktops.map(c => c.name || c.addr).join(', ');
+  if (chip) {
+    chip.classList.toggle('on', desktops.length > 0);
+    chip.textContent = desktops.length ? `⇄ DESKTOP · ${names}` : '';
+    chip.title = desktops.length
+      ? (m.web === 'yield' ? 'The desktop app has the receiver; this page is view-only'
+                           : 'The desktop app is connected; changes made there show here too')
+      : '';
+  }
+  if (veil) {
+    const on = desktops.length > 0 && m.web === 'yield';
+    veil.classList.toggle('on', on);
+    const n = $('yieldName');
+    if (n) n.textContent = names || 'another computer';
+  }
 }
 
 // Decode a 0x02 binary FFT frame into the same shape the JSON path produced.

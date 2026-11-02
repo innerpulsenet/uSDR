@@ -600,6 +600,9 @@ pub struct SdrStatus {
     /// Live FLEX decoder diagnostics when in FLEX mode.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub flex_diag: Option<scannerd_engine::flex::FlexDiagnostics>,
+    /// Display averaging: "off", "slow" or "deep".
+    #[serde(default)]
+    pub avg: String,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -1084,6 +1087,17 @@ pub enum AvgMode {
     Slow,
     /// ~2 s: for beacons and marginal carriers.
     Deeper,
+}
+
+impl AvgMode {
+    /// The name `/api/sdr/avg` takes and the status reports.
+    pub fn wire(self) -> &'static str {
+        match self {
+            AvgMode::Off => "off",
+            AvgMode::Slow => "slow",
+            AvgMode::Deeper => "deep",
+        }
+    }
 }
 
 impl Drop for SdrRuntime {
@@ -3067,6 +3081,7 @@ fn run_sdr(
             pager_live_hz: None,
             scan: None,
             flex_diag: None,
+            avg: AvgMode::Off.wire().into(),
             ..SdrStatus::default()
         };
         describe_radio(&mut s, &dev, host);
@@ -3623,6 +3638,11 @@ fn run_sdr(
                 }
                 SdrCmd::Avg(mode) => {
                     avg_mode = mode;
+                    // In the status so every client shows the same setting,
+                    // not whatever it last sent.
+                    let mut s = status.lock().unwrap();
+                    s.avg = mode.wire().to_string();
+                    let _ = events.send(SdrEvent::Status(s.clone()));
                 }
                 SdrCmd::Ppm(ppm) => {
                     if let Some(ref dev) = dev_opt {

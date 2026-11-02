@@ -74,6 +74,51 @@ struct Args {
     /// List the radios the drivers can see, then exit.
     #[arg(long)]
     devices: bool,
+    /// What the browser page may do: `shared` (works alongside the desktop
+    /// app), `yield` (view-only while the desktop app is connected) or `off`
+    /// (not served; the API stays up). Saved to the settings file.
+    #[arg(long, value_enum)]
+    web: Option<WebPolicy>,
+}
+
+/// What the browser page may do while the server runs. The desktop client
+/// sets this from its Settings; `--web` sets it from the command line.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize, clap::ValueEnum)]
+#[serde(rename_all = "lowercase")]
+enum WebPolicy {
+    /// The page and the desktop app both drive the receiver and both follow
+    /// the same state.
+    #[default]
+    Shared,
+    /// While a desktop client is connected the page is view-only and its
+    /// changes are refused.
+    Yield,
+    /// The page is not served at all.
+    Off,
+}
+
+/// A memory channel, shared by every client so a slot stored in the desktop
+/// app is the same slot in the browser.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct Memory {
+    name: String,
+    freq_hz: f64,
+    mode: sdr::SdrMode,
+}
+
+/// Most memory channels kept; the page shows eight, the desktop app more.
+const MEMORY_LIMIT: usize = 64;
+
+/// One websocket connection, as the presence list reports it.
+#[derive(Clone, Debug, Serialize)]
+struct ClientInfo {
+    id: u64,
+    /// `desktop` or `web`.
+    kind: &'static str,
+    name: String,
+    addr: String,
+    /// Seconds since the epoch at connect.
+    since: u64,
 }
 
 // ---------- persisted settings ----------
@@ -126,6 +171,12 @@ struct Settings {
     /// mode is `scan`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     scan: Option<scan::ScanCfg>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    web: Option<WebPolicy>,
+    /// Memory channels; `None` until a client first stores one, so each
+    /// client can offer its own defaults until then.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    memories: Option<Vec<Memory>>,
 }
 
 fn settings_path(explicit: Option<PathBuf>) -> Result<PathBuf> {
@@ -173,12 +224,41 @@ struct AppState {
     /// waterfall fires a REST call per step; serialising the TOML and hitting
     /// the disk on each one is wasted I/O, since only the last value matters.
     last_settings_write: std::sync::Mutex<Option<std::time::Instant>>,
+    /// Who is connected, by connection number.
+    clients: Mutex<std::collections::BTreeMap<u64, ClientInfo>>,
+    next_client: std::sync::atomic::AtomicU64,
+    /// Pre-serialized JSON for every socket: presence and memories.
+    meta: tokio::sync::broadcast::Sender<String>,
 }
 
 /// Minimum spacing between settings-file writes.
 const SETTINGS_WRITE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(2);
 
 impl AppState {
+    fn web_policy(&self) -> WebPolicy {
+        self.settings.lock().expect("settings").web.unwrap_or_default()
+    }
+
+    fn presence_json(&self) -> String {
+        let clients: Vec<ClientInfo> = self.clients.lock().expect("clients").values().cloned().collect();
+        serde_json::json!({ "type": "presence", "clients": clients, "web": self.web_policy() }).to_string()
+    }
+
+    fn memories_json(&self) -> String {
+        let m = self.settings.lock().expect("settings").memories.clone();
+        serde_json::json!({ "type": "memories", "memories": m }).to_string()
+    }
+
+    /// The desktop client that holds the receiver while the page yields.
+    fn desktop_holder(&self) -> Option<String> {
+        self.clients
+            .lock()
+            .expect("clients")
+            .values()
+            .find(|c| c.kind == "desktop")
+            .map(|c| c.name.clone())
+    }
+
     /// Record a browser-made change and put it on disk, at most one write per
     /// [`SETTINGS_WRITE_INTERVAL`], carrying whatever the latest state is. A
     /// failed write is worth saying out loud but is never worth failing the
@@ -252,6 +332,9 @@ async fn main() -> Result<()> {
     if args.gain.is_some() {
         settings.gain_db = args.gain;
     }
+    if args.web.is_some() {
+        settings.web = args.web;
+    }
 
     let cfg = sdr::SdrCfg {
         serial: settings.serial.clone(),
@@ -308,6 +391,9 @@ async fn main() -> Result<()> {
         p25_keys: Mutex::new(p25_keys),
         shutdown: Notify::new(),
         last_settings_write: std::sync::Mutex::new(None),
+        clients: Mutex::new(std::collections::BTreeMap::new()),
+        next_client: std::sync::atomic::AtomicU64::new(1),
+        meta: tokio::sync::broadcast::channel(16).0,
     });
 
     let app = Router::new()
@@ -341,7 +427,10 @@ async fn main() -> Result<()> {
             "/api/sdr/replay",
             post(post_sdr_replay).layer(DefaultBodyLimit::max(REPLAY_LIMIT_BYTES)),
         )
+        .route("/api/web", get(get_web).post(post_web))
+        .route("/api/memories", get(get_memories).post(post_memories))
         .route("/ws", get(ws_upgrade))
+        .layer(axum::middleware::from_fn_with_state(Arc::clone(&state), yield_guard))
         .with_state(Arc::clone(&state));
 
     let listener = tokio::net::TcpListener::bind(bind)
@@ -360,7 +449,7 @@ async fn main() -> Result<()> {
             eprintln!("TCP_NODELAY: {e}");
         }
     });
-    axum::serve(listener, app)
+    axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>())
         .with_graceful_shutdown(async move {
             let _ = tokio::signal::ctrl_c().await;
             println!("\nshutting down");
@@ -379,9 +468,99 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-async fn index() -> impl IntoResponse {
+async fn index(State(st): State<Arc<AppState>>) -> Response {
+    if st.web_policy() == WebPolicy::Off {
+        return (
+            StatusCode::NOT_FOUND,
+            [(header::CACHE_CONTROL, "no-store")],
+            Html(WEB_OFF_HTML),
+        )
+            .into_response();
+    }
     // Never let a browser keep an old client across a rebuild.
-    ([(header::CACHE_CONTROL, "no-store")], Html(INDEX_HTML))
+    ([(header::CACHE_CONTROL, "no-store")], Html(INDEX_HTML)).into_response()
+}
+
+const WEB_OFF_HTML: &str = "<!doctype html><meta charset=utf-8><title>uSDR</title>\
+<body style=\"background:#0a0908;color:#b0a99f;font:15px system-ui;display:grid;place-items:center;height:100vh;margin:0\">\
+<p>The web interface is turned off on this server.<br>Use the uSDR desktop app, or turn the page back on in its Settings.</p>";
+
+/// While the page yields to a connected desktop client, changes from
+/// anything that is not a desktop client are refused, so two operators never
+/// fight over one receiver. Reads, the stream and the page itself still work.
+async fn yield_guard(
+    State(st): State<Arc<AppState>>,
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Response {
+    if req.method() == axum::http::Method::POST && st.web_policy() == WebPolicy::Yield {
+        let from_desktop = req
+            .headers()
+            .get("x-usdr-client")
+            .and_then(|v| v.to_str().ok())
+            .is_some_and(|v| v.starts_with("desktop"));
+        if !from_desktop && let Some(name) = st.desktop_holder() {
+            return (
+                StatusCode::CONFLICT,
+                format!("uSDR desktop on {name} has the receiver; this page is view-only"),
+            )
+                .into_response();
+        }
+    }
+    next.run(req).await
+}
+
+async fn get_web(State(st): State<Arc<AppState>>) -> Json<serde_json::Value> {
+    let clients: Vec<ClientInfo> = st.clients.lock().expect("clients").values().cloned().collect();
+    Json(serde_json::json!({ "policy": st.web_policy(), "clients": clients }))
+}
+
+#[derive(Deserialize)]
+struct WebReq {
+    policy: WebPolicy,
+}
+
+async fn post_web(
+    State(st): State<Arc<AppState>>,
+    Json(req): Json<WebReq>,
+) -> Json<serde_json::Value> {
+    st.update_settings(|s| s.web = Some(req.policy));
+    let _ = st.meta.send(st.presence_json());
+    Json(serde_json::json!({ "ok": true, "policy": req.policy }))
+}
+
+async fn get_memories(State(st): State<Arc<AppState>>) -> Json<serde_json::Value> {
+    let m = st.settings.lock().expect("settings").memories.clone();
+    Json(serde_json::json!({ "memories": m }))
+}
+
+#[derive(Deserialize)]
+struct MemoriesReq {
+    memories: Vec<Memory>,
+}
+
+async fn post_memories(
+    State(st): State<Arc<AppState>>,
+    Json(req): Json<MemoriesReq>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    if req.memories.len() > MEMORY_LIMIT {
+        return Err(ApiError::BadRequest(format!("at most {MEMORY_LIMIT} memories")));
+    }
+    if req.memories.iter().any(|m| !m.freq_hz.is_finite() || m.freq_hz <= 0.0) {
+        return Err(ApiError::BadRequest("memory frequency must be positive".into()));
+    }
+    let memories: Vec<Memory> = req
+        .memories
+        .into_iter()
+        .map(|mut m| {
+            m.name = m.name.chars().filter(|c| !c.is_control()).take(24).collect();
+            m
+        })
+        .collect();
+    let count = memories.len();
+    st.update_settings(|s| s.memories = Some(memories));
+    let _ = st.meta.send(st.memories_json());
+    Ok(Json(serde_json::json!({ "ok": true, "count": count })))
 }
 
 #[derive(Serialize)]
@@ -1078,13 +1257,64 @@ async fn post_sdr_replay(
     Ok(Json(replay))
 }
 
-async fn ws_upgrade(ws: WebSocketUpgrade, State(st): State<Arc<AppState>>) -> Response {
-    ws.on_upgrade(move |socket| ws_client(socket, st))
+#[derive(Deserialize, Default)]
+#[serde(default)]
+struct WsQuery {
+    /// `desktop` for the desktop app; anything else is a browser.
+    client: Option<String>,
+    name: Option<String>,
 }
 
-async fn ws_client(mut socket: WebSocket, st: Arc<AppState>) {
+async fn ws_upgrade(
+    ws: WebSocketUpgrade,
+    State(st): State<Arc<AppState>>,
+    Query(q): Query<WsQuery>,
+    axum::extract::ConnectInfo(addr): axum::extract::ConnectInfo<SocketAddr>,
+) -> Response {
+    let desktop = q.client.as_deref() == Some("desktop");
+    if !desktop && st.web_policy() == WebPolicy::Off {
+        return (StatusCode::FORBIDDEN, "the web interface is turned off").into_response();
+    }
+    let info = ClientInfo {
+        id: st.next_client.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+        kind: if desktop { "desktop" } else { "web" },
+        name: q
+            .name
+            .unwrap_or_default()
+            .chars()
+            .filter(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '.' | '_' | ' '))
+            .take(64)
+            .collect(),
+        addr: addr.ip().to_string(),
+        since: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0),
+    };
+    ws.on_upgrade(move |socket| ws_client(socket, st, info))
+}
+
+/// Takes a client off the presence list however its socket ends.
+struct Registered {
+    st: Arc<AppState>,
+    id: u64,
+}
+
+impl Drop for Registered {
+    fn drop(&mut self) {
+        self.st.clients.lock().expect("clients").remove(&self.id);
+        let _ = self.st.meta.send(self.st.presence_json());
+    }
+}
+
+async fn ws_client(mut socket: WebSocket, st: Arc<AppState>, info: ClientInfo) {
     let mut sdr_ev = st.sdr_events.subscribe();
     let mut audio = st.audio.subscribe();
+    let mut meta = st.meta.subscribe();
+    let id = info.id;
+    st.clients.lock().expect("clients").insert(id, info);
+    let _registered = Registered { st: Arc::clone(&st), id };
+    let _ = st.meta.send(st.presence_json());
 
     // Describe what the client is looking at before anything starts streaming.
     let sdr_st = st
@@ -1101,6 +1331,11 @@ async fn ws_client(mut socket: WebSocket, st: Arc<AppState>) {
         .is_err()
     {
         return;
+    }
+    for text in [st.presence_json(), st.memories_json()] {
+        if socket.send(Message::Text(text.into())).await.is_err() {
+            return;
+        }
     }
 
     loop {
@@ -1155,6 +1390,16 @@ async fn ws_client(mut socket: WebSocket, st: Arc<AppState>) {
                 }
                 // Audio is a live monitor. A client that fell behind wants the
                 // present, not a backlog played late.
+                Err(RecvError::Lagged(_)) => continue,
+                Err(RecvError::Closed) => return,
+            },
+            text = meta.recv() => match text {
+                Ok(t) => {
+                    if socket.send(Message::Text(t.into())).await.is_err() {
+                        return;
+                    }
+                }
+                // Presence is a snapshot; the next one carries everything.
                 Err(RecvError::Lagged(_)) => continue,
                 Err(RecvError::Closed) => return,
             },
