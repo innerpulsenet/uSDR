@@ -253,8 +253,20 @@ impl Player {
     }
 }
 
-impl crate::net::AudioSink for Player {
-    fn push(&self, rate_hz: u32, samples: &[i16]) {
+/// The two receivers' players, each fed its own audio.
+pub struct Speakers {
+    pub a: Arc<Player>,
+    pub b: Arc<Player>,
+}
+
+impl crate::net::AudioSink for Speakers {
+    fn push(&self, rx: u8, rate_hz: u32, samples: &[i16]) {
+        if rx == 0 { &self.a } else { &self.b }.push(rate_hz, samples);
+    }
+}
+
+impl Player {
+    pub fn push(&self, rate_hz: u32, samples: &[i16]) {
         let mut s = self.shared.lock().unwrap();
         if rate_hz > 0 && (s.in_rate - rate_hz as f64).abs() > 0.5 {
             // A mode change: the queued audio is at the old rate.

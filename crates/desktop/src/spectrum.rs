@@ -30,6 +30,23 @@ pub enum Act {
     CopyFreq(f64),
     /// New passband edges, Hz from the carrier.
     Filter(f32, f32),
+    /// Make receiver A (0) or B (1) the one the gestures drive.
+    Select(u8),
+    /// Put receiver B here.
+    PlaceB(f64),
+}
+
+/// Receiver B as the display draws it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RxB {
+    pub freq_hz: f64,
+    pub mode: Mode,
+    pub bandwidth_hz: f64,
+    pub offset_hz: f64,
+    pub active: bool,
+    /// Channel power over its passband, dBFS, measured from the spectrum.
+    pub level: Option<f32>,
+    pub note: Option<String>,
 }
 
 /// Display preferences the panafall reads each frame.
@@ -125,6 +142,10 @@ pub struct Panafall {
     /// carrier; `None` where the mode or the server fixes it.
     pub filter: Option<(usdr_proto::FilterRange, f32, f32)>,
     edge_drag: Option<EdgeDrag>,
+    /// The second receiver, when one is listening.
+    pub rx_b: Option<RxB>,
+    /// Where each receiver's flag was drawn last frame (A, B), for clicks.
+    flags: [Option<Rect>; 2],
 }
 
 /// A passband edge being dragged, or (Ctrl) the whole passband shifted.
@@ -193,6 +214,8 @@ impl Default for Panafall {
             regions: None,
             filter: None,
             edge_drag: None,
+            rx_b: None,
+            flags: [None, None],
         }
     }
 }
@@ -802,7 +825,30 @@ impl Panafall {
 
         // ---- slice flag at the carrier
         if on_screen {
-            flag.paint(&painter, pan, ix, line_y_at(&line, ix).unwrap_or(pan.center().y));
+            let active_a = !self.rx_b.as_ref().is_some_and(|b| b.active);
+            self.flags[0] = Some(flag.paint(&painter, pan, ix, line_y_at(&line, ix).unwrap_or(pan.center().y), active_a));
+        } else {
+            self.flags[0] = None;
+        }
+        self.flags[1] = None;
+        if let Some(b) = self.rx_b.clone() {
+            let bx = self.x_for(b.freq_hz, pan);
+            if bx >= pan.left() && bx <= pan.right() {
+                let c = b.offset_hz + b.freq_hz;
+                let x0 = self.x_for(c - b.bandwidth_hz / 2.0, pan);
+                let x1 = self.x_for(c + b.bandwidth_hz / 2.0, pan);
+                let band = Rect::from_min_max(pos2(x0.max(pan.left()), pan.top()), pos2(x1.min(pan.right()), pan.bottom()));
+                painter.rect_filled(band, CornerRadius::ZERO, alpha(theme::VIOLET, if b.active { 0.12 } else { 0.07 }));
+                let wf_band = Rect::from_min_max(pos2(x0.max(wf.left()), wf.top()), pos2(x1.min(wf.right()), wf.bottom()));
+                painter.rect_filled(wf_band, CornerRadius::ZERO, alpha(theme::VIOLET, 0.035));
+                painter.line_segment([pos2(bx, pan.top()), pos2(bx, pan.bottom())], Stroke::new(1.4, theme::VIOLET));
+                painter.add(Shape::convex_polygon(
+                    vec![pos2(bx - 6.0, axis.top()), pos2(bx + 6.0, axis.top()), pos2(bx, axis.top() + 7.0)],
+                    theme::VIOLET,
+                    Stroke::NONE,
+                ));
+                self.flags[1] = Some(paint_b_flag(&painter, pan, bx, &b));
+            }
         }
 
         // ---- interaction
@@ -918,7 +964,8 @@ impl Panafall {
                         acts.push(Act::Zoom(z));
                     } else {
                         let step = if alt { self.span_hz / 10.0 } else { step_hz };
-                        let target = inspect + notches as f64 * step;
+                        let base = self.rx_b.as_ref().filter(|b| b.active).map_or(inspect, |b| b.freq_hz);
+                        let target = base + notches as f64 * step;
                         let hz = if alt { target.round() } else { crate::tuning::snap(target, step) };
                         acts.push(Act::Tune { hz, lock: true });
                     }
@@ -1033,9 +1080,22 @@ impl Panafall {
         }
 
         // Clicks.
-        if let Some(p) = resp.interact_pointer_pos().filter(|p| in_area(*p)) {
+        let on_flag = resp
+            .interact_pointer_pos()
+            .and_then(|p| self.flags.iter().position(|f| f.is_some_and(|r| r.contains(p))));
+        if let Some(i) = on_flag {
+            if resp.clicked() {
+                acts.push(Act::Select(i as u8));
+            }
+            if resp.hovered() {
+                ctx.set_cursor_icon(egui::CursorIcon::PointingHand);
+            }
+        } else if let Some(p) = resp.interact_pointer_pos().filter(|p| in_area(*p)) {
             let hz = self.hz_for(p.x, pan);
             let landing = if alt { hz.round() } else { crate::tuning::snap(hz, step_hz) };
+            if resp.middle_clicked() {
+                acts.push(Act::PlaceB(landing));
+            }
             if resp.double_clicked() {
                 acts.push(Act::Tune { hz: landing, lock: true });
             } else if resp.clicked() && !self.sql_drag {
@@ -1059,6 +1119,10 @@ impl Panafall {
             }
             if ui.button("Tune and center").clicked() {
                 acts.push(Act::Tune { hz: menu_hz, lock: true });
+                ui.close();
+            }
+            if ui.button("Put receiver B here").clicked() {
+                acts.push(Act::PlaceB(menu_hz));
                 ui.close();
             }
             if ui.button("Center the span here").clicked() {
@@ -1152,7 +1216,7 @@ pub struct SliceFlag {
 }
 
 impl SliceFlag {
-    fn paint(&self, painter: &egui::Painter, pan: Rect, x: f32, trace_y: f32) {
+    fn paint(&self, painter: &egui::Painter, pan: Rect, x: f32, trace_y: f32, active: bool) -> Rect {
         let w = 168.0;
         let h = 62.0;
         let right_side = x + 10.0 + w < pan.right() - 4.0;
@@ -1163,7 +1227,10 @@ impl SliceFlag {
         painter.rect(r, CornerRadius::same(4), alpha(theme::surface_2(), 0.93), Stroke::new(1.0, alpha(theme::AMBER, 0.45)), egui::StrokeKind::Inside);
         theme::glass(painter, r);
         // The index tick: the active receiver.
-        painter.rect_filled(Rect::from_min_size(r.left_top(), vec2(16.0, 2.0)), CornerRadius::ZERO, theme::EMBER);
+        if active {
+            painter.rect_filled(Rect::from_min_size(r.left_top(), vec2(16.0, 2.0)), CornerRadius::ZERO, theme::EMBER);
+        }
+        painter.text(r.right_bottom() + vec2(-8.0, -6.0), Align2::RIGHT_BOTTOM, "A", theme::mono_bold(10.0), theme::text_3());
         let anchor_x = if right_side { r.left() } else { r.right() };
         painter.line_segment([pos2(x, r.top() + 14.0), pos2(anchor_x, r.top() + 14.0)], Stroke::new(1.0, alpha(theme::AMBER, 0.5)));
         painter.text(r.left_top() + vec2(8.0, 7.0), Align2::LEFT_TOP, crate::tuning::fmt_mhz(self.freq_hz, 4), theme::mono_bold(14.0), theme::text());
@@ -1184,9 +1251,42 @@ impl SliceFlag {
         };
         painter.text(r.left_top() + vec2(8.0, 44.0), Align2::LEFT_TOP, bottom, theme::sans(11.0), theme::text_2());
         if self.recording {
-            painter.circle_filled(pos2(r.right() - 10.0, r.bottom() - 10.0), 4.0, theme::EMBER);
+            painter.circle_filled(pos2(r.right() - 22.0, r.bottom() - 10.0), 4.0, theme::EMBER);
         }
+        r
     }
+}
+
+/// Receiver B's flag: smaller than A's, in violet, set below it so the two
+/// never cover each other when the receivers are close.
+fn paint_b_flag(painter: &egui::Painter, pan: Rect, x: f32, b: &RxB) -> Rect {
+    let (w, h) = (150.0, 44.0);
+    let right = x + 10.0 + w < pan.right() - 4.0;
+    let left = if right { x + 10.0 } else { x - 10.0 - w };
+    let r = Rect::from_min_size(pos2(left, pan.top() + 78.0), vec2(w, h));
+    painter.rect(r, CornerRadius::same(4), alpha(theme::surface_2(), 0.93), Stroke::new(1.0, alpha(theme::VIOLET, 0.55)), egui::StrokeKind::Inside);
+    theme::glass(painter, r);
+    if b.active {
+        painter.rect_filled(Rect::from_min_size(r.left_top(), vec2(16.0, 2.0)), CornerRadius::ZERO, theme::EMBER);
+    }
+    let anchor = if right { r.left() } else { r.right() };
+    painter.line_segment([pos2(x, r.top() + 12.0), pos2(anchor, r.top() + 12.0)], Stroke::new(1.0, alpha(theme::VIOLET, 0.5)));
+    painter.text(r.left_top() + vec2(8.0, 5.0), Align2::LEFT_TOP, crate::tuning::fmt_mhz(b.freq_hz, 4), theme::mono_bold(12.5), theme::text());
+    painter.text(r.right_top() + vec2(-8.0, 7.0), Align2::RIGHT_TOP, format!("B · {}", b.mode.label()), theme::mono(10.0), theme::VIOLET);
+    match (&b.note, b.level) {
+        (Some(n), _) => {
+            painter.text(r.left_top() + vec2(8.0, 25.0), Align2::LEFT_TOP, n, theme::sans(11.0), theme::WARN);
+        }
+        (None, Some(l)) => {
+            let bar = Rect::from_min_size(r.left_top() + vec2(8.0, 29.0), vec2(w - 64.0, 5.0));
+            painter.rect_filled(bar, CornerRadius::same(1), theme::surface_4());
+            let f = crate::meter::frac(l);
+            painter.rect_filled(Rect::from_min_size(bar.min, vec2(bar.width() * f, bar.height())), CornerRadius::same(1), theme::VIOLET);
+            painter.text(pos2(r.right() - 8.0, bar.center().y), Align2::RIGHT_CENTER, crate::meter::s_label(Some(l)), theme::mono_bold(10.5), theme::text());
+        }
+        _ => {}
+    }
+    r
 }
 
 #[cfg(test)]

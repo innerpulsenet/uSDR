@@ -92,6 +92,10 @@ pub struct App {
     pub prefs: Prefs,
     pub link: Option<Link>,
     pub player: Arc<Player>,
+    /// Receiver B's audio, on its own stream.
+    pub player_b: Arc<Player>,
+    /// Whether the display, the readout and the keys drive receiver B.
+    pub active_b: bool,
     pub conn: Conn,
     pub status: Status,
     pub have_status: bool,
@@ -157,7 +161,8 @@ impl App {
     pub fn new(cc: &eframe::CreationContext<'_>, server: Option<String>) -> App {
         let prefs = Prefs::load();
         let player = Player::new(prefs.audio_device.as_deref());
-        let mut app = App::build(&cc.egui_ctx, prefs, player, server.clone());
+        let player_b = Player::new(prefs.audio_device.as_deref());
+        let mut app = App::build(&cc.egui_ctx, prefs, player, player_b, server.clone());
         if server.is_some() || app.prefs.auto_connect && app.prefs.last_server.is_some() {
             let s = app.connect_input.clone();
             app.connect(&cc.egui_ctx, &s);
@@ -166,9 +171,12 @@ impl App {
     }
 
     /// Everything but connecting and the sound card, so tests can build one.
-    pub fn build(ctx: &egui::Context, prefs: Prefs, player: Arc<Player>, server: Option<String>) -> App {
+    pub fn build(ctx: &egui::Context, prefs: Prefs, player: Arc<Player>, player_b: Arc<Player>, server: Option<String>) -> App {
         theme::install(ctx, prefs.ground);
         egui_extras::install_image_loaders(ctx);
+        player_b.set_volume(prefs.volume_b);
+        player_b.set_muted(prefs.muted_b);
+        player_b.set_pan(prefs.pan_b);
         player.set_volume(prefs.volume);
         player.set_muted(prefs.muted);
         player.set_pan(prefs.pan);
@@ -186,6 +194,8 @@ impl App {
             prefs,
             link: None,
             player,
+            player_b,
+            active_b: false,
             conn: Conn::Idle,
             status: Status::default(),
             have_status: false,
@@ -254,7 +264,8 @@ impl App {
     }
 
     pub fn connect(&mut self, ctx: &egui::Context, server: &str) {
-        self.link = Some(Link::open(server, ctx.clone(), self.player.clone()));
+        let speakers = Arc::new(crate::audio::Speakers { a: self.player.clone(), b: self.player_b.clone() });
+        self.link = Some(Link::open(server, ctx.clone(), speakers));
         self.prefs.remember_server(server);
         self.prefs.save();
         self.conn = Conn::Connecting { attempt: 1, reason: None };
@@ -316,7 +327,67 @@ impl App {
         }
     }
 
+    /// Whether this server has a second receiver to offer.
+    pub fn rx2_available(&self) -> bool {
+        self.server.as_ref().is_some_and(|i| i.has("rx2"))
+    }
+
+    /// The frequency the readout and the display's gestures act on.
+    pub fn active_hz(&self) -> f64 {
+        match (&self.status.rx2, self.active_b) {
+            (Some(b), true) => b.freq_hz,
+            _ => self.inspect_hz(),
+        }
+    }
+
+    /// Start or move receiver B. It must stay inside the span; the server
+    /// refuses it otherwise and says so.
+    pub fn set_rx2(&mut self, hz: f64, mode: Mode) {
+        let (lo, hi) = (self.status.min_freq_hz, self.status.max_freq_hz);
+        if hi > lo && !(lo..=hi).contains(&hz) {
+            self.toasts.push(Toast {
+                text: format!("Receiver B listens inside the span ({} – {} MHz)", crate::tuning::fmt_mhz(lo, 3), crate::tuning::fmt_mhz(hi, 3)),
+                tone: Tone::Warn,
+                until: 0.0,
+            });
+            return;
+        }
+        let (blo, bhi) = self.modes.iter().find(|c| c.mode == mode).map(|c| (c.passband_offset_hz as f64 - c.bandwidth_hz as f64 / 2.0, c.passband_offset_hz as f64 + c.bandwidth_hz as f64 / 2.0)).unwrap_or((-6_250.0, 6_250.0));
+        let keep = self.status.rx2.as_ref().filter(|b| b.mode == mode).map(|b| (b.bandwidth_hz, b.passband_offset_hz));
+        let (bw, off) = keep.unwrap_or((bhi - blo, (blo + bhi) / 2.0));
+        self.status.rx2 = Some(proto::SubRx { freq_hz: hz, mode, bandwidth_hz: bw, passband_offset_hz: off, note: None });
+        self.post("/api/sdr/rx2", json!({ "freq_hz": hz, "mode": mode.wire() }));
+    }
+
+    /// Receiver B at `hz`: started if it is off, moved if it is on. It
+    /// listens in A's mode where it can, NFM otherwise.
+    pub fn place_b(&mut self, hz: f64) {
+        if !self.rx2_available() {
+            self.toasts.push(Toast { text: "This server has no second receiver (it predates API 2).".into(), tone: Tone::Warn, until: 0.0 });
+            return;
+        }
+        let mode = match &self.status.rx2 {
+            Some(b) => b.mode,
+            None if matches!(self.status.mode, Mode::Nfm | Mode::Am | Mode::Usb | Mode::Lsb | Mode::Wfm) => self.status.mode,
+            None => Mode::Nfm,
+        };
+        self.set_rx2(hz, mode);
+    }
+
+    pub fn rx2_off(&mut self) {
+        self.status.rx2 = None;
+        self.active_b = false;
+        self.player_b.flush();
+        self.post("/api/sdr/rx2", json!({ "off": true }));
+    }
+
     pub fn tune(&mut self, hz: f64, lock: bool) {
+        if self.active_b
+            && let Some(b) = self.status.rx2.clone()
+        {
+            self.set_rx2(hz, b.mode);
+            return;
+        }
         let bounds = if self.status.tune_max_hz > self.status.tune_min_hz {
             (self.status.tune_min_hz, self.status.tune_max_hz)
         } else {
@@ -329,8 +400,16 @@ impl App {
         } else {
             self.span_now()
         };
-        let plan = crate::tuning::plan(hz, center, span, self.status.bandwidth_hz, lock && self.status.zoom <= 1.01, bounds);
+        let locked = self.prefs.span_lock;
+        let plan = crate::tuning::plan(hz, center, span, self.status.bandwidth_hz, lock && self.status.zoom <= 1.01, locked, bounds);
         if let Some(c) = plan.center_hz {
+            if locked {
+                self.toasts.push(Toast {
+                    text: format!("Span lock: {} MHz is outside the span, so the span moved to reach it.", crate::tuning::fmt_mhz(plan.inspect_hz, 4)),
+                    tone: Tone::Idle,
+                    until: 0.0,
+                });
+            }
             self.post("/api/sdr/tune", json!({ "freq_hz": c }));
         }
         self.post("/api/sdr/inspect", json!({ "freq_hz": plan.inspect_hz }));
@@ -489,6 +568,9 @@ impl App {
             && (want - s.rate_hz).abs() < 1.0
         {
             self.span_pending = None;
+        }
+        if s.rx2.is_none() {
+            self.active_b = false;
         }
         self.status = s;
         self.have_status = true;
@@ -734,9 +816,11 @@ impl App {
                 }
                 Key::Comma if mods.command => self.settings_open = !self.settings_open,
                 _ if !self.prefs.shortcuts || !self.have_status => {}
+                Key::L if !mods.command => self.prefs.span_lock = !self.prefs.span_lock,
+                Key::B if !mods.command => self.active_b = !self.active_b && self.status.rx2.is_some(),
                 Key::ArrowUp | Key::ArrowDown => {
                     let d = if k == Key::ArrowUp { 1.0 } else { -1.0 };
-                    let hz = self.inspect_hz() + self.vfo.step_selected(d);
+                    let hz = self.active_hz() + self.vfo.step_selected(d);
                     self.tune(hz, true);
                 }
                 Key::ArrowLeft => self.vfo.move_selection(-1),
@@ -744,7 +828,7 @@ impl App {
                 Key::PageUp | Key::PageDown => {
                     let d = if k == Key::PageUp { 1.0 } else { -1.0 } * if mods.shift { 10.0 } else { 1.0 };
                     let step = self.step_hz();
-                    let hz = crate::tuning::snap(self.inspect_hz() + d * step, step);
+                    let hz = crate::tuning::snap(self.active_hz() + d * step, step);
                     self.tune(hz, true);
                 }
                 Key::M if !mods.command => {
@@ -832,6 +916,9 @@ impl App {
                 annunciator(ui, "RATE", &crate::tuning::fmt_short_hz(s.rate_hz), theme::text());
                 annunciator(ui, "SPAN", &crate::tuning::fmt_short_hz((s.max_freq_hz - s.min_freq_hz).max(0.0)), theme::text());
                 annunciator(ui, "IF BW", &crate::tuning::fmt_short_hz(s.bandwidth_hz), theme::text());
+                if self.prefs.span_lock {
+                    annunciator(ui, "SPAN", "LOCKED", theme::CYAN);
+                }
                 if s.lo_offset {
                     annunciator(ui, "LO", &format!("{:+}", crate::tuning::fmt_short_hz(s.lo_offset_hz)), theme::CYAN);
                 }
@@ -944,14 +1031,19 @@ impl App {
 
     fn vfo_bar(&mut self, ui: &mut Ui) {
         let mut acts = Vec::new();
-        let hz = self.inspect_hz();
+        let hz = self.active_hz();
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 14.0;
             ui.vertical(|ui| {
                 ui.spacing_mut().item_spacing.y = 2.0;
                 ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new("RX").font(theme::mono_bold(10.0)).color(theme::AMBER));
-                    let mode = self.status.mode.label();
+                    let b = self.status.rx2.clone().filter(|_| self.active_b);
+                    let (tag, tag_c) = if b.is_some() { ("RX B", theme::VIOLET) } else { ("RX A", theme::AMBER) };
+                    let r = ui.add(egui::Label::new(egui::RichText::new(tag).font(theme::mono_bold(10.0)).color(tag_c)).sense(Sense::click()));
+                    if self.status.rx2.is_some() && r.on_hover_text("Switch receivers (B)").clicked() {
+                        self.active_b = !self.active_b;
+                    }
+                    let mode = b.as_ref().map_or(self.status.mode, |b| b.mode).label();
                     ui.label(egui::RichText::new(mode).font(theme::mono_bold(10.0)).color(theme::text()));
                     ui.label(egui::RichText::new(crate::tuning::fmt_hz(self.status.bandwidth_hz)).font(theme::mono(10.0)).color(theme::text_3()));
                     let agc = match (self.status.gain_db, self.status.tuner_agc) {
@@ -988,7 +1080,7 @@ impl App {
                         }
                     });
                 if let Some(d) = crate::vfo::tune_strip(ui, hz, self.step_hz(), 220.0) {
-                    let target = self.inspect_hz() + d;
+                    let target = self.active_hz() + d;
                     self.tune(target, true);
                 }
                 ui.horizontal(|ui| {
@@ -997,9 +1089,17 @@ impl App {
                         if widgets::action(ui, lbl).on_hover_text(format!("{n:+} step")).clicked() {
                             let fine = ui.input(|i| i.modifiers.shift);
                             let st = if fine { (self.step_hz() / 10.0).round().max(100.0) } else { self.step_hz() };
-                            let target = self.inspect_hz() + n * st;
+                            let target = self.active_hz() + n * st;
                             self.tune(target, true);
                         }
+                    }
+                    ui.add_space(6.0);
+                    let lock = self.prefs.span_lock;
+                    if widgets::key(ui, "SPAN LOCK", lock, theme::CYAN)
+                        .on_hover_text("Keep the span where it is: clicks, the wheel, the dial and the keys move only the receiver (L)")
+                        .clicked()
+                    {
+                        self.prefs.span_lock = !lock;
                     }
                 });
             });
@@ -1062,7 +1162,7 @@ impl App {
         for a in acts {
             match a {
                 VfoAct::Step(d) => {
-                    let hz = self.inspect_hz() + d;
+                    let hz = self.active_hz() + d;
                     self.tune(hz, true);
                 }
                 VfoAct::Set(hz) => self.tune(hz, false),
@@ -1115,6 +1215,11 @@ impl App {
 
     fn toasts_ui(&mut self, ctx: &egui::Context) {
         let now = ctx.input(|i| i.time);
+        for t in &mut self.toasts {
+            if t.until == 0.0 {
+                t.until = now + 5.0;
+            }
+        }
         self.toasts.retain(|t| t.until > now);
         if self.toasts.is_empty() {
             return;
@@ -1168,7 +1273,18 @@ impl App {
         let rm = self.reduce_motion();
         let width = ui.available_width() - 44.0;
         let now = ui.input(|i| i.time);
-        self.pan.filter = self.filter_range().map(|r| (r, self.status.filter_low_hz as f32, self.status.filter_high_hz as f32));
+        self.pan.filter = self.filter_range().filter(|_| !self.active_b).map(|r| (r, self.status.filter_low_hz as f32, self.status.filter_high_hz as f32));
+        self.pan.rx_b = self.status.rx2.as_ref().map(|b| crate::spectrum::RxB {
+            freq_hz: b.freq_hz,
+            mode: b.mode,
+            bandwidth_hz: b.bandwidth_hz,
+            offset_hz: b.passband_offset_hz,
+            active: self.active_b,
+            level: self.frame.as_ref().and_then(|f| {
+                proto::channel_level(&f.pwr, f.center_hz, f.rate_hz, b.freq_hz + b.passband_offset_hz, b.bandwidth_hz).map(|l| l.0)
+            }),
+            note: b.note.clone(),
+        });
         self.display_bins(&ui.ctx().clone(), width, now);
         self.pan.ui(ui, &self.status, self.frame.as_deref(), &mut self.prefs.view, &flag, step, rm, &mut acts);
         for a in acts {
@@ -1183,6 +1299,8 @@ impl App {
                 }
                 Act::CopyFreq(hz) => ui.ctx().copy_text(format!("{:.0}", hz)),
                 Act::Filter(lo, hi) => self.set_filter(lo as f64, hi as f64),
+                Act::Select(i) => self.active_b = i == 1 && self.status.rx2.is_some(),
+                Act::PlaceB(hz) => self.place_b(hz),
             }
         }
     }
@@ -1443,10 +1561,10 @@ mod tests {
         let ctx = egui::Context::default();
         let mut prefs = Prefs::default();
         prefs.auto_connect = false;
-        let mut app = App::build(&ctx, prefs, Player::silent(), None);
+        let mut app = App::build(&ctx, prefs, Player::silent(), Player::silent(), None);
         let (link, wire) = Link::wire();
         app.link = Some(link);
-        let info = proto::ServerInfo { name: "usdr".into(), version: "test".into(), api: 2, features: vec!["filter".into()] };
+        let info = proto::ServerInfo { name: "usdr".into(), version: "test".into(), api: 2, features: vec!["filter".into(), "rx2".into()] };
         wire.events.send(NetEvent::Connected(Box::new(rsp_status()), Some(info))).unwrap();
         let mut h = Harness::builder().with_size(egui::vec2(1600.0, 1000.0)).build_ui_state(
             |ui, t: &mut T| {
@@ -1578,6 +1696,43 @@ mod tests {
         h.get_by_role_and_label(role, "12.5k").click();
         h.run_steps(2);
         assert!(drain(&h).contains(&("/api/sdr/filter".into(), json!({ "low_hz": -6250.0, "high_hz": 6250.0 }))));
+    }
+
+    #[test]
+    fn span_lock_keeps_the_tuner_still() {
+        let mut h = harness();
+        h.state_mut().app.prefs.span_lock = true;
+        // A dial turn would normally recenter; locked it only moves the receiver.
+        h.state_mut().app.tune(146.9e6, true);
+        assert_eq!(drain(&h), vec![("/api/sdr/inspect".into(), json!({ "freq_hz": 146.9e6 }))]);
+        // Out of the span, it still has to move.
+        h.state_mut().app.tune(150e6, false);
+        let posts = drain(&h);
+        assert!(posts.contains(&("/api/sdr/tune".into(), json!({ "freq_hz": 150e6 }))), "{posts:?}");
+    }
+
+    #[test]
+    fn receiver_b_starts_where_middle_clicked_and_takes_the_gestures_when_active() {
+        let mut h = harness();
+        let pwr = vec![-100.0f32; 1024];
+        h.state().wire.events.send(NetEvent::Fft(Box::new(FftFrame { center_hz: 146e6, rate_hz: 2e6, inspect_hz: 146.52e6, pwr, ..Default::default() }))).unwrap();
+        h.run_steps(3);
+        let r = h.state().app.pan.regions.unwrap()[0];
+        let x = r.left() + 0.25 * r.width(); // 145.5 MHz
+        let p = egui::pos2(x, r.center().y);
+        h.event(egui::Event::PointerMoved(p));
+        h.event(egui::Event::PointerButton { pos: p, button: egui::PointerButton::Middle, pressed: true, modifiers: egui::Modifiers::NONE });
+        h.event(egui::Event::PointerButton { pos: p, button: egui::PointerButton::Middle, pressed: false, modifiers: egui::Modifiers::NONE });
+        h.run_steps(2);
+        let posts = drain(&h);
+        let (_, body) = posts.iter().find(|(p, _)| p == "/api/sdr/rx2").expect("rx2 posted");
+        assert!((body["freq_hz"].as_f64().unwrap() - 145.5e6).abs() < 7_000.0);
+        assert_eq!(body["mode"], json!("nfm"));
+        // Made active, tuning goes to B and leaves A alone.
+        h.state_mut().app.active_b = true;
+        h.state_mut().app.tune(146.1e6, true);
+        let posts = drain(&h);
+        assert_eq!(posts, vec![("/api/sdr/rx2".into(), json!({ "freq_hz": 146.1e6, "mode": "nfm" }))]);
     }
 
     #[test]

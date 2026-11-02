@@ -90,6 +90,7 @@ pub fn side(app: &mut App, ui: &mut Ui) {
     widgets::applet(ui, "filter", "Filter", |_| {}, |ui| filter(app, ui));
     widgets::applet(ui, "memories", "Memories", |_| {}, |ui| memories(app, ui));
     widgets::applet(ui, "audio", "Audio", |_| {}, |ui| audio(app, ui));
+    widgets::applet(ui, "rxb", "Receiver B", |_| {}, |ui| receiver_b(app, ui));
     widgets::applet(ui, "gain", "RF gain", |_| {}, |ui| gain(app, ui));
     widgets::applet(ui, "frontend", "Front end", |_| {}, |ui| front_end(app, ui));
     widgets::applet(ui, "display", "Span · zoom · display", |_| {}, |ui| display(app, ui));
@@ -448,6 +449,101 @@ fn audio(app: &mut App, ui: &mut Ui) {
     } else {
         ui.label(small("no audio arriving"));
     }
+}
+
+fn receiver_b(app: &mut App, ui: &mut Ui) {
+    if !app.rx2_available() {
+        ui.label(small("this server has no second receiver (it predates API 2)"));
+        return;
+    }
+    let Some(b) = app.status.rx2.clone() else {
+        ui.label(small("A second listener inside the span, with its own audio. Middle-click the display, or:"));
+        if widgets::action(ui, "START RX B").clicked() {
+            // Beside receiver A, inside the span.
+            let a = app.inspect_hz();
+            let span = (app.status.max_freq_hz - app.status.min_freq_hz).max(0.0);
+            let hz = if a + span / 8.0 < app.status.max_freq_hz { a + span / 8.0 } else { a - span / 8.0 };
+            let step = crate::tuning::mode_raster_hz(app.status.mode, hz);
+            app.place_b(crate::tuning::snap(hz, step));
+            app.active_b = true;
+        }
+        return;
+    };
+    ui.horizontal(|ui| {
+        ui.label(RichText::new(crate::tuning::fmt_mhz(b.freq_hz, 5)).font(theme::mono_bold(15.0)).color(theme::VIOLET));
+        ui.label(small(format!("{} · {}", b.mode.label(), crate::tuning::fmt_short_hz(b.bandwidth_hz))));
+    });
+    if let Some(n) = &b.note {
+        widgets::chip(ui, Tone::Warn, n);
+    }
+    let w = (ui.available_width() - 4.0 * 4.0) / 5.0;
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 4.0;
+        for m in [Mode::Nfm, Mode::Am, Mode::Usb, Mode::Lsb, Mode::Wfm] {
+            if widgets::key_sized(ui, m.label(), b.mode == m, theme::VIOLET, vec2(w, 24.0)).clicked() && b.mode != m {
+                app.set_rx2(b.freq_hz, m);
+            }
+        }
+    });
+    ui.horizontal_wrapped(|ui| {
+        if widgets::key(ui, "ACTIVE", app.active_b, theme::EMBER).on_hover_text("The display, the readout and the keys drive receiver B (B)").clicked() {
+            app.active_b = !app.active_b;
+        }
+        if widgets::action(ui, "SWAP A↔B").on_hover_text("Trade frequencies between the receivers").clicked() {
+            let a = app.inspect_hz();
+            app.active_b = false;
+            app.tune(b.freq_hz, false);
+            app.set_rx2(a, b.mode);
+        }
+        if widgets::action(ui, "OFF").clicked() {
+            app.rx2_off();
+        }
+    });
+    let mut vol = app.prefs.volume_b as f64 * 100.0;
+    let muted = app.prefs.muted_b;
+    let (ch, _) = Fader {
+        value: &mut vol,
+        min: 0.0,
+        max: 100.0,
+        step: 2.0,
+        fine: 1.0,
+        label: "AF GAIN B",
+        text: |v| if muted { "muted".into() } else { format!("{v:.0}") },
+        color: theme::VIOLET,
+        enabled: !muted,
+        ticks: vec![],
+    }
+    .show(ui);
+    if ch {
+        app.prefs.volume_b = (vol / 100.0) as f32;
+        app.player_b.set_volume(app.prefs.volume_b);
+    }
+    let mut pan = app.prefs.pan_b as f64;
+    let (ch, _) = Fader {
+        value: &mut pan,
+        min: -1.0,
+        max: 1.0,
+        step: 0.1,
+        fine: 0.02,
+        label: "BALANCE B",
+        text: |p| if p.abs() < 0.01 { "center".into() } else if p < 0.0 { format!("L {:.0}", -p * 100.0) } else { format!("R {:.0}", p * 100.0) },
+        color: theme::text_2(),
+        enabled: true,
+        ticks: vec![],
+    }
+    .show(ui);
+    if ch {
+        app.prefs.pan_b = pan as f32;
+        app.player_b.set_pan(app.prefs.pan_b);
+    }
+    ui.horizontal(|ui| {
+        if widgets::key(ui, if muted { "MUTED" } else { "MONITOR" }, !muted, theme::OK).clicked() {
+            app.prefs.muted_b = !muted;
+            app.player_b.set_muted(app.prefs.muted_b);
+        }
+        let r = app.player_b.reading();
+        ui.label(small(if r.queue_ms > 0.0 { format!("{} Hz · {:.0} ms", r.in_rate.round(), r.queue_ms) } else { "no audio yet".into() }));
+    });
 }
 
 fn gain(app: &mut App, ui: &mut Ui) {

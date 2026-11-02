@@ -171,10 +171,12 @@ pub fn settings_window(app: &mut App, ctx: &egui::Context) {
                         if ui.selectable_label(app.prefs.audio_device.is_none(), "System default").clicked() {
                             app.prefs.audio_device = None;
                             app.player.open(None);
+                            app.player_b.open(None);
                         }
                         for d in app.audio_devices.clone() {
                             if ui.selectable_label(app.prefs.audio_device.as_deref() == Some(&d), &d).clicked() {
                                 app.player.open(Some(&d));
+                                app.player_b.open(Some(&d));
                                 app.prefs.audio_device = Some(d);
                             }
                         }
@@ -263,6 +265,9 @@ pub fn help_window(app: &mut App, ctx: &egui::Context) {
                 ("PgUp PgDn (Shift ×10)", "step"),
                 ("+ / −", "zoom in / out"),
                 ("C", "center the span on the receiver"),
+                ("L", "span lock: tuning moves only the receiver"),
+                ("Middle-click, or right-click › Put receiver B here", "start or move receiver B"),
+                ("Click a receiver's flag, or B", "choose which receiver the gestures drive"),
                 ("M", "mute"),
                 ("R", "record what you hear"),
                 ("Ctrl+1 … 9", "recall a memory"),

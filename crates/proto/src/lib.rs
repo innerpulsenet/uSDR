@@ -16,6 +16,9 @@ use std::collections::BTreeMap;
 pub const FFT_FRAME_MAGIC: u8 = 0x03;
 /// Leading byte of a binary audio frame: `[0x01][u32 rate][i16 samples…]`.
 pub const AUDIO_FRAME_MAGIC: u8 = 0x01;
+/// Leading byte of a tagged audio frame from another receiver:
+/// `[0x04][u8 receiver][u32 rate][i16 samples…]` (API 2, `rx2`).
+pub const TAGGED_AUDIO_MAGIC: u8 = 0x04;
 
 // ---------- binary frames ----------
 
@@ -90,6 +93,8 @@ pub struct Classification {
 /// A block of demodulated audio.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct AudioFrame {
+    /// Which receiver: 0 the main one, 1 the second.
+    pub rx: u8,
     pub rate_hz: u32,
     pub samples: Vec<i16>,
 }
@@ -169,6 +174,11 @@ pub fn decode_binary(buf: &[u8]) -> Result<Binary, DecodeError> {
     match buf.first() {
         Some(&FFT_FRAME_MAGIC) => decode_fft(buf).map(|f| Binary::Fft(Box::new(f))),
         Some(&AUDIO_FRAME_MAGIC) => decode_audio(buf).map(Binary::Audio),
+        Some(&TAGGED_AUDIO_MAGIC) if buf.len() >= 6 => {
+            let mut a = decode_audio(&buf[1..])?;
+            a.rx = buf[1];
+            Ok(Binary::Audio(a))
+        }
         Some(_) => Err(DecodeError("unknown frame type")),
         None => Err(DecodeError("empty frame")),
     }
@@ -182,7 +192,7 @@ pub fn decode_audio(buf: &[u8]) -> Result<AudioFrame, DecodeError> {
         .chunks_exact(2)
         .map(|c| i16::from_le_bytes([c[0], c[1]]))
         .collect();
-    Ok(AudioFrame { rate_hz, samples })
+    Ok(AudioFrame { rx: 0, rate_hz, samples })
 }
 
 pub fn decode_fft(buf: &[u8]) -> Result<FftFrame, DecodeError> {
@@ -335,6 +345,43 @@ pub struct Status {
     pub filter_low_hz: f64,
     pub filter_high_hz: f64,
     pub filter_custom: bool,
+    /// The second receiver, when one is listening (API 2, `rx2`).
+    pub rx2: Option<SubRx>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SubRx {
+    pub freq_hz: f64,
+    pub mode: Mode,
+    pub bandwidth_hz: f64,
+    pub passband_offset_hz: f64,
+    /// Why it is silent, when it is.
+    pub note: Option<String>,
+}
+
+/// Power in a channel and the floor under it, from a spectrum frame, the
+/// way the server measures its own receiver: the channel's bins summed in
+/// linear power, against the median bin scaled to the same width.
+pub fn channel_level(pwr: &[f32], center_hz: f64, rate_hz: f64, channel_hz: f64, bandwidth_hz: f64) -> Option<(f32, f32)> {
+    let n = pwr.len();
+    if n < 8 || rate_hz <= 0.0 {
+        return None;
+    }
+    let off = channel_hz - center_hz;
+    let bin_of = |hz: f64| ((hz / rate_hz + 0.5) * (n - 1) as f64).round();
+    let lo = bin_of(off - bandwidth_hz / 2.0);
+    let hi = bin_of(off + bandwidth_hz / 2.0);
+    if hi < 0.0 || lo > (n - 1) as f64 {
+        return None;
+    }
+    let lo = lo.clamp(0.0, (n - 1) as f64) as usize;
+    let hi = (hi.clamp(0.0, (n - 1) as f64) as usize).max(lo + 1).min(n - 1);
+    let sum: f64 = pwr[lo..=hi].iter().map(|&db| 10f64.powf(f64::from(db) / 10.0)).sum();
+    let mut sorted = pwr.to_vec();
+    sorted.sort_unstable_by(f32::total_cmp);
+    let floor = 10f64.powf(f64::from(sorted[n / 2]) / 10.0) * (hi - lo + 1) as f64;
+    Some(((10.0 * sum.max(1e-30).log10()) as f32, (10.0 * floor.max(1e-30).log10()) as f32))
 }
 
 impl Status {
@@ -773,6 +820,12 @@ mod tests {
         let Binary::Audio(a) = decode_binary(&b).unwrap() else { panic!() };
         assert_eq!(a.rate_hz, 48_000);
         assert_eq!(a.samples, vec![-5, 7]);
+        assert_eq!(a.rx, 0);
+        // The second receiver's frame: a tag byte and the receiver number.
+        let mut t = vec![TAGGED_AUDIO_MAGIC, 1];
+        t.extend_from_slice(&b[1..]);
+        let Binary::Audio(a) = decode_binary(&t).unwrap() else { panic!() };
+        assert_eq!((a.rx, a.rate_hz, a.samples.clone()), (1, 48_000, vec![-5, 7]));
     }
 
     #[test]

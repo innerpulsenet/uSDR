@@ -453,6 +453,7 @@ no longer one of the three read errors that reopen the device.
 | `POST /api/sdr/replay?frequency_hz=` | Decode a posted I/Q WAV (≤ 16 MiB) |
 | `GET /api/version` | `{"name", "version", "api", "features"}` — the API revision (2) and what this server supports; the websocket `hello` carries the same as `server` |
 | `POST /api/sdr/filter` | `{"low_hz": …, "high_hz": …}` (edges from the carrier) or `{"reset": true}` — the current mode's filter, saved per mode. Sideband takes both edges (width and shift), AM/NFM/WFM a centered width; digital modes refuse it. `GET /api/sdr/modes` gives each mode's `filter` range, and the status carries `filter_low_hz`, `filter_high_hz` and `filter_custom` |
+| `POST /api/sdr/rx2` | `{"freq_hz": …, "mode": "nfm" \| "am" \| "usb" \| "lsb" \| "wfm"}` starts or moves a second receiver inside the span, `{"off": true}` stops it. A listener only, with no decoders; its audio arrives as `[0x04][u8 receiver][u32 rate][i16…]` frames, which the web page skips, and the status carries `rx2` |
 | `GET /api/web` | Who is connected (`clients`: kind, name, address, since) and the web policy |
 | `POST /api/web` | `{"policy": "shared" \| "yield" \| "off"}` |
 | `GET /api/memories` | The shared memory bank, or `null` before anyone has stored one |

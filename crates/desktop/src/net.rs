@@ -99,7 +99,8 @@ pub struct Stats {
 }
 
 pub trait AudioSink: Send + Sync {
-    fn push(&self, rate_hz: u32, samples: &[i16]);
+    /// Audio from receiver `rx` (0 the main one, 1 the second).
+    fn push(&self, rx: u8, rate_hz: u32, samples: &[i16]);
 }
 
 pub struct Link {
@@ -282,7 +283,7 @@ fn ws_loop(
                                 }
                                 Ok(proto::Binary::Audio(a)) => {
                                     stats.audio_frames.fetch_add(1, Ordering::Relaxed);
-                                    audio.push(a.rate_hz, &a.samples);
+                                    audio.push(a.rx, a.rate_hz, &a.samples);
                                 }
                                 Err(_) => {
                                     stats.decode_errors.fetch_add(1, Ordering::Relaxed);

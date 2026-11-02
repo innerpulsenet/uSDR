@@ -12,6 +12,7 @@ mod keys;
 mod p25_keys;
 mod scan;
 mod sdr;
+mod sub_rx;
 
 use sdr::SdrEvent;
 
@@ -439,6 +440,7 @@ async fn main() -> Result<()> {
         .route("/api/web", get(get_web).post(post_web))
         .route("/api/version", get(get_version))
         .route("/api/sdr/filter", post(post_sdr_filter))
+        .route("/api/sdr/rx2", post(post_sdr_rx2))
         .route("/api/memories", get(get_memories).post(post_memories))
         .route("/ws", get(ws_upgrade))
         .layer(axum::middleware::from_fn_with_state(Arc::clone(&state), yield_guard))
@@ -524,7 +526,7 @@ async fn yield_guard(
 /// What this server is and which API revision it speaks, so a client can say
 /// plainly when it needs a newer one rather than failing on a missing route.
 const API_REVISION: u32 = 2;
-const API_FEATURES: &[&str] = &["presence", "web-policy", "memories", "avg-status", "filter"];
+const API_FEATURES: &[&str] = &["presence", "web-policy", "memories", "avg-status", "filter", "rx2"];
 
 fn version_json() -> serde_json::Value {
     serde_json::json!({
@@ -582,6 +584,47 @@ async fn post_sdr_filter(
     });
     let (lo, hi) = mode.filter_edges();
     Ok(Json(serde_json::json!({ "ok": true, "low_hz": lo, "high_hz": hi, "custom": edges.is_some() })))
+}
+
+#[derive(Deserialize)]
+struct SdrRx2Req {
+    #[serde(default)]
+    freq_hz: Option<f64>,
+    #[serde(default)]
+    mode: Option<sdr::SdrMode>,
+    #[serde(default)]
+    off: bool,
+}
+
+/// Start, move or stop the second receiver: a listener (NFM, AM, USB, LSB
+/// or WFM) on another channel inside the span, whose audio goes out tagged
+/// as receiver 1.
+async fn post_sdr_rx2(
+    State(st): State<Arc<AppState>>,
+    Json(req): Json<SdrRx2Req>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let guard = st.sdr.lock().expect("sdr");
+    let sdr = guard
+        .as_ref()
+        .ok_or_else(|| ApiError::BadRequest("the receiver is not running".into()))?;
+    if req.off {
+        sdr.set_rx2(None)?;
+        return Ok(Json(serde_json::json!({ "ok": true, "rx2": null })));
+    }
+    let (min, max, cur) = {
+        let s = sdr.status.lock().expect("sdr status");
+        (s.min_freq_hz, s.max_freq_hz, s.rx2.as_ref().map(|r| (r.freq_hz, r.mode)))
+    };
+    let freq = req.freq_hz.or(cur.map(|c| c.0)).ok_or_else(|| ApiError::BadRequest("give freq_hz".into()))?;
+    let mode = req.mode.or(cur.map(|c| c.1)).unwrap_or(sdr::SdrMode::Nfm);
+    if !sub_rx::supports(mode) {
+        return Err(ApiError::BadRequest("the second receiver listens in NFM, AM, USB, LSB or WFM".into()));
+    }
+    if max > min && !(min..=max).contains(&freq) {
+        return Err(ApiError::BadRequest(format!("{} is outside the span ({} – {})", fmt_hz(freq), fmt_hz(min), fmt_hz(max))));
+    }
+    sdr.set_rx2(Some((freq, mode)))?;
+    Ok(Json(serde_json::json!({ "ok": true, "freq_hz": freq, "mode": mode })))
 }
 
 async fn get_web(State(st): State<Arc<AppState>>) -> Json<serde_json::Value> {
@@ -1452,8 +1495,15 @@ async fn ws_client(mut socket: WebSocket, st: Arc<AppState>, info: ClientInfo) {
                     // [0x01][u32 LE sample rate][i16 LE samples...]. Binary
                     // because a JSON float array costs about ten times the
                     // bytes for something that arrives forty times a second.
-                    let mut buf = Vec::with_capacity(5 + f.samples.len() * 2);
-                    buf.push(0x01u8);
+                    // The second receiver's is [0x04][u8 rx][u32][i16...],
+                    // which pages that know nothing of it skip.
+                    let mut buf = Vec::with_capacity(6 + f.samples.len() * 2);
+                    if f.rx == 0 {
+                        buf.push(0x01u8);
+                    } else {
+                        buf.push(0x04u8);
+                        buf.push(f.rx);
+                    }
                     buf.extend_from_slice(&f.rate_hz.to_le_bytes());
                     for s in &f.samples {
                         buf.extend_from_slice(&s.to_le_bytes());

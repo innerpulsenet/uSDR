@@ -49,9 +49,15 @@ pub struct Prefs {
     pub volume: f32,
     pub muted: bool,
     pub pan: f32,
+    /// The second receiver's own audio.
+    pub volume_b: f32,
+    pub muted_b: bool,
+    pub pan_b: f32,
     pub view: View,
     /// A fixed tuning step; `None` follows the mode's raster.
     pub step_hz: Option<f64>,
+    /// The span stays where it is; tuning moves only the receiver in it.
+    pub span_lock: bool,
     pub motion: Motion,
     pub ground: crate::theme::Ground,
     pub record_dir: Option<PathBuf>,
@@ -76,8 +82,12 @@ impl Default for Prefs {
             volume: 0.8,
             muted: false,
             pan: 0.0,
+            volume_b: 0.7,
+            muted_b: false,
+            pan_b: 0.0,
             view: View::default(),
             step_hz: None,
+            span_lock: false,
             motion: Motion::System,
             ground: crate::theme::Ground::Carbon,
             record_dir: None,

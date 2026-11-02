@@ -370,6 +370,10 @@ impl SdrMode {
     /// Width of the inspect chain's channel filter. Sideband needs both sides
     /// of the carrier into the demodulator, which picks one; everything
     /// else filters to the width it displays.
+    pub fn chain_bandwidth(self) -> f32 {
+        self.chain_bandwidth_hz()
+    }
+
     fn chain_bandwidth_hz(self) -> f32 {
         match self {
             SdrMode::Usb | SdrMode::Lsb => {
@@ -501,6 +505,8 @@ pub struct ModeCapabilities {
 /// One block of demodulated audio on its way to the browser.
 #[derive(Clone, Debug)]
 pub struct AudioFrame {
+    /// Which receiver: 0 the main one, 1 the second.
+    pub rx: u8,
     pub rate_hz: u32,
     pub samples: Vec<i16>,
 }
@@ -711,6 +717,9 @@ pub struct SdrStatus {
     pub filter_high_hz: f64,
     #[serde(default)]
     pub filter_custom: bool,
+    /// The second receiver, when one is listening.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rx2: Option<crate::sub_rx::SubRxStatus>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -1183,6 +1192,8 @@ enum SdrCmd {
     /// The current mode's filter was set or cleared (already in the table):
     /// rebuild the chain around it.
     Filter,
+    /// Start, move or (with `None`) stop the second receiver.
+    Rx2(Option<(f64, SdrMode)>),
     /// Replace the voice-scan configuration (range, modes, threshold).
     ScanConfig(crate::scan::ScanCfg),
     /// Pause/resume/skip/forget/unskip, from the scan panel. `Unskip` names
@@ -1293,6 +1304,12 @@ impl SdrRuntime {
 
     /// Display averaging mode (weak-signal spectrum aid).
     /// The current mode's filter changed (see [`SdrMode::set_filter`]).
+    pub fn set_rx2(&self, rx: Option<(f64, SdrMode)>) -> Result<()> {
+        self.cmd_tx
+            .send(SdrCmd::Rx2(rx))
+            .map_err(|e| anyhow::anyhow!("send rx2: {e}"))
+    }
+
     pub fn filter_changed(&self) -> Result<()> {
         self.cmd_tx
             .send(SdrCmd::Filter)
@@ -3474,6 +3491,7 @@ fn run_sdr(
     // once after the drain: a UI burst of Tune/Inspect/Rate/Mode in one batch
     // is one chain rebuild (FIR design + FFT plan + capture clear), not five.
     let mut inspect_dirty = false;
+    let mut sub_rx: Option<crate::sub_rx::SubRx> = None;
 
     while !stop.load(Ordering::Relaxed) {
         // Drain commands
@@ -3768,6 +3786,12 @@ fn run_sdr(
                         s.max_freq_hz = inspect_hz + shown / 2.0;
                         let _ = events.send(SdrEvent::Status(s.clone()));
                     }
+                }
+                SdrCmd::Rx2(want) => {
+                    sub_rx = want.map(|(hz, m)| crate::sub_rx::SubRx::new(hz, m));
+                    let mut s = status.lock().unwrap();
+                    s.rx2 = sub_rx.as_ref().map(|r| r.status());
+                    let _ = events.send(SdrEvent::Status(s.clone()));
                 }
                 SdrCmd::Filter => {
                     inspect_dirty = true;
@@ -4405,6 +4429,19 @@ fn run_sdr(
             && scanner.as_ref().is_none_or(|sc| sc.listen().is_none());
         if !scan_sweeping {
             inspect_chain.process(&clean, &mut inspect_iq);
+        }
+        // The second receiver listens to the same cleaned span.
+        if let Some(sub) = sub_rx.as_mut() {
+            let lo_off = lo_offset_for(current_rate, lo_offset, current_mode);
+            let note_before = sub.note.clone();
+            if let Some((rate, samples)) = sub.process(&clean, current_rate, current_freq, lo_off) {
+                let _ = audio_tx.send(AudioFrame { rx: 1, rate_hz: rate, samples });
+            }
+            if sub.note != note_before {
+                let mut s = status.lock().unwrap();
+                s.rx2 = Some(sub.status());
+                let _ = events.send(SdrEvent::Status(s.clone()));
+            }
         }
         let fs_chain = inspect_chain.fs_out();
         // The monitor chain is sample-rated, so a span-rate change re-rates
@@ -5860,6 +5897,7 @@ fn run_sdr(
         };
         if !audio_buf.is_empty() && audio_rate > 0.0 {
             let _ = audio_tx.send(AudioFrame {
+                rx: 0,
                 rate_hz: audio_rate.round() as u32,
                 samples: audio_buf
                     .iter()

@@ -43,17 +43,24 @@ pub struct Retune {
 
 /// Plan a retune to `rx`. `lock_center` recenters the span on it (a dial
 /// turn that scrolls the display). Otherwise the span moves only when `rx`
-/// is outside it or within a channel plus 2% of its edge.
+/// is outside it or within a channel plus 2% of its edge. With `span_lock`
+/// the span stays put for anything inside it — recentering and the edge
+/// nudge both off — and moves only to reach a frequency outside it.
 pub fn plan(
     rx: f64,
     center_hz: f64,
     span_hz: f64,
     bandwidth_hz: f64,
     lock_center: bool,
+    span_lock: bool,
     bounds: (f64, f64),
 ) -> Retune {
     let rx = rx.clamp(bounds.0, bounds.1);
     let half = span_hz / 2.0;
+    if span_lock {
+        let center = if (rx - center_hz).abs() > half - bandwidth_hz / 2.0 { rx } else { center_hz };
+        return Retune { center_hz: ((center - center_hz).abs() > 1.0).then_some(center), inspect_hz: rx };
+    }
     let guard = bandwidth_hz / 2.0 + span_hz * 0.02;
     let center = if lock_center || (rx - center_hz).abs() > half {
         rx
@@ -154,16 +161,27 @@ mod tests {
     fn retune_moves_span_only_when_needed() {
         let b = (1e3, 2.2e9);
         // Inside the span, clear of the edges: span stays.
-        let r = plan(100.5e6, 100e6, 2e6, 12.5e3, false, b);
+        let r = plan(100.5e6, 100e6, 2e6, 12.5e3, false, false, b);
         assert_eq!(r.center_hz, None);
         // Near the top edge: nudged so the channel and a guard fit.
-        let r = plan(100.99e6, 100e6, 2e6, 12.5e3, false, b);
+        let r = plan(100.99e6, 100e6, 2e6, 12.5e3, false, false, b);
         let c = r.center_hz.unwrap();
         assert!((c + 1e6 - (100.99e6 + 6_250.0 + 40e3)).abs() < 1.0);
         // Outside: jump.
-        assert_eq!(plan(150e6, 100e6, 2e6, 12.5e3, false, b).center_hz, Some(150e6));
-        // Locked: recenter.
-        assert_eq!(plan(100.2e6, 100e6, 2e6, 12.5e3, true, b).center_hz, Some(100.2e6));
+        assert_eq!(plan(150e6, 100e6, 2e6, 12.5e3, false, false, b).center_hz, Some(150e6));
+        // A dial turn: recenter.
+        assert_eq!(plan(100.2e6, 100e6, 2e6, 12.5e3, true, false, b).center_hz, Some(100.2e6));
+    }
+
+    #[test]
+    fn a_locked_span_stays_put_for_anything_inside_it() {
+        let b = (1e3, 2.2e9);
+        // Dial turns and edge-hugging clicks leave it where it is.
+        assert_eq!(plan(100.2e6, 100e6, 2e6, 12.5e3, true, true, b).center_hz, None);
+        assert_eq!(plan(100.99e6, 100e6, 2e6, 12.5e3, false, true, b).center_hz, None);
+        // A frequency the span cannot hear still moves it.
+        assert_eq!(plan(150e6, 100e6, 2e6, 12.5e3, false, true, b).center_hz, Some(150e6));
+        assert_eq!(plan(100.998e6, 100e6, 2e6, 12.5e3, false, true, b).center_hz, Some(100.998e6));
     }
 
     #[test]

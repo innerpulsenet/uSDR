@@ -36,7 +36,7 @@ fn probe(server: &str) -> anyhow::Result<()> {
     use std::sync::Arc;
     struct Count(std::sync::atomic::AtomicU64);
     impl net::AudioSink for Count {
-        fn push(&self, _rate: u32, s: &[i16]) {
+        fn push(&self, _rx: u8, _rate: u32, s: &[i16]) {
             self.0.fetch_add(s.len() as u64, std::sync::atomic::Ordering::Relaxed);
         }
     }
