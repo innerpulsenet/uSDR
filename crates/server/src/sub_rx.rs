@@ -62,6 +62,11 @@ impl SubRx {
         Self { freq_hz, mode, built_for: None, chain: None, demod: None, iq: Vec::new(), audio: Vec::new(), note: None }
     }
 
+    /// Rebuild before the next block (its mode's filter changed).
+    pub fn invalidate(&mut self) {
+        self.built_for = None;
+    }
+
     pub fn status(&self) -> SubRxStatus {
         let (lo, hi) = self.mode.filter_edges();
         SubRxStatus {

@@ -161,8 +161,12 @@ impl Scope {
             return;
         };
         let gap = 8.0;
-        let left = Rect::from_min_size(rect.min, vec2((rect.width() - gap) * 0.5, rect.height()));
-        let right = Rect::from_min_max(pos2(left.right() + gap, rect.top()), rect.max);
+        // Readouts get a strip of their own under the plots, never over a trace.
+        let strip = 16.0;
+        let plots = Rect::from_min_max(rect.min, pos2(rect.right(), rect.bottom() - strip));
+        let left = Rect::from_min_size(plots.min, vec2((plots.width() - gap) * 0.5, plots.height()));
+        let right = Rect::from_min_max(pos2(left.right() + gap, plots.top()), plots.max);
+        let text_y = rect.bottom() - 1.0;
         let sub = self.sub_for(mode);
         let symbols = f.scope_kind == ScopeKind::Symbols || mode == Mode::Flex;
         if symbols {
@@ -171,8 +175,8 @@ impl Scope {
             grid(&painter, right, 8, 4);
             self.eye(&painter, left, f, mode);
             self.slicer(&painter, right, mode);
-            painter.text(left.left_bottom() + vec2(6.0, -4.0), Align2::LEFT_BOTTOM, &self.level_text, theme::mono(10.0), theme::text_2());
-            painter.text(right.right_bottom() + vec2(-6.0, -20.0), Align2::RIGHT_BOTTOM, &self.time_text, theme::mono(10.0), theme::text_3());
+            painter.text(pos2(left.left() + 4.0, text_y), Align2::LEFT_BOTTOM, &self.level_text, theme::mono(10.0), theme::text_2());
+            painter.text(pos2(right.right() - 4.0, text_y), Align2::RIGHT_BOTTOM, &self.time_text, theme::mono(10.0), theme::text_3());
             if resp.clicked() {
                 self.toggle(mode);
             }
@@ -180,8 +184,8 @@ impl Scope {
         }
 
         // ---- left: spectrum
-        let spec = Rect::from_min_max(left.min, pos2(left.right(), left.top() + left.height() * 0.6));
-        let mini = Rect::from_min_max(pos2(left.left(), spec.bottom() + 2.0), left.max);
+        let spec = Rect::from_min_max(left.min, pos2(left.right(), left.top() + left.height() * 0.6 - 14.0));
+        let mini = Rect::from_min_max(pos2(left.left(), spec.bottom() + 14.0), left.max);
         grid(&painter, spec, 4, 3);
         let (trace, axis): (Vec<f32>, Vec<(f32, String)>) = if sub == Sub::Passband && !symbols {
             match pass {
@@ -240,8 +244,8 @@ impl Scope {
         }
         for (t, label) in axis {
             let x = spec.left() + t * spec.width();
-            let align = if t <= 0.0 { Align2::LEFT_BOTTOM } else if t >= 1.0 { Align2::RIGHT_BOTTOM } else { Align2::CENTER_BOTTOM };
-            painter.text(pos2(x, spec.bottom() - 2.0), align, label, theme::mono(9.0), theme::text_3());
+            let align = if t <= 0.0 { Align2::LEFT_TOP } else if t >= 1.0 { Align2::RIGHT_TOP } else { Align2::CENTER_TOP };
+            painter.text(pos2(x, spec.bottom() + 1.0), align, label, theme::mono(9.0), theme::text_3());
         }
         // Mini waterfall, one small texture rebuilt each frame.
         let lut = palette.lut();
@@ -266,8 +270,8 @@ impl Scope {
         } else {
             self.oscilloscope(&painter, right, f, mode == Mode::Pager && sub == Sub::Disc);
         }
-        painter.text(right.left_bottom() + vec2(6.0, -4.0), Align2::LEFT_BOTTOM, &self.level_text, theme::mono(10.0), theme::text_2());
-        painter.text(right.right_bottom() + vec2(-6.0, -4.0), Align2::RIGHT_BOTTOM, &self.time_text, theme::mono(10.0), theme::text_3());
+        painter.text(pos2(right.left() + 4.0, text_y), Align2::LEFT_BOTTOM, &self.level_text, theme::mono(10.0), theme::text_2());
+        painter.text(pos2(right.right() - 4.0, text_y), Align2::RIGHT_BOTTOM, &self.time_text, theme::mono(10.0), theme::text_3());
         if resp.clicked() {
             self.toggle(mode);
         }

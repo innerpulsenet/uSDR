@@ -14,6 +14,16 @@ fn mono(t: impl Into<String>, c: egui::Color32) -> RichText {
 }
 
 pub fn dock(app: &mut App, ui: &mut Ui) {
+    // The scope: always in view beside the logs.
+    if app.prefs.show_scope {
+        let resp = egui::Panel::right("dock-scope")
+            .resizable(true)
+            .default_size(app.prefs.scope_width)
+            .size_range(300.0..=800.0)
+            .frame(egui::Frame::new().inner_margin(egui::Margin { left: 10, right: 0, top: 0, bottom: 0 }))
+            .show(ui, |ui| scope(app, ui));
+        app.prefs.scope_width = resp.response.rect.width();
+    }
     ui.horizontal(|ui| {
         let tabs = [
             (DockTab::Decodes, format!("Decodes {}", app.decodes.len())),
@@ -209,7 +219,62 @@ fn word_dump(s: &str) -> String {
     words.chunks(8).map(|c| c.join(" ")).collect::<Vec<_>>().join("\n")
 }
 
+fn scope(app: &mut App, ui: &mut Ui) {
+    let mode = app.status.mode;
+    let kind = app.frame.as_ref().map(|f| f.scope_kind).unwrap_or_default();
+    let (title, tag) = app.scope.title(mode, kind);
+    ui.horizontal(|ui| {
+        ui.label(RichText::new(title).font(theme::sans_semibold(12.0)).color(theme::text()));
+        ui.label(RichText::new(format!("{tag} · click to switch")).font(theme::mono(10.0)).color(theme::text_3()));
+    });
+    let pass = crate::panels::passband_slice(app);
+    let rect = ui.available_rect_before_wrap();
+    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect));
+    app.scope.ui(&mut child, app.frame.as_deref(), mode, pass.as_ref().map(|(v, r)| (v.as_slice(), *r)), app.prefs.view.palette);
+    ui.advance_cursor_after_rect(rect);
+}
+
+/// What the classifier hears right now, above its log.
+fn signal_details(app: &App, ui: &mut Ui) {
+    let (c, word) = app.shown_class();
+    if let Some(c) = c.filter(|_| word != "IDLE") {
+        ui.horizontal_wrapped(|ui| {
+            ui.label(RichText::new(&c.protocol).font(theme::sans_semibold(13.0)).color(widgets::protocol_color(&c.protocol)));
+            ui.label(mono(format!(
+                "{} · {:.0}% · SNR {:+.1} dB · RF {:.0} dBFS · dev peak {:.1}k rms {:.1}k · DC {:+.0} Hz",
+                c.modulation,
+                c.confidence * 100.0,
+                c.snr_db,
+                c.rf_dbfs,
+                c.peak_dev_hz / 1000.0,
+                c.rms_dev_hz / 1000.0,
+                c.center_offset_hz
+            ), theme::text_2()));
+            if let Some(d) = &c.details {
+                ui.label(RichText::new(d).font(theme::sans(11.5)).color(theme::text_3()));
+            }
+        });
+    }
+    if let Some(sweep) = &app.status.pager_sweep {
+        ui.label(mono(format!("sweeping POCSAG/FLEX · {sweep}"), theme::text_2()));
+    }
+    if let Some(d) = &app.status.flex_diag {
+        let g = |k: &str| d.get(k).and_then(serde_json::Value::as_u64).unwrap_or(0);
+        ui.label(mono(format!(
+            "FLEX syncs {} (6.4k {} · 3.2k {} · 1.6k {}) · BCH ok {} fix {} err {}",
+            g("syncs1600") + g("syncs3200") + g("syncs6400"),
+            g("syncs6400"),
+            g("syncs3200"),
+            g("syncs1600"),
+            g("bchOk"),
+            g("bchFixed"),
+            g("bchErr")
+        ), theme::text_2()));
+    }
+}
+
 fn classifier(app: &mut App, ui: &mut Ui) {
+    signal_details(app, ui);
     ui.horizontal(|ui| {
         ui.label(mono(format!("{} detections", app.class_log.len()), theme::text_3()));
         if ui.button("Clear").clicked() {

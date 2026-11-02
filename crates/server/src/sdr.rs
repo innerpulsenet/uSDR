@@ -3795,7 +3795,13 @@ fn run_sdr(
                 }
                 SdrCmd::Filter => {
                     inspect_dirty = true;
+                    // The second receiver rebuilds around its mode's filter
+                    // on its next block.
+                    if let Some(sub) = sub_rx.as_mut() {
+                        sub.invalidate();
+                    }
                     let mut s = status.lock().unwrap();
+                    s.rx2 = sub_rx.as_ref().map(|r| r.status());
                     stamp_filter(&mut s, current_mode);
                     let _ = events.send(SdrEvent::Status(s.clone()));
                 }

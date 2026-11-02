@@ -1179,7 +1179,13 @@ impl Panafall {
             if view.band_plan
                 && let Some(b) = crate::bandplan::within(landing, landing + 1.0).next()
             {
-                text.push_str(&format!("\n{} · {}", b.name, b.kind.name()));
+                // The kind only where the name does not already say it.
+                let kind = b.kind.name();
+                if b.name.to_lowercase().contains(&kind.to_lowercase()) {
+                    text.push_str(&format!("\n{}", b.name));
+                } else {
+                    text.push_str(&format!("\n{} · {kind}", b.name));
+                }
             }
             let g = painter.layout_no_wrap(text, theme::mono(11.0), theme::text());
             let mut r = Rect::from_min_size(pos2(p.x + 12.0, p.y + 14.0), g.size() + vec2(12.0, 8.0));

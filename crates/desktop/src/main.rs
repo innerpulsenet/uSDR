@@ -10,6 +10,7 @@
 mod anim;
 mod app;
 mod audio;
+mod bar;
 mod bandplan;
 mod brand;
 mod colormap;
@@ -22,6 +23,7 @@ mod scope;
 mod screens;
 mod spectrum;
 mod theme;
+mod toolbar;
 mod tuning;
 mod vfo;
 mod wav;

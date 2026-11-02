@@ -550,6 +550,10 @@ struct SdrFilterReq {
     /// Back to the mode's own filter.
     #[serde(default)]
     reset: bool,
+    /// The mode whose filter this is; the current mode when absent (the
+    /// second receiver sets its own mode's this way).
+    #[serde(default)]
+    mode: Option<sdr::SdrMode>,
 }
 
 /// Set the current mode's filter: both edges for sideband (width and
@@ -562,7 +566,7 @@ async fn post_sdr_filter(
     let sdr = guard
         .as_ref()
         .ok_or_else(|| ApiError::BadRequest("the receiver is not running".into()))?;
-    let mode = sdr.status.lock().expect("sdr status").mode;
+    let mode = req.mode.unwrap_or_else(|| sdr.status.lock().expect("sdr status").mode);
     let edges = if req.reset {
         None
     } else {

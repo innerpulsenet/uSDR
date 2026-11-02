@@ -265,15 +265,6 @@ pub fn tune_strip(ui: &mut Ui, hz: f64, step: f64, width: f32) -> Option<f64> {
     (out != 0.0).then_some(out)
 }
 
-/// A thin hairline box with a label, used around readouts.
-pub fn readout(ui: &mut Ui, label: &str, value: &str, color: egui::Color32) {
-    ui.vertical(|ui| {
-        ui.spacing_mut().item_spacing.y = 1.0;
-        ui.label(egui::RichText::new(label).font(theme::mono(9.5)).color(theme::text_3()));
-        ui.label(egui::RichText::new(value).font(theme::mono_bold(12.5)).color(color));
-    });
-    let _ = Stroke::NONE;
-}
 
 #[cfg(test)]
 mod tests {

@@ -66,6 +66,12 @@ pub struct Prefs {
     pub show_side: bool,
     pub show_dock: bool,
     pub show_scope: bool,
+    /// The one-click memory row under the receiver bar.
+    pub show_memories: bool,
+    /// The scope's width in the dock.
+    pub scope_width: f32,
+    /// Which tab the right column shows: the radio, or the tools.
+    pub tools_tab: bool,
     /// Text and control size, as egui's zoom factor (Ctrl+= / Ctrl+− / Ctrl+0).
     pub ui_scale: f32,
     /// Most frames drawn a second: 60, or 30 to spend less CPU.
@@ -100,6 +106,9 @@ impl Default for Prefs {
             show_side: true,
             show_dock: true,
             show_scope: true,
+            show_memories: true,
+            scope_width: 420.0,
+            tools_tab: false,
             shortcuts: true,
             ui_scale: 1.0,
             max_fps: 60,

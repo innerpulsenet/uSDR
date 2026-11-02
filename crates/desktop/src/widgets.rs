@@ -101,6 +101,24 @@ pub fn key_sized(ui: &mut Ui, label: &str, on: bool, tally: Color32, size: egui:
     resp
 }
 
+/// A compact selector chip: lit with its tally color when on, no LED.
+/// For rows of choices (modes, presets) where a full key is too wide.
+pub fn chip_key(ui: &mut Ui, label: &str, on: bool, tally: Color32) -> Response {
+    let galley = ui.painter().layout_no_wrap(label.to_string(), theme::mono_bold(10.5), Color32::PLACEHOLDER);
+    let (rect, resp) = ui.allocate_exact_size(vec2(galley.size().x + 14.0, 22.0), Sense::click());
+    let enabled = ui.is_enabled();
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, enabled, on, label));
+    let t = ui.ctx().animate_bool_with_time(resp.id.with("on"), on, 0.15);
+    let hover = ui.ctx().animate_bool_with_time(resp.id.with("hv"), resp.hovered(), 0.12);
+    let bg = theme::lerp(theme::lerp(theme::surface_3(), theme::surface_4(), hover), alpha(tally, 0.22), t);
+    let stroke = theme::lerp(theme::line(), alpha(tally, 0.75), t);
+    let p = ui.painter();
+    p.rect(rect, CornerRadius::same(3), bg, Stroke::new(1.0, stroke), egui::StrokeKind::Inside);
+    let c = theme::lerp(theme::text_2(), theme::text(), t.max(hover));
+    p.galley(rect.center() - galley.size() / 2.0, galley, if enabled { c } else { theme::text_3() });
+    resp
+}
+
 /// A plain action key.
 pub fn action(ui: &mut Ui, label: &str) -> Response {
     let galley = ui.painter().layout_no_wrap(label.to_string(), theme::sans_semibold(11.5), Color32::PLACEHOLDER);

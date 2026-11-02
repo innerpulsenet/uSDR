@@ -210,7 +210,7 @@ pub fn settings_window(app: &mut App, ctx: &egui::Context) {
                     }
                 });
                 ui.checkbox(&mut app.prefs.shortcuts, "Keyboard tuning shortcuts (arrows, PgUp/PgDn, M, C, R, digits)");
-                ui.checkbox(&mut app.prefs.show_scope, "Show the scope applet");
+                ui.checkbox(&mut app.prefs.show_scope, "Show the scope in the dock");
                 ui.horizontal(|ui| {
                     ui.label("Motion");
                     use crate::prefs::Motion;
@@ -272,7 +272,7 @@ pub fn help_window(app: &mut App, ctx: &egui::Context) {
                 ("M", "mute"),
                 ("R", "record what you hear"),
                 ("Ctrl+1 … 9", "recall a memory"),
-                ("S / D", "show or hide the applets / the dock"),
+                ("S / D", "show or hide the right column / the dock"),
                 ("F11", "full screen"),
                 ("Ctrl+,", "settings"),
                 ("Drop a .iq + .json", "decode it on the server"),

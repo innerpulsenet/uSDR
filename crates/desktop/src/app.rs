@@ -10,7 +10,7 @@ use crate::prefs::{Memory, Motion, Prefs};
 use crate::scope::Scope;
 use crate::spectrum::{Act, Panafall, SliceFlag};
 use crate::theme::{self, alpha};
-use crate::vfo::{Vfo, VfoAct};
+use crate::vfo::Vfo;
 use crate::widgets::{self, Tone};
 use egui::{Align2, CornerRadius, Rect, Sense, Stroke, Ui, pos2, vec2};
 use serde_json::{Value, json};
@@ -108,6 +108,8 @@ pub struct App {
     pub pan: Panafall,
     pub vfo: Vfo,
     pub meter: Meter,
+    /// Receiver B's meter, measured from the spectrum over its passband.
+    pub meter_b: Meter,
     pub scope: Scope,
     pub decodes: VecDeque<DecodeRow>,
     pub class_log: VecDeque<ClassRow>,
@@ -214,6 +216,7 @@ impl App {
             pan: Panafall::default(),
             vfo: Vfo::default(),
             meter: Meter::default(),
+            meter_b: Meter::default(),
             scope: Scope::default(),
             decodes: VecDeque::new(),
             class_log: VecDeque::new(),
@@ -520,6 +523,11 @@ impl App {
             NetEvent::Fft(f) => {
                 self.pan.push(&f, &self.prefs.view, now);
                 self.meter.feed(f.channel_dbfs, f.noise_dbfs, f.peak_iq);
+                if let Some(b) = &self.status.rx2
+                    && let Some((ch, nz)) = proto::channel_level(&f.pwr, f.center_hz, f.rate_hz, b.freq_hz + b.passband_offset_hz, b.bandwidth_hz)
+                {
+                    self.meter_b.feed(ch, nz, f.peak_iq);
+                }
                 if f.peak_iq >= 0.98 {
                     self.clip_until = now + 2.5;
                 }
@@ -884,6 +892,24 @@ impl App {
         }
     }
 
+    /// Record receiver B's audio, as R does A's.
+    pub fn toggle_recording_b(&mut self, ctx: &egui::Context) {
+        if let Some((path, secs)) = self.player_b.stop_recording() {
+            self.toast(ctx, Tone::Ok, format!("Recorded {secs:.1} s of receiver B to {}", path.display()));
+            return;
+        }
+        let Some(b) = self.status.rx2.clone() else { return };
+        let path = self.prefs.record_dir().join(format!(
+            "usdr-audio-B-{}-{}MHz-{}.wav",
+            crate::wav::stamp(),
+            crate::tuning::fmt_mhz(b.freq_hz, 5),
+            b.mode.wire()
+        ));
+        if let Err(e) = self.player_b.start_recording(path) {
+            self.toast(ctx, Tone::Err, format!("Could not start recording: {e}"));
+        }
+    }
+
     pub fn toggle_local_recording(&mut self, ctx: &egui::Context) {
         if let Some((path, secs)) = self.player.stop_recording() {
             self.toast(ctx, Tone::Ok, format!("Recorded {secs:.1} s to {}", path.display()));
@@ -1031,9 +1057,10 @@ impl App {
     fn view_menu(&mut self, ui: &mut Ui) {
         ui.menu_button(egui::RichText::new("View").font(theme::sans_semibold(12.0)), |ui| {
             ui.set_min_width(220.0);
-            ui.checkbox(&mut self.prefs.show_side, "Applets   S");
+            ui.checkbox(&mut self.prefs.show_side, "Radio and tools column   S");
             ui.checkbox(&mut self.prefs.show_dock, "Dock   D");
-            ui.checkbox(&mut self.prefs.show_scope, "Scope applet");
+            ui.checkbox(&mut self.prefs.show_scope, "Scope in the dock");
+            ui.checkbox(&mut self.prefs.show_memories, "Memory row");
             ui.checkbox(&mut self.prefs.view.band_plan, "Band plan");
             ui.checkbox(&mut self.prefs.span_lock, "Span lock   L");
             ui.separator();
@@ -1108,147 +1135,6 @@ impl App {
             }
             ui.label(egui::RichText::new(format!("Web page: {}", self.presence.web.label())).color(theme::text_3()));
         });
-    }
-
-    fn vfo_bar(&mut self, ui: &mut Ui) {
-        let mut acts = Vec::new();
-        let hz = self.active_hz();
-        ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = 14.0;
-            ui.vertical(|ui| {
-                ui.spacing_mut().item_spacing.y = 2.0;
-                ui.horizontal(|ui| {
-                    let b = self.status.rx2.clone().filter(|_| self.active_b);
-                    let (tag, tag_c) = if b.is_some() { ("RX B", theme::VIOLET) } else { ("RX A", theme::AMBER) };
-                    let r = ui.add(egui::Label::new(egui::RichText::new(tag).font(theme::mono_bold(10.0)).color(tag_c)).sense(Sense::click()));
-                    if self.status.rx2.is_some() && r.on_hover_text("Switch receivers (B)").clicked() {
-                        self.active_b = !self.active_b;
-                    }
-                    let mode = b.as_ref().map_or(self.status.mode, |b| b.mode).label();
-                    ui.label(egui::RichText::new(mode).font(theme::mono_bold(10.0)).color(theme::text()));
-                    ui.label(egui::RichText::new(crate::tuning::fmt_hz(self.status.bandwidth_hz)).font(theme::mono(10.0)).color(theme::text_3()));
-                    let agc = match (self.status.gain_db, self.status.tuner_agc) {
-                        (None, true) => if self.status.is_sdrplay() { "IF AGC".to_string() } else { "TUNER AGC".into() },
-                        (None, false) => "AGC".into(),
-                        (Some(g), _) => format!("MAN {g:.0} dB"),
-                    };
-                    ui.label(egui::RichText::new(agc).font(theme::mono(10.0)).color(theme::text_3()));
-                });
-                self.vfo.ui(ui, hz, 46.0, &mut acts);
-            });
-            ui.add_space(8.0);
-            // Step and jog.
-            ui.vertical(|ui| {
-                ui.spacing_mut().item_spacing.y = 4.0;
-                ui.label(egui::RichText::new("STEP").font(theme::mono(9.5)).color(theme::text_3()));
-                let auto = crate::tuning::mode_raster_hz(self.status.mode, hz);
-                let label = match self.prefs.step_hz {
-                    None => format!("AUTO {}", crate::tuning::fmt_short_hz(auto)),
-                    Some(s) => crate::tuning::fmt_short_hz(s),
-                };
-                let color = if self.prefs.step_hz.is_some() { theme::WARN } else { theme::text() };
-                egui::ComboBox::from_id_salt("step")
-                    .selected_text(egui::RichText::new(label).font(theme::mono(11.5)).color(color))
-                    .width(118.0)
-                    .show_ui(ui, |ui| {
-                        if ui.selectable_label(self.prefs.step_hz.is_none(), format!("Auto · mode raster ({})", crate::tuning::fmt_short_hz(auto))).clicked() {
-                            self.prefs.step_hz = None;
-                        }
-                        for s in crate::tuning::STEPS_HZ {
-                            if ui.selectable_label(self.prefs.step_hz == Some(s), crate::tuning::fmt_hz(s)).clicked() {
-                                self.prefs.step_hz = Some(s);
-                            }
-                        }
-                    });
-                if let Some(d) = crate::vfo::tune_strip(ui, hz, self.step_hz(), 220.0) {
-                    let target = self.active_hz() + d;
-                    self.tune(target, true);
-                }
-                ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = 3.0;
-                    for (lbl, n) in [("«", -10.0), ("‹", -1.0), ("›", 1.0), ("»", 10.0)] {
-                        if widgets::action(ui, lbl).on_hover_text(format!("{n:+} step")).clicked() {
-                            let fine = ui.input(|i| i.modifiers.shift);
-                            let st = if fine { (self.step_hz() / 10.0).round().max(100.0) } else { self.step_hz() };
-                            let target = self.active_hz() + n * st;
-                            self.tune(target, true);
-                        }
-                    }
-                    ui.add_space(6.0);
-                    let lock = self.prefs.span_lock;
-                    if widgets::key(ui, "SPAN LOCK", lock, theme::CYAN)
-                        .on_hover_text("Keep the span where it is: clicks, the wheel, the dial and the keys move only the receiver (L)")
-                        .clicked()
-                    {
-                        self.prefs.span_lock = !lock;
-                    }
-                });
-            });
-            ui.add_space(8.0);
-            // Telemetry segments.
-            let (c, status_word) = self.shown_class();
-            ui.vertical(|ui| {
-                ui.spacing_mut().item_spacing.y = 4.0;
-                ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = 16.0;
-                    let rf = self.meter.rf.map_or("—".into(), |d| format!("{d:.1} dBFS"));
-                    crate::vfo::readout(ui, "CH PWR", &rf, theme::text());
-                    let snr = self.meter.snr.map_or("—".into(), |d| format!("{d:.1} dB"));
-                    crate::vfo::readout(ui, "SNR", &snr, theme::text());
-                    let err = self.status.freq_error_hz.map_or("—".into(), |e| {
-                        if e.abs() >= 10_000.0 { format!("{:+.1}k", e / 1000.0) } else { format!("{e:+.0} Hz") }
-                    });
-                    let ec = if self.status.freq_error_hz.is_some_and(|e| e.abs() > 2000.0) { theme::WARN } else { theme::text() };
-                    let r = ui.scope(|ui| crate::vfo::readout(ui, "ERR", &err, ec)).response;
-                    if r.interact(Sense::click()).on_hover_text("Click to calibrate the ppm from this carrier").clicked()
-                        && let Some(l) = &self.link
-                    {
-                        l.post_get("/api/sdr/calibrate", json!({}), Get::Calibrate);
-                    }
-                    let mut notches = Vec::new();
-                    if self.status.rf_notch == Some(true) {
-                        notches.push("AM/FM".to_string());
-                    }
-                    if self.status.dab_notch == Some(true) {
-                        notches.push("DAB".to_string());
-                    }
-                    if !self.status.spurs_hz.is_empty() {
-                        notches.push(format!("SPUR {}", self.status.spurs_hz.len()));
-                    }
-                    let nt = if notches.is_empty() { "OFF".to_string() } else { notches.join(" ") };
-                    crate::vfo::readout(ui, "NOTCH", &nt, if notches.is_empty() { theme::text_3() } else { theme::VIOLET });
-                    if let Some(mark) = self.prefs.view.sql_mark {
-                        let open = self.meter.rf.is_some_and(|r| r >= mark);
-                        crate::vfo::readout(ui, "MARK", if open { "OPEN" } else { "CLOSED" }, if open { theme::OK } else { theme::WARN });
-                    }
-                });
-                ui.horizontal(|ui| {
-                    let (txt, col) = match &c {
-                        Some(c) if status_word != "IDLE" => (
-                            format!("{} · {} · {:.0}%", c.protocol, c.modulation, c.confidence * 100.0),
-                            widgets::protocol_color(&c.protocol),
-                        ),
-                        _ => (mode_idle_text(self.status.mode).to_string(), theme::text_3()),
-                    };
-                    let tone = match status_word {
-                        "ACTIVE" => Tone::Ok,
-                        "HELD" => Tone::Warn,
-                        _ => Tone::Idle,
-                    };
-                    widgets::chip(ui, tone, status_word);
-                    ui.label(egui::RichText::new(txt).font(theme::sans(12.5)).color(col));
-                });
-            });
-        });
-        for a in acts {
-            match a {
-                VfoAct::Step(d) => {
-                    let hz = self.active_hz() + d;
-                    self.tune(hz, true);
-                }
-                VfoAct::Set(hz) => self.tune(hz, false),
-            }
-        }
     }
 
     fn status_bar(&mut self, ui: &mut Ui) {
@@ -1429,7 +1315,7 @@ pub fn icon_button(ui: &mut Ui, glyph: &str, tip: &str) -> egui::Response {
     resp.on_hover_text(tip)
 }
 
-fn mode_idle_text(m: Mode) -> &'static str {
+pub fn mode_idle_text(m: Mode) -> &'static str {
     match m {
         Mode::Wfm => "broadcast FM · classifier off",
         Mode::Am => "envelope detection · no classifier",
@@ -1545,22 +1431,31 @@ impl App {
             .exact_size(26.0)
             .frame(egui::Frame::new().fill(theme::surface_1()).inner_margin(egui::Margin::symmetric(14, 0)).stroke(Stroke::new(1.0, theme::line())))
             .show(ui, |ui| self.status_bar(ui));
+        // The receiver bar: the receiver being driven, across the window.
+        egui::Panel::top("receiver")
+            .frame(egui::Frame::new().fill(theme::surface_1()).inner_margin(egui::Margin::symmetric(14, 8)).stroke(Stroke::new(1.0, theme::line())))
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                crate::bar::receiver_bar(self, ui);
+                // The index tick: the bar belongs to the active receiver.
+                let r = ui.max_rect().expand2(vec2(14.0, 8.0));
+                ui.painter().rect_filled(Rect::from_min_size(r.left_top(), vec2(16.0, 2.0)), CornerRadius::ZERO, theme::EMBER);
+            });
+        if self.prefs.show_memories {
+            egui::Panel::top("memories")
+                .exact_size(30.0)
+                .frame(egui::Frame::new().fill(theme::surface_1()).inner_margin(egui::Margin::symmetric(14, 4)).stroke(Stroke::new(1.0, theme::line())))
+                .show(ui, |ui| crate::bar::memory_row(self, ui));
+        }
         if self.prefs.show_side {
             let resp = egui::Panel::right("side")
                 .resizable(true)
                 .default_size(self.prefs.side_width)
-                .size_range(270.0..=460.0)
+                .size_range(260.0..=440.0)
                 .frame(egui::Frame::new().fill(theme::surface_1()).inner_margin(egui::Margin::same(10)))
                 .show(ui, |ui| {
                     theme::paint_weave(ui.painter(), ui.max_rect().expand(10.0));
-                    let mut area = egui::ScrollArea::vertical().auto_shrink([false, false]);
-                    // QA: start the applet column scrolled (USDR_QA_SCROLL=px).
-                    if let Some(y) = std::env::var("USDR_QA_SCROLL").ok().and_then(|v| v.parse::<f32>().ok()) {
-                        area = area.vertical_scroll_offset(y);
-                    }
-                    area.show(ui, |ui| {
-                        crate::panels::side(self, ui);
-                    });
+                    crate::panels::side(self, ui);
                 });
             self.prefs.side_width = resp.response.rect.width();
         }
@@ -1578,14 +1473,12 @@ impl App {
             .show(ui, |ui| {
                 egui::Frame::new()
                     .fill(theme::surface_1())
-                    .inner_margin(egui::Margin::symmetric(14, 8))
+                    .inner_margin(egui::Margin::symmetric(10, 2))
                     .show(ui, |ui| {
                         ui.set_width(ui.available_width());
-                        self.vfo_bar(ui);
+                        ui.set_height(28.0);
+                        crate::toolbar::toolbar(self, ui);
                     });
-                // The index tick: this is the active receiver.
-                let r = ui.min_rect();
-                ui.painter().rect_filled(Rect::from_min_size(r.left_top(), vec2(16.0, 2.0)), CornerRadius::ZERO, theme::EMBER);
                 self.panafall(ui);
             });
         crate::screens::settings_window(self, &ctx);
@@ -1816,6 +1709,43 @@ mod tests {
         h.state_mut().app.tune(146.1e6, true);
         let posts = drain(&h);
         assert_eq!(posts, vec![("/api/sdr/rx2".into(), json!({ "freq_hz": 146.1e6, "mode": "nfm" }))]);
+    }
+
+    #[test]
+    fn the_receiver_bar_follows_receiver_b() {
+        let mut h = harness();
+        let range = proto::FilterRange { min_width_hz: 2_000.0, max_width_hz: 20_000.0, max_edge_hz: 10_000.0, symmetric: true };
+        h.state_mut().app.modes = vec![ModeCaps { mode: Mode::Am, filter: Some(range), bandwidth_hz: 10_000.0, ..Default::default() }];
+        h.state_mut().app.status.rx2 = Some(proto::SubRx { freq_hz: 146.1e6, mode: Mode::Nfm, bandwidth_hz: 25_000.0, ..Default::default() });
+        h.state_mut().app.active_b = true;
+        h.run_steps(3);
+        // B's modes are the listener's five; P25 is not among them.
+        let role = egui::accesskit::Role::CheckBox;
+        assert!(h.query_by_role_and_label(role, "P25").is_none());
+        h.get_by_role_and_label(role, "AM").click();
+        h.run_steps(2);
+        assert!(drain(&h).contains(&("/api/sdr/rx2".into(), json!({ "freq_hz": 146.1e6, "mode": "am" }))));
+        // Its filter is set for its own mode.
+        h.state_mut().app.status.rx2.as_mut().unwrap().mode = Mode::Am;
+        h.run_steps(2);
+        h.get_by_role_and_label(role, "6k").click();
+        h.run_steps(2);
+        assert!(drain(&h).contains(&("/api/sdr/filter".into(), json!({ "low_hz": -3000.0, "high_hz": 3000.0, "mode": "am" }))));
+        // And A comes back with a click.
+        h.get_by_role_and_label(role, "A").click();
+        h.run_steps(2);
+        assert!(!h.state().app.active_b);
+    }
+
+    #[test]
+    fn the_right_column_keeps_the_radio_and_the_tools_apart() {
+        let mut h = harness();
+        assert!(h.query_by_label("BIAS-T").is_some());
+        assert!(h.query_by_label("SAVE I/Q").is_none());
+        h.get_by_label("TOOLS").click();
+        h.run_steps(2);
+        assert!(h.query_by_label("SAVE I/Q").is_some());
+        assert!(h.query_by_label("BIAS-T").is_none());
     }
 
     #[test]
