@@ -226,7 +226,19 @@ fn scope(app: &mut App, ui: &mut Ui) {
     ui.horizontal(|ui| {
         ui.label(RichText::new(title).font(theme::sans_semibold(12.0)).color(theme::text()));
         ui.label(RichText::new(format!("{tag} · click to switch")).font(theme::mono(10.0)).color(theme::text_3()));
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.spacing_mut().item_spacing.x = 3.0;
+            for hz in [25.0f32, 10.0, 5.0] {
+                if widgets::chip_key(ui, &format!("{hz:.0} Hz"), (app.prefs.scope_rate_hz - hz).abs() < 0.1, theme::OK)
+                    .on_hover_text("How often the scope updates")
+                    .clicked()
+                {
+                    app.prefs.scope_rate_hz = hz;
+                }
+            }
+        });
     });
+    app.scope.rate_hz = app.prefs.scope_rate_hz;
     let pass = crate::panels::passband_slice(app);
     let rect = ui.available_rect_before_wrap();
     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect));

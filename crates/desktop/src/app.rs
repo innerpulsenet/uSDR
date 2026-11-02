@@ -162,6 +162,8 @@ pub struct App {
     pub memory_armed: bool,
     pub audio_devices: Vec<String>,
     pub fullscreen: bool,
+    /// The window is wide enough for the memories to ride on the toolbar.
+    pub memories_on_toolbar: bool,
 }
 
 impl App {
@@ -262,6 +264,7 @@ impl App {
             memory_armed: false,
             audio_devices: Player::devices(),
             fullscreen: false,
+            memories_on_toolbar: false,
         }
     }
 
@@ -1441,7 +1444,11 @@ impl App {
                 let r = ui.max_rect().expand2(vec2(14.0, 8.0));
                 ui.painter().rect_filled(Rect::from_min_size(r.left_top(), vec2(16.0, 2.0)), CornerRadius::ZERO, theme::EMBER);
             });
-        if self.prefs.show_memories {
+        // The toolbar's own items take about 830 px and the memories about
+        // 470; the toolbar runs the width of the display, beside the column.
+        let toolbar_room = ui.available_width() - if self.prefs.show_side { self.prefs.side_width } else { 0.0 };
+        self.memories_on_toolbar = toolbar_room >= 1340.0;
+        if self.prefs.show_memories && !self.memories_on_toolbar {
             egui::Panel::top("memories")
                 .exact_size(30.0)
                 .frame(egui::Frame::new().fill(theme::surface_1()).inner_margin(egui::Margin::symmetric(14, 4)).stroke(Stroke::new(1.0, theme::line())))

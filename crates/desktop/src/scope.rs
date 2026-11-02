@@ -6,6 +6,11 @@
 //! rising zero crossing, or for digital modes an eye diagram whose clock
 //! phase is searched each frame, with the eye opening and EVM measured from
 //! the same strobes.
+//!
+//! It updates at its own rate (10 Hz unless set otherwise), not the
+//! display's: between updates it draws what it last measured, the
+//! passband trace is smoothed across updates, and the oscilloscope keeps
+//! its last few sweeps fading behind the newest, like a phosphor.
 
 use crate::theme::{self, alpha};
 use egui::{Align2, Color32, CornerRadius, Pos2, Rect, Sense, Shape, Stroke, Ui, pos2, vec2};
@@ -39,6 +44,16 @@ pub struct Scope {
     /// The discriminator over the last couple of dozen symbols, normalized.
     wave: Vec<f32>,
     levels: Vec<f32>,
+    /// Updates a second.
+    pub rate_hz: f32,
+    last_update: f64,
+    /// The frame the scope last measured, drawn until the next update.
+    held: Option<FftFrame>,
+    /// The passband slice, normalized and smoothed across updates.
+    pass_smooth: Vec<f32>,
+    /// The oscilloscope's recent sweeps, newest first, as (x 0..1, y −1..1).
+    osc: VecDeque<Vec<[f32; 2]>>,
+    eye_two_level: bool,
 }
 
 impl Default for Scope {
@@ -58,6 +73,12 @@ impl Default for Scope {
             strobes: VecDeque::new(),
             wave: Vec::new(),
             levels: Vec::new(),
+            rate_hz: 10.0,
+            last_update: f64::NEG_INFINITY,
+            held: None,
+            pass_smooth: Vec::new(),
+            osc: VecDeque::new(),
+            eye_two_level: false,
         }
     }
 }
@@ -156,10 +177,32 @@ impl Scope {
         let resp = ui.allocate_rect(rect, Sense::click());
         let painter = ui.painter_at(rect);
         painter.rect_filled(rect, CornerRadius::same(4), theme::ink());
-        let Some(f) = f else {
+        let Some(live) = f else {
             painter.text(rect.center(), Align2::CENTER_CENTER, "no signal yet", theme::sans(12.0), theme::text_3());
             return;
         };
+        // Measure at the scope's own rate; draw the held measurement between.
+        let now = ui.input(|i| i.time);
+        let fresh = now - self.last_update >= 1.0 / f64::from(self.rate_hz.max(1.0)) || self.held.is_none();
+        if fresh {
+            self.last_update = now;
+            self.held = Some(live.clone());
+            if let Some((p, (lo, hi))) = pass
+                && p.len() > 2
+            {
+                let range = (hi - lo).max(1.0);
+                let tr: Vec<f32> = p.iter().map(|v| ((v - lo) / range).clamp(0.0, 1.0)).collect();
+                if self.pass_smooth.len() == tr.len() {
+                    for (a, b) in self.pass_smooth.iter_mut().zip(&tr) {
+                        *a += (b - *a) * 0.45;
+                    }
+                } else {
+                    self.pass_smooth = tr;
+                }
+            }
+        }
+        let held = self.held.clone();
+        let Some(f) = held.as_ref() else { return };
         let gap = 8.0;
         // Readouts get a strip of their own under the plots, never over a trace.
         let strip = 16.0;
@@ -173,7 +216,7 @@ impl Scope {
             // Digital: the eye on the left, the slicer on the right.
             grid(&painter, left, 4, 4);
             grid(&painter, right, 8, 4);
-            self.eye(&painter, left, f, mode);
+            self.eye(&painter, left, f, mode, fresh);
             self.slicer(&painter, right, mode);
             painter.text(pos2(left.left() + 4.0, text_y), Align2::LEFT_BOTTOM, &self.level_text, theme::mono(10.0), theme::text_2());
             painter.text(pos2(right.right() - 4.0, text_y), Align2::RIGHT_BOTTOM, &self.time_text, theme::mono(10.0), theme::text_3());
@@ -188,16 +231,15 @@ impl Scope {
         let mini = Rect::from_min_max(pos2(left.left(), spec.bottom() + 14.0), left.max);
         grid(&painter, spec, 4, 3);
         let (trace, axis): (Vec<f32>, Vec<(f32, String)>) = if sub == Sub::Passband && !symbols {
-            match pass {
-                Some((p, (lo, hi))) if p.len() > 2 => {
-                    let range = (hi - lo).max(1.0);
-                    let tr: Vec<f32> = p.iter().map(|v| ((v - lo) / range).clamp(0.0, 1.0)).collect();
-                    (tr, vec![(0.0, "−".into()), (0.5, "center".into()), (1.0, "+".into())])
-                }
-                _ => (Vec::new(), Vec::new()),
+            if self.pass_smooth.len() > 2 {
+                (self.pass_smooth.clone(), vec![(0.0, "−".into()), (0.5, "center".into()), (1.0, "+".into())])
+            } else {
+                (Vec::new(), Vec::new())
             }
         } else {
-            self.audio_spectrum(&f.scope);
+            if fresh {
+                self.audio_spectrum(&f.scope);
+            }
             let max_hz = f.scope_rate_hz.max(1.0) / 2.0;
             let tr: Vec<f32> = self.spectrum.iter().map(|d| ((d + 80.0) / 80.0).clamp(0.0, 1.0)).collect();
             let mut ax: Vec<(f32, String)> = (0..=4)
@@ -230,17 +272,20 @@ impl Scope {
             crate::spectrum::fill_under(&painter, &pts, spec.bottom(), theme::AMBER, 0.4);
             painter.add(Shape::line(pts.clone(), Stroke::new(2.6, alpha(theme::AMBER, 0.25))));
             painter.add(Shape::line(pts, Stroke::new(1.1, Color32::from_rgb(0xff, 0xe4, 0xbd))));
-            // Resampled to a fixed width so rows of any length stack.
-            let row: Vec<f32> = (0..MINI_W)
+            // Resampled to a fixed width so rows of any length stack. One row
+            // per update, so the little waterfall runs at the scope's rate.
+            let row: Vec<f32> = if !fresh { Vec::new() } else { (0..MINI_W)
                 .map(|i| {
                     let x = i as f32 / (MINI_W - 1) as f32 * (trace.len() - 1) as f32;
                     let a = x as usize;
                     let b = (a + 1).min(trace.len() - 1);
                     trace[a] + (trace[b] - trace[a]) * (x - a as f32)
                 })
-                .collect();
-            self.mini_wf.push_front(row);
-            self.mini_wf.truncate(MINI_H);
+                .collect() };
+            if fresh {
+                self.mini_wf.push_front(row);
+                self.mini_wf.truncate(MINI_H);
+            }
         }
         for (t, label) in axis {
             let x = spec.left() + t * spec.width();
@@ -265,11 +310,7 @@ impl Scope {
 
         // ---- right: time domain
         grid(&painter, right, 8, 4);
-        if symbols {
-            self.eye(&painter, right, f, mode);
-        } else {
-            self.oscilloscope(&painter, right, f, mode == Mode::Pager && sub == Sub::Disc);
-        }
+        self.oscilloscope(&painter, right, f, mode == Mode::Pager && sub == Sub::Disc, fresh);
         painter.text(pos2(right.left() + 4.0, text_y), Align2::LEFT_BOTTOM, &self.level_text, theme::mono(10.0), theme::text_2());
         painter.text(pos2(right.right() - 4.0, text_y), Align2::RIGHT_BOTTOM, &self.time_text, theme::mono(10.0), theme::text_3());
         if resp.clicked() {
@@ -277,11 +318,36 @@ impl Scope {
         }
     }
 
-    fn oscilloscope(&mut self, painter: &egui::Painter, r: Rect, f: &FftFrame, disc: bool) {
+    fn oscilloscope(&mut self, painter: &egui::Painter, r: Rect, f: &FftFrame, disc: bool, fresh: bool) {
         let s = &f.scope;
-        if s.len() < 16 {
-            return;
+        if fresh && s.len() >= 16 {
+            self.measure_sweep(f, disc);
         }
+        if disc {
+            for (lvl, name) in [(0.6, "+3"), (0.2, "+1"), (-0.2, "−1"), (-0.6, "−3")] {
+                let y = r.center().y - lvl * (r.height() / 2.0 - 4.0);
+                crate::spectrum::dashed_h(painter, r.left(), r.left() + r.width() * 0.76, y, alpha(theme::WARN, 0.35));
+                painter.text(pos2(r.left() + r.width() * 0.77, y), Align2::LEFT_CENTER, name, theme::mono(9.0), alpha(theme::WARN, 0.8));
+            }
+        }
+        let to_screen = |p: &[f32; 2]| pos2(r.left() + p[0] * r.width(), r.center().y - p[1] * (r.height() / 2.0 - 4.0));
+        // Older sweeps first, each fainter, then the newest with its glow.
+        let n = self.osc.len();
+        for (age, sweep) in self.osc.iter().enumerate().rev() {
+            let pts: Vec<Pos2> = sweep.iter().map(to_screen).collect();
+            if age == 0 {
+                painter.add(Shape::line(pts.clone(), Stroke::new(3.0, alpha(theme::OK, 0.2))));
+                painter.add(Shape::line(pts, Stroke::new(1.2, Color32::from_rgb(0xa8, 0xff, 0xcc))));
+            } else {
+                let a = 0.35 * (1.0 - age as f32 / n.max(1) as f32);
+                painter.add(Shape::line(pts, Stroke::new(1.0, alpha(theme::OK, a))));
+            }
+        }
+    }
+
+    /// One oscilloscope sweep from a frame: triggered, normalized, kept.
+    fn measure_sweep(&mut self, f: &FftFrame, disc: bool) {
+        let s = &f.scope;
         let mut start = 0;
         if s.len() > 128 {
             let lim = (s.len() - 64).min(s.len() * 35 / 100);
@@ -293,25 +359,13 @@ impl Scope {
             }
         }
         let seg = &s[start..];
-        let pts: Vec<Pos2> = seg
+        let sweep: Vec<[f32; 2]> = seg
             .iter()
             .enumerate()
-            .map(|(i, v)| {
-                pos2(
-                    r.left() + i as f32 / (seg.len() - 1).max(1) as f32 * r.width(),
-                    r.center().y - (*v as f32 / 32000.0) * (r.height() / 2.0 - 4.0),
-                )
-            })
+            .map(|(i, v)| [i as f32 / (seg.len() - 1).max(1) as f32, (*v as f32 / 32000.0).clamp(-1.2, 1.2)])
             .collect();
-        if disc {
-            for (lvl, name) in [(0.6, "+3"), (0.2, "+1"), (-0.2, "−1"), (-0.6, "−3")] {
-                let y = r.center().y - lvl * (r.height() / 2.0 - 4.0);
-                crate::spectrum::dashed_h(painter, r.left(), r.left() + r.width() * 0.76, y, alpha(theme::WARN, 0.35));
-                painter.text(pos2(r.left() + r.width() * 0.77, y), Align2::LEFT_CENTER, name, theme::mono(9.0), alpha(theme::WARN, 0.8));
-            }
-        }
-        painter.add(Shape::line(pts.clone(), Stroke::new(3.0, alpha(theme::OK, 0.22))));
-        painter.add(Shape::line(pts, Stroke::new(1.2, Color32::from_rgb(0xa8, 0xff, 0xcc))));
+        self.osc.push_front(sweep);
+        self.osc.truncate(4);
         let rms = (s.iter().map(|v| (*v as f32 / 32768.0).powi(2)).sum::<f32>() / s.len() as f32).sqrt();
         if disc {
             let mean = s.iter().map(|v| *v as f32 / 32000.0).sum::<f32>() / s.len() as f32;
@@ -323,11 +377,16 @@ impl Scope {
         self.time_text = if ms_div >= 1.0 { format!("{ms_div:.1} ms/div") } else { format!("{:.0} µs/div", ms_div * 1000.0) };
     }
 
-    fn eye(&mut self, painter: &egui::Painter, r: Rect, f: &FftFrame, mode: Mode) {
-        let s = &f.scope;
-        if s.len() < 64 {
-            return;
+    fn eye(&mut self, painter: &egui::Painter, r: Rect, f: &FftFrame, mode: Mode, fresh: bool) {
+        if fresh && f.scope.len() >= 64 {
+            self.measure_eye(f, mode);
         }
+        self.draw_eye(painter, r, mode);
+    }
+
+    /// Clock search, sweeps, decisions and the eye's figures from a frame.
+    fn measure_eye(&mut self, f: &FftFrame, mode: Mode) {
+        let s = &f.scope;
         let rate = if f.scope_rate_hz > 1000.0 { f.scope_rate_hz } else { 48_000.0 };
         let two_level = mode == Mode::Packet || (mode != Mode::Flex && f.symbol_rate_hz > 0.0 && f.symbol_rate_hz <= 1200.0);
         let sym = if f.symbol_rate_hz > 0.0 { f.symbol_rate_hz } else if mode == Mode::Flex { 1600.0 } else { 4800.0 };
@@ -383,26 +442,6 @@ impl Scope {
         }
         self.eye_sweeps.push_front(sweeps);
         self.eye_sweeps.truncate(4);
-
-        let half = r.height() / 2.0 - 12.0;
-        for l in levels {
-            let y = r.center().y - l * half;
-            painter.line_segment([pos2(r.left(), y), pos2(r.right(), y)], Stroke::new(1.0, alpha(theme::CYAN, 0.18)));
-        }
-        for xs in [0.25, 0.75] {
-            crate::spectrum::dashed_v(painter, r.left() + r.width() * xs, r.top(), r.bottom(), alpha(theme::OK, 0.45));
-        }
-        for (age, sweeps) in self.eye_sweeps.iter().enumerate().rev() {
-            let a = 0.32 * (1.0 - age as f32 / 4.0);
-            for sw in sweeps {
-                let pts: Vec<Pos2> = sw
-                    .iter()
-                    .enumerate()
-                    .map(|(i, v)| pos2(r.left() + i as f32 / (sw.len() - 1).max(1) as f32 * r.width(), r.center().y - v.clamp(-1.2, 1.2) * half))
-                    .collect();
-                painter.add(Shape::line(pts, Stroke::new(1.0, alpha(if mode == Mode::Flex { theme::CYAN } else { theme::OK }, a))));
-            }
-        }
         // Decisions at every strobe, for the slicer and its histogram.
         let mut counts = vec![0f32; levels.len()];
         let mut t = phase;
@@ -427,14 +466,41 @@ impl Scope {
         let n = ((shown * sps) as usize).min(x.len());
         self.wave = x[x.len() - n..].to_vec();
         self.levels = levels.to_vec();
+        self.eye_two_level = two_level;
+        self.level_text = format!("eye {:.0}% · EVM {:.1}%", self.eye_open, self.evm);
+        self.time_text = format!("{:.1} kBd", rs / 1000.0);
+    }
+
+    fn draw_eye(&self, painter: &egui::Painter, r: Rect, mode: Mode) {
+        let half = r.height() / 2.0 - 12.0;
+        for l in &self.levels {
+            let y = r.center().y - l * half;
+            painter.line_segment([pos2(r.left(), y), pos2(r.right(), y)], Stroke::new(1.0, alpha(theme::CYAN, 0.18)));
+        }
+        for xs in [0.25, 0.75] {
+            crate::spectrum::dashed_v(painter, r.left() + r.width() * xs, r.top(), r.bottom(), alpha(theme::OK, 0.45));
+        }
+        for (age, sweeps) in self.eye_sweeps.iter().enumerate().rev() {
+            let a = 0.32 * (1.0 - age as f32 / 4.0);
+            for sw in sweeps {
+                let pts: Vec<Pos2> = sw
+                    .iter()
+                    .enumerate()
+                    .map(|(i, v)| pos2(r.left() + i as f32 / (sw.len() - 1).max(1) as f32 * r.width(), r.center().y - v.clamp(-1.2, 1.2) * half))
+                    .collect();
+                painter.add(Shape::line(pts, Stroke::new(1.0, alpha(if mode == Mode::Flex { theme::CYAN } else { theme::OK }, a))));
+            }
+        }
+        if self.levels.is_empty() {
+            return;
+        }
         // Calipers at the first strobe.
+        let two_level = self.eye_two_level;
         let open_h = self.eye_open / 100.0 * if two_level { 0.7 } else { 0.38 } * half;
         let cx = r.left() + r.width() * 0.25;
         painter.line_segment([pos2(cx - 6.0, r.center().y - open_h), pos2(cx + 6.0, r.center().y - open_h)], Stroke::new(1.5, theme::AMBER));
         painter.line_segment([pos2(cx - 6.0, r.center().y + open_h), pos2(cx + 6.0, r.center().y + open_h)], Stroke::new(1.5, theme::AMBER));
         painter.text(pos2(cx + 8.0, r.center().y - open_h - 2.0), Align2::LEFT_BOTTOM, format!("EYE {:.0}%", self.eye_open), theme::mono(9.5), theme::AMBER);
-        self.level_text = format!("eye {:.0}% · EVM {:.1}%", self.eye_open, self.evm);
-        self.time_text = format!("{:.1} kBd", rs / 1000.0);
     }
 }
 

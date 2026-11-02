@@ -164,16 +164,34 @@ pub struct Fader<'a, F: Fn(f64) -> String> {
 impl<F: Fn(f64) -> String> Fader<'_, F> {
     /// Returns (changed, released-after-change).
     pub fn show(self, ui: &mut Ui) -> (bool, bool) {
+        self.run(ui, false)
+    }
+
+    /// On one 22 px line: the label, the track, the value.
+    pub fn show_compact(self, ui: &mut Ui) -> (bool, bool) {
+        self.run(ui, true)
+    }
+
+    fn run(self, ui: &mut Ui, compact: bool) -> (bool, bool) {
         let w = ui.available_width();
-        let h = if self.ticks.is_empty() { 34.0 } else { 46.0 };
+        let h = if compact { 22.0 } else if self.ticks.is_empty() { 34.0 } else { 46.0 };
         let (rect, resp) = ui.allocate_exact_size(vec2(w, h), Sense::click_and_drag());
         let (enabled, value, label) = (self.enabled, *self.value, self.label);
         resp.widget_info(|| egui::WidgetInfo::slider(enabled, value, label));
         let p = ui.painter();
         let a = if self.enabled { 1.0 } else { 0.5 };
-        p.text(rect.left_top(), Align2::LEFT_TOP, self.label, theme::mono(10.0), alpha(theme::text_3(), a));
-        p.text(rect.right_top(), Align2::RIGHT_TOP, (self.text)(*self.value), theme::mono_bold(11.5), alpha(self.color, a.max(0.7)));
-        let track = Rect::from_min_max(pos2(rect.left() + 4.0, rect.top() + 18.0), pos2(rect.right() - 4.0, rect.top() + 24.0));
+        let value_text = (self.text)(*self.value);
+        let track = if compact {
+            let lw = p.layout_no_wrap(self.label.to_string(), theme::mono(9.5), theme::text_3()).size().x;
+            let vw = p.layout_no_wrap(value_text.clone(), theme::mono_bold(11.0), theme::text()).size().x.max(44.0);
+            p.text(pos2(rect.left(), rect.center().y), Align2::LEFT_CENTER, self.label, theme::mono(9.5), alpha(theme::text_3(), a));
+            p.text(pos2(rect.right(), rect.center().y), Align2::RIGHT_CENTER, &value_text, theme::mono_bold(11.0), alpha(self.color, a.max(0.7)));
+            Rect::from_min_max(pos2(rect.left() + lw + 10.0, rect.center().y - 3.0), pos2(rect.right() - vw - 10.0, rect.center().y + 3.0))
+        } else {
+            p.text(rect.left_top(), Align2::LEFT_TOP, self.label, theme::mono(10.0), alpha(theme::text_3(), a));
+            p.text(rect.right_top(), Align2::RIGHT_TOP, &value_text, theme::mono_bold(11.5), alpha(self.color, a.max(0.7)));
+            Rect::from_min_max(pos2(rect.left() + 4.0, rect.top() + 18.0), pos2(rect.right() - 4.0, rect.top() + 24.0))
+        };
         p.rect_filled(track, CornerRadius::same(2), theme::ink());
         p.rect_stroke(track, CornerRadius::same(2), Stroke::new(1.0, theme::line()), egui::StrokeKind::Outside);
         let span = (self.max - self.min).max(1e-9);

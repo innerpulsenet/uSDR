@@ -70,6 +70,8 @@ pub struct Prefs {
     pub show_memories: bool,
     /// The scope's width in the dock.
     pub scope_width: f32,
+    /// Scope updates a second.
+    pub scope_rate_hz: f32,
     /// Which tab the right column shows: the radio, or the tools.
     pub tools_tab: bool,
     /// Text and control size, as egui's zoom factor (Ctrl+= / Ctrl+− / Ctrl+0).
@@ -108,6 +110,7 @@ impl Default for Prefs {
             show_scope: true,
             show_memories: true,
             scope_width: 420.0,
+            scope_rate_hz: 10.0,
             tools_tab: false,
             shortcuts: true,
             ui_scale: 1.0,

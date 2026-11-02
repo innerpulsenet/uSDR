@@ -137,7 +137,7 @@ fn readout(app: &mut App, ui: &mut Ui) {
             };
             ui.label(small(agc));
         });
-        app.vfo.ui(ui, hz, 44.0, &mut acts);
+        app.vfo.ui(ui, hz, 40.0, &mut acts);
     });
     for a in acts {
         match a {
@@ -181,20 +181,25 @@ fn tuning(app: &mut App, ui: &mut Ui) {
                 app.prefs.span_lock = !lock;
             }
         });
-        if let Some(d) = crate::vfo::tune_strip(ui, hz, app.step_hz(), 214.0) {
-            let target = app.active_hz() + d;
-            app.tune(target, true);
-        }
+        // The jog keys either side of the strip: « ‹ [strip] › ».
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 3.0;
-            for (lbl, n) in [("«", -10.0), ("‹", -1.0), ("›", 1.0), ("»", 10.0)] {
+            let jog = |ui: &mut Ui, app: &mut App, lbl: &str, n: f64| {
                 if widgets::chip_key(ui, lbl, false, theme::AMBER).on_hover_text(format!("{n:+} step · Shift for a tenth")).clicked() {
                     let fine = ui.input(|i| i.modifiers.shift);
                     let st = if fine { (app.step_hz() / 10.0).round().max(100.0) } else { app.step_hz() };
                     let target = app.active_hz() + n * st;
                     app.tune(target, true);
                 }
+            };
+            jog(ui, app, "«", -10.0);
+            jog(ui, app, "‹", -1.0);
+            if let Some(d) = crate::vfo::tune_strip(ui, hz, app.step_hz(), 150.0, 24.0) {
+                let target = app.active_hz() + d;
+                app.tune(target, true);
             }
+            jog(ui, app, "›", 1.0);
+            jog(ui, app, "»", 10.0);
         });
     });
 }
@@ -264,20 +269,10 @@ fn filter(app: &mut App, ui: &mut Ui) {
         None
     };
     let custom = if b.is_some() { range.is_some() && (width - app.modes.iter().find(|c| c.mode == mode).map_or(0.0, |c| c.bandwidth_hz)).abs() > 1.0 } else { app.status.filter_custom };
-    bay(ui, "FILTER", |ui| {
+    let label = format!("FILTER  {} … {}", k(lo), k(hi));
+    bay(ui, &label, |ui| {
         ui.set_min_width(250.0);
         ui.set_max_width(310.0);
-        ui.horizontal(|ui| {
-            ui.label(RichText::new(format!("{} … {}", k(lo), k(hi))).font(theme::mono_bold(12.0)).color(theme::AMBER));
-            ui.label(small(format!("width {}", k(width))));
-            if range.is_some() && custom && widgets::chip_key(ui, "RESET", false, theme::OK).on_hover_text("Back to the mode's own filter").clicked() {
-                if b.is_some() {
-                    app.post("/api/sdr/filter", json!({ "reset": true, "mode": mode.wire() }));
-                } else {
-                    app.reset_filter();
-                }
-            }
-        });
         let Some(range) = range else {
             ui.label(small(if app.server.as_ref().is_some_and(|i| i.has("filter")) {
                 format!("{} keeps its decoder's filter", mode.label())
@@ -309,6 +304,13 @@ fn filter(app: &mut App, ui: &mut Ui) {
                     set = Some(around(*p));
                 }
             }
+            if custom && widgets::chip_key(ui, "RESET", false, theme::OK).on_hover_text("Back to the mode's own filter").clicked() {
+                if b.is_some() {
+                    app.post("/api/sdr/filter", json!({ "reset": true, "mode": mode.wire() }));
+                } else {
+                    app.reset_filter();
+                }
+            }
         });
         let mut wv = width as f64;
         let (ch, _) = Fader {
@@ -317,13 +319,13 @@ fn filter(app: &mut App, ui: &mut Ui) {
             max: range.max_width_hz as f64,
             step: if range.max_width_hz > 50_000.0 { 5_000.0 } else { 100.0 },
             fine: if range.max_width_hz > 50_000.0 { 1_000.0 } else { 50.0 },
-            label: if range.symmetric { "WIDTH" } else { "WIDTH · Ctrl-drag the passband to shift" },
-            text: |v| format!("{:.2} kHz", v / 1000.0),
+            label: "WIDTH",
+            text: |v| format!("{:.2}k", v / 1000.0),
             color: theme::AMBER,
             enabled: true,
             ticks: vec![],
         }
-        .show(ui);
+        .show_compact(ui);
         if ch {
             set = Some(around(wv as f32));
         }
@@ -361,7 +363,7 @@ fn audio(app: &mut App, ui: &mut Ui) {
             enabled: !muted,
             ticks: vec![],
         }
-        .show(ui);
+        .show_compact(ui);
         if ch {
             if is_b {
                 app.prefs.volume_b = (v / 100.0) as f32;
@@ -392,6 +394,15 @@ fn audio(app: &mut App, ui: &mut Ui) {
                     app.toggle_local_recording(&ctx);
                 }
             }
+            // Output level, beside the keys.
+            let r = player.reading();
+            let lw = (ui.available_width() - 30.0).clamp(30.0, 120.0);
+            let (rect, _) = ui.allocate_exact_size(vec2(lw, 4.0), Sense::hover());
+            ui.painter().rect_filled(rect, egui::CornerRadius::same(1), theme::ink());
+            let lvl = |v: f32| ((20.0 * v.max(1e-5).log10() + 60.0) / 60.0).clamp(0.0, 1.0);
+            ui.painter().rect_filled(egui::Rect::from_min_size(rect.min, vec2(rect.width() * lvl(r.rms), rect.height())), egui::CornerRadius::same(1), alpha(theme::OK, 0.8));
+            let px = rect.left() + rect.width() * lvl(r.peak);
+            ui.painter().line_segment([egui::pos2(px, rect.top()), egui::pos2(px, rect.bottom())], Stroke::new(1.5, theme::text()));
             ui.menu_button(RichText::new("···").font(theme::mono_bold(11.0)), |ui| {
                 ui.set_min_width(220.0);
                 let mut pan = if is_b { app.prefs.pan_b } else { app.prefs.pan } as f64;
@@ -430,14 +441,6 @@ fn audio(app: &mut App, ui: &mut Ui) {
                 }
             });
         });
-        // Output level under the controls.
-        let r = if is_b { app.player_b.reading() } else { app.player.reading() };
-        let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width().min(210.0), 4.0), Sense::hover());
-        ui.painter().rect_filled(rect, egui::CornerRadius::same(1), theme::ink());
-        let lvl = |v: f32| ((20.0 * v.max(1e-5).log10() + 60.0) / 60.0).clamp(0.0, 1.0);
-        ui.painter().rect_filled(egui::Rect::from_min_size(rect.min, vec2(rect.width() * lvl(r.rms), rect.height())), egui::CornerRadius::same(1), alpha(theme::OK, 0.8));
-        let px = rect.left() + rect.width() * lvl(r.peak);
-        ui.painter().line_segment([egui::pos2(px, rect.top()), egui::pos2(px, rect.bottom())], Stroke::new(1.5, theme::text()));
     });
 }
 
@@ -445,16 +448,18 @@ fn meter(app: &mut App, ui: &mut Ui) {
     let is_b = app.active_b && app.status.rx2.is_some();
     let rm = app.reduce_motion();
     let mark = app.prefs.view.sql_mark;
+    // The last bay takes whatever width the row has left.
+    let w = (ui.available_width() - 20.0).clamp(300.0, 560.0);
     bay(ui, if is_b { "SIGNAL B" } else { "SIGNAL" }, |ui| {
-        ui.set_min_width(300.0);
-        ui.set_max_width(300.0);
+        ui.set_min_width(w);
+        ui.set_max_width(w);
         if is_b {
-            app.meter_b.ui(ui, rm, mark);
+            app.meter_b.ui_compact(ui, rm, mark);
             let snr = app.meter_b.snr.map_or("—".into(), |s| format!("{s:.1} dB"));
             ui.label(small(format!("SNR {snr} · measured from the spectrum")));
             return;
         }
-        app.meter.ui(ui, rm, mark);
+        app.meter.ui_compact(ui, rm, mark);
         let s = &app.status;
         let snr = app.meter.snr.map_or("—".into(), |d| format!("{d:.1} dB"));
         let err = s.freq_error_hz.map_or("—".into(), |e| if e.abs() >= 10_000.0 { format!("{:+.1}k", e / 1000.0) } else { format!("{e:+.0} Hz") });
@@ -481,9 +486,7 @@ fn meter(app: &mut App, ui: &mut Ui) {
             if !notches.is_empty() {
                 ui.label(RichText::new(format!("notch {}", notches.join(" "))).font(theme::mono(10.0)).color(theme::VIOLET));
             }
-        });
-        let (c, word) = app.shown_class();
-        ui.horizontal(|ui| {
+            let (c, word) = app.shown_class();
             let tone = match word {
                 "ACTIVE" => Tone::Ok,
                 "HELD" => Tone::Warn,
@@ -502,9 +505,15 @@ fn meter(app: &mut App, ui: &mut Ui) {
 /// One-click memories under the bar, like a radio's band buttons. Storing
 /// and renaming live in the Tools tab.
 pub fn memory_row(app: &mut App, ui: &mut Ui) {
+    ui.horizontal(|ui| memory_chips(app, ui));
+}
+
+/// The memory chips themselves, for a row of their own or the end of the
+/// display toolbar.
+pub fn memory_chips(app: &mut App, ui: &mut Ui) {
     let list = app.memories();
     let inspect = app.inspect_hz();
-    ui.horizontal(|ui| {
+    {
         ui.spacing_mut().item_spacing.x = 4.0;
         ui.label(small("MEMORIES"));
         let armed = app.memory_armed;
@@ -548,5 +557,5 @@ pub fn memory_row(app: &mut App, ui: &mut Ui) {
         if app.memory_armed {
             ui.label(RichText::new(format!("pick a slot for {} {}", crate::tuning::fmt_mhz(inspect, 4), app.status.mode.label())).font(theme::mono(10.0)).color(theme::AMBER));
         }
-    });
+    }
 }

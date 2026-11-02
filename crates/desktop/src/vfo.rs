@@ -188,8 +188,9 @@ const STRIP_PX: f32 = 14.0;
 /// The tuning strip: a scale of raster steps under a fixed hairline, as on
 /// a radio's dial. Drag it like a dial (right lowers the frequency), or
 /// wheel over it; Shift for a tenth of the step. Returns how far to tune.
-pub fn tune_strip(ui: &mut Ui, hz: f64, step: f64, width: f32) -> Option<f64> {
-    let (rect, resp) = ui.allocate_exact_size(vec2(width, 40.0), Sense::click_and_drag());
+pub fn tune_strip(ui: &mut Ui, hz: f64, step: f64, width: f32, height: f32) -> Option<f64> {
+    let (rect, resp) = ui.allocate_exact_size(vec2(width, height), Sense::click_and_drag());
+    let tall = height >= 36.0;
     let id = resp.id.with("offset");
     let mut offset: f32 = ui.data(|d| d.get_temp(id).unwrap_or(0.0));
     let fine = ui.input(|i| i.modifiers.shift);
@@ -229,21 +230,22 @@ pub fn tune_strip(ui: &mut Ui, hz: f64, step: f64, width: f32) -> Option<f64> {
             continue;
         }
         let idx = base + k;
+        let k = if tall { 1.0 } else { 0.7 };
         let (len, col) = if idx % 10 == 0 {
-            (14.0, theme::text_2())
+            (14.0 * k, theme::text_2())
         } else if idx % 5 == 0 {
-            (10.0, theme::text_3())
+            (10.0 * k, theme::text_3())
         } else {
-            (5.0, theme::surface_4())
+            (5.0 * k, theme::surface_4())
         };
         p.line_segment([pos2(x, rect.top() + 3.0), pos2(x, rect.top() + 3.0 + len)], Stroke::new(1.0, col));
         let clear = (x - rect.center().x).abs() > 30.0 && x > rect.left() + 26.0 && x < rect.right() - 26.0;
         if idx % 5 == 0 && clear {
             p.text(
-                pos2(x, rect.bottom() - 4.0),
+                pos2(x, rect.bottom() - if tall { 4.0 } else { 1.0 }),
                 Align2::CENTER_BOTTOM,
                 format!("{:.*}", decimals, idx as f64 * st / 1e6),
-                theme::mono(9.5),
+                theme::mono(if tall { 9.5 } else { 9.0 }),
                 theme::text_3(),
             );
         }
@@ -360,7 +362,7 @@ mod tests {
                     s.ready = true;
                     return;
                 }
-                if let Some(d) = tune_strip(ui, 146.52e6, 6_250.0, 220.0) {
+                if let Some(d) = tune_strip(ui, 146.52e6, 6_250.0, 220.0, 40.0) {
                     s.got.push(d);
                 }
             },

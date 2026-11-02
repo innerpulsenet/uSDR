@@ -91,6 +91,12 @@ pub fn toolbar(app: &mut App, ui: &mut Ui) {
         if widgets::chip_key(ui, if held { "LIVE" } else { "HOLD" }, held, theme::EMBER).on_hover_text("Hold the waterfall and scroll back five minutes (H)").clicked() {
             app.pan.toggle_hold();
         }
+        // Wide windows carry the memories here rather than on a row of their own.
+        if app.prefs.show_memories && app.memories_on_toolbar {
+            ui.add_space(8.0);
+            divider(ui);
+            crate::bar::memory_chips(app, ui);
+        }
     });
 }
 
