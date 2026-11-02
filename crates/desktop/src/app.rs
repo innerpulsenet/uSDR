@@ -30,12 +30,41 @@ pub struct DecodeRow {
     pub at: SystemTime,
     pub freq_hz: f64,
     pub ev: proto::DecodeEvent,
+    /// Its fields shown inline under the row.
+    pub open: bool,
 }
 
 pub struct ClassRow {
     pub at: SystemTime,
     pub freq_hz: f64,
     pub c: Classification,
+}
+
+/// What a file dialog was opened for, with what it returned.
+pub enum Picked {
+    Replay(Vec<std::path::PathBuf>),
+    RecordDir(std::path::PathBuf),
+}
+
+/// Open a native file dialog without stalling the window: it runs on its own
+/// thread and its answer arrives through `App::picked`.
+pub fn pick(app: &App, what: &'static str) {
+    let tx = app.picked.0.clone();
+    let start = app.prefs.record_dir();
+    let _ = std::thread::Builder::new().name("usdr-dialog".into()).spawn(move || {
+        let d = rfd::FileDialog::new().set_directory(&start);
+        let out = match what {
+            "replay" => d
+                .set_title("Decode a capture")
+                .add_filter("I/Q capture", &["iq", "json", "wav"])
+                .pick_files()
+                .map(Picked::Replay),
+            _ => d.set_title("Save recordings in").pick_folder().map(Picked::RecordDir),
+        };
+        if let Some(p) = out {
+            let _ = tx.send(p);
+        }
+    });
 }
 
 pub struct Toast {
@@ -84,6 +113,14 @@ pub struct App {
     pub toasts: Vec<Toast>,
     pub dock_tab: DockTab,
     pub decode_filter: String,
+    /// Rows that arrived since the log last drew, and where it was scrolled,
+    /// so new frames arriving on top do not move what is being read.
+    pub decodes_added: usize,
+    pub decode_scroll: f32,
+    /// A memory slot being renamed, and the name so far.
+    pub renaming: Option<(usize, String)>,
+    /// Files picked in a dialog, arriving from its thread.
+    pub picked: (crossbeam_channel::Sender<Picked>, crossbeam_channel::Receiver<Picked>),
     pub selected_decode: Option<usize>,
     pub scan_form: proto::ScanCfg,
     pub scan_touched: bool,
@@ -168,6 +205,10 @@ impl App {
             toasts: Vec::new(),
             dock_tab: qa_tab,
             decode_filter: String::new(),
+            decodes_added: 0,
+            decode_scroll: 0.0,
+            renaming: None,
+            picked: crossbeam_channel::unbounded(),
             selected_decode: None,
             scan_form: proto::ScanCfg::default(),
             scan_touched: false,
@@ -364,7 +405,8 @@ impl App {
             NetEvent::Status(s) => self.apply_status(*s),
             NetEvent::Decode { inspect_hz, event, at } => {
                 let call = event.kind == "call";
-                self.decodes.push_front(DecodeRow { at, freq_hz: inspect_hz, ev: event });
+                self.decodes.push_front(DecodeRow { at, freq_hz: inspect_hz, ev: event, open: false });
+                self.decodes_added += 1;
                 self.decodes.truncate(400);
                 self.selected_decode = self.selected_decode.map(|i| i + 1);
                 if call && let Some(l) = &self.link {
@@ -460,7 +502,8 @@ impl App {
                 let events = v.get("events").and_then(Value::as_array).cloned().unwrap_or_default();
                 for e in &events {
                     if let Ok(ev) = serde_json::from_value::<proto::DecodeEvent>(e.clone()) {
-                        self.decodes.push_front(DecodeRow { at: SystemTime::now(), freq_hz: hz, ev });
+                        self.decodes.push_front(DecodeRow { at: SystemTime::now(), freq_hz: hz, ev, open: false });
+                        self.decodes_added += 1;
                     }
                 }
                 let proto_name = v
@@ -913,6 +956,10 @@ impl App {
                             }
                         }
                     });
+                if let Some(d) = crate::vfo::tune_strip(ui, hz, self.step_hz(), 220.0) {
+                    let target = self.inspect_hz() + d;
+                    self.tune(target, true);
+                }
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = 3.0;
                     for (lbl, n) in [("«", -10.0), ("‹", -1.0), ("›", 1.0), ("»", 10.0)] {
@@ -1109,10 +1156,14 @@ impl App {
 
     fn dropped(&mut self, ctx: &egui::Context) {
         let files: Vec<std::path::PathBuf> = ctx.input(|i| i.raw.dropped_files.iter().filter_map(|f| f.path.clone()).collect());
-        if files.is_empty() {
-            return;
+        if !files.is_empty() {
+            self.replay_files(ctx, &files);
         }
-        match crate::wav::replay_body(&files) {
+    }
+
+    /// Send capture files to the server's decoders.
+    fn replay_files(&mut self, ctx: &egui::Context, files: &[std::path::PathBuf]) {
+        match crate::wav::replay_body(files) {
             Ok((body, hz)) => {
                 let hz = hz.unwrap_or(self.inspect_hz());
                 if let Some(l) = &self.link {
@@ -1215,6 +1266,15 @@ impl App {
         }
         self.shortcuts(ctx);
         self.dropped(ctx);
+        while let Ok(p) = self.picked.1.try_recv() {
+            match p {
+                Picked::Replay(files) => self.replay_files(ctx, &files),
+                Picked::RecordDir(dir) => {
+                    self.prefs.record_dir = Some(dir);
+                    self.prefs.save();
+                }
+            }
+        }
     }
 
     /// Lay out the window.
@@ -1396,6 +1456,8 @@ mod tests {
     #[test]
     fn agc_key_hands_gain_to_the_loop_and_back() {
         let mut h = harness();
+        h.get_by_label("AGC").scroll_to_me();
+        h.run_steps(3);
         h.get_by_label("AGC").click();
         h.run_steps(2);
         assert!(drain(&h).contains(&("/api/sdr/gain".into(), json!({ "gain_db": null }))));

@@ -72,7 +72,7 @@ impl Meter {
         self.pos
     }
 
-    pub fn ui(&mut self, ui: &mut Ui, reduce_motion: bool) {
+    pub fn ui(&mut self, ui: &mut Ui, reduce_motion: bool, mark: Option<f32>) {
         let now = ui.input(|i| i.time);
         let dt = ui.input(|i| i.stable_dt).clamp(0.001, 0.05);
         let pos = self.tick(now, dt, reduce_motion);
@@ -116,6 +116,17 @@ impl Meter {
             let sx = bar.left() + bar.width() * pos;
             if sx > fx {
                 p.line_segment([pos2(fx, bar.bottom() + 4.0), pos2(sx, bar.bottom() + 4.0)], Stroke::new(2.0, alpha(theme::OK, 0.6)));
+            }
+        }
+        // The squelch mark: filled once the channel is over it.
+        if let Some(m) = mark {
+            let mx = bar.left() + bar.width() * frac(m);
+            let open = self.rf.is_some_and(|r| r >= m);
+            let tri = vec![pos2(mx, bar.top() - 1.0), pos2(mx - 4.0, bar.top() - 7.0), pos2(mx + 4.0, bar.top() - 7.0)];
+            if open {
+                p.add(egui::Shape::convex_polygon(tri, theme::ERR, Stroke::NONE));
+            } else {
+                p.add(egui::Shape::closed_line(tri, Stroke::new(1.2, theme::ERR)));
             }
         }
         // Peak marker.

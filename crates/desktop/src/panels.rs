@@ -17,7 +17,38 @@ pub fn side(app: &mut App, ui: &mut Ui) {
     ui.spacing_mut().item_spacing.y = 8.0;
     let rm = app.reduce_motion();
     widgets::applet(ui, "meter", "Signal", |_| {}, |ui| {
-        app.meter.ui(ui, rm);
+        let mark = app.prefs.view.sql_mark;
+        app.meter.ui(ui, rm, mark);
+        // The squelch mark: a level to watch the channel against. The
+        // server has no squelch; this opens and closes nothing.
+        let (lo, hi) = app.pan.range();
+        let on = mark.is_some();
+        let mut v = mark.unwrap_or(app.pan.floor_est + 10.0) as f64;
+        let (ch, _) = Fader {
+            value: &mut v,
+            min: lo.floor() as f64,
+            max: hi.ceil() as f64,
+            step: 1.0,
+            fine: 0.5,
+            label: "SQL MARK",
+            text: |v| if on { format!("{v:.0} dBFS") } else { "off".into() },
+            color: theme::ERR,
+            enabled: on,
+            ticks: vec![],
+        }
+        .show(ui);
+        if ch && on {
+            app.prefs.view.sql_mark = Some(v as f32);
+        }
+        ui.horizontal(|ui| {
+            if widgets::key(ui, "MARK", on, theme::ERR).on_hover_text("A level line on the spectrum and the meter; drag it on the spectrum too. Visual only: the server has no squelch.").clicked() {
+                app.prefs.view.sql_mark = if on { None } else { Some(app.pan.floor_est + 10.0) };
+            }
+            if let Some(m) = app.prefs.view.sql_mark {
+                let open = app.meter.rf.is_some_and(|r| r >= m);
+                widgets::chip(ui, if open { Tone::Ok } else { Tone::Idle }, if open { "OVER MARK" } else { "UNDER MARK" });
+            }
+        });
         let floor = app.meter.floor.map_or("—".into(), |f| format!("{f:.0} dBFS"));
         let snr = app.meter.snr.map_or("—".into(), |s| format!("{s:.1} dB"));
         ui.label(small(format!("SNR {snr} · floor {floor}")));
@@ -174,6 +205,10 @@ fn memories(app: &mut App, ui: &mut Ui) {
                     store_at = Some(i);
                     ui.close();
                 }
+                if m.is_some() && ui.button("Rename…").clicked() {
+                    app.renaming = Some((i, m.map(|m| m.name.clone()).unwrap_or_default()));
+                    ui.close();
+                }
                 if m.is_some() && ui.button("Clear").clicked() {
                     delete = Some(i);
                     ui.close();
@@ -191,6 +226,30 @@ fn memories(app: &mut App, ui: &mut Ui) {
     } else {
         "defaults · storing one shares the bank with every client".into()
     }));
+    // Renaming a slot, in place under the bank.
+    let mut rename_done: Option<(usize, String)> = None;
+    if let Some((i, name)) = &mut app.renaming {
+        let i = *i;
+        ui.horizontal(|ui| {
+            ui.label(small(format!("slot {}", i + 1)));
+            let r = ui.add(egui::TextEdit::singleline(name).char_limit(24).desired_width(140.0).font(theme::mono(11.5)));
+            r.request_focus();
+            if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) || widgets::action(ui, "OK").clicked() {
+                rename_done = Some((i, name.trim().to_string()));
+            }
+            if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                rename_done = Some((usize::MAX, String::new()));
+            }
+        });
+    }
+    if let Some((i, name)) = rename_done {
+        app.renaming = None;
+        let mut l = list.clone();
+        if let Some(m) = l.get_mut(i).filter(|_| !name.is_empty()) {
+            m.name = name;
+            app.save_memories(l);
+        }
+    }
     if let Some(i) = store_at {
         let mut l = list.clone();
         let m = crate::prefs::Memory { name: app.status.mode.label().into(), freq_hz: inspect.round(), mode: app.status.mode };
@@ -598,7 +657,15 @@ fn recorder(app: &mut App, ui: &mut Ui) {
     if let Some(n) = &app.replay_note {
         ui.label(small(n.clone()));
     }
-    ui.label(small(format!("Saves to {} · drop a .iq + .json on the window to decode it", dir.display())));
+    ui.horizontal_wrapped(|ui| {
+        if widgets::action(ui, "LOAD I/Q…").on_hover_text("Decode a .iq (with its .json) or an I/Q WAV on the server").clicked() {
+            crate::app::pick(app, "replay");
+        }
+        if widgets::action(ui, "FOLDER…").on_hover_text("Where saves and recordings go").clicked() {
+            crate::app::pick(app, "folder");
+        }
+    });
+    ui.label(small(format!("Saves to {} · or drop a .iq + .json on the window", dir.display())));
 }
 
 fn radio(app: &mut App, ui: &mut Ui) {

@@ -34,6 +34,11 @@ pub struct Scope {
     pub level_text: String,
     pub time_text: String,
     hist: Vec<f32>,
+    /// Recent symbol decisions: the strobed value and the level it fell to.
+    strobes: VecDeque<(f32, usize)>,
+    /// The discriminator over the last couple of dozen symbols, normalized.
+    wave: Vec<f32>,
+    levels: Vec<f32>,
 }
 
 impl Default for Scope {
@@ -50,6 +55,9 @@ impl Default for Scope {
             level_text: String::new(),
             time_text: String::new(),
             hist: vec![0.0; 4],
+            strobes: VecDeque::new(),
+            wave: Vec::new(),
+            levels: Vec::new(),
         }
     }
 }
@@ -157,6 +165,19 @@ impl Scope {
         let right = Rect::from_min_max(pos2(left.right() + gap, rect.top()), rect.max);
         let sub = self.sub_for(mode);
         let symbols = f.scope_kind == ScopeKind::Symbols || mode == Mode::Flex;
+        if symbols {
+            // Digital: the eye on the left, the slicer on the right.
+            grid(&painter, left, 4, 4);
+            grid(&painter, right, 8, 4);
+            self.eye(&painter, left, f, mode);
+            self.slicer(&painter, right, mode);
+            painter.text(left.left_bottom() + vec2(6.0, -4.0), Align2::LEFT_BOTTOM, &self.level_text, theme::mono(10.0), theme::text_2());
+            painter.text(right.right_bottom() + vec2(-6.0, -20.0), Align2::RIGHT_BOTTOM, &self.time_text, theme::mono(10.0), theme::text_3());
+            if resp.clicked() {
+                self.toggle(mode);
+            }
+            return;
+        }
 
         // ---- left: spectrum
         let spec = Rect::from_min_max(left.min, pos2(left.right(), left.top() + left.height() * 0.6));
@@ -182,6 +203,8 @@ impl Scope {
                 (Mode::Wfm, Sub::Mpx) => &[(19_000.0, "PILOT"), (38_000.0, "STEREO"), (57_000.0, "RDS")],
                 (Mode::Packet, _) => &[(1_200.0, "MARK"), (2_200.0, "SPACE")],
                 (Mode::Nfm, _) => &[(250.0, "CTCSS")],
+                // FLEX's deviation levels, seen as tones in the discriminator.
+                (Mode::Pager, Sub::Disc) => &[(1_600.0, "±1.6k"), (4_800.0, "±4.8k")],
                 _ => &[],
             };
             for (hz, name) in marks {
@@ -376,14 +399,18 @@ impl Scope {
                 painter.add(Shape::line(pts, Stroke::new(1.0, alpha(if mode == Mode::Flex { theme::CYAN } else { theme::OK }, a))));
             }
         }
-        // Level histogram along the right edge.
+        // Decisions at every strobe, for the slicer and its histogram.
         let mut counts = vec![0f32; levels.len()];
         let mut t = phase;
         while (t as usize) < x.len() {
             let v = x[t as usize];
             let (k, _) = levels.iter().enumerate().map(|(k, l)| (k, (v - l).abs())).fold((0, f32::MAX), |a, b| if b.1 < a.1 { b } else { a });
             counts[k] += 1.0;
+            self.strobes.push_back((v, k));
             t += sps;
+        }
+        while self.strobes.len() > 64 {
+            self.strobes.pop_front();
         }
         let total: f32 = counts.iter().sum::<f32>().max(1.0);
         if self.hist.len() != counts.len() {
@@ -392,11 +419,10 @@ impl Scope {
         for (h, c) in self.hist.iter_mut().zip(&counts) {
             *h = *h * 0.75 + (c / total) * 0.25;
         }
-        for (l, h) in levels.iter().zip(&self.hist) {
-            let y = r.center().y - l * half;
-            let w = h * 60.0;
-            painter.rect_filled(Rect::from_min_max(pos2(r.right() - w, y - 2.0), pos2(r.right(), y + 2.0)), CornerRadius::ZERO, alpha(theme::AMBER, 0.6));
-        }
+        let shown = if mode == Mode::Flex { 16.0 } else { 24.0 };
+        let n = ((shown * sps) as usize).min(x.len());
+        self.wave = x[x.len() - n..].to_vec();
+        self.levels = levels.to_vec();
         // Calipers at the first strobe.
         let open_h = self.eye_open / 100.0 * if two_level { 0.7 } else { 0.38 } * half;
         let cx = r.left() + r.width() * 0.25;
@@ -405,6 +431,74 @@ impl Scope {
         painter.text(pos2(cx + 8.0, r.center().y - open_h - 2.0), Align2::LEFT_BOTTOM, format!("EYE {:.0}%", self.eye_open), theme::mono(9.5), theme::AMBER);
         self.level_text = format!("eye {:.0}% · EVM {:.1}%", self.eye_open, self.evm);
         self.time_text = format!("{:.1} kBd", rs / 1000.0);
+    }
+}
+
+fn level_color(levels: usize, k: usize) -> Color32 {
+    if levels == 2 {
+        [theme::OK, theme::ERR][k.min(1)]
+    } else {
+        [theme::CYAN, theme::OK, theme::WARN, theme::ERR][k.min(3)]
+    }
+}
+
+impl Scope {
+    /// Where each symbol falls: the decision levels, the discriminator over
+    /// the last couple of dozen symbols, the strobes as dots, how often each
+    /// level is hit, and the decided symbols as a tape along the bottom.
+    fn slicer(&self, painter: &egui::Painter, r: Rect, mode: Mode) {
+        let levels = &self.levels;
+        if levels.is_empty() {
+            return;
+        }
+        let tape_h = 18.0;
+        let area = Rect::from_min_max(r.min, pos2(r.right(), r.bottom() - tape_h));
+        let half = area.height() / 2.0 - 10.0;
+        let y_of = |v: f32| area.center().y - v.clamp(-1.2, 1.2) * half;
+        let plot_r = area.right() - 70.0;
+        let n = levels.len();
+        for (k, l) in levels.iter().enumerate() {
+            let y = y_of(*l);
+            let c = level_color(n, k);
+            painter.rect_filled(Rect::from_min_max(pos2(area.left(), y - 6.0), pos2(plot_r, y + 6.0)), CornerRadius::ZERO, alpha(c, 0.05));
+            crate::spectrum::dashed_h(painter, area.left(), plot_r, y, alpha(c, 0.45));
+        }
+        if self.wave.len() > 1 {
+            let pts: Vec<Pos2> = self
+                .wave
+                .iter()
+                .enumerate()
+                .map(|(i, v)| pos2(area.left() + 6.0 + i as f32 / (self.wave.len() - 1) as f32 * (plot_r - area.left() - 12.0), y_of(*v)))
+                .collect();
+            let c = if mode == Mode::Flex { theme::CYAN } else { theme::OK };
+            painter.add(Shape::line(pts.clone(), Stroke::new(2.8, alpha(c, 0.22))));
+            painter.add(Shape::line(pts, Stroke::new(1.2, c)));
+        }
+        let span = (plot_r - area.left() - 60.0).max(20.0);
+        for (i, (v, k)) in self.strobes.iter().enumerate() {
+            let x = area.left() + 30.0 + (i as f32 * 9.0) % span;
+            painter.circle_filled(pos2(x, y_of(*v)), 2.2, alpha(level_color(n, *k), 0.8));
+        }
+        for (k, (l, h)) in levels.iter().zip(&self.hist).enumerate() {
+            let y = y_of(*l);
+            let w = h * 58.0;
+            painter.rect_filled(Rect::from_min_max(pos2(area.right() - 4.0 - w, y - 3.0), pos2(area.right() - 4.0, y + 3.0)), CornerRadius::same(1), alpha(level_color(n, k), 0.75));
+        }
+        // The dibit tape.
+        let names: &[&str] = if n == 2 { &["1", "0"] } else { &["01", "00", "10", "11"] };
+        let tape = Rect::from_min_max(pos2(r.left(), r.bottom() - tape_h), r.max);
+        painter.line_segment([tape.left_top(), tape.right_top()], Stroke::new(1.0, theme::line()));
+        let fit = ((tape.width() - 12.0) / 20.0) as usize;
+        let recent: Vec<&(f32, usize)> = self.strobes.iter().rev().take(fit.min(26)).collect();
+        for (i, (_, k)) in recent.iter().rev().enumerate() {
+            painter.text(
+                pos2(tape.left() + 8.0 + i as f32 * 20.0, tape.center().y),
+                Align2::LEFT_CENTER,
+                names[(*k).min(n - 1)],
+                theme::mono(10.0),
+                level_color(n, *k),
+            );
+        }
     }
 }
 

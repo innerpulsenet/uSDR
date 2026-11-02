@@ -186,10 +186,15 @@ pub fn settings_window(app: &mut App, ctx: &egui::Context) {
                 ui.label(RichText::new(format!("playing on {}", app.player.device_name.lock().unwrap())).font(theme::mono(11.0)).color(theme::text_3()));
 
                 section(ui, "Recordings");
-                let mut dir = app.prefs.record_dir().display().to_string();
-                if ui.add(egui::TextEdit::singleline(&mut dir).font(theme::mono(11.5)).desired_width(f32::INFINITY)).changed() {
-                    app.prefs.record_dir = Some(dir.into());
-                }
+                ui.horizontal(|ui| {
+                    let mut dir = app.prefs.record_dir().display().to_string();
+                    if ui.add(egui::TextEdit::singleline(&mut dir).font(theme::mono(11.5)).desired_width(340.0)).changed() {
+                        app.prefs.record_dir = Some(dir.into());
+                    }
+                    if widgets::action(ui, "CHOOSE…").clicked() {
+                        crate::app::pick(app, "folder");
+                    }
+                });
 
                 section(ui, "Interface");
                 ui.horizontal(|ui| {

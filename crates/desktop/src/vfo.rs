@@ -10,6 +10,7 @@
 use crate::theme;
 use egui::{Align2, CornerRadius, Rect, Sense, Stroke, Ui, pos2, vec2};
 
+
 pub enum VfoAct {
     /// Turn by this many Hz, recentering the span (a dial step).
     Step(f64),
@@ -181,6 +182,89 @@ impl Vfo {
     }
 }
 
+/// Pixels of drag per raster step on the tune strip.
+const STRIP_PX: f32 = 14.0;
+
+/// The tuning strip: a scale of raster steps under a fixed hairline, as on
+/// a radio's dial. Drag it like a dial (right lowers the frequency), or
+/// wheel over it; Shift for a tenth of the step. Returns how far to tune.
+pub fn tune_strip(ui: &mut Ui, hz: f64, step: f64, width: f32) -> Option<f64> {
+    let (rect, resp) = ui.allocate_exact_size(vec2(width, 40.0), Sense::click_and_drag());
+    let id = resp.id.with("offset");
+    let mut offset: f32 = ui.data(|d| d.get_temp(id).unwrap_or(0.0));
+    let fine = ui.input(|i| i.modifiers.shift);
+    let st = if fine { (step / 10.0).round().max(100.0) } else { step };
+    let mut out = 0.0;
+    if resp.dragged() {
+        offset += resp.drag_delta().x;
+        while offset.abs() >= STRIP_PX {
+            let dir = offset.signum();
+            offset -= dir * STRIP_PX;
+            out -= dir as f64 * st;
+        }
+        ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
+    } else {
+        offset = 0.0;
+    }
+    if resp.hovered() {
+        let w = crate::widgets::wheel(ui);
+        if w != 0.0 {
+            crate::widgets::eat_scroll(ui);
+            out += w.round() as f64 * st;
+        }
+    }
+    ui.data_mut(|d| d.insert_temp(id, offset));
+
+    let p = ui.painter_at(rect);
+    p.rect(rect, egui::CornerRadius::same(theme::RADIUS), theme::ink(), Stroke::new(1.0, theme::line()), egui::StrokeKind::Inside);
+    // The scale moves under the hairline as the dial turns.
+    let frac = ((hz / st) - (hz / st).round()) as f32 * STRIP_PX;
+    let c = rect.center().x - frac + offset;
+    let n = (rect.width() / STRIP_PX / 2.0) as i64 + 2;
+    let base = (hz / st).round() as i64;
+    let decimals = if st >= 100_000.0 { 1 } else if st >= 10_000.0 { 2 } else if st >= 1_000.0 { 3 } else { 4 };
+    for k in -n..=n {
+        let x = c + k as f32 * STRIP_PX;
+        if x < rect.left() + 2.0 || x > rect.right() - 2.0 {
+            continue;
+        }
+        let idx = base + k;
+        let (len, col) = if idx % 10 == 0 {
+            (14.0, theme::text_2())
+        } else if idx % 5 == 0 {
+            (10.0, theme::text_3())
+        } else {
+            (5.0, theme::surface_4())
+        };
+        p.line_segment([pos2(x, rect.top() + 3.0), pos2(x, rect.top() + 3.0 + len)], Stroke::new(1.0, col));
+        let clear = (x - rect.center().x).abs() > 30.0 && x > rect.left() + 26.0 && x < rect.right() - 26.0;
+        if idx % 5 == 0 && clear {
+            p.text(
+                pos2(x, rect.bottom() - 4.0),
+                Align2::CENTER_BOTTOM,
+                format!("{:.*}", decimals, idx as f64 * st / 1e6),
+                theme::mono(9.5),
+                theme::text_3(),
+            );
+        }
+    }
+    // The hairline: where the receiver is.
+    p.line_segment([pos2(rect.center().x, rect.top() + 1.0), pos2(rect.center().x, rect.bottom() - 1.0)], Stroke::new(1.5, theme::AMBER));
+    // Fade the ends into the well.
+    for (x0, x1, a0, a1) in [(rect.left(), rect.left() + 28.0, 1.0, 0.0), (rect.right() - 28.0, rect.right(), 0.0, 1.0)] {
+        let mut m = egui::Mesh::default();
+        m.colored_vertex(pos2(x0, rect.top()), theme::alpha(theme::ink(), a0));
+        m.colored_vertex(pos2(x1, rect.top()), theme::alpha(theme::ink(), a1));
+        m.colored_vertex(pos2(x0, rect.bottom()), theme::alpha(theme::ink(), a0));
+        m.colored_vertex(pos2(x1, rect.bottom()), theme::alpha(theme::ink(), a1));
+        m.add_triangle(0, 1, 2);
+        m.add_triangle(2, 1, 3);
+        p.add(egui::Shape::mesh(m));
+    }
+    resp.on_hover_text("Drag like a dial, or wheel · Shift for a tenth of the step");
+    (out != 0.0).then_some(out)
+}
+
 /// A thin hairline box with a label, used around readouts.
 pub fn readout(ui: &mut Ui, label: &str, value: &str, color: egui::Color32) {
     ui.vertical(|ui| {
@@ -270,6 +354,40 @@ mod tests {
         h.run_steps(2);
         assert_eq!(steps(&h), vec![7.2e6]);
         assert!(!h.state().vfo.editing());
+    }
+
+    #[test]
+    fn the_strip_turns_like_a_dial() {
+        struct S {
+            got: Vec<f64>,
+            ready: bool,
+        }
+        let mut h = Harness::builder().with_size(egui::vec2(300.0, 60.0)).build_ui_state(
+            |ui, s: &mut S| {
+                if !s.ready {
+                    crate::theme::install(ui.ctx(), crate::theme::Ground::Carbon);
+                    s.ready = true;
+                    return;
+                }
+                if let Some(d) = tune_strip(ui, 146.52e6, 6_250.0, 220.0) {
+                    s.got.push(d);
+                }
+            },
+            S { got: Vec::new(), ready: false },
+        );
+        h.run_steps(2);
+        let start = egui::pos2(110.0, 20.0);
+        h.event(Event::PointerMoved(start));
+        h.drag_at(start);
+        h.run_steps(1);
+        // Right by three steps' worth: the frequency goes down three steps.
+        for i in 1..=6 {
+            h.event(Event::PointerMoved(start + egui::vec2(7.0 * i as f32, 0.0)));
+            h.run_steps(1);
+        }
+        h.drop_at(start + egui::vec2(42.0, 0.0));
+        h.run_steps(1);
+        assert_eq!(h.state().got.iter().sum::<f64>(), -3.0 * 6_250.0);
     }
 
     #[test]

@@ -56,6 +56,12 @@ fn decodes(app: &mut App, ui: &mut Ui) {
                 app.decodes.clear();
                 app.selected_decode = None;
             }
+            if ui.button("Collapse all").clicked() {
+                app.decodes.iter_mut().for_each(|d| d.open = false);
+            }
+            if ui.button("Expand all").clicked() {
+                app.decodes.iter_mut().for_each(|d| d.open = true);
+            }
         });
     });
     let filter = app.decode_filter.to_lowercase();
@@ -73,13 +79,25 @@ fn decodes(app: &mut App, ui: &mut Ui) {
     ui.horizontal_top(|ui| {
         ui.allocate_ui(vec2(list_w, avail.y), |ui| {
             ui.label(mono(if visible.len() == total { format!("{total} frames") } else { format!("{} of {total} frames", visible.len()) }, theme::text_3()));
-            egui::ScrollArea::vertical().id_salt("decodes").auto_shrink([false, false]).show_rows(ui, 20.0, visible.len(), |ui, range| {
-                for &i in &visible[range] {
+            // Scrolled into the log, new frames arriving on top push it down
+            // by their height, so the rows being read stay where they are.
+            let row_h = 24.0;
+            let mut area = egui::ScrollArea::vertical().id_salt("decodes").auto_shrink([false, false]);
+            if app.decode_scroll > 1.0 && app.decodes_added > 0 {
+                area = area.vertical_scroll_offset(app.decode_scroll + app.decodes_added as f32 * row_h);
+            }
+            app.decodes_added = 0;
+            let mut toggle: Option<usize> = None;
+            let out = area.show(ui, |ui| {
+                for &i in &visible {
                     let d = &app.decodes[i];
                     let sel = app.selected_decode == Some(i);
                     let resp = ui
                         .horizontal(|ui| {
                             ui.set_min_height(18.0);
+                            if ui.add(egui::Label::new(mono(if d.open { "▾" } else { "▸" }, theme::text_3())).sense(egui::Sense::click())).clicked() {
+                                toggle = Some(i);
+                            }
                             ui.label(mono(local_hms(d.at), theme::text_3()));
                             if ui.add(egui::Label::new(mono(crate::tuning::fmt_mhz(d.freq_hz, 4), theme::AMBER)).sense(egui::Sense::click())).on_hover_text("Tune here").clicked() {
                                 tune_to = Some(d.freq_hz);
@@ -97,8 +115,26 @@ fn decodes(app: &mut App, ui: &mut Ui) {
                     if resp.clicked() {
                         app.selected_decode = if sel { None } else { Some(i) };
                     }
+                    if d.open {
+                        ui.indent(("open", i), |ui| {
+                            egui::Grid::new(("row", i)).num_columns(2).spacing(vec2(12.0, 1.0)).show(ui, |ui| {
+                                ui.label(mono("checksum", theme::text_3()));
+                                ui.label(mono(if d.ev.valid { "valid" } else { "rejected" }, if d.ev.valid { theme::OK } else { theme::ERR }));
+                                ui.end_row();
+                                for (k, v) in &d.ev.fields {
+                                    ui.label(mono(k, theme::text_3()));
+                                    ui.add(egui::Label::new(mono(v, theme::text())).truncate());
+                                    ui.end_row();
+                                }
+                            });
+                        });
+                    }
                 }
             });
+            app.decode_scroll = out.state.offset.y;
+            if let Some(i) = toggle {
+                app.decodes[i].open = !app.decodes[i].open;
+            }
         });
         if let Some(i) = app.selected_decode
             && let Some(d) = app.decodes.get(i)
