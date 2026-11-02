@@ -1341,13 +1341,13 @@ fn open_sdr(
 const RTL_SPANS_HZ: [f64; 6] = [250_000.0, 1_024_000.0, 1_536_000.0, 2_048_000.0, 2_400_000.0, 3_200_000.0];
 
 /// Spans an SDRplay offers. Its narrow spans are the rates it decimates to in
-/// hardware (250k, 500k, 1M) rather than the RTL's, which it does not have.
-/// The top is set by this process, not by the RSP, which goes to 10 MS/s:
-/// the worker is one thread carrying the spectrum and every channel chain,
-/// and 6 MS/s is already twice the widest span it had been run at.
-const SDRPLAY_SPANS_HZ: [f64; 9] = [
+/// hardware (250k, 500k, 1M) rather than the RTL's, which it does not have,
+/// and the top is the RSP's own 10 MS/s. Measured against the RSP1A over
+/// SoapyRemote, the worker thread ran at 20% of a core at 6 MS/s with no
+/// dropped, lagged or lost samples.
+const SDRPLAY_SPANS_HZ: [f64; 11] = [
     250_000.0, 500_000.0, 1_000_000.0, 2_000_000.0, 2_048_000.0, 3_000_000.0, 4_000_000.0,
-    5_000_000.0, 6_000_000.0,
+    5_000_000.0, 6_000_000.0, 8_000_000.0, 10_000_000.0,
 ];
 
 fn span_rates(caps: &scannerd_radio::Capabilities) -> Vec<f64> {

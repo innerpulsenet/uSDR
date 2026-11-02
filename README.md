@@ -249,9 +249,9 @@ Then open <http://127.0.0.1:8073>.
 |---|---|
 | `--bind` | Listen address, default `127.0.0.1:8073` |
 | `--serial` | Radio serial; defaults to the first one found, USB before remote |
-| `--remote` | SoapyRemote host with an SDRplay receiver (`mario`, `mario:55132`); repeatable, saved to the settings file |
+| `--remote` | SoapyRemote host with an SDRplay receiver (`172.16.0.216`, `host:55132`); repeatable, saved to the settings file |
 | `--freq` | Center frequency in MHz |
-| `--rate` | Span in MHz (0.2 – 3.2 on an RTL-SDR, to 6 on an SDRplay) |
+| `--rate` | Span in MHz (0.2 – 3.2 on an RTL-SDR, to 10 on an SDRplay) |
 | `--gain` | Tuner gain in dB; omit for automatic gain (a clip-guarded loop, see below) |
 | `--config` | Settings file, default `~/.config/usdr/usdr.toml` |
 | `--devices` | List visible radios, local and remote, and exit |
@@ -268,56 +268,62 @@ not be exposed to a network you do not control.
 
 ## Remote SDRplay (SoapyRemote)
 
-The RSP1A on MARIO is used from here over the network with
-[SoapyRemote](https://github.com/pothosware/SoapyRemote): MARIO runs
-`SoapySDRServer`, and this machine opens `driver=remote`, which proxies the
-whole Soapy API — both gain elements, the notch and bias-T settings, the
-sample rates and the stream. Nothing above `crates/radio` knows the radio is
-remote beyond the host name. The RSP's 16-bit samples go over the wire as
-they are (`CS16`, 8 MB/s at 2 MS/s) and become floats here, so none of the
-14-bit ADC's range is lost on the way. The stream runs over TCP: SoapyRemote's
-UDP default has no retransmission, and over the tailnet's 1280-byte MTU each
-default-sized datagram is split in two, doubling the odds of a hole.
+The RSP1A is used from here over the network with
+[SoapyRemote](https://github.com/pothosware/SoapyRemote). It lives in its own
+container on the Proxmox host `vault`, which runs `SoapySDRServer`, and this
+machine opens `driver=remote`. That proxies the whole Soapy API — both gain
+elements, the notch and bias-T settings, the sample rates and the stream.
+Nothing above `crates/radio` knows the radio is remote beyond the host name.
+The RSP's 16-bit samples go over the wire as they are (`CS16`, 8 MB/s at
+2 MS/s, 40 MB/s at 10) and become floats here, so none of the 14-bit ADC's
+range is lost on the way. The stream runs over TCP, because SoapyRemote's UDP
+default has no retransmission and a lost datagram is a hole in the samples.
 
 ```bash
-./target/release/usdr --remote mario
+./target/release/usdr --remote 172.16.0.216
 ```
 
 `--remote` is saved, so later runs find the RSP on their own. With no RTL-SDR
 plugged in it is the radio the server opens; with one, pick it in the
-Advanced drawer's device list, where it shows as `RSP1A @ mario`. Only
+Advanced drawer's device list, where it shows as `RSP1A @ 172.16.0.216`. Only
 SDRplay receivers are looked for on a remote host. An RTL-SDR's I2C faults
 show up only on the stderr of the process that owns it (see
 [`i2c wr failed=-9`](#i2c-wr-failed-9-and-tuning-that-does-not-take)), and
 across the network that process is the server.
 
-### The server on MARIO
+### The server: container 216 on vault
 
-Debian's `soapyremote-server` package with a drop-in,
-`/etc/systemd/system/soapyremote-server.service.d/override.conf`. SoapyRemote
-has no authentication, so the drop-in is the access control:
+`rsp` (CT 216, `172.16.0.216`) is an unprivileged Debian 13 container that
+does nothing else. It runs SDRplay's API 3.15 service, SoapySDRPlay3 (built
+from source, at the commit MARIO had), and Debian's `soapyremote-server`.
 
-- It binds to MARIO's Tailscale address only (`100.99.134.33:55132`), and the
-  unit's IP filter (`IPAddressDeny=any`, `IPAddressAllow=localhost
-  100.114.126.106`) admits SCRIBE and nothing else. Add a client by widening
-  `IPAddressAllow`. The filter also blocks the server's SSDP announcements,
-  which is why its journal logs `sendto … Operation not permitted`: the
-  server is not advertised on the LAN.
-- It runs as an unprivileged `soapyremote` system user with
-  `DevicePolicy=closed`, so it can open no device node at all. The SDRplay
-  API client talks to `sdrplay_apiService`, which owns the USB side, so the
-  RSP works, and the three RTL-SDR dongles `scannerd` uses on the same host
-  are out of reach of anything on the network. The user is static rather than
-  `DynamicUser=` because `SoapySDRServer` exits when it cannot reach D-Bus for
-  Avahi, and MARIO has no `nss-systemd` to resolve a dynamic user for D-Bus.
+- **USB.** The container bind-mounts `/dev/bus/usb` and may open USB devices
+  (`lxc.cgroup2.devices.allow: c 189:* rwm` in `/etc/pve/lxc/216.conf`). A
+  udev rule on vault, `/etc/udev/rules.d/66-sdrplay-rsp1a.rules`, makes the
+  RSP1A's node world-writable so the container's unprivileged root can claim
+  it. Every other node stays root-only, so the RTL dongles passed to MARIO are
+  out of the container's reach.
+- **Access.** SoapyRemote has no authentication. The server binds to
+  `172.16.0.216:55132`, and the container's nftables policy
+  (`/etc/nftables.conf`) drops all input except loopback, replies, ping and
+  SCRIBE (`172.16.0.50`). The stream uses ephemeral ports, so the rule admits
+  the address rather than a port. To add a client, add its address to the
+  `clients` set. Other LAN hosts, vault included, cannot reach the server or
+  SSH. `pct enter 216` on vault still gets a shell.
 
 ```bash
-ssh mario systemctl status soapyremote-server
+ssh root@172.16.0.216 systemctl status sdrplay soapyremote-server
 ```
 
 ```bash
-SoapySDRUtil --find="driver=remote,remote=tcp://mario:55132,remote:driver=sdrplay"
+SoapySDRUtil --find="driver=remote,remote=tcp://172.16.0.216:55132,remote:driver=sdrplay"
 ```
+
+The RSP was passed through to the MARIO VM until 2026-11-02, and it stopped
+streaming there; see
+[`Init() failed`](#init-failed-sdrplay_api_fail-and-the-rsp-never-streams).
+A container shares vault's kernel, so the RSP's isochronous transfers go
+through vault's own USB stack, with no emulated controller in between.
 
 ### What changes with an RSP
 
@@ -354,11 +360,11 @@ MARIO's it powers an inline preamp, without which the receiver is deaf, so it
 is on for the RSP1A. A radio with no entry opens with it off.
 
 **Spans** come from the radio: 250 kHz, 500 kHz, 1 MHz (the rates the RSP
-decimates to in hardware) and 2–6 MHz. The RSP goes to 10 MS/s. The 6 MHz
-ceiling comes from this server, whose worker is one thread carrying the
-spectrum and every channel chain, and 6 MS/s is already twice the widest span
-it had been run at. The analog filter for a whole span is the RSP's widest
-that fits under it (1.536 MHz at 2.048 MS/s). Tuning reaches down to the
+decimates to in hardware) and 2–10 MHz. Measured from the container, every
+span ran with no dropped, lagged or lost samples. The worker thread, which
+carries the spectrum and every channel chain, used about 20% of a core at
+6 MS/s and 40% at 10 MS/s. The analog filter for a whole span is the RSP's
+widest that fits under it (1.536 MHz at 2.048 MS/s, 6 MHz at 6 MS/s). Tuning reaches down to the
 RSP's 1 kHz floor, below the 1 MHz bound kept for other radios.
 
 **Blocks.** SoapySDRPlay3 and SoapyRemote hand over about 1000 samples per
@@ -624,21 +630,25 @@ as a scan mode, and a manual per-channel lockout list.
 
 ### `Init() failed: sdrplay_api_Fail`, and the RSP never streams
 
-The SDRplay API service on MARIO is crashing as streaming starts: `journalctl
--k` on MARIO shows a `sdrplay_apiServ … segfault` for each attempt, with an
-`xhci_hcd … TRB DMA ptr not part of current TD` error from the VM's emulated
-USB controller at the same moment. Enumeration, gain, settings and tuning all
-still work, because none of them touch the stream; `Init()` is the first call
-that does. SoapySDRPlay3 then throws while releasing the device, which aborts
-`SoapySDRServer`, and systemd restarts it five seconds later. Here that reads
-as `radio offline: no radio found on USB or on mario` between reopens.
+This was the RSP1A passed through to the MARIO VM. From at least 2026-10-31,
+SDRplay's API service segfaulted in `Init()` at the first stream, every time.
+The guest logged `xhci_hcd … TRB DMA ptr not part of current TD` errors from
+QEMU's emulated xHCI controller at the same moment. Enumeration, gain,
+settings and tuning all worked, because none of them touch the stream.
 
-It is not the network: a plain `SoapySDRUtil --args=driver=sdrplay --rate=2e6`
-on MARIO fails the same way. Restarting `sdrplay.service` and a guest-side
-`usbreset 1df7:3000` did not clear it. It began on 2026-10-31, and the RSP
-streamed in this VM in August and September. The fix is on the hardware side:
-replug or power-cycle the RSP, or look at the hypervisor's USB passthrough for
-it.
+The RSP streams over high-bandwidth isochronous USB (3 × 1024 bytes per
+microframe), which is the weakest part of QEMU's USB passthrough. Ruled out
+in turn: the guest kernel (the previous one failed the same way), stale QEMU
+state (a cold VM restart did not help), the QEMU update (nothing USB-related
+in it), and the hardware (the same RSP streams cleanly from a container on
+the same host). SoapySDRPlay3 built for the RSP's bulk mode stopped the crash
+but stalled instead. The RSP worked in this VM in September, under vault's
+previous kernel. That points at vault's 7.0.14-22 kernel together with
+passthrough, but it is not proven.
+
+The fix was moving the RSP out of the VM into its own container; see
+[the server](#the-server-container-216-on-vault). If it is ever passed to a
+VM again, expect this.
 
 ### `i2c wr failed=-9`, and tuning that does not take
 

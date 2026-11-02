@@ -48,8 +48,8 @@ struct Args {
     /// each remote.
     #[arg(long)]
     serial: Option<String>,
-    /// A SoapyRemote host with an SDRplay receiver: `mario`, `mario:55132` or
-    /// `tcp://mario:55132`. Repeat for more than one. Saved to the settings
+    /// A SoapyRemote host with an SDRplay receiver: `172.16.0.216`,
+    /// `rsp:55132` or `tcp://rsp:55132`. Repeat for more than one. Saved to the settings
     /// file, so it need only be given once.
     #[arg(long = "remote", value_name = "HOST[:PORT]")]
     remotes: Vec<String>,

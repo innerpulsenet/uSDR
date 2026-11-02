@@ -169,7 +169,7 @@ pub struct DeviceConfig {
     /// "no requirement", in which case the span itself is the only constraint.
     pub cover_hz: f64,
     pub role: Role,
-    /// SoapyRemote URL of the host the device is on (`tcp://mario:55132`),
+    /// SoapyRemote URL of the host the device is on (`tcp://172.16.0.216:55132`),
     /// or `None` for a dongle on this machine's USB.
     pub remote: Option<String>,
     /// Power the antenna port. Off unless asked for: DC on a feedline that
@@ -201,10 +201,11 @@ impl DeviceConfig {
     /// The Soapy device string this config addresses.
     ///
     /// A remote device streams over TCP. SoapyRemote's default is UDP with
-    /// no retransmission, so a lost datagram is lost samples; over the
-    /// tailnet the tunnel's 1280-byte MTU also splits every default-sized
-    /// datagram in two, doubling the odds. TCP on a LAN-latency path costs
-    /// nothing measurable and keeps the sample timeline whole.
+    /// no retransmission, so a lost datagram is lost samples, and through a
+    /// tunnel with a small MTU (a tailnet's is 1280 bytes) every default-sized
+    /// datagram is also split in two. TCP on a LAN-latency path costs nothing
+    /// measurable and keeps the sample timeline whole: 10 MS/s ran with no
+    /// lost samples.
     pub fn soapy_args(&self) -> String {
         match &self.remote {
             None => format!("driver=rtlsdr,serial={}", self.serial),
@@ -219,8 +220,8 @@ impl DeviceConfig {
 /// SoapyRemote's default port.
 pub const REMOTE_PORT: u16 = 55132;
 
-/// A SoapyRemote URL from what an operator would type: `mario`,
-/// `mario:55132`, or a full `tcp://mario:55132`.
+/// A SoapyRemote URL from what an operator would type: `rsp`,
+/// `rsp:55132`, or a full `tcp://rsp:55132`.
 pub fn remote_url(spec: &str) -> String {
     let spec = spec.trim();
     if spec.contains("://") {
@@ -442,7 +443,7 @@ pub struct DeviceInfo {
 }
 
 /// Enumerate attached RTL-SDR dongles, then the SDRplay receivers on each
-/// SoapyRemote host in `remotes` (`mario`, `mario:55132`, or a URL).
+/// SoapyRemote host in `remotes` (`172.16.0.216`, `rsp:55132`, or a URL).
 ///
 /// Pinned to `driver=rtlsdr` on purpose: the osmosdr Soapy module is also
 /// installed on this host and will happily claim the same hardware, which makes
