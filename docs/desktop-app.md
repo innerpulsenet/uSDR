@@ -52,7 +52,7 @@ server and every change comes back to every client as a `status` event. Display 
 | Front end: notches, LO offset, IQ corr, bias-T, IF filter, spur notch | Front-end applet |
 | S-meter, CH PWR/SNR/MARK/ERR/NOTCH | Meter applet + slice flag |
 | PEAK, RNG, FILL, AVG, WF PEAK, palette, floor/ceiling | Display bar over the panadapter + right-click menu |
-| Span, zoom, center | Display bar; Ctrl-wheel zoom at the cursor |
+| Span, zoom, center | Display bar; Ctrl-wheel zooms into what is under the cursor (tuning there first when it is more than a channel away) |
 | Recorder (I/Q + JSON, voice, disc, play 20 s, replay, load I/Q) | Recorder applet, plus a local audio recorder |
 | Scope (passband, audio, MPX, eye, slicer, disc) | Scope applet |
 | Class log, decode log + inspector, Last Heard, Scan | Bottom dock tabs |

@@ -49,14 +49,17 @@ impl Colormap {
 
     fn stops(self) -> &'static [(f32, [u8; 3])] {
         match self {
+            // The floor stays ink for the first third, so a busy span is
+            // not a wall of red; the red, ember and amber are kept for
+            // what stands above it.
             Colormap::Ember => &[
                 (0.00, [0x0a, 0x09, 0x08]),
-                (0.18, [0x1d, 0x0b, 0x0a]),
-                (0.38, [0x6e, 0x12, 0x10]),
-                (0.56, [0xc4, 0x24, 0x1a]),
-                (0.70, [0xf4, 0x3a, 0x2a]),
-                (0.84, [0xff, 0x9a, 0x3c]),
-                (0.94, [0xff, 0xd5, 0x8a]),
+                (0.30, [0x1a, 0x0c, 0x0a]),
+                (0.48, [0x5a, 0x12, 0x10]),
+                (0.62, [0xb0, 0x22, 0x1a]),
+                (0.74, [0xf4, 0x3a, 0x2a]),
+                (0.86, [0xff, 0x9a, 0x3c]),
+                (0.95, [0xff, 0xd5, 0x8a]),
                 (1.00, [0xf4, 0xf1, 0xec]),
             ],
             Colormap::Ham => &[

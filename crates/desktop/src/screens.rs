@@ -167,17 +167,19 @@ pub fn settings_window(app: &mut App, ctx: &egui::Context) {
                 section(ui, "Audio");
                 ui.horizontal(|ui| {
                     let cur = app.prefs.audio_device.clone().unwrap_or_else(|| "System default".into());
-                    egui::ComboBox::from_id_salt("audiodev").selected_text(cur).width(320.0).show_ui(ui, |ui| {
+                    widgets::selector(ui, "audiodev", &cur, theme::text(), 320.0, |ui| {
                         if ui.selectable_label(app.prefs.audio_device.is_none(), "System default").clicked() {
                             app.prefs.audio_device = None;
                             app.player.open(None);
                             app.player_b.open(None);
+                            ui.close();
                         }
                         for d in app.audio_devices.clone() {
                             if ui.selectable_label(app.prefs.audio_device.as_deref() == Some(&d), &d).clicked() {
                                 app.player.open(Some(&d));
                                 app.player_b.open(Some(&d));
                                 app.prefs.audio_device = Some(d);
+                                ui.close();
                             }
                         }
                     });
@@ -350,6 +352,17 @@ pub fn diagnostics_window(app: &mut App, ctx: &egui::Context) {
                     s.dropped_blocks, s.lagged_blocks, s.lost_samples, s.gap_events
                 )).font(theme::mono(11.5)).color(tone));
                 ui.end_row();
+                if app.have_status {
+                    let s = &app.status;
+                    ui.label(label("Receiver"));
+                    ui.label(mono(format!(
+                        "FFT {} · crystal {:+.2} ppm · channel {}S/s",
+                        s.fft_size,
+                        s.ppm,
+                        if s.inspect_rate_hz > 0.0 { crate::tuning::fmt_short_hz(s.inspect_rate_hz) } else { "—".into() }
+                    )));
+                    ui.end_row();
+                }
                 for (name, p) in [("Audio A", &app.player), ("Audio B", &app.player_b)] {
                     let r = p.reading();
                     ui.label(label(name));

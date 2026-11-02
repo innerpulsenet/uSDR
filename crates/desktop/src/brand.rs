@@ -219,10 +219,19 @@ impl Splash {
             .collect();
         crate::spectrum::fill_under(&painter, &pts, pan.bottom(), theme::AMBER, 0.22);
         painter.add(Shape::line(pts, Stroke::new(1.4, theme::alpha(theme::AMBER, 0.85))));
-        painter.line_segment(
-            [pos2(rect.left(), split), pos2(rect.right(), split)],
-            Stroke::new(1.0, theme::line_2()),
-        );
+        // The panadapter settles into the waterfall through a short shade
+        // rather than a hard rule.
+        let shade = egui::Mesh {
+            indices: vec![0, 1, 2, 2, 1, 3],
+            vertices: vec![
+                vtx(pos2(rect.left(), split), theme::alpha(theme::ink(), 0.85)),
+                vtx(pos2(rect.right(), split), theme::alpha(theme::ink(), 0.85)),
+                vtx(pos2(rect.left(), split + 22.0), Color32::TRANSPARENT),
+                vtx(pos2(rect.right(), split + 22.0), Color32::TRANSPARENT),
+            ],
+            texture_id: egui::TextureId::default(),
+        };
+        painter.add(Shape::mesh(shade));
         if moving {
             crate::anim::more(ui.ctx());
         }

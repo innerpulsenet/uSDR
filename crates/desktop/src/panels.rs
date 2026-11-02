@@ -17,7 +17,7 @@ fn small(t: impl Into<String>) -> RichText {
 pub fn side(app: &mut App, ui: &mut Ui) {
     ui.spacing_mut().item_spacing.y = 8.0;
     egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-        widgets::applet(ui, "gain", "RF gain", |_| {}, |ui| gain(app, ui));
+        widgets::applet(ui, "gain", "Gain", |_| {}, |ui| gain(app, ui));
         widgets::applet(ui, "frontend", "Front end", |_| {}, |ui| front_end(app, ui));
         widgets::applet(ui, "recorder", "Recorder · last 20 s", |_| {}, |ui| recorder(app, ui));
         if app.status.mode == Mode::P25 {
@@ -46,7 +46,7 @@ fn activity(app: &App, ui: &mut Ui) {
         crate::spectrum::fill_under(p, &pts, r.bottom(), theme::AMBER, 0.5);
         p.add(egui::Shape::line(pts, egui::Stroke::new(1.0, theme::AMBER)));
     } else {
-        p.text(r.center(), egui::Align2::CENTER_CENTER, "nothing measured on this channel yet", theme::mono(9.5), theme::text_3());
+        p.text(r.center(), egui::Align2::CENTER_CENTER, "nothing measured on this channel yet", theme::mono(10.5), theme::text_3());
     }
     ui.horizontal(|ui| {
         ui.label(small("−20 s"));
@@ -289,13 +289,15 @@ fn front_end(app: &mut App, ui: &mut Ui) {
         let label = if s.if_bandwidth_manual { crate::tuning::fmt_hz(cur) } else { format!("AUTO · {}", crate::tuning::fmt_hz(cur)) };
         ui.horizontal(|ui| {
             ui.label(small("IF FILTER"));
-            egui::ComboBox::from_id_salt("iffilter").selected_text(RichText::new(label).font(theme::mono(11.0))).show_ui(ui, |ui| {
+            widgets::selector(ui, "iffilter", &label, theme::text(), 0.0, |ui| {
                 if ui.selectable_label(!s.if_bandwidth_manual, "Auto · follow the span").clicked() {
                     app.post("/api/sdr/frontend", json!({ "if_bandwidth": 0 }));
+                    ui.close();
                 }
                 for w in s.if_bandwidths_hz.iter().filter(|w| **w > 0.0 && **w <= s.rate_hz * 1.001) {
                     if ui.selectable_label(s.if_bandwidth_manual && (*w - cur).abs() < 1.0, crate::tuning::fmt_hz(*w)).clicked() {
                         app.post("/api/sdr/frontend", json!({ "if_bandwidth": w }));
+                        ui.close();
                     }
                 }
             });
@@ -310,7 +312,7 @@ fn recorder(app: &mut App, ui: &mut Ui) {
     let has = |k: &str| app.modes.is_empty() || kinds.iter().any(|x| x == k);
     let receiving = app.status.error.is_none() && app.status.rate_hz > 0.0 && !kinds.is_empty();
     ui.horizontal(|ui| {
-        widgets::chip(ui, if receiving { Tone::Live } else { Tone::Idle }, if receiving { "FILLING" } else { "OFF" });
+        widgets::chip(ui, if receiving { Tone::Ok } else { Tone::Idle }, if receiving { "FILLING" } else { "OFF" });
         let head = if !receiving {
             format!("{} keeps no buffer", app.status.mode.label())
         } else {
@@ -392,14 +394,15 @@ fn radio(app: &mut App, ui: &mut Ui) {
         // space of its own: a truncating combo box fills whatever room its
         // row has, and a row wider than the column shifts every card in it.
         let w = (ui.available_width() - 34.0).max(100.0);
-        ui.allocate_ui(egui::vec2(w, 24.0), |ui| {
-            egui::ComboBox::from_id_salt("device").selected_text(RichText::new(cur).font(theme::mono(11.0))).width(w).truncate().show_ui(ui, |ui| {
-                for d in app.devices.clone() {
-                    if ui.selectable_label(d.serial == s.serial, device_label(&d)).clicked() && d.serial != s.serial {
+        widgets::selector(ui, "device", &cur, theme::text(), w, |ui| {
+            for d in app.devices.clone() {
+                if ui.selectable_label(d.serial == s.serial, device_label(&d)).clicked() {
+                    if d.serial != s.serial {
                         app.post("/api/sdr/device", json!({ "serial": d.serial }));
                     }
+                    ui.close();
                 }
-            });
+            }
         });
         if crate::app::icon_button(ui, "↻", "Look for radios again").clicked()
             && let Some(l) = &app.link
@@ -410,7 +413,7 @@ fn radio(app: &mut App, ui: &mut Ui) {
     ui.horizontal(|ui| {
         ui.label(small("PPM"));
         let mut ppm = s.ppm;
-        let r = ui.add(egui::DragValue::new(&mut ppm).range(-200.0..=200.0).speed(0.05).fixed_decimals(2));
+        let r = widgets::numeric(ui, &mut ppm, -200.0..=200.0, 0.05, 2, 76.0);
         if r.changed() {
             app.post("/api/sdr/ppm", json!({ "ppm": ppm }));
             app.status.ppm = ppm;
@@ -504,13 +507,14 @@ fn p25(app: &mut App, ui: &mut Ui) {
         crate::tuning::fmt_mhz(freq as f64, 6),
         if f.configured { "a key is configured" } else { "no key for this channel" }
     )));
-    egui::ComboBox::from_id_salt("p25alg")
-        .selected_text(ALGS.iter().find(|a| a.0 == f.algorithm).map(|a| a.1).unwrap_or("?"))
-        .show_ui(ui, |ui| {
-            for (v, name, _) in ALGS {
-                ui.selectable_value(&mut f.algorithm, v, name);
+    let alg_label = ALGS.iter().find(|a| a.0 == f.algorithm).map(|a| a.1).unwrap_or("?");
+    widgets::selector(ui, "p25alg", alg_label, theme::text(), 0.0, |ui| {
+        for (v, name, _) in ALGS {
+            if ui.selectable_value(&mut f.algorithm, v, name).clicked() {
+                ui.close();
             }
-        });
+        }
+    });
     let need = ALGS.iter().find(|a| a.0 == f.algorithm).map(|a| a.2).unwrap_or(64);
     ui.horizontal(|ui| {
         ui.label(small("KEY ID"));

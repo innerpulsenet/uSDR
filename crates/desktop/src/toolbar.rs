@@ -10,7 +10,7 @@ use egui::{RichText, Ui, vec2};
 use serde_json::json;
 
 fn small(t: impl Into<String>) -> RichText {
-    RichText::new(t).font(theme::mono(10.0)).color(theme::text_3())
+    RichText::new(t).font(theme::mono(10.5)).color(theme::text_3())
 }
 
 fn divider(ui: &mut Ui) {
@@ -27,12 +27,10 @@ pub fn toolbar(app: &mut App, ui: &mut Ui) {
         // Span and zoom.
         let s = app.status.clone();
         let span = (s.max_freq_hz - s.min_freq_hz).max(s.rate_hz);
-        ui.menu_button(RichText::new(format!("SPAN {}", crate::tuning::fmt_short_hz(span))).font(theme::mono_bold(10.5)), |ui| {
+        widgets::menu_chip(ui, &format!("SPAN {}", crate::tuning::fmt_short_hz(span)), theme::CYAN, |ui| {
             ui.set_min_width(300.0);
             span_zoom(app, ui);
-        })
-        .response
-        .on_hover_text("Span, zoom and centering");
+        });
         if widgets::chip_key(ui, "−", false, theme::CYAN).on_hover_text("Zoom out (−)").clicked() {
             app.set_zoom(app.zoom_ui / 2.0);
         }
@@ -73,7 +71,7 @@ pub fn toolbar(app: &mut App, ui: &mut Ui) {
             v.band_plan = !v.band_plan;
         }
         if narrow {
-            ui.menu_button(RichText::new("DISPLAY ▾").font(theme::mono_bold(10.5)), |ui| {
+            widgets::menu_chip(ui, "DISPLAY", theme::AMBER, |ui| {
                 ui.set_min_width(280.0);
                 ui.label(small("RANGE"));
                 range(app, ui);
@@ -83,18 +81,16 @@ pub fn toolbar(app: &mut App, ui: &mut Ui) {
                 ui.separator();
                 ui.label(small("WATERFALL"));
                 waterfall(app, ui);
-            })
-            .response
-            .on_hover_text("Range, style and waterfall");
+            });
         } else {
-            ui.menu_button(RichText::new(if v.auto_range { "RANGE AUTO" } else { "RANGE" }).font(theme::mono_bold(10.5)), |ui| {
+            widgets::menu_chip(ui, if v.auto_range { "RANGE AUTO" } else { "RANGE" }, theme::AMBER, |ui| {
                 ui.set_min_width(260.0);
                 range(app, ui);
             });
             divider(ui);
             let label = format!("STYLE {}", app.prefs.view.style.label().to_uppercase());
-            ui.menu_button(RichText::new(label).font(theme::mono_bold(10.5)), |ui| style(app, ui));
-            ui.menu_button(RichText::new("WATERFALL").font(theme::mono_bold(10.5)), |ui| {
+            widgets::menu_chip(ui, &label, theme::AMBER, |ui| style(app, ui));
+            widgets::menu_chip(ui, "WATERFALL", theme::AMBER, |ui| {
                 ui.set_min_width(280.0);
                 waterfall(app, ui);
             });
@@ -172,7 +168,7 @@ fn waterfall(app: &mut App, ui: &mut Ui) {
     let v = &mut app.prefs.view;
     ui.horizontal(|ui| {
         ui.label(small("palette"));
-        egui::ComboBox::from_id_salt("palette").selected_text(v.palette.label()).show_ui(ui, |ui| {
+        widgets::selector(ui, "palette", v.palette.label(), theme::text(), 130.0, |ui| {
             for m in crate::colormap::Colormap::ALL {
                 ui.horizontal(|ui| {
                     let (r, _) = ui.allocate_exact_size(vec2(60.0, 12.0), egui::Sense::hover());

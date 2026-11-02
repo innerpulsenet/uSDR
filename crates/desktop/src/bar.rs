@@ -15,7 +15,7 @@ use usdr_proto::Mode;
 const B_MODES: [Mode; 5] = [Mode::Nfm, Mode::Am, Mode::Usb, Mode::Lsb, Mode::Wfm];
 
 fn small(t: impl Into<String>) -> RichText {
-    RichText::new(t).font(theme::mono(10.0)).color(theme::text_3())
+    RichText::new(t).font(theme::mono(10.5)).color(theme::text_3())
 }
 
 /// A bay: a labelled section of the bar, divided from the next by a hairline.
@@ -23,7 +23,7 @@ fn bay<R>(ui: &mut Ui, label: &str, add: impl FnOnce(&mut Ui) -> R) -> R {
     let r = ui
         .vertical(|ui| {
             ui.spacing_mut().item_spacing.y = 4.0;
-            ui.label(RichText::new(label).font(theme::mono(9.5)).color(theme::text_3()).extra_letter_spacing(1.0));
+            ui.label(RichText::new(label).font(theme::mono(10.5)).color(theme::text_3()).extra_letter_spacing(1.0));
             add(ui)
         })
         .inner;
@@ -42,10 +42,12 @@ const GAP: f32 = 22.0;
 pub fn receiver_bar(app: &mut App, ui: &mut Ui) {
     let w = ui.available_width();
     let b_active = app.active_b && app.status.rx2.is_some();
-    // A violet wash says, before anything is read, that B is being driven.
-    if b_active {
+    // A violet wash says, before anything is read, that B is being driven;
+    // it fades in and out, so the switch is seen before it is read.
+    let wash = ui.ctx().animate_bool_with_time(egui::Id::new("rx-b-wash"), b_active, 0.2);
+    if wash > 0.01 {
         let r = ui.max_rect();
-        ui.painter().rect_filled(r, egui::CornerRadius::ZERO, alpha(theme::VIOLET, 0.05));
+        ui.painter().rect_filled(r, egui::CornerRadius::ZERO, alpha(theme::VIOLET, 0.06 * wash));
     }
     ui.spacing_mut().item_spacing.x = 10.0;
     // Four fits, widest first. Each row ends in a section that takes what
@@ -57,7 +59,7 @@ pub fn receiver_bar(app: &mut App, ui: &mut Ui) {
             tuning(app, ui, true);
             modes(app, ui);
             filter(app, ui, 310.0);
-            audio(app, ui);
+            audio(app, ui, 220.0);
             meter(app, ui, 300.0, 560.0);
         });
     } else if w >= 1640.0 {
@@ -68,7 +70,7 @@ pub fn receiver_bar(app: &mut App, ui: &mut Ui) {
             tuning(app, ui, false);
             modes(app, ui);
             filter(app, ui, 250.0);
-            audio(app, ui);
+            audio(app, ui, 220.0);
             meter(app, ui, 230.0, 560.0);
         });
     } else if w >= 1500.0 {
@@ -80,23 +82,26 @@ pub fn receiver_bar(app: &mut App, ui: &mut Ui) {
             readout_sized(app, ui, 34.0);
             tuning(app, ui, false);
             modes(app, ui);
-            filter(app, ui, (w - 1400.0).clamp(150.0, 250.0));
-            audio(app, ui);
-            meter(app, ui, 230.0, 560.0);
+            // The filter and the audio give up a little so the signal bay
+            // can say what it hears.
+            filter(app, ui, (w - 1450.0).clamp(150.0, 250.0));
+            audio(app, ui, 190.0);
+            meter(app, ui, 290.0, 560.0);
         });
     } else {
         ui.horizontal_top(|ui| {
             switch(app, ui);
             readout(app, ui);
             tuning(app, ui, false);
-            meter(app, ui, 260.0, 760.0);
+            meter(app, ui, 260.0, 560.0);
         });
         ui.add_space(4.0);
-        let filter_w = (w - MODES_W - AUDIO_W - 3.0 * GAP).clamp(230.0, 900.0);
+        // A fader wider than this is a slab of empty track.
+        let filter_w = (w - MODES_W - AUDIO_W - 3.0 * GAP).clamp(230.0, 380.0);
         ui.horizontal_top(|ui| {
             modes(app, ui);
             filter(app, ui, filter_w);
-            audio(app, ui);
+            audio(app, ui, 220.0);
         });
     }
 }
@@ -166,6 +171,7 @@ fn readout_sized(app: &mut App, ui: &mut Ui, digits_px: f32) {
     let b = app.status.rx2.clone().filter(|_| app.active_b);
     let hz = app.active_hz();
     let mut acts = Vec::new();
+    let rm = app.reduce_motion();
     bay(ui, if b.is_some() { "RECEIVER B" } else { "RECEIVER A" }, |ui| {
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 8.0;
@@ -182,7 +188,7 @@ fn readout_sized(app: &mut App, ui: &mut Ui, digits_px: f32) {
             };
             ui.label(small(agc));
         });
-        app.vfo.ui(ui, hz, digits_px, &mut acts);
+        app.vfo.ui(ui, hz, digits_px, rm, &mut acts);
     });
     for a in acts {
         match a {
@@ -205,19 +211,18 @@ fn tuning(app: &mut App, ui: &mut Ui, strip: bool) {
         };
         let color = if app.prefs.step_hz.is_some() { theme::WARN } else { theme::text() };
         ui.horizontal(|ui| {
-            egui::ComboBox::from_id_salt("step")
-                .selected_text(RichText::new(label).font(theme::mono(11.0)).color(color))
-                .width(104.0)
-                .show_ui(ui, |ui| {
-                    if ui.selectable_label(app.prefs.step_hz.is_none(), format!("Auto · mode raster ({})", crate::tuning::fmt_short_hz(auto))).clicked() {
-                        app.prefs.step_hz = None;
+            widgets::selector(ui, "step", &label, color, 118.0, |ui| {
+                if ui.selectable_label(app.prefs.step_hz.is_none(), format!("Auto · mode raster ({})", crate::tuning::fmt_short_hz(auto))).clicked() {
+                    app.prefs.step_hz = None;
+                    ui.close();
+                }
+                for s in crate::tuning::STEPS_HZ {
+                    if ui.selectable_label(app.prefs.step_hz == Some(s), crate::tuning::fmt_hz(s)).clicked() {
+                        app.prefs.step_hz = Some(s);
+                        ui.close();
                     }
-                    for s in crate::tuning::STEPS_HZ {
-                        if ui.selectable_label(app.prefs.step_hz == Some(s), crate::tuning::fmt_hz(s)).clicked() {
-                            app.prefs.step_hz = Some(s);
-                        }
-                    }
-                });
+                }
+            });
             let lock = app.prefs.span_lock;
             if widgets::chip_key(ui, "SPAN LOCK", lock, theme::CYAN)
                 .on_hover_text("Keep the span where it is: tuning moves only the receiver (L)")
@@ -394,11 +399,11 @@ fn filter(app: &mut App, ui: &mut Ui, width_px: f32) {
     });
 }
 
-fn audio(app: &mut App, ui: &mut Ui) {
+fn audio(app: &mut App, ui: &mut Ui, width_px: f32) {
     let is_b = app.active_b && app.status.rx2.is_some();
     bay(ui, if is_b { "AUDIO B" } else { "AUDIO A" }, |ui| {
-        ui.set_min_width(200.0);
-        ui.set_max_width(220.0);
+        ui.set_min_width(width_px - 20.0);
+        ui.set_max_width(width_px);
         let (vol, muted) = if is_b { (app.prefs.volume_b, app.prefs.muted_b) } else { (app.prefs.volume, app.prefs.muted) };
         let mut v = vol as f64 * 100.0;
         let (ch, _) = Fader {
@@ -453,7 +458,7 @@ fn audio(app: &mut App, ui: &mut Ui) {
             ui.painter().rect_filled(egui::Rect::from_min_size(rect.min, vec2(rect.width() * lvl(r.rms), rect.height())), egui::CornerRadius::same(1), alpha(theme::OK, 0.8));
             let px = rect.left() + rect.width() * lvl(r.peak);
             ui.painter().line_segment([egui::pos2(px, rect.top()), egui::pos2(px, rect.bottom())], Stroke::new(1.5, theme::text()));
-            ui.menu_button(RichText::new("···").font(theme::mono_bold(11.0)), |ui| {
+            widgets::menu_chip(ui, "···", theme::text_2(), |ui| {
                 ui.set_min_width(220.0);
                 let mut pan = if is_b { app.prefs.pan_b } else { app.prefs.pan } as f64;
                 let (ch, _) = Fader {
@@ -485,7 +490,7 @@ fn audio(app: &mut App, ui: &mut Ui) {
                     "no audio arriving".into()
                 }));
                 if let Some(p) = app.player.clip_progress()
-                    && ui.button(format!("Stop playback ({:.0}%) and return to live", p * 100.0)).clicked()
+                    && widgets::action(ui, &format!("STOP PLAYBACK ({:.0}%) · BACK TO LIVE", p * 100.0)).clicked()
                 {
                     app.player.stop_clip();
                 }
@@ -512,7 +517,7 @@ fn meter(app: &mut App, ui: &mut Ui, min_w: f32, max_w: f32) {
         app.meter.ui_compact(ui, rm, mark);
         let s = &app.status;
         let snr = app.meter.snr.map_or("—".into(), |d| format!("{d:.1} dB"));
-        let err = s.freq_error_hz.map_or("—".into(), |e| if e.abs() >= 10_000.0 { format!("{:+.1}k", e / 1000.0) } else { format!("{e:+.0} Hz") });
+        let err = s.freq_error_hz.map_or("—".into(), |e| if e.abs() >= 1_000.0 { format!("{:+.1}k", e / 1000.0) } else { format!("{e:+.0} Hz") });
         let mut notches = Vec::new();
         if s.rf_notch == Some(true) {
             notches.push("AM/FM".to_string());
@@ -547,11 +552,17 @@ fn meter(app: &mut App, ui: &mut Ui, min_w: f32, max_w: f32) {
                 _ => Tone::Idle,
             };
             widgets::chip(ui, tone, word);
-            let (txt, col) = match &c {
-                Some(c) if word != "IDLE" => (format!("{} · {}", c.protocol, c.modulation), widgets::protocol_color(&c.protocol)),
-                _ => (crate::app::mode_idle_text(app.status.mode).to_string(), theme::text_3()),
+            // The protocol alone, without its qualifier, so it fits; the
+            // whole of it and the modulation are a hover away.
+            let short = |p: &str| p.split(" (").next().unwrap_or(p).to_string();
+            let (txt, tip, col) = match &c {
+                Some(c) if word != "IDLE" => (short(&c.protocol), Some(format!("{} · {}", c.protocol, c.modulation)), widgets::protocol_color(&c.protocol)),
+                _ => (crate::app::mode_idle_text(app.status.mode).to_string(), None, theme::text_3()),
             };
-            ui.add(egui::Label::new(RichText::new(txt).font(theme::sans(12.0)).color(col)).truncate());
+            let r = ui.add(egui::Label::new(RichText::new(txt).font(theme::sans(12.0)).color(col)).truncate());
+            if let Some(t) = tip {
+                r.on_hover_text(t);
+            }
         });
     });
 }

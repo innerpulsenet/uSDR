@@ -54,12 +54,15 @@ const CARBON: Palette = Palette {
     select: rgb(0x1a73b8),
 };
 
+// Ink is visibly warmer than Carbon, not a shade off it: its surfaces step
+// up through umber rather than slate, and its hairlines are warm and a
+// touch stronger, since it has no weave to give the panels a grain.
 const INK_P: Palette = Palette {
     ground: rgb(0x0a0908),
-    s: [rgb(0x100e0c), rgb(0x17140f), rgb(0x1f1b17), rgb(0x2a251f)],
-    text: [rgb(0xece7df), rgb(0xb0a99f), rgb(0x8e877d)],
-    line: [hairline(244, 241, 236, 0.09), hairline(244, 241, 236, 0.16)],
-    select: rgb(0x6e4a1c),
+    s: [rgb(0x15110c), rgb(0x1d1812), rgb(0x282119), rgb(0x362d23)],
+    text: [rgb(0xf0eae0), rgb(0xb8ae9f), rgb(0x8f8678)],
+    line: [hairline(255, 236, 214, 0.11), hairline(255, 236, 214, 0.20)],
+    select: rgb(0x7a521f),
 };
 
 static GROUND: AtomicU8 = AtomicU8::new(0);

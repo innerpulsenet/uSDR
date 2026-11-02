@@ -80,6 +80,8 @@ pub struct Prefs {
     pub shortcuts: bool,
     /// The last mode that was not SCAN, for the scan panel's STOP.
     pub last_voice_mode: usdr_proto::Mode,
+    /// The one-time hint that `?` lists the shortcuts has been shown.
+    pub hinted_shortcuts: bool,
 }
 
 impl Default for Prefs {
@@ -113,6 +115,7 @@ impl Default for Prefs {
             ui_scale: 1.0,
             max_fps: 60,
             last_voice_mode: usdr_proto::Mode::Nfm,
+            hinted_shortcuts: false,
         }
     }
 }

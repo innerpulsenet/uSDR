@@ -26,14 +26,22 @@ pub struct Vfo {
     pub open_entry_request: bool,
     /// Where each digit was drawn last frame, GHz first.
     pub cells: Vec<Rect>,
+    /// The digits as last drawn, to see which ones change.
+    shown: Option<String>,
+    /// A digit rolling over: when it started, the glyph leaving, and which
+    /// way (up for a higher frequency).
+    roll: [Option<(f64, char, i8)>; DIGITS],
 }
 
 impl Default for Vfo {
     fn default() -> Self {
         // The 10 kHz digit.
-        Self { selected: 5, entry: None, focus_entry: false, scroll_accum: 0.0, open_entry_request: false, cells: Vec::new() }
+        Self { selected: 5, entry: None, focus_entry: false, scroll_accum: 0.0, open_entry_request: false, cells: Vec::new(), shown: None, roll: [None; DIGITS] }
     }
 }
+
+/// How long a digit takes to roll to its new value.
+const ROLL_S: f64 = 0.11;
 
 const DIGITS: usize = 10;
 
@@ -51,7 +59,7 @@ impl Vfo {
         self.focus_entry = true;
     }
 
-    pub fn ui(&mut self, ui: &mut Ui, hz: f64, height: f32, acts: &mut Vec<VfoAct>) {
+    pub fn ui(&mut self, ui: &mut Ui, hz: f64, height: f32, reduce_motion: bool, acts: &mut Vec<VfoAct>) {
         if self.open_entry_request {
             self.open_entry_request = false;
             self.open_entry(hz, None);
@@ -94,27 +102,43 @@ impl Vfo {
         let small = theme::mono_bold(height * 0.56);
         let dw = ui.painter().layout_no_wrap("0".into(), big.clone(), theme::text()).size().x;
         let sw = ui.painter().layout_no_wrap("0".into(), small.clone(), theme::text()).size().x;
-        let sep = dw * 0.38;
+        // `1 090.000 000`: the decimal point after the MHz digits, and a
+        // thin gap at each thousands group either side of it.
+        let point = dw * 0.38;
+        let gap = dw * 0.24;
         let widths: Vec<f32> = (0..DIGITS).map(|i| if i >= 7 { sw } else { dw }).collect();
-        let total: f32 = widths.iter().sum::<f32>() + 3.0 * sep + 8.0 + 40.0;
+        let total: f32 = widths.iter().sum::<f32>() + 2.0 * gap + point + 8.0 + 40.0;
         let (rect, resp) = ui.allocate_exact_size(vec2(total, height), Sense::click());
         let painter = ui.painter_at(rect.expand(2.0));
         let first_sig = s.find(|c: char| c != '0').unwrap_or(DIGITS - 1).min(3);
+        let now = ui.input(|i| i.time);
+        // Which digits changed since the last draw, and which way: each
+        // rolls over like an odometer wheel.
+        if let Some(prev) = &self.shown
+            && prev != &s
+            && !reduce_motion
+        {
+            let up = units > prev.parse::<u64>().unwrap_or(units);
+            for (i, (a, b)) in prev.chars().zip(s.chars()).enumerate() {
+                if a != b {
+                    self.roll[i] = Some((now, a, if up { 1 } else { -1 }));
+                }
+            }
+        }
+        self.shown = Some(s.clone());
         let mut x = rect.left();
         let mut hovered_digit = None;
+        let mut rolling = false;
         self.cells.clear();
         let pointer = resp.hover_pos();
         for (i, ch) in s.chars().enumerate() {
-            if i == 1 || i == 4 || i == 7 {
-                let dim = i == 1 && first_sig > 0;
-                painter.text(
-                    pos2(x + sep / 2.0, rect.bottom() - height * 0.16),
-                    Align2::CENTER_BOTTOM,
-                    ".",
-                    big.clone(),
-                    if dim { theme::surface_4() } else { theme::text_3() },
-                );
-                x += sep;
+            if i == 1 {
+                x += gap;
+            } else if i == 4 {
+                painter.text(pos2(x + point / 2.0, rect.bottom() - height * 0.16), Align2::CENTER_BOTTOM, ".", big.clone(), theme::text_2());
+                x += point;
+            } else if i == 7 {
+                x += gap;
             }
             let w = widths[i];
             let cell = Rect::from_min_max(pos2(x, rect.top()), pos2(x + w, rect.bottom()));
@@ -133,7 +157,24 @@ impl Vfo {
                 theme::text()
             };
             let font = if i >= 7 { small.clone() } else { big.clone() };
-            painter.text(pos2(cell.center().x, rect.bottom() - height * 0.12), Align2::CENTER_BOTTOM, ch.to_string(), font, color);
+            let base = pos2(cell.center().x, rect.bottom() - height * 0.12);
+            let roll = self.roll[i].filter(|(t0, _, _)| !reduce_motion && now - t0 < ROLL_S);
+            match roll {
+                Some((t0, old, dir)) => {
+                    let t = ((now - t0) / ROLL_S) as f32;
+                    let e = 1.0 - (1.0 - t).powi(3);
+                    let shift = height * 0.55 * dir as f32;
+                    let clip = Rect::from_min_max(pos2(cell.left() - 1.0, rect.top()), pos2(cell.right() + 1.0, rect.bottom()));
+                    let cp = painter.with_clip_rect(clip);
+                    cp.text(base - vec2(0.0, e * shift), Align2::CENTER_BOTTOM, old.to_string(), font.clone(), color);
+                    cp.text(base + vec2(0.0, (1.0 - e) * shift), Align2::CENTER_BOTTOM, ch.to_string(), font, color);
+                    rolling = true;
+                }
+                None => {
+                    self.roll[i] = None;
+                    painter.text(base, Align2::CENTER_BOTTOM, ch.to_string(), font, color);
+                }
+            }
             if i == self.selected {
                 painter.rect_filled(
                     Rect::from_min_max(pos2(cell.left() + 1.0, rect.bottom() - 3.0), pos2(cell.right() - 1.0, rect.bottom() - 1.0)),
@@ -144,6 +185,9 @@ impl Vfo {
             x += w;
         }
         painter.text(pos2(x + 8.0, rect.bottom() - height * 0.16), Align2::LEFT_BOTTOM, "MHz", theme::mono(height * 0.26), theme::text_3());
+        if rolling {
+            crate::anim::more(ui.ctx());
+        }
 
         if let Some(i) = hovered_digit {
             ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
@@ -290,7 +334,7 @@ mod tests {
                     return;
                 }
                 let hz = t.hz;
-                t.vfo.ui(ui, hz, 46.0, &mut t.acts);
+                t.vfo.ui(ui, hz, 46.0, true, &mut t.acts);
             },
             T { vfo: Vfo::default(), hz, acts: Vec::new(), ready: false },
         );

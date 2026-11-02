@@ -34,16 +34,24 @@ pub fn dock(app: &mut App, ui: &mut Ui) {
             (DockTab::Calls, format!("Last heard {}", app.calls.len())),
             (DockTab::Scan, "Scan".to_string()),
         ];
+        let mut under: Option<egui::Rect> = None;
         for (t, label) in tabs {
             let on = app.dock_tab == t;
             let r = ui.add(egui::Button::selectable(on, RichText::new(label).font(theme::sans_semibold(12.0)).color(if on { theme::text() } else { theme::text_2() })).frame_when_inactive(false));
             if on {
-                let rr = r.rect;
-                ui.painter().rect_filled(egui::Rect::from_min_max(egui::pos2(rr.left() + 4.0, rr.bottom()), egui::pos2(rr.right() - 4.0, rr.bottom() + 2.0)), egui::CornerRadius::ZERO, theme::AMBER);
+                under = Some(r.rect);
             }
             if r.clicked() {
                 app.dock_tab = t;
             }
+        }
+        // The amber underline slides to the tab that was chosen.
+        if let Some(rr) = under {
+            let ctx = ui.ctx().clone();
+            let rm = app.reduce_motion();
+            let ease = |id: &str, v: f32| if rm { v } else { ctx.animate_value_with_time(egui::Id::new(("dock-tab", id)), v, 0.15) };
+            let (l, r) = (ease("l", rr.left() + 4.0), ease("r", rr.right() - 4.0));
+            ui.painter().rect_filled(egui::Rect::from_min_max(egui::pos2(l, rr.bottom()), egui::pos2(r, rr.bottom() + 2.0)), egui::CornerRadius::same(1), theme::AMBER);
         }
     });
     ui.add_space(4.0);
@@ -79,11 +87,11 @@ fn decodes(app: &mut App, ui: &mut Ui) {
             }
         }
         ui.add_space(6.0);
-        if ui.button("Clear").clicked() {
+        if widgets::action_small(ui, "CLEAR").clicked() {
             app.decodes.clear();
             app.selected_decode = None;
         }
-        ui.menu_button(RichText::new("···").font(theme::mono_bold(11.0)), |ui| {
+        widgets::menu_chip(ui, "···", theme::text_2(), |ui| {
             if ui.button("Expand all").clicked() {
                 app.decodes.iter_mut().for_each(|d| d.open = true);
                 ui.close();
@@ -111,6 +119,13 @@ fn decodes(app: &mut App, ui: &mut Ui) {
         // frames out side by side.
         ui.allocate_ui_with_layout(vec2(list_w, avail.y), egui::Layout::top_down(egui::Align::Min), |ui| {
             ui.label(mono(if visible.len() == total { format!("{total} frames") } else { format!("{} of {total} frames", visible.len()) }, theme::text_3()));
+            // Said inside the list, so a short dock scrolls it rather than
+            // growing past its panel.
+            let empty = (total == 0).then_some(match app.status.mode {
+                Mode::Auto => "Frames decoded on receiver A appear here, newest first. AUTO is running every decoder on this channel.",
+                Mode::P25 | Mode::Dmr | Mode::Nxdn | Mode::Pager | Mode::Flex | Mode::Packet => "Frames decoded on receiver A appear here, newest first. Click a frame's frequency to tune to it; expand one for its fields.",
+                _ => "Frames decoded on receiver A appear here. This mode has no decoder: pick a digital mode, or AUTO to run every decoder on the channel.",
+            });
             // Scrolled into the log, new frames arriving on top push it down
             // by their height, so the rows being read stay where they are.
             let row_h = 24.0;
@@ -128,6 +143,9 @@ fn decodes(app: &mut App, ui: &mut Ui) {
             let kind_w = visible.iter().map(|&i| app.decodes[i].ev.kind.chars().count()).max().unwrap_or(4).clamp(4, 16) as f32 * char_w;
             let mut toggle: Option<usize> = None;
             let out = area.show(ui, |ui| {
+                if let Some(text) = empty {
+                    empty_state(ui, text);
+                }
                 for &i in &visible {
                     let d = &app.decodes[i];
                     let sel = app.selected_decode == Some(i);
@@ -225,7 +243,7 @@ fn decodes(app: &mut App, ui: &mut Ui) {
                         let dump = if k == "rawWords" { word_dump(v) } else { hex_dump(v) };
                         ui.horizontal(|ui| {
                             ui.label(mono(format!("payload · {k}"), theme::text_3()));
-                            if ui.small_button("copy").clicked() {
+                            if widgets::action_small(ui, "COPY").clicked() {
                                 ui.ctx().copy_text(v.clone());
                             }
                         });
@@ -240,6 +258,12 @@ fn decodes(app: &mut App, ui: &mut Ui) {
     if let Some(hz) = tune_to {
         app.tune(hz, false);
     }
+}
+
+/// What a log will hold, said once while it holds nothing.
+fn empty_state(ui: &mut Ui, text: &str) {
+    ui.add_space(6.0);
+    ui.add(egui::Label::new(RichText::new(text).font(theme::sans(12.0)).color(theme::text_3())).wrap());
 }
 
 /// How far through a recording the speaker is, as a slim bar; keeps the
@@ -321,22 +345,23 @@ fn scope(app: &mut App, ui: &mut Ui) {
 fn signal_details(app: &App, ui: &mut Ui) {
     let (c, word) = app.shown_class();
     if let Some(c) = c.filter(|_| word != "IDLE") {
-        ui.horizontal_wrapped(|ui| {
+        // Three lines, each cut to the dock rather than wrapped mid-field:
+        // what it is, what was measured, and the decoder's own note.
+        ui.horizontal(|ui| {
             ui.label(RichText::new(&c.protocol).font(theme::sans_semibold(13.0)).color(widgets::protocol_color(&c.protocol)));
-            ui.label(mono(format!(
-                "{} · {:.0}% · SNR {:+.1} dB · RF {:.0} dBFS · dev peak {:.1}k rms {:.1}k · DC {:+.0} Hz",
-                c.modulation,
-                c.confidence * 100.0,
-                c.snr_db,
-                c.rf_dbfs,
-                c.peak_dev_hz / 1000.0,
-                c.rms_dev_hz / 1000.0,
-                c.center_offset_hz
-            ), theme::text_2()));
-            if let Some(d) = &c.details {
-                ui.label(RichText::new(d).font(theme::sans(11.5)).color(theme::text_3()));
-            }
+            ui.add(egui::Label::new(mono(format!("{} · {:.0}%", c.modulation, c.confidence * 100.0), theme::text_2())).truncate());
         });
+        ui.add(egui::Label::new(mono(format!(
+            "SNR {:+.1} dB · RF {:.0} dBFS · dev peak {:.1}k rms {:.1}k · DC {:+.0} Hz",
+            c.snr_db,
+            c.rf_dbfs,
+            c.peak_dev_hz / 1000.0,
+            c.rms_dev_hz / 1000.0,
+            c.center_offset_hz
+        ), theme::text_2())).truncate());
+        if let Some(d) = &c.details {
+            ui.add(egui::Label::new(RichText::new(d).font(theme::sans(11.5)).color(theme::text_3())).truncate());
+        }
     }
     if let Some(sweep) = &app.status.pager_sweep {
         ui.label(mono(format!("sweeping POCSAG/FLEX · {sweep}"), theme::text_2()));
@@ -360,11 +385,17 @@ fn classifier(app: &mut App, ui: &mut Ui) {
     signal_details(app, ui);
     ui.horizontal(|ui| {
         ui.label(mono(format!("{} detections", app.class_log.len()), theme::text_3()));
-        if ui.button("Clear").clicked() {
+        if widgets::action_small(ui, "CLEAR").clicked() {
             app.class_log.clear();
         }
     });
     let mut tune_to = None;
+    if app.class_log.is_empty() {
+        egui::ScrollArea::vertical().id_salt("class").auto_shrink([false, false]).show(ui, |ui| {
+            empty_state(ui, "What the classifier hears on receiver A is logged here: a row when the protocol or channel changes, or every three seconds while a signal holds.");
+        });
+        return;
+    }
     egui::ScrollArea::vertical().id_salt("class").auto_shrink([false, false]).show_rows(ui, 20.0, app.class_log.len(), |ui, range| {
         for row in app.class_log.range(range) {
             ui.horizontal(|ui| {
@@ -393,6 +424,9 @@ fn calls(app: &mut App, ui: &mut Ui) {
     let mut tune_to = None;
     let progress = app.player.clip_progress();
     egui::ScrollArea::vertical().id_salt("calls").auto_shrink([false, false]).show(ui, |ui| {
+        if app.calls.is_empty() {
+            empty_state(ui, "Finished voice calls are kept here with their audio, the most recent sixteen, so a call that went past can be played again. P25, DMR and NFM calls arrive once the receiver, or the scanner, hears one.");
+        }
         for c in &app.calls {
             egui::Frame::new().fill(theme::surface_2()).corner_radius(egui::CornerRadius::same(4)).inner_margin(egui::Margin::symmetric(8, 6)).show(ui, |ui| {
                 ui.set_width(ui.available_width());
@@ -408,10 +442,10 @@ fn calls(app: &mut App, ui: &mut Ui) {
                         ui.label(mono(format!("from {} · to {}", c.source_id.map_or("—".into(), |v| v.to_string()), c.target_id.map_or("—".into(), |v| v.to_string())), theme::text()));
                     }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.small_button("IQ").on_hover_text("Save the channel I/Q (CS16LE + JSON)").clicked() {
+                        if widgets::action_small(ui, "IQ").on_hover_text("Save the channel I/Q (CS16LE + JSON)").clicked() {
                             actions.push((c.id, "iq"));
                         }
-                        if ui.small_button("WAV").on_hover_text("Save the call audio").clicked() {
+                        if widgets::action_small(ui, "WAV").on_hover_text("Save the call audio").clicked() {
                             actions.push((c.id, "wav"));
                         }
                         if c.encrypted && !c.decrypted {
@@ -554,20 +588,21 @@ fn scan(app: &mut App, ui: &mut Ui) {
                 let mut to = f.stop_hz / 1e6;
                 ui.label(mono("FROM / TO MHz", theme::text_3()));
                 ui.horizontal(|ui| {
-                    touched |= ui.add(egui::DragValue::new(&mut from).range(1.0..=2200.0).speed(0.01).fixed_decimals(4)).changed();
-                    touched |= ui.add(egui::DragValue::new(&mut to).range(1.0..=2200.0).speed(0.01).fixed_decimals(4)).changed();
+                    touched |= widgets::numeric(ui, &mut from, 1.0..=2200.0, 0.01, 4, 86.0).changed();
+                    touched |= widgets::numeric(ui, &mut to, 1.0..=2200.0, 0.01, 4, 86.0).changed();
                 });
                 f.start_hz = (from * 1e6).round();
                 f.stop_hz = (to * 1e6).round();
                 ui.end_row();
                 ui.label(mono("MODES", theme::text_3()));
                 ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 3.0;
                     for m in ["am", "nfm", "p25", "dmr"] {
-                        let mut on = f.modes.iter().any(|x| x == m);
-                        if ui.checkbox(&mut on, m.to_uppercase()).changed() {
+                        let on = f.modes.iter().any(|x| x == m);
+                        if widgets::chip_key(ui, &m.to_uppercase(), on, theme::OK).clicked() {
                             touched = true;
                             f.modes.retain(|x| x != m);
-                            if on {
+                            if !on {
                                 f.modes.push(m.into());
                             }
                         }
@@ -600,7 +635,7 @@ fn scan(app: &mut App, ui: &mut Ui) {
                 ] {
                     let mut v = f.other.get(key).and_then(|v| v.as_f64()).unwrap_or(def);
                     ui.label(mono(label, theme::text_3()));
-                    if ui.add(egui::DragValue::new(&mut v).range(lo..=hi).speed(1.0).fixed_decimals(0)).changed() {
+                    if widgets::numeric(ui, &mut v, lo..=hi, 1.0, 0, 76.0).changed() {
                         touched = true;
                         f.other.insert(key.into(), json!(v.round() as u64));
                     }
@@ -651,7 +686,7 @@ fn scan(app: &mut App, ui: &mut Ui) {
                         }
                         let left = if s.expires_in_s >= 90 { format!("{} min", s.expires_in_s / 60) } else { format!("{} s", s.expires_in_s) };
                         ui.label(mono(left, theme::text_3()));
-                        if ui.small_button("re-test").clicked()
+                        if widgets::action_small(ui, "RE-TEST").clicked()
                             && let Some(l) = &app.link
                         {
                             l.post_each("/api/sdr/scan/control", json!({ "action": "unskip", "freq_hz": s.freq_hz }));

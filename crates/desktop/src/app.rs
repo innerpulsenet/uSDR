@@ -87,6 +87,9 @@ pub struct Toast {
     pub text: String,
     pub tone: Tone,
     pub until: f64,
+    /// When it appeared, for its rise; its height once drawn, for stacking.
+    pub born: f64,
+    pub height: f32,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -193,6 +196,8 @@ pub struct App {
     pub fullscreen: bool,
     /// The window is wide enough for the memories to ride on the toolbar.
     pub memories_on_toolbar: bool,
+    /// The window title as last set.
+    title: String,
 }
 
 impl App {
@@ -300,6 +305,7 @@ impl App {
             audio_devices: Player::devices(),
             fullscreen: false,
             memories_on_toolbar: false,
+            title: String::new(),
         }
     }
 
@@ -337,7 +343,7 @@ impl App {
 
     pub fn toast(&mut self, ctx: &egui::Context, tone: Tone, text: impl Into<String>) {
         let until = ctx.input(|i| i.time) + 5.0;
-        self.toasts.push(Toast { text: text.into(), tone, until });
+        self.toasts.push(Toast { text: text.into(), tone, until, born: 0.0, height: 0.0 });
         if self.toasts.len() > 4 {
             self.toasts.remove(0);
         }
@@ -401,6 +407,8 @@ impl App {
                 text: format!("Receiver B listens inside the span ({} – {} MHz)", crate::tuning::fmt_mhz(lo, 3), crate::tuning::fmt_mhz(hi, 3)),
                 tone: Tone::Warn,
                 until: 0.0,
+                born: 0.0,
+                height: 0.0,
             });
             return;
         }
@@ -415,7 +423,7 @@ impl App {
     /// listens in A's mode where it can, NFM otherwise.
     pub fn place_b(&mut self, hz: f64) {
         if !self.rx2_available() {
-            self.toasts.push(Toast { text: "This server has no second receiver (it predates API 2).".into(), tone: Tone::Warn, until: 0.0 });
+            self.toasts.push(Toast { text: "This server has no second receiver (it predates API 2).".into(), tone: Tone::Warn, until: 0.0, born: 0.0, height: 0.0 });
             return;
         }
         let mode = match &self.status.rx2 {
@@ -460,6 +468,8 @@ impl App {
                     text: format!("Span lock: {} MHz is outside the span, so the span moved to reach it.", crate::tuning::fmt_mhz(plan.inspect_hz, 4)),
                     tone: Tone::Idle,
                     until: 0.0,
+                    born: 0.0,
+                    height: 0.0,
                 });
             }
             self.post("/api/sdr/tune", json!({ "freq_hz": c }));
@@ -553,6 +563,11 @@ impl App {
                 self.server = info;
                 self.apply_status(*s);
                 self.display_bins_sent = 0;
+                if !self.prefs.hinted_shortcuts {
+                    self.prefs.hinted_shortcuts = true;
+                    self.prefs.save();
+                    self.toast(ctx, Tone::Idle, "Press ? for the shortcuts and gestures: click, wheel and drag the display; arrows and PgUp/PgDn tune.");
+                }
                 if let Some(l) = &self.link {
                     l.get("/api/sdr/modes", Get::Modes);
                     l.get("/api/devices", Get::Devices);
@@ -1124,7 +1139,7 @@ impl App {
     }
 
     fn view_menu(&mut self, ui: &mut Ui) {
-        ui.menu_button(egui::RichText::new("View").font(theme::sans_semibold(12.0)), |ui| {
+        widgets::menu_chip(ui, "VIEW", theme::text_2(), |ui| {
             ui.set_min_width(220.0);
             ui.checkbox(&mut self.prefs.show_side, "Radio and tools column   S");
             ui.checkbox(&mut self.prefs.show_dock, "Dock   D");
@@ -1219,23 +1234,17 @@ impl App {
             }
             let a = self.player.reading();
             if a.queue_ms > 0.0 {
-                small(ui, format!("audio {:.0} ms · clock {:+.0} ppm", a.queue_ms, a.drift_ppm), theme::text_3());
+                small(ui, format!("audio {:.0} ms", a.queue_ms), theme::text_3());
             } else {
                 small(ui, "audio —".into(), theme::text_3());
             }
             if a.underruns > 0 {
                 small(ui, format!("{} underruns", a.underruns), theme::WARN);
             }
-            if self.have_status {
-                let s = &self.status;
-                small(ui, format!("FFT {}", s.fft_size), theme::text_3());
-                small(ui, format!("crystal {:+.2} ppm", s.ppm), theme::text_3());
-                if s.inspect_rate_hz > 0.0 {
-                    small(ui, format!("ch {}S/s", crate::tuning::fmt_short_hz(s.inspect_rate_hz)), theme::text_3());
-                }
-                if let Some(e) = &s.error {
-                    small(ui, e.clone(), theme::ERR);
-                }
+            if self.have_status
+                && let Some(e) = &self.status.error
+            {
+                small(ui, e.clone(), theme::ERR);
             }
             if let Some(e) = self.player.error.lock().unwrap().clone() {
                 small(ui, format!("audio: {e}"), theme::ERR);
@@ -1251,22 +1260,32 @@ impl App {
 
     fn toasts_ui(&mut self, ctx: &egui::Context) {
         let now = ctx.input(|i| i.time);
+        let rm = self.reduce_motion();
         for t in &mut self.toasts {
             if t.until == 0.0 {
                 t.until = now + 5.0;
+            }
+            if t.born == 0.0 {
+                t.born = now;
             }
         }
         self.toasts.retain(|t| t.until > now);
         if self.toasts.is_empty() {
             return;
         }
-        egui::Area::new("toasts".into())
-            .anchor(Align2::RIGHT_BOTTOM, vec2(-16.0, -40.0))
-            .order(egui::Order::Foreground)
-            .interactable(false)
-            .show(ctx, |ui| {
-                for t in &self.toasts {
-                    let fade = ((t.until - now) as f32 / 0.4).clamp(0.0, 1.0);
+        // Each toast is its own area, stacked up from the corner, so a new
+        // one can rise into place while the others hold still.
+        let mut stack = 0.0;
+        for (i, t) in self.toasts.iter_mut().enumerate() {
+            let fade_out = ((t.until - now) as f32 / 0.4).clamp(0.0, 1.0);
+            let born = if rm { 1.0 } else { ((now - t.born) as f32 / 0.18).clamp(0.0, 1.0) };
+            let rise = 1.0 - (1.0 - born).powi(3);
+            let fade = fade_out.min(rise);
+            let r = egui::Area::new(egui::Id::new(("toast", i)))
+                .anchor(Align2::RIGHT_BOTTOM, vec2(-16.0, -40.0 - stack - 8.0 * (1.0 - rise)))
+                .order(egui::Order::Foreground)
+                .interactable(false)
+                .show(ctx, |ui| {
                     egui::Frame::new()
                         .fill(alpha(theme::surface_3(), 0.97 * fade))
                         .stroke(Stroke::new(1.0, alpha(theme::line_2(), fade)))
@@ -1286,9 +1305,10 @@ impl App {
                                 ui.label(egui::RichText::new(&t.text).color(alpha(theme::text(), fade)));
                             });
                         });
-                    ui.add_space(6.0);
-                }
-            });
+                });
+            t.height = r.response.rect.height();
+            stack += t.height + 6.0;
+        }
         crate::anim::more(ctx);
     }
 
@@ -1369,7 +1389,7 @@ fn sep(ui: &mut Ui) {
 fn annunciator(ui: &mut Ui, label: &str, value: &str, color: egui::Color32) {
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 4.0;
-        ui.label(egui::RichText::new(label).font(theme::mono(9.5)).color(theme::text_3()));
+        ui.label(egui::RichText::new(label).font(theme::mono(10.5)).color(theme::text_3()));
         ui.label(egui::RichText::new(value).font(theme::mono_bold(11.0)).color(color));
     });
 }
@@ -1483,6 +1503,20 @@ impl App {
             }
         }
         let live = self.have_status && matches!(self.conn, Conn::Live | Conn::Connecting { .. }) && self.link.is_some();
+        // The title says what the receiver is on, for the taskbar and alt-tab.
+        let title = if live {
+            let (hz, mode) = match (&self.status.rx2, self.active_b) {
+                (Some(b), true) => (b.freq_hz, b.mode),
+                _ => (self.inspect_hz(), self.status.mode),
+            };
+            format!("{} {} · uSDR", crate::tuning::fmt_mhz(hz, 3), mode.label())
+        } else {
+            "uSDR".to_string()
+        };
+        if title != self.title {
+            self.title = title.clone();
+            ctx.send_viewport_cmd(egui::ViewportCommand::Title(title));
+        }
         if !live {
             crate::screens::connect_screen(self, ui);
             crate::screens::settings_window(self, &ctx);
@@ -1507,9 +1541,11 @@ impl App {
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
                 crate::bar::receiver_bar(self, ui);
-                // The index tick: the bar belongs to the active receiver.
+                // The index tick: the bar belongs to the active receiver; it
+                // takes B's violet as the wash does.
                 let r = ui.max_rect().expand2(vec2(14.0, 8.0));
-                ui.painter().rect_filled(Rect::from_min_size(r.left_top(), vec2(16.0, 2.0)), CornerRadius::ZERO, theme::EMBER);
+                let b = ui.ctx().animate_bool_with_time(egui::Id::new("rx-b-wash"), self.active_b && self.status.rx2.is_some(), 0.2);
+                ui.painter().rect_filled(Rect::from_min_size(r.left_top(), vec2(16.0, 2.0)), CornerRadius::ZERO, theme::lerp(theme::EMBER, theme::VIOLET, b));
             });
         // The toolbar's own items take about 830 px and the memories about
         // 470; the toolbar runs the width of the display, beside the column.

@@ -68,16 +68,115 @@ fn applet_opened<R>(ui: &mut Ui, id: &str, title: &str, first_open: bool, extra:
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| extra(ui));
             });
-            if open {
-                ui.add_space(4.0);
-                Some(add(ui))
-            } else {
-                None
+            // The body folds and unfolds with the chevron: it is laid out at
+            // its full height and shown through a window that grows with
+            // the same animation, so what is hidden cannot be hit either.
+            let t = ui.ctx().animate_bool_with_time(open_id.with("a"), open, 0.15);
+            if t <= 0.001 {
+                return None;
             }
+            ui.add_space(4.0 * t);
+            let full = ui.available_rect_before_wrap();
+            let natural_id = open_id.with("h");
+            let natural: f32 = ui.data(|d| d.get_temp(natural_id).unwrap_or(0.0));
+            let shown_h = if t >= 0.999 { f32::INFINITY } else { natural * t };
+            let mut child = ui.new_child(egui::UiBuilder::new().max_rect(Rect::from_min_size(full.min, vec2(full.width(), f32::INFINITY))));
+            child.set_clip_rect(Rect::from_min_max(full.min, pos2(full.right(), (full.top() + shown_h).min(ui.clip_rect().bottom()))));
+            let r = add(&mut child);
+            let h = child.min_rect().height();
+            ui.data_mut(|d| d.insert_temp(natural_id, h));
+            ui.allocate_space(vec2(full.width(), if t >= 0.999 { h } else { h * t }));
+            if t < 0.999 {
+                crate::anim::more(ui.ctx());
+            }
+            Some(r)
         })
         .inner;
     ui.data_mut(|d| d.insert_persisted(open_id, open));
     out
+}
+
+/// `text` cut to fit `max_w` in `font`, with an ellipsis where it was cut.
+pub fn ellipsize(painter: &egui::Painter, text: &str, font: egui::FontId, max_w: f32) -> String {
+    let width = |s: &str| painter.layout_no_wrap(s.to_owned(), font.clone(), Color32::PLACEHOLDER).size().x;
+    if width(text) <= max_w {
+        return text.to_owned();
+    }
+    let chars: Vec<char> = text.chars().collect();
+    let mut n = chars.len();
+    while n > 0 {
+        n -= 1;
+        let s: String = chars[..n].iter().collect::<String>().trim_end().to_owned() + "…";
+        if width(&s) <= max_w {
+            return s;
+        }
+    }
+    "…".into()
+}
+
+/// A chip that opens a menu: a `chip_key` with a chevron, so every menu on
+/// the bars looks like the chips beside it and says it opens.
+pub fn menu_chip<R>(ui: &mut Ui, label: &str, tally: Color32, add: impl FnOnce(&mut Ui) -> R) -> Option<R> {
+    let galley = ui.painter().layout_no_wrap(format!("{label} ▾"), theme::mono_bold(10.5), Color32::PLACEHOLDER);
+    let (rect, resp) = ui.allocate_exact_size(vec2(galley.size().x + 14.0, 22.0), Sense::click());
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, label));
+    let open = egui::Popup::is_id_open(ui.ctx(), egui::Popup::default_response_id(&resp));
+    let t = ui.ctx().animate_bool_with_time(resp.id.with("on"), open, 0.15);
+    let hover = ui.ctx().animate_bool_with_time(resp.id.with("hv"), resp.hovered(), 0.12);
+    let bg = theme::lerp(theme::lerp(theme::surface_3(), theme::surface_4(), hover), alpha(tally, 0.22), t);
+    let stroke = theme::lerp(theme::line(), alpha(tally, 0.75), t);
+    let p = ui.painter();
+    p.rect(rect, CornerRadius::same(3), bg, Stroke::new(1.0, stroke), egui::StrokeKind::Inside);
+    let c = theme::lerp(theme::text_2(), theme::text(), t.max(hover));
+    p.galley(rect.center() - galley.size() / 2.0, galley, c);
+    egui::Popup::menu(&resp).show(add).map(|r| r.inner)
+}
+
+/// A selector: the chosen value in mono with a chevron, opening a menu of
+/// the choices. The house take on a combo box.
+pub fn selector<R>(ui: &mut Ui, id: &str, text: &str, color: Color32, width: f32, add: impl FnOnce(&mut Ui) -> R) -> Option<R> {
+    let font = theme::mono(11.0);
+    let w = if width > 0.0 { width } else { ui.painter().layout_no_wrap(text.to_owned(), font.clone(), Color32::PLACEHOLDER).size().x + 34.0 };
+    let (rect, resp) = ui.allocate_exact_size(vec2(w, 24.0), Sense::click());
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, true, text));
+    let hover = ui.ctx().animate_bool_with_time(resp.id.with("hv"), resp.hovered(), 0.12);
+    let p = ui.painter();
+    p.rect(rect, CornerRadius::same(theme::RADIUS), theme::lerp(theme::surface_3(), theme::surface_4(), hover), Stroke::new(1.0, theme::lerp(theme::line(), theme::line_2(), hover)), egui::StrokeKind::Inside);
+    let shown = ellipsize(p, text, font.clone(), w - 30.0);
+    p.text(pos2(rect.left() + 8.0, rect.center().y), Align2::LEFT_CENTER, shown, font, color);
+    p.text(pos2(rect.right() - 7.0, rect.center().y), Align2::RIGHT_CENTER, "▾", theme::mono(10.0), theme::text_3());
+    if resp.has_focus() {
+        p.rect_stroke(rect.expand(1.5), CornerRadius::same(theme::RADIUS + 1), Stroke::new(1.0, theme::EMBER), egui::StrokeKind::Outside);
+    }
+    egui::Popup::menu(&resp).id(egui::Id::new(("selector", id))).width(w.max(160.0)).show(add).map(|r| r.inner)
+}
+
+/// A number the operator drags or types: egui's drag value in the house
+/// frame and the measuring mono, at a fixed width so rows do not shift.
+pub fn numeric(ui: &mut Ui, value: &mut f64, range: std::ops::RangeInclusive<f64>, speed: f64, decimals: usize, width: f32) -> Response {
+    ui.scope(|ui| {
+        ui.style_mut().drag_value_text_style = egui::TextStyle::Monospace;
+        ui.style_mut().text_styles.insert(egui::TextStyle::Monospace, theme::mono(11.0));
+        ui.spacing_mut().interact_size.y = 24.0;
+        ui.spacing_mut().button_padding = vec2(8.0, 4.0);
+        ui.add_sized([width, 24.0], egui::DragValue::new(value).range(range).speed(speed).fixed_decimals(decimals))
+    })
+    .inner
+}
+
+/// An action key at chip height, for the small verbs inside lists.
+pub fn action_small(ui: &mut Ui, label: &str) -> Response {
+    let galley = ui.painter().layout_no_wrap(label.to_string(), theme::sans_semibold(11.0), Color32::PLACEHOLDER);
+    let (rect, resp) = ui.allocate_exact_size(vec2(galley.size().x + 14.0, 22.0), Sense::click());
+    let enabled = ui.is_enabled();
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, label));
+    let hover = ui.ctx().animate_bool_with_time(resp.id.with("hv"), resp.hovered(), 0.12);
+    let p = ui.painter();
+    let bg = if resp.is_pointer_button_down_on() { theme::surface_4() } else { theme::lerp(theme::surface_3(), theme::surface_4(), hover) };
+    p.rect(rect, CornerRadius::same(3), bg, Stroke::new(1.0, theme::line_2()), egui::StrokeKind::Inside);
+    let c = if enabled { theme::text() } else { theme::text_3() };
+    p.galley(rect.center() - galley.size() / 2.0, galley, c);
+    resp
 }
 
 /// A latching key with a tally light. Returns its response; clicked toggles.
@@ -191,13 +290,13 @@ impl<F: Fn(f64) -> String> Fader<'_, F> {
         let a = if self.enabled { 1.0 } else { 0.5 };
         let value_text = (self.text)(*self.value);
         let track = if compact {
-            let lw = p.layout_no_wrap(self.label.to_string(), theme::mono(9.5), theme::text_3()).size().x;
+            let lw = p.layout_no_wrap(self.label.to_string(), theme::mono(10.5), theme::text_3()).size().x;
             let vw = p.layout_no_wrap(value_text.clone(), theme::mono_bold(11.0), theme::text()).size().x.max(44.0);
-            p.text(pos2(rect.left(), rect.center().y), Align2::LEFT_CENTER, self.label, theme::mono(9.5), alpha(theme::text_3(), a));
+            p.text(pos2(rect.left(), rect.center().y), Align2::LEFT_CENTER, self.label, theme::mono(10.5), alpha(theme::text_3(), a));
             p.text(pos2(rect.right(), rect.center().y), Align2::RIGHT_CENTER, &value_text, theme::mono_bold(11.0), alpha(self.color, a.max(0.7)));
             Rect::from_min_max(pos2(rect.left() + lw + 10.0, rect.center().y - 3.0), pos2(rect.right() - vw - 10.0, rect.center().y + 3.0))
         } else {
-            p.text(rect.left_top(), Align2::LEFT_TOP, self.label, theme::mono(10.0), alpha(theme::text_3(), a));
+            p.text(rect.left_top(), Align2::LEFT_TOP, self.label, theme::mono(10.5), alpha(theme::text_3(), a));
             p.text(rect.right_top(), Align2::RIGHT_TOP, &value_text, theme::mono_bold(11.5), alpha(self.color, a.max(0.7)));
             Rect::from_min_max(pos2(rect.left() + 4.0, rect.top() + 18.0), pos2(rect.right() - 4.0, rect.top() + 24.0))
         };
@@ -223,7 +322,7 @@ impl<F: Fn(f64) -> String> Fader<'_, F> {
             let x = track.left() + track.width() * f;
             p.line_segment([pos2(x, track.bottom() + 2.0), pos2(x, track.bottom() + 5.0)], Stroke::new(1.0, theme::text_3()));
             let align = if *f <= 0.0 { Align2::LEFT_TOP } else if *f >= 1.0 { Align2::RIGHT_TOP } else { Align2::CENTER_TOP };
-            p.text(pos2(x, track.bottom() + 6.0), align, label, theme::mono(9.0), theme::text_3());
+            p.text(pos2(x, track.bottom() + 6.0), align, label, theme::mono(9.5), theme::text_3());
         }
         let mut changed = false;
         if let Some(pos) = resp.interact_pointer_pos()

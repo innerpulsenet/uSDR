@@ -152,7 +152,7 @@ impl Default for View {
             wf_peak: false,
             wf_black: -3.0,
             wf_auto_black: true,
-            wf_range: 55.0,
+            wf_range: 65.0,
             split: 0.42,
             sql_mark: None,
             show_peaks: true,
@@ -190,6 +190,13 @@ pub struct Panafall {
     smooth: Vec<f32>,
     peak: Vec<f32>,
     max_hold: Vec<f32>,
+    /// A slower-falling trace drawn faintly under the live one, the way a
+    /// phosphor keeps what it just showed.
+    after: Vec<f32>,
+    /// Where the carrier is drawn: it glides to the receive frequency.
+    marker_hz: f64,
+    /// A palette change in progress: the palette it came from, and when.
+    fade: Option<(Colormap, f64)>,
     pub center_hz: f64,
     pub span_hz: f64,
     /// Animated display range.
@@ -278,6 +285,9 @@ impl Default for Panafall {
             smooth: Vec::new(),
             peak: Vec::new(),
             max_hold: Vec::new(),
+            after: Vec::new(),
+            marker_hz: 0.0,
+            fade: None,
             center_hz: 0.0,
             span_hz: 0.0,
             min_db: -110.0,
@@ -389,14 +399,27 @@ impl Panafall {
         let axis_moved = (f.center_hz - self.center_hz).abs() > 1.0;
         let span_changed = (f.rate_hz - self.span_hz).abs() > 1.0;
         if self.smooth.len() != n || span_changed {
-            self.smooth = f.pwr.clone();
-            self.peak = f.pwr.clone();
+            // A new span or a new width: carry the old trace over, resampled
+            // onto the new axis, so the display glides into the new span
+            // rather than blinking to a fresh one.
+            if self.span_hz > 0.0 && self.smooth.len() >= 2 {
+                let old = (self.center_hz, self.span_hz);
+                let new = (f.center_hz, f.rate_hz);
+                self.smooth = resample(&self.smooth, old, n, new);
+                self.peak = resample(&self.peak, old, n, new);
+                self.after = resample(&self.after, old, n, new);
+            } else {
+                self.smooth = f.pwr.clone();
+                self.peak = f.pwr.clone();
+                self.after = f.pwr.clone();
+            }
         } else if axis_moved {
             // Same span, new center: carry the holds and history across by
             // the bins they moved, so a retune slides rather than blanks.
             let shift = ((f.center_hz - self.center_hz) / f.rate_hz * (n - 1) as f64).round() as isize;
             shift_vec(&mut self.smooth, shift, -200.0);
             shift_vec(&mut self.peak, shift, -200.0);
+            shift_vec(&mut self.after, shift, -200.0);
             self.shift_waterfall(shift as f64 / (n - 1) as f64);
         }
         self.center_hz = f.center_hz;
@@ -409,6 +432,15 @@ impl Panafall {
         }
         for (p, &s) in self.peak.iter_mut().zip(&self.smooth) {
             *p = s.max(*p - 0.25);
+        }
+        if self.after.len() != n {
+            self.after = self.smooth.clone();
+        }
+        for (a, &s) in self.after.iter_mut().zip(&self.smooth) {
+            if *a < -190.0 {
+                *a = s;
+            }
+            *a += (s - *a) * if s > *a { 0.5 } else { 0.06 };
         }
         self.max_hold = f.max_hold.clone();
 
@@ -568,7 +600,7 @@ impl Panafall {
                 pos2(time_axis.right() - 2.0, y + 1.0),
                 Align2::RIGHT_TOP,
                 format!("{:02}:{:02}", (secs / 60) % 60, secs % 60),
-                theme::mono(9.5),
+                theme::mono(10.0),
                 theme::text_2(),
             );
         }
@@ -618,17 +650,46 @@ impl Panafall {
         }
     }
 
-    fn upload(&mut self, ctx: &egui::Context, view: &View) {
+    fn upload(&mut self, ctx: &egui::Context, view: &View, now: f64, reduce_motion: bool) {
         if self.wf_cols == 0 {
             return;
         }
         let (black, top) = self.wf_levels(view);
         let want = (black, top, view.palette);
         if want != self.wf_levels {
+            // A new palette crossfades over the whole history, a quarter of
+            // a second, rather than snapping; levels and ranges snap as
+            // before, since those are readings.
+            if self.wf_levels.2 != view.palette && self.wf_tex.is_some() && !reduce_motion {
+                let from = match self.fade {
+                    Some((f, _)) => f,
+                    None => self.wf_levels.2,
+                };
+                self.fade = Some((from, now));
+            }
             self.wf_levels = want;
             self.wf_dirty_all = true;
         }
-        let lut = view.palette.lut();
+        let mut blended = [Color32::TRANSPARENT; 256];
+        let lut: &[Color32; 256] = match self.fade {
+            Some((from, start)) => {
+                let t = ((now - start) / 0.25) as f32;
+                if t >= 1.0 || reduce_motion {
+                    self.fade = None;
+                    view.palette.lut()
+                } else {
+                    let e = 1.0 - (1.0 - t).powi(3);
+                    let (a, b) = (from.lut(), view.palette.lut());
+                    for i in 0..256 {
+                        blended[i] = theme::lerp(a[i], b[i], e);
+                    }
+                    self.wf_dirty_all = true;
+                    crate::anim::more(ctx);
+                    &blended
+                }
+            }
+            None => view.palette.lut(),
+        };
         let opts = egui::TextureOptions {
             magnification: egui::TextureFilter::Linear,
             minification: egui::TextureFilter::Linear,
@@ -684,7 +745,10 @@ impl Panafall {
             crate::anim::more(&ctx);
         }
 
-        let axis_h = 22.0;
+        // The frequency axis, with the band plan as a named strip above the
+        // labels when it is on.
+        let strip_h = if view.band_plan { 13.0 } else { 0.0 };
+        let axis_h = 22.0 + strip_h;
         let db_w = 44.0;
         let split_y = full.top() + (full.height() - axis_h) * view.split.clamp(0.15, 0.85);
         let pan = Rect::from_min_max(full.min, pos2(full.right() - db_w, split_y));
@@ -746,7 +810,7 @@ impl Panafall {
             pos2(db_axis.right() - 6.0, db_axis.top() + 8.0),
             Align2::RIGHT_CENTER,
             "dBFS",
-            theme::mono(9.5),
+            theme::mono(10.0),
             theme::text_3(),
         );
         let f_step = nice_step(self.span_hz, (pan.width() / 110.0).max(3.0) as f64);
@@ -765,13 +829,15 @@ impl Panafall {
         painter.rect_filled(axis, CornerRadius::ZERO, theme::surface_1());
         painter.line_segment([axis.left_top(), axis.right_top()], Stroke::new(1.0, theme::line_2()));
         painter.line_segment([axis.left_bottom(), axis.right_bottom()], Stroke::new(1.0, theme::line()));
+        // The labels sit in the lower 22 px; the strip, when on, above them.
+        let labels_top = axis.bottom() - 22.0;
         while f <= hi {
             let x = self.x_for(f, pan);
             painter.line_segment([pos2(x, pan.top()), pos2(x, pan.bottom())], Stroke::new(1.0, theme::line()));
-            painter.line_segment([pos2(x, axis.top()), pos2(x, axis.top() + 4.0)], Stroke::new(1.0, theme::text_3()));
+            painter.line_segment([pos2(x, labels_top), pos2(x, labels_top + 4.0)], Stroke::new(1.0, theme::text_3()));
             if x > axis.left() + 30.0 && x < pan.right() - 30.0 {
                 painter.text(
-                    pos2(x, axis.center().y + 1.0),
+                    pos2(x, labels_top + 12.0),
                     Align2::CENTER_CENTER,
                     crate::tuning::fmt_mhz(f, decimals),
                     theme::mono(10.5),
@@ -781,20 +847,33 @@ impl Panafall {
             f += f_step;
         }
 
-        // ---- the band plan, as a colored edge along the top of the axis
+        // ---- the band plan: a tinted strip over the labels, each band
+        // named where there is room, so a sweep across a band says what it
+        // is without a hover.
         if view.band_plan {
             let lo = self.hz_for(pan.left(), pan);
             let hi = self.hz_for(pan.right(), pan);
+            let strip = Rect::from_min_max(pos2(axis.left(), axis.top() + 1.0), pos2(pan.right(), labels_top - 1.0));
+            painter.line_segment([pos2(strip.left(), labels_top - 0.5), pos2(strip.right(), labels_top - 0.5)], Stroke::new(1.0, theme::line()));
             for b in crate::bandplan::within(lo, hi) {
                 let x0 = self.x_for(b.lo_hz, pan).max(pan.left());
                 let x1 = self.x_for(b.hi_hz, pan).min(pan.right());
-                let r = Rect::from_min_max(pos2(x0, axis.top() + 1.0), pos2(x1.max(x0 + 2.0), axis.top() + 4.0));
-                painter.rect_filled(r, CornerRadius::ZERO, alpha(b.kind.color(), 0.75));
+                if x1 <= x0 {
+                    continue;
+                }
+                let c = b.kind.color();
+                let r = Rect::from_min_max(pos2(x0, strip.top()), pos2(x1.max(x0 + 2.0), strip.bottom()));
+                painter.rect_filled(r, CornerRadius::ZERO, alpha(c, 0.16));
+                painter.rect_filled(Rect::from_min_size(r.min, vec2(r.width(), 2.0)), CornerRadius::ZERO, alpha(c, 0.85));
+                let g = painter.layout_no_wrap(b.name.to_owned(), theme::mono(10.0), c);
+                if g.size().x + 12.0 < r.width() {
+                    painter.galley(pos2(r.left() + 6.0, r.center().y + 1.0 - g.size().y / 2.0), g, c);
+                }
             }
         }
 
         // ---- waterfall
-        self.upload(&ctx, view);
+        self.upload(&ctx, view, now, reduce_motion);
         if self.hold.is_some() {
             self.draw_held(ui, wf, time_axis, view);
         } else if let Some(tex) = &self.wf_tex {
@@ -830,10 +909,13 @@ impl Panafall {
             if !reduce_motion && frac < 1.0 {
                 crate::anim::more(&ctx);
             }
-            // Time marks, measured from the rows themselves.
+            // Time marks, measured from the rows themselves, spaced for
+            // about one label per 70 px whatever the row rate.
             painter.rect_filled(time_axis, CornerRadius::ZERO, theme::surface_1());
             let newest = self.wf_time[self.wf_head];
-            let mut next_mark = 5.0;
+            let visible_s = rows_vis as f64 * self.row_interval.max(0.005);
+            let step_s = nice_step(visible_s, (wf.height() / 70.0).max(1.0) as f64).max(0.5);
+            let mut next_mark = step_s;
             for i in 0..rows_vis.min(self.wf_count) {
                 let r = (self.wf_head + i) % WF_ROWS;
                 let age = newest - self.wf_time[r];
@@ -846,11 +928,11 @@ impl Panafall {
                     painter.text(
                         pos2(time_axis.right() - 6.0, y),
                         Align2::RIGHT_CENTER,
-                        format!("−{:.0}s", next_mark),
+                        fmt_age(next_mark, step_s),
                         theme::mono(10.0),
                         theme::text_3(),
                     );
-                    next_mark += 5.0;
+                    next_mark += step_s;
                 }
             }
         }
@@ -880,7 +962,7 @@ impl Panafall {
                 };
                 let mmss = |t: f64| format!("−{:.0}:{:04.1}", (t / 60.0).floor(), t - (t / 60.0).floor() * 60.0);
                 let label = painter.layout_no_wrap(format!("HELD {}", mmss(age)), theme::mono_bold(10.5), theme::WARN);
-                let ends = painter.layout_no_wrap(format!("−{:.0}:{:02.0}", (span_s / 60.0).floor(), (span_s % 60.0).floor()), theme::mono(9.5), theme::text_3());
+                let ends = painter.layout_no_wrap(format!("−{:.0}:{:02.0}", (span_s / 60.0).floor(), (span_s % 60.0).floor()), theme::mono(10.0), theme::text_3());
                 let track_w = 180.0f32.min(wf.width() * 0.3);
                 let track = Rect::from_min_size(pos2(r.left() - 12.0 - track_w, r.center().y - 3.0), vec2(track_w, 6.0));
                 let ends_x = track.left() - 8.0 - ends.size().x;
@@ -953,6 +1035,17 @@ impl Panafall {
                 }
                 pan_painter.add(Shape::mesh(mesh));
             }
+            // The afterglow: what the trace showed a moment ago, wide and
+            // faint under it. Classic keeps its flat look.
+            if view.style != Style::Classic && self.after.len() == n {
+                let pts: Vec<Pos2> = (0..cols)
+                    .map(|c| {
+                        let x = pan.left() + c as f32 / (cols - 1) as f32 * pan.width() + self.drag_offset_px;
+                        pos2(x, self.y_for(column(&self.after, c), pan))
+                    })
+                    .collect();
+                pan_painter.add(Shape::line(pts, Stroke::new(4.5, alpha(look.glow, 0.11))));
+            }
             if self.max_hold.len() == n {
                 let pts: Vec<Pos2> = (0..cols)
                     .map(|c| {
@@ -982,7 +1075,7 @@ impl Panafall {
                 continue;
             }
             dashed_v(&painter, x, pan.top(), pan.bottom(), alpha(theme::ERR, 0.8));
-            painter.text(pos2(x + 3.0, pan.top() + 10.0), Align2::LEFT_CENTER, "NOTCH", theme::mono(9.5), theme::ERR);
+            painter.text(pos2(x + 3.0, pan.top() + 10.0), Align2::LEFT_CENTER, "NOTCH", theme::mono(10.0), theme::ERR);
         }
 
         // ---- scan marks
@@ -1003,9 +1096,24 @@ impl Panafall {
 
         // ---- passband and carrier
         let inspect = frame.map(|f| f.inspect_hz).filter(|h| *h > 0.0).unwrap_or(status.inspect_hz);
-        let ix = self.x_for(inspect, pan);
+        // The carrier, passband and flag glide to a new frequency over
+        // about 140 ms (the waterfall is panning under them); a jump past
+        // most of the span, or reduced motion, snaps.
+        if reduce_motion || self.marker_hz <= 0.0 || (self.marker_hz - inspect).abs() > self.span_hz * 0.75 {
+            self.marker_hz = inspect;
+        } else if (self.marker_hz - inspect).abs() > 1.0 {
+            let k = 1.0 - (-(dt as f64) * 22.0).exp();
+            self.marker_hz += (inspect - self.marker_hz) * k;
+            if (self.marker_hz - inspect).abs() <= 1.0 {
+                self.marker_hz = inspect;
+            } else {
+                crate::anim::more(&ctx);
+            }
+        }
+        let shown_hz = self.marker_hz;
+        let ix = self.x_for(shown_hz, pan);
         let bw = status.bandwidth_hz.max(100.0);
-        let pc = inspect + status.passband_offset_hz;
+        let pc = shown_hz + status.passband_offset_hz;
         let px0 = self.x_for(pc - bw / 2.0, pan);
         let px1 = self.x_for(pc + bw / 2.0, pan);
         let wide = (px1 - px0) > pan.width() * 0.25;
@@ -1023,7 +1131,7 @@ impl Panafall {
             }
             painter.line_segment([pos2(ix, pan.top()), pos2(ix, pan.bottom())], Stroke::new(1.4, theme::AMBER));
             painter.add(Shape::convex_polygon(
-                vec![pos2(ix - 6.0, axis.top()), pos2(ix + 6.0, axis.top()), pos2(ix, axis.top() + 7.0)],
+                vec![pos2(ix - 6.0, labels_top), pos2(ix + 6.0, labels_top), pos2(ix, labels_top + 7.0)],
                 theme::AMBER,
                 Stroke::NONE,
             ));
@@ -1088,7 +1196,7 @@ impl Panafall {
             let y = self.y_for(sql, pan);
             let c = if self.sql_drag { theme::ERR } else { alpha(theme::ERR, 0.7) };
             dashed_h(&painter, pan.left(), pan.right(), y, c);
-            let g = painter.layout_no_wrap(format!("MARK {sql:.0} dB"), theme::mono(9.5), theme::ERR);
+            let g = painter.layout_no_wrap(format!("MARK {sql:.0} dB"), theme::mono(10.0), theme::ERR);
             let r = Rect::from_min_size(pos2(pan.left() + 6.0, y - 8.0), vec2(g.size().x + 8.0, 15.0));
             painter.rect(r, CornerRadius::same(3), alpha(theme::ink(), 0.9), Stroke::new(1.0, alpha(theme::ERR, 0.6)), egui::StrokeKind::Inside);
             painter.galley(pos2(r.left() + 4.0, r.center().y - g.size().y / 2.0), g, theme::ERR);
@@ -1114,7 +1222,7 @@ impl Panafall {
                 painter.rect_filled(wf_band, CornerRadius::ZERO, alpha(theme::VIOLET, 0.035));
                 painter.line_segment([pos2(bx, pan.top()), pos2(bx, pan.bottom())], Stroke::new(1.4, theme::VIOLET));
                 painter.add(Shape::convex_polygon(
-                    vec![pos2(bx - 6.0, axis.top()), pos2(bx + 6.0, axis.top()), pos2(bx, axis.top() + 7.0)],
+                    vec![pos2(bx - 6.0, labels_top), pos2(bx + 6.0, labels_top), pos2(bx, labels_top + 7.0)],
                     theme::VIOLET,
                     Stroke::NONE,
                 ));
@@ -1212,6 +1320,19 @@ impl Panafall {
                     text.push_str(&format!("\n{} · {kind}", b.name));
                 }
             }
+            // A dot on the trace where the hover line crosses it, and its
+            // level carried across to the dB scale.
+            if let Some(l) = level
+                && pan.contains(p)
+            {
+                let y = self.y_for(l, pan);
+                painter.line_segment([pos2(lx, y), pos2(db_axis.left(), y)], Stroke::new(1.0, Color32::from_white_alpha(40)));
+                painter.circle(pos2(lx, y), 3.0, look.core, Stroke::new(1.0, theme::ink()));
+                let g = painter.layout_no_wrap(format!("{l:.0}"), theme::mono_bold(10.0), theme::text());
+                let plate = Rect::from_center_size(pos2(db_axis.right() - 6.0 - g.size().x / 2.0, y), g.size() + vec2(8.0, 4.0));
+                painter.rect(plate, CornerRadius::same(3), alpha(theme::surface_3(), 0.96), Stroke::new(1.0, theme::line_2()), egui::StrokeKind::Inside);
+                painter.galley(plate.min + vec2(4.0, 2.0), g, theme::text());
+            }
             let g = painter.layout_no_wrap(text, theme::mono(11.0), theme::text());
             let mut r = Rect::from_min_size(pos2(p.x + 12.0, p.y + 14.0), g.size() + vec2(12.0, 8.0));
             if r.right() > full.right() - 4.0 {
@@ -1248,7 +1369,14 @@ impl Panafall {
                 if notches != 0.0 {
                     self.scroll_accum -= notches;
                     if ctrl {
+                        // Zoom into what is under the cursor: the zoomed
+                        // window follows the receiver, so zooming in from
+                        // more than a channel away tunes there first.
                         let z = (status.zoom.max(1.0) * 2f64.powf(0.25 * notches as f64)).clamp(1.0, 32.0);
+                        let base = self.rx_b.as_ref().filter(|b| b.active).map_or(inspect, |b| b.freq_hz);
+                        if notches > 0.0 && (landing - base).abs() > status.bandwidth_hz.max(1_000.0) {
+                            acts.push(Act::Tune { hz: landing, lock: false });
+                        }
                         acts.push(Act::Zoom(z));
                     } else {
                         let step = if alt { self.span_hz / 10.0 } else { step_hz };
@@ -1514,7 +1642,16 @@ pub struct SliceFlag {
 
 impl SliceFlag {
     fn paint(&self, painter: &egui::Painter, pan: Rect, x: f32, trace_y: f32, active: bool) -> Rect {
-        let w = 168.0;
+        let bottom = match (&self.protocol, self.snr_db) {
+            (Some(p), Some(s)) => format!("{p} · SNR {s:.1} dB"),
+            (Some(p), None) => p.clone(),
+            (None, Some(s)) => format!("SNR {s:.1} dB"),
+            _ => String::new(),
+        };
+        // The card grows to fit a long protocol name, up to a point.
+        let rec_w = if self.recording { 16.0 } else { 0.0 };
+        let bottom_w = painter.layout_no_wrap(bottom.clone(), theme::sans(11.0), Color32::PLACEHOLDER).size().x;
+        let w = (bottom_w + 16.0 + rec_w).clamp(168.0, 240.0);
         let h = 62.0;
         let right_side = x + 10.0 + w < pan.right() - 4.0;
         let left = if right_side { x + 10.0 } else { x - 10.0 - w };
@@ -1527,10 +1664,10 @@ impl SliceFlag {
         if active {
             painter.rect_filled(Rect::from_min_size(r.left_top(), vec2(16.0, 2.0)), CornerRadius::ZERO, theme::EMBER);
         }
-        painter.text(r.right_bottom() + vec2(-8.0, -6.0), Align2::RIGHT_BOTTOM, "A", theme::mono_bold(10.0), theme::text_3());
+        receiver_tab(painter, r, "A", theme::AMBER, active);
         let anchor_x = if right_side { r.left() } else { r.right() };
         painter.line_segment([pos2(x, r.top() + 14.0), pos2(anchor_x, r.top() + 14.0)], Stroke::new(1.0, alpha(theme::AMBER, 0.5)));
-        painter.text(r.left_top() + vec2(8.0, 7.0), Align2::LEFT_TOP, crate::tuning::fmt_mhz(self.freq_hz, 4), theme::mono_bold(14.0), theme::text());
+        painter.text(r.left_top() + vec2(27.0, 7.0), Align2::LEFT_TOP, crate::tuning::fmt_mhz(self.freq_hz, 4), theme::mono_bold(14.0), theme::text());
         let chip = format!("{} · {}", self.mode.label(), crate::tuning::fmt_short_hz(self.bandwidth_hz));
         painter.text(r.right_top() + vec2(-8.0, 9.0), Align2::RIGHT_TOP, chip, theme::mono(10.0), theme::AMBER);
         // Mini S-meter.
@@ -1540,18 +1677,58 @@ impl SliceFlag {
         let c = if self.meter > 0.556 { theme::WARN } else { theme::OK };
         painter.rect_filled(lit, CornerRadius::same(1), c);
         painter.text(pos2(r.right() - 8.0, bar.center().y), Align2::RIGHT_CENTER, &self.s_label, theme::mono_bold(11.0), theme::text());
-        let bottom = match (&self.protocol, self.snr_db) {
-            (Some(p), Some(s)) => format!("{p} · SNR {s:.1} dB"),
-            (Some(p), None) => p.clone(),
-            (None, Some(s)) => format!("SNR {s:.1} dB"),
-            _ => String::new(),
-        };
+        // The bottom line is cut to the card, clear of the recording dot.
+        let bottom = crate::widgets::ellipsize(painter, &bottom, theme::sans(11.0), w - 16.0 - rec_w);
         painter.text(r.left_top() + vec2(8.0, 44.0), Align2::LEFT_TOP, bottom, theme::sans(11.0), theme::text_2());
         if self.recording {
-            painter.circle_filled(pos2(r.right() - 22.0, r.bottom() - 10.0), 4.0, theme::EMBER);
+            painter.circle_filled(pos2(r.right() - 12.0, r.bottom() - 10.0), 4.0, theme::EMBER);
         }
         r
     }
+}
+
+/// The receiver's letter as a small tab at the top-left of its flag, lit
+/// when that receiver is the one being driven.
+fn receiver_tab(painter: &egui::Painter, r: Rect, letter: &str, color: Color32, active: bool) {
+    let tab = Rect::from_min_size(r.left_top() + vec2(8.0, 8.0), vec2(14.0, 14.0));
+    painter.rect_filled(tab, CornerRadius::same(3), alpha(color, if active { 0.9 } else { 0.3 }));
+    painter.text(tab.center(), Align2::CENTER_CENTER, letter, theme::mono_bold(9.5), if active { theme::ink() } else { theme::text() });
+}
+
+/// A waterfall age for the time axis: seconds under a minute, else m:ss.
+fn fmt_age(s: f64, step: f64) -> String {
+    if s >= 60.0 {
+        format!("−{}:{:02}", (s / 60.0).floor(), (s % 60.0).round())
+    } else if step < 1.0 {
+        format!("−{s:.1}s")
+    } else {
+        format!("−{s:.0}s")
+    }
+}
+
+/// `old`, measured over one span, as `n` values over another: linear
+/// between bins, and the "nothing yet" sentinel where the new span reaches
+/// past the old.
+fn resample(old: &[f32], (oc, os): (f64, f64), n: usize, (nc, ns): (f64, f64)) -> Vec<f32> {
+    let m = old.len();
+    if m < 2 || os <= 0.0 || ns <= 0.0 || n < 2 {
+        return vec![-200.0; n];
+    }
+    let olo = oc - os / 2.0;
+    let nlo = nc - ns / 2.0;
+    (0..n)
+        .map(|i| {
+            let hz = nlo + i as f64 / (n - 1) as f64 * ns;
+            let x = (hz - olo) / os * (m - 1) as f64;
+            if !(0.0..=(m - 1) as f64).contains(&x) {
+                return -200.0;
+            }
+            let a = x.floor() as usize;
+            let b = (a + 1).min(m - 1);
+            let t = (x - a as f64) as f32;
+            old[a] + (old[b] - old[a]) * t
+        })
+        .collect()
 }
 
 /// Receiver B's flag: smaller than A's, in violet, set below it so the two
@@ -1566,12 +1743,14 @@ fn paint_b_flag(painter: &egui::Painter, pan: Rect, x: f32, b: &RxB) -> Rect {
     if b.active {
         painter.rect_filled(Rect::from_min_size(r.left_top(), vec2(16.0, 2.0)), CornerRadius::ZERO, theme::EMBER);
     }
+    receiver_tab(painter, r, "B", theme::VIOLET, b.active);
     let anchor = if right { r.left() } else { r.right() };
     painter.line_segment([pos2(x, r.top() + 12.0), pos2(anchor, r.top() + 12.0)], Stroke::new(1.0, alpha(theme::VIOLET, 0.5)));
-    painter.text(r.left_top() + vec2(8.0, 5.0), Align2::LEFT_TOP, crate::tuning::fmt_mhz(b.freq_hz, 4), theme::mono_bold(12.5), theme::text());
-    painter.text(r.right_top() + vec2(-8.0, 7.0), Align2::RIGHT_TOP, format!("B · {}", b.mode.label()), theme::mono(10.0), theme::VIOLET);
+    painter.text(r.left_top() + vec2(27.0, 6.0), Align2::LEFT_TOP, crate::tuning::fmt_mhz(b.freq_hz, 4), theme::mono_bold(12.5), theme::text());
+    painter.text(r.right_top() + vec2(-8.0, 7.0), Align2::RIGHT_TOP, b.mode.label(), theme::mono(10.0), theme::VIOLET);
     match (&b.note, b.level) {
         (Some(n), _) => {
+            let n = crate::widgets::ellipsize(painter, n, theme::sans(11.0), w - 16.0);
             painter.text(r.left_top() + vec2(8.0, 25.0), Align2::LEFT_TOP, n, theme::sans(11.0), theme::WARN);
         }
         (None, Some(l)) => {
@@ -1696,11 +1875,40 @@ mod tests {
     }
 
     #[test]
-    fn ctrl_wheel_zooms() {
+    fn ctrl_wheel_zooms_into_what_is_under_the_cursor() {
         let mut h = harness();
         let r = pan_rect(&h);
+        // The center of the span is 146.0, a channel and more from the
+        // receiver at 146.2: zooming in tunes there first, then zooms.
         wheel(&mut h, r.center(), 4.0, Modifiers::COMMAND);
-        assert_eq!(h.state().acts, vec![Act::Zoom(2.0)]);
+        assert_eq!(h.state().acts, vec![Act::Tune { hz: 146.0e6, lock: false }, Act::Zoom(2.0)]);
+        // Over the receiver itself, it only zooms; zooming out never tunes.
+        h.state_mut().acts.clear();
+        wheel(&mut h, pos2(x_of(r, 146.2e6), r.center().y), 4.0, Modifiers::COMMAND);
+        wheel(&mut h, r.center(), -4.0, Modifiers::COMMAND);
+        assert_eq!(h.state().acts, vec![Act::Zoom(2.0), Act::Zoom(1.0)]);
+    }
+
+    #[test]
+    fn a_span_change_carries_the_trace_over() {
+        let mut pan = Panafall::default();
+        let view = View::default();
+        let mut pwr = vec![-100.0f32; 1024];
+        pwr[512] = -30.0;
+        pan.push(&FftFrame { center_hz: 100e6, rate_hz: 2e6, pwr: pwr.clone(), ..Default::default() }, &view, 0.0);
+        // Half the span around the same center: the carrier stays in the
+        // middle of the carried-over trace rather than the trace restarting.
+        let quiet = vec![-100.0f32; 1024];
+        pan.push(&FftFrame { center_hz: 100e6, rate_hz: 1e6, pwr: quiet, ..Default::default() }, &view, 0.04);
+        assert!(pan.smooth[512] > -60.0, "carried: {}", pan.smooth[512]);
+        assert!(pan.smooth[256] < -90.0);
+    }
+
+    #[test]
+    fn ages_read_as_seconds_then_minutes() {
+        assert_eq!(fmt_age(5.0, 5.0), "−5s");
+        assert_eq!(fmt_age(0.5, 0.5), "−0.5s");
+        assert_eq!(fmt_age(90.0, 30.0), "−1:30");
     }
 
     #[test]
