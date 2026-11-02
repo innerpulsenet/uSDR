@@ -330,6 +330,11 @@ pub struct Status {
     pub flex_diag: Option<serde_json::Value>,
     /// Display averaging ("off", "slow", "deep"); absent from older servers.
     pub avg: Option<String>,
+    /// Passband edges in use, Hz from the carrier, and whether they are the
+    /// operator's rather than the mode's own (API 2).
+    pub filter_low_hz: f64,
+    pub filter_high_hz: f64,
+    pub filter_custom: bool,
 }
 
 impl Status {
@@ -431,6 +436,38 @@ pub struct ModeCaps {
     pub symbol_rate_hz: f32,
     pub passband_offset_hz: f32,
     pub capture: Vec<String>,
+    /// How far the filter can be set; `None` where the decoder fixes it.
+    pub filter: Option<FilterRange>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct FilterRange {
+    pub min_width_hz: f32,
+    pub max_width_hz: f32,
+    pub max_edge_hz: f32,
+    pub symmetric: bool,
+}
+
+/// What the server says it is, from `GET /api/version` and the hello.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ServerInfo {
+    pub name: String,
+    pub version: String,
+    /// API revision: 1 is the original page's API (no version route), 2
+    /// adds presence, the web policy, shared memories and the filter.
+    pub api: u32,
+    pub features: Vec<String>,
+}
+
+/// The API revision this client is written for.
+pub const API_REVISION: u32 = 2;
+
+impl ServerInfo {
+    pub fn has(&self, feature: &str) -> bool {
+        self.features.iter().any(|f| f == feature)
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -603,7 +640,9 @@ impl WebPolicy {
 /// A text websocket message.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Event {
-    Hello(Box<Status>),
+    /// The receiver's state on connect, and the server's description of
+    /// itself (`None` from servers that predate API 2).
+    Hello(Box<Status>, Option<ServerInfo>),
     Status(Box<Status>),
     Decode { inspect_hz: f64, event: DecodeEvent },
     Presence(Presence),
@@ -616,7 +655,8 @@ pub fn decode_text(text: &str) -> Result<Event, serde_json::Error> {
     Ok(match kind.as_str() {
         "hello" => {
             let sdr = v.get("sdr").cloned().unwrap_or_default();
-            Event::Hello(Box::new(serde_json::from_value(sdr)?))
+            let server = v.get("server").cloned().and_then(|s| serde_json::from_value(s).ok());
+            Event::Hello(Box::new(serde_json::from_value(sdr)?), server)
         }
         "status" => Event::Status(Box::new(serde_json::from_value(v)?)),
         "decode" => Event::Decode {
@@ -746,7 +786,10 @@ mod tests {
         assert_eq!(inspect_hz, 1.5e8);
         assert_eq!(event.fields["addr"], "123");
         let h = r#"{"type":"hello","sdr":{"tuner":"R820T","mode":"nfm"}}"#;
-        assert!(matches!(decode_text(h).unwrap(), Event::Hello(_)));
+        assert!(matches!(decode_text(h).unwrap(), Event::Hello(_, None)));
+        let h2 = r#"{"type":"hello","sdr":{"tuner":"RSP1A"},"server":{"name":"usdr","version":"0.1.0","api":2,"features":["filter"]}}"#;
+        let Event::Hello(_, Some(info)) = decode_text(h2).unwrap() else { panic!() };
+        assert!(info.api == 2 && info.has("filter"));
     }
 
     #[test]

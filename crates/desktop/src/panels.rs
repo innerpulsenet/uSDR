@@ -87,6 +87,7 @@ pub fn side(app: &mut App, ui: &mut Ui) {
     });
 
     widgets::applet(ui, "mode", "Mode", |_| {}, |ui| mode_grid(app, ui));
+    widgets::applet(ui, "filter", "Filter", |_| {}, |ui| filter(app, ui));
     widgets::applet(ui, "memories", "Memories", |_| {}, |ui| memories(app, ui));
     widgets::applet(ui, "audio", "Audio", |_| {}, |ui| audio(app, ui));
     widgets::applet(ui, "gain", "RF gain", |_| {}, |ui| gain(app, ui));
@@ -163,6 +164,112 @@ fn mode_grid(app: &mut App, ui: &mut Ui) {
                 }
             }
         });
+    }
+}
+
+fn filter(app: &mut App, ui: &mut Ui) {
+    let lo = app.status.filter_low_hz as f32;
+    let hi = app.status.filter_high_hz as f32;
+    let width = (hi - lo).max(0.0);
+    let k = |v: f32| if v.abs() >= 10_000.0 { format!("{:.0}k", v / 1000.0) } else { format!("{:.2}k", v / 1000.0) };
+    ui.horizontal(|ui| {
+        ui.label(RichText::new(format!("{} … {}", k(lo), k(hi))).font(theme::mono_bold(13.0)).color(theme::AMBER));
+        ui.label(small(format!("width {}", k(width))));
+    });
+    let Some(range) = app.filter_range() else {
+        let why = if app.server.as_ref().is_some_and(|i| i.has("filter")) {
+            format!("{} keeps the filter its decoder needs", app.status.mode.label())
+        } else {
+            "this server cannot set the filter (it predates API 2)".to_string()
+        };
+        ui.label(small(why));
+        return;
+    };
+    let mode = app.status.mode;
+    // Presets: widths that suit the mode, from the low edge for sideband.
+    let presets: &[f32] = match mode {
+        Mode::Usb | Mode::Lsb => &[1_800.0, 2_100.0, 2_400.0, 2_700.0, 3_000.0, 3_600.0],
+        Mode::Am => &[4_000.0, 6_000.0, 8_000.0, 10_000.0, 12_000.0, 16_000.0],
+        Mode::Nfm => &[6_000.0, 8_000.0, 11_000.0, 12_500.0, 16_000.0, 25_000.0],
+        Mode::Wfm => &[100_000.0, 150_000.0, 180_000.0, 200_000.0, 230_000.0],
+        _ => &[],
+    };
+    let mut set: Option<(f32, f32)> = None;
+    let w = (ui.available_width() - 5.0 * 4.0) / 6.0;
+    egui::Grid::new("filter-presets").spacing(vec2(4.0, 4.0)).show(ui, |ui| {
+        for (i, p) in presets.iter().enumerate() {
+            let on = (width - p).abs() < 1.0;
+            let label = format!("{}k", format!("{:.1}", p / 1000.0).trim_end_matches(".0"));
+            if widgets::key_sized(ui, &label, on, theme::AMBER, vec2(w, 24.0)).clicked() {
+                set = Some(match mode {
+                    Mode::Usb => (lo, (lo + p).min(range.max_edge_hz)),
+                    Mode::Lsb => ((hi - p).max(-range.max_edge_hz), hi),
+                    _ => (-p / 2.0, p / 2.0),
+                });
+            }
+            if i % 6 == 5 {
+                ui.end_row();
+            }
+        }
+    });
+    let mut wv = width as f64;
+    let (ch, _) = Fader {
+        value: &mut wv,
+        min: range.min_width_hz as f64,
+        max: range.max_width_hz as f64,
+        step: if range.max_width_hz > 50_000.0 { 5_000.0 } else { 100.0 },
+        fine: if range.max_width_hz > 50_000.0 { 1_000.0 } else { 50.0 },
+        label: "WIDTH",
+        text: |v| format!("{:.2} kHz", v / 1000.0),
+        color: theme::AMBER,
+        enabled: true,
+        ticks: vec![],
+    }
+    .show(ui);
+    if ch {
+        let v = wv as f32;
+        set = Some(match mode {
+            Mode::Usb => (lo, (lo + v).min(range.max_edge_hz)),
+            Mode::Lsb => ((hi - v).max(-range.max_edge_hz), hi),
+            _ => (-v / 2.0, v / 2.0),
+        });
+    }
+    if !range.symmetric {
+        // Shift moves the passband, keeping its width, along the sideband.
+        let center = (lo + hi) / 2.0;
+        let (cmin, cmax) = if mode == Mode::Usb {
+            (width / 2.0, range.max_edge_hz - width / 2.0)
+        } else {
+            (-range.max_edge_hz + width / 2.0, -width / 2.0)
+        };
+        let mut cv = center as f64;
+        let (ch, _) = Fader {
+            value: &mut cv,
+            min: cmin as f64,
+            max: cmax.max(cmin) as f64,
+            step: 50.0,
+            fine: 10.0,
+            label: "SHIFT (passband center)",
+            text: |v| format!("{:+.0} Hz", v),
+            color: theme::CYAN,
+            enabled: cmax > cmin,
+            ticks: vec![],
+        }
+        .show(ui);
+        if ch {
+            let c = cv as f32;
+            set = Some((c - width / 2.0, c + width / 2.0));
+        }
+    }
+    ui.horizontal(|ui| {
+        let custom = app.status.filter_custom;
+        if widgets::key(ui, if custom { "RESET" } else { "MODE DEFAULT" }, !custom, theme::OK).on_hover_text("Back to the mode's own filter").clicked() && custom {
+            app.reset_filter();
+        }
+        ui.label(small(if range.symmetric { "drag a passband edge on the display" } else { "drag an edge on the display · Ctrl-drag inside to shift" }));
+    });
+    if let Some((l, h)) = set {
+        app.set_filter(l.round() as f64, h.round() as f64);
     }
 }
 

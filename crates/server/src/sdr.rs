@@ -136,7 +136,7 @@ fn fft_size_for(bins: usize, zoom: f64) -> usize {
 
 /// What the inspect chain is being used for. This picks the channel width, the
 /// demodulator, and what gets fed the resulting audio.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize, Default)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize, Serialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum SdrMode {
     /// Narrowband FM plus the full digital classifier. The default.
@@ -184,8 +184,96 @@ pub enum SdrMode {
     Flex,
 }
 
+/// The operator's filter for each mode that has one, as (low, high) edges
+/// in Hz relative to the carrier. One radio per server, so one table.
+static FILTERS: std::sync::Mutex<Option<std::collections::HashMap<SdrMode, (f32, f32)>>> =
+    std::sync::Mutex::new(None);
+
+fn filter_override(mode: SdrMode) -> Option<(f32, f32)> {
+    FILTERS.lock().ok()?.as_ref()?.get(&mode).copied()
+}
+
+/// Which filters can be set, and how far. Sideband takes both edges (width
+/// and shift); AM, NFM and WFM a symmetric width. The digital modes keep the
+/// filters their decoders were built for.
+#[derive(Clone, Copy, Debug, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct FilterRange {
+    pub min_width_hz: f32,
+    pub max_width_hz: f32,
+    /// Furthest an edge may sit from the carrier.
+    pub max_edge_hz: f32,
+    pub symmetric: bool,
+}
+
 impl SdrMode {
+    pub fn filter_range(self) -> Option<FilterRange> {
+        let sym = |lo: f32, hi: f32| FilterRange { min_width_hz: lo, max_width_hz: hi, max_edge_hz: hi / 2.0, symmetric: true };
+        match self {
+            SdrMode::Usb | SdrMode::Lsb => Some(FilterRange { min_width_hz: 200.0, max_width_hz: 4_000.0, max_edge_hz: 4_000.0, symmetric: false }),
+            SdrMode::Am => Some(sym(2_000.0, 20_000.0)),
+            SdrMode::Nfm => Some(sym(2_500.0, INSPECT_BANDWIDTH_HZ)),
+            SdrMode::Wfm => Some(sym(50_000.0, 230_000.0)),
+            _ => None,
+        }
+    }
+
+    /// Check and tidy a requested filter for this mode: symmetric modes
+    /// are centered on the carrier, sideband edges must sit on its side.
+    pub fn normalize_filter(self, low: f32, high: f32) -> std::result::Result<(f32, f32), String> {
+        let Some(r) = self.filter_range() else {
+            return Err(format!("{}'s filter is fixed to what its decoder needs", self.capabilities().label));
+        };
+        if !(low.is_finite() && high.is_finite()) || high <= low {
+            return Err("the high edge must be above the low edge".into());
+        }
+        let (lo, hi) = if r.symmetric {
+            let w = (high - low).clamp(r.min_width_hz, r.max_width_hz);
+            (-w / 2.0, w / 2.0)
+        } else {
+            let (lo, hi) = (low.clamp(-r.max_edge_hz, r.max_edge_hz), high.clamp(-r.max_edge_hz, r.max_edge_hz));
+            match self {
+                SdrMode::Usb if lo < 0.0 => return Err("upper sideband edges sit above the carrier".into()),
+                SdrMode::Lsb if hi > 0.0 => return Err("lower sideband edges sit below the carrier".into()),
+                _ => {}
+            }
+            if hi - lo < r.min_width_hz {
+                return Err(format!("narrowest is {} Hz", r.min_width_hz));
+            }
+            (lo, hi.min(lo + r.max_width_hz))
+        };
+        Ok((lo, hi))
+    }
+
+    /// Set (or with `None` clear) this mode's filter, server-wide.
+    pub fn set_filter(self, f: Option<(f32, f32)>) {
+        if let Ok(mut g) = FILTERS.lock() {
+            let map = g.get_or_insert_with(Default::default);
+            match f {
+                Some(f) => map.insert(self, f),
+                None => map.remove(&self),
+            };
+        }
+    }
+
+    /// The passband edges in use, relative to the carrier.
+    pub fn filter_edges(self) -> (f32, f32) {
+        filter_override(self).unwrap_or_else(|| {
+            let c = self.default_passband_offset_hz();
+            let w = self.default_bandwidth_hz();
+            (c - w / 2.0, c + w / 2.0)
+        })
+    }
+
+    /// The passband width in use: the operator's filter, or the mode's own.
     fn bandwidth_hz(self) -> f32 {
+        let (lo, hi) = self.filter_edges();
+        hi - lo
+    }
+
+    /// The mode's own passband width, which the LO plan is laid out around
+    /// so that moving the filter never moves the tuner.
+    fn default_bandwidth_hz(self) -> f32 {
         match self {
             SdrMode::Nfm => INSPECT_BANDWIDTH_HZ,
             SdrMode::Am => AM_BANDWIDTH_HZ,
@@ -266,6 +354,11 @@ impl SdrMode {
     /// zero for every mode except sideband, whose audio is all on one side
     /// of the suppressed carrier.
     pub fn passband_offset_hz(self) -> f32 {
+        let (lo, hi) = self.filter_edges();
+        (lo + hi) / 2.0
+    }
+
+    fn default_passband_offset_hz(self) -> f32 {
         let center = (SSB_LOW_HZ + SSB_HIGH_HZ) / 2.0;
         match self {
             SdrMode::Usb => center,
@@ -279,7 +372,10 @@ impl SdrMode {
     /// else filters to the width it displays.
     fn chain_bandwidth_hz(self) -> f32 {
         match self {
-            SdrMode::Usb | SdrMode::Lsb => 2.0 * SSB_HIGH_HZ + 400.0,
+            SdrMode::Usb | SdrMode::Lsb => {
+                let (lo, hi) = self.filter_edges();
+                2.0 * lo.abs().max(hi.abs()) + 400.0
+            }
             _ => self.bandwidth_hz(),
         }
     }
@@ -333,10 +429,11 @@ impl SdrMode {
             // gated monitor) so the operator can hear what is being decoded.
             delivers_audio: true,
             delivers_decode_events: !matches!(self, SdrMode::Wfm),
-            bandwidth_hz: self.bandwidth_hz(),
+            bandwidth_hz: self.default_bandwidth_hz(),
+            filter: self.filter_range(),
             scope_kind: self.scope_kind(),
             symbol_rate_hz: self.symbol_rate_hz(),
-            passband_offset_hz: self.passband_offset_hz(),
+            passband_offset_hz: self.default_passband_offset_hz(),
             capture: match self {
                 // The classifier chain: I/Q, its discriminator and the
                 // monitor audio, all at the channel rate.
@@ -387,6 +484,9 @@ pub struct ModeCapabilities {
     pub delivers_audio: bool,
     pub delivers_decode_events: bool,
     pub bandwidth_hz: f32,
+    /// How far the filter can be set, for the modes where it can.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub filter: Option<FilterRange>,
     /// Matches the scope-kind byte in the binary FFT frame: "audio",
     /// "symbols", or "mpx".
     pub scope_kind: &'static str,
@@ -603,6 +703,14 @@ pub struct SdrStatus {
     /// Display averaging: "off", "slow" or "deep".
     #[serde(default)]
     pub avg: String,
+    /// The passband edges in use, relative to the carrier, and whether the
+    /// operator set them (rather than the mode's own).
+    #[serde(default)]
+    pub filter_low_hz: f64,
+    #[serde(default)]
+    pub filter_high_hz: f64,
+    #[serde(default)]
+    pub filter_custom: bool,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -1072,6 +1180,9 @@ enum SdrCmd {
     DisplayBins(usize),
     /// Display averaging mode for the spectrum (weak-signal aid).
     Avg(AvgMode),
+    /// The current mode's filter was set or cleared (already in the table):
+    /// rebuild the chain around it.
+    Filter,
     /// Replace the voice-scan configuration (range, modes, threshold).
     ScanConfig(crate::scan::ScanCfg),
     /// Pause/resume/skip/forget/unskip, from the scan panel. `Unskip` names
@@ -1087,6 +1198,16 @@ pub enum AvgMode {
     Slow,
     /// ~2 s: for beacons and marginal carriers.
     Deeper,
+}
+
+/// Put a mode's passband in the status.
+fn stamp_filter(s: &mut SdrStatus, mode: SdrMode) {
+    let (lo, hi) = mode.filter_edges();
+    s.bandwidth_hz = f64::from(hi - lo);
+    s.passband_offset_hz = f64::from((lo + hi) / 2.0);
+    s.filter_low_hz = f64::from(lo);
+    s.filter_high_hz = f64::from(hi);
+    s.filter_custom = filter_override(mode).is_some();
 }
 
 impl AvgMode {
@@ -1171,6 +1292,13 @@ impl SdrRuntime {
     }
 
     /// Display averaging mode (weak-signal spectrum aid).
+    /// The current mode's filter changed (see [`SdrMode::set_filter`]).
+    pub fn filter_changed(&self) -> Result<()> {
+        self.cmd_tx
+            .send(SdrCmd::Filter)
+            .map_err(|e| anyhow::anyhow!("send filter: {e}"))
+    }
+
     pub fn set_avg(&self, mode: AvgMode) -> Result<()> {
         self.cmd_tx
             .send(SdrCmd::Avg(mode))
@@ -1425,7 +1553,7 @@ fn lo_plan_zero_if() -> bool {
 /// 1 dB up 15 kHz out; anything nearer the LO than that is listened to
 /// through it.
 fn zero_if_offset(rate_hz: f64, mode: SdrMode) -> f64 {
-    let edge = f64::from(mode.bandwidth_hz()) / 2.0 + f64::from(mode.passband_offset_hz()).abs();
+    let edge = f64::from(mode.default_bandwidth_hz()) / 2.0 + f64::from(mode.default_passband_offset_hz()).abs();
     (edge + 50e3).max(100e3).min(rate_hz * 0.15)
 }
 
@@ -1435,10 +1563,10 @@ fn lo_active(rate_hz: f64, on: bool, mode: SdrMode) -> bool {
     }
     if lo_plan_zero_if() {
         // DC must land outside the passband with room to spare.
-        let half = f64::from(mode.bandwidth_hz()) / 2.0 + f64::from(mode.passband_offset_hz()).abs();
+        let half = f64::from(mode.default_bandwidth_hz()) / 2.0 + f64::from(mode.default_passband_offset_hz()).abs();
         zero_if_offset(rate_hz, mode) >= half + (rate_hz * 0.005).max(5e3)
     } else {
-        f64::from(mode.bandwidth_hz()) <= rate_hz * LO_USABLE_FRACTION / 3.0
+        f64::from(mode.default_bandwidth_hz()) <= rate_hz * LO_USABLE_FRACTION / 3.0
     }
 }
 
@@ -1791,10 +1919,15 @@ impl Demod {
                 audio: Vec::new(),
             },
             SdrMode::Usb | SdrMode::Lsb => Demod::Ssb {
-                demod: SsbDemod::new(
-                    fs_out,
-                    if mode == SdrMode::Usb { Sideband::Upper } else { Sideband::Lower },
-                ),
+                demod: {
+                    let (lo, hi) = mode.filter_edges();
+                    SsbDemod::with_passband(
+                        fs_out,
+                        if mode == SdrMode::Usb { Sideband::Upper } else { Sideband::Lower },
+                        lo.abs().min(hi.abs()),
+                        lo.abs().max(hi.abs()),
+                    )
+                },
                 audio: Vec::new(),
             },
             SdrMode::Wfm => {
@@ -3084,6 +3217,7 @@ fn run_sdr(
             avg: AvgMode::Off.wire().into(),
             ..SdrStatus::default()
         };
+        stamp_filter(&mut s, current_mode);
         describe_radio(&mut s, &dev, host);
     }
 
@@ -3468,8 +3602,7 @@ fn run_sdr(
                         inspect_dirty = true;
                         let mut s = status.lock().unwrap();
                         s.mode = current_mode;
-                        s.bandwidth_hz = f64::from(current_mode.bandwidth_hz());
-                        s.passband_offset_hz = f64::from(current_mode.passband_offset_hz());
+                        stamp_filter(&mut s, current_mode);
                         s.lo_offset_hz = lo_offset_for(current_rate, lo_offset, current_mode);
                         let shown = display_rate_for(current_rate, lo_offset, current_mode);
                         s.min_freq_hz = current_freq - shown / 2.0;
@@ -3635,6 +3768,12 @@ fn run_sdr(
                         s.max_freq_hz = inspect_hz + shown / 2.0;
                         let _ = events.send(SdrEvent::Status(s.clone()));
                     }
+                }
+                SdrCmd::Filter => {
+                    inspect_dirty = true;
+                    let mut s = status.lock().unwrap();
+                    stamp_filter(&mut s, current_mode);
+                    let _ = events.send(SdrEvent::Status(s.clone()));
                 }
                 SdrCmd::Avg(mode) => {
                     avg_mode = mode;
@@ -6176,6 +6315,32 @@ fn run_sdr(
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn filters_follow_the_mode_rules_and_never_move_the_lo() {
+        // Sideband takes both edges, on its own side of the carrier.
+        assert_eq!(SdrMode::Usb.normalize_filter(500.0, 2_000.0), Ok((500.0, 2_000.0)));
+        assert!(SdrMode::Usb.normalize_filter(-500.0, 2_000.0).is_err());
+        assert_eq!(SdrMode::Lsb.normalize_filter(-2_400.0, -300.0), Ok((-2_400.0, -300.0)));
+        assert!(SdrMode::Lsb.normalize_filter(-100.0, 0.0).is_err(), "narrower than 200 Hz");
+        // AM is centered whatever is asked, and clamped to its range.
+        assert_eq!(SdrMode::Am.normalize_filter(0.0, 6_000.0), Ok((-3_000.0, 3_000.0)));
+        assert_eq!(SdrMode::Am.normalize_filter(-50_000.0, 50_000.0), Ok((-10_000.0, 10_000.0)));
+        // Digital decoders keep their filters.
+        assert!(SdrMode::P25.normalize_filter(-3_000.0, 3_000.0).is_err());
+
+        let before = lo_offset_for(5e6, true, SdrMode::Wfm);
+        SdrMode::Wfm.set_filter(Some((-60_000.0, 60_000.0)));
+        assert_eq!(SdrMode::Wfm.bandwidth_hz(), 120_000.0);
+        assert_eq!(lo_offset_for(5e6, true, SdrMode::Wfm), before, "the LO plan is laid out on the mode's own width");
+        SdrMode::Wfm.set_filter(None);
+        assert_eq!(SdrMode::Wfm.bandwidth_hz(), WFM_BANDWIDTH_HZ);
+
+        SdrMode::Lsb.set_filter(Some((-2_000.0, -1_000.0)));
+        assert_eq!(SdrMode::Lsb.passband_offset_hz(), -1_500.0);
+        assert_eq!(SdrMode::Lsb.chain_bandwidth_hz(), 4_400.0);
+        SdrMode::Lsb.set_filter(None);
+    }
     use super::*;
 
     /// The capability table the `/api/sdr/modes` endpoint serves must cover

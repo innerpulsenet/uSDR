@@ -97,6 +97,8 @@ pub struct App {
     pub have_status: bool,
     pub modes: Vec<ModeCaps>,
     pub presence: Presence,
+    /// What the server said it is; `None` for servers before API 2.
+    pub server: Option<proto::ServerInfo>,
     pub memories: Option<Vec<Memory>>,
     pub frame: Option<Box<FftFrame>>,
     pub pan: Panafall,
@@ -189,6 +191,7 @@ impl App {
             have_status: false,
             modes: Vec::new(),
             presence: Presence::default(),
+            server: None,
             memories: None,
             frame: None,
             pan: Panafall::default(),
@@ -346,6 +349,29 @@ impl App {
         self.post("/api/sdr/mode", json!({ "mode": m.wire() }));
     }
 
+    /// The filter the current mode lets the operator set, when the server
+    /// can take one.
+    pub fn filter_range(&self) -> Option<proto::FilterRange> {
+        if !self.server.as_ref().is_some_and(|i| i.has("filter")) {
+            return None;
+        }
+        self.mode_caps().and_then(|c| c.filter)
+    }
+
+    pub fn set_filter(&mut self, lo: f64, hi: f64) {
+        // Shown at once; the server's status confirms or corrects it.
+        self.status.filter_low_hz = lo;
+        self.status.filter_high_hz = hi;
+        self.status.bandwidth_hz = hi - lo;
+        self.status.passband_offset_hz = (lo + hi) / 2.0;
+        self.status.filter_custom = true;
+        self.post("/api/sdr/filter", json!({ "low_hz": lo, "high_hz": hi }));
+    }
+
+    pub fn reset_filter(&mut self) {
+        self.post("/api/sdr/filter", json!({ "reset": true }));
+    }
+
     pub fn set_zoom(&mut self, z: f64) {
         let z = if z < 1.04 { 1.0 } else { z.min(32.0) };
         self.zoom_ui = z;
@@ -373,8 +399,13 @@ impl App {
                     self.conn = Conn::Connecting { attempt, reason };
                 }
             }
-            NetEvent::Connected(s) => {
+            NetEvent::Connected(s, info) => {
                 self.conn = Conn::Live;
+                let old = info.as_ref().is_none_or(|i| i.api < proto::API_REVISION);
+                if old && self.server.as_ref().map(|i| i.api) != info.as_ref().map(|i| i.api) {
+                    self.toast(ctx, Tone::Warn, "This server is older than the app: presence, the web page setting, shared memories and the filter are unavailable until it is updated.");
+                }
+                self.server = info;
                 self.apply_status(*s);
                 self.display_bins_sent = 0;
                 if let Some(l) = &self.link {
@@ -1137,6 +1168,7 @@ impl App {
         let rm = self.reduce_motion();
         let width = ui.available_width() - 44.0;
         let now = ui.input(|i| i.time);
+        self.pan.filter = self.filter_range().map(|r| (r, self.status.filter_low_hz as f32, self.status.filter_high_hz as f32));
         self.display_bins(&ui.ctx().clone(), width, now);
         self.pan.ui(ui, &self.status, self.frame.as_deref(), &mut self.prefs.view, &flag, step, rm, &mut acts);
         for a in acts {
@@ -1150,6 +1182,7 @@ impl App {
                     self.save_memories(list);
                 }
                 Act::CopyFreq(hz) => ui.ctx().copy_text(format!("{:.0}", hz)),
+                Act::Filter(lo, hi) => self.set_filter(lo as f64, hi as f64),
             }
         }
     }
@@ -1413,7 +1446,8 @@ mod tests {
         let mut app = App::build(&ctx, prefs, Player::silent(), None);
         let (link, wire) = Link::wire();
         app.link = Some(link);
-        wire.events.send(NetEvent::Connected(Box::new(rsp_status()))).unwrap();
+        let info = proto::ServerInfo { name: "usdr".into(), version: "test".into(), api: 2, features: vec!["filter".into()] };
+        wire.events.send(NetEvent::Connected(Box::new(rsp_status()), Some(info))).unwrap();
         let mut h = Harness::builder().with_size(egui::vec2(1600.0, 1000.0)).build_ui_state(
             |ui, t: &mut T| {
                 let ctx = ui.ctx().clone();
@@ -1530,6 +1564,20 @@ mod tests {
         let j = posts.iter().position(|(p, b)| p == "/api/sdr/mode" && b["mode"] == "scan").expect("mode");
         assert!(i < j);
         assert_eq!(posts[i].1["start_hz"], json!(450e6));
+    }
+
+    #[test]
+    fn filter_presets_post_a_centered_width() {
+        let mut h = harness();
+        let range = proto::FilterRange { min_width_hz: 2_500.0, max_width_hz: 25_000.0, max_edge_hz: 12_500.0, symmetric: true };
+        h.state_mut().app.modes = vec![ModeCaps { mode: Mode::Nfm, filter: Some(range), ..Default::default() }];
+        h.run_steps(2);
+        let role = egui::accesskit::Role::CheckBox;
+        h.get_by_role_and_label(role, "12.5k").scroll_to_me();
+        h.run_steps(3);
+        h.get_by_role_and_label(role, "12.5k").click();
+        h.run_steps(2);
+        assert!(drain(&h).contains(&("/api/sdr/filter".into(), json!({ "low_hz": -6250.0, "high_hz": 6250.0 }))));
     }
 
     #[test]

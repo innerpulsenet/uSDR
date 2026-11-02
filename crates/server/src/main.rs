@@ -173,6 +173,10 @@ struct Settings {
     scan: Option<scan::ScanCfg>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     web: Option<WebPolicy>,
+    /// The operator's filter per mode, as (low, high) edges in Hz from the
+    /// carrier, for the modes that have one to set.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    filters: std::collections::BTreeMap<sdr::SdrMode, (f32, f32)>,
     /// Memory channels; `None` until a client first stores one, so each
     /// client can offer its own defaults until then.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -336,6 +340,11 @@ async fn main() -> Result<()> {
         settings.web = args.web;
     }
 
+    for (mode, (lo, hi)) in &settings.filters {
+        if let Ok(f) = mode.normalize_filter(*lo, *hi) {
+            mode.set_filter(Some(f));
+        }
+    }
     let cfg = sdr::SdrCfg {
         serial: settings.serial.clone(),
         freq_hz: settings.freq_hz.unwrap_or(sdr::DEFAULT_FREQ_HZ),
@@ -428,6 +437,8 @@ async fn main() -> Result<()> {
             post(post_sdr_replay).layer(DefaultBodyLimit::max(REPLAY_LIMIT_BYTES)),
         )
         .route("/api/web", get(get_web).post(post_web))
+        .route("/api/version", get(get_version))
+        .route("/api/sdr/filter", post(post_sdr_filter))
         .route("/api/memories", get(get_memories).post(post_memories))
         .route("/ws", get(ws_upgrade))
         .layer(axum::middleware::from_fn_with_state(Arc::clone(&state), yield_guard))
@@ -508,6 +519,69 @@ async fn yield_guard(
         }
     }
     next.run(req).await
+}
+
+/// What this server is and which API revision it speaks, so a client can say
+/// plainly when it needs a newer one rather than failing on a missing route.
+const API_REVISION: u32 = 2;
+const API_FEATURES: &[&str] = &["presence", "web-policy", "memories", "avg-status", "filter"];
+
+fn version_json() -> serde_json::Value {
+    serde_json::json!({
+        "name": "usdr",
+        "version": env!("CARGO_PKG_VERSION"),
+        "api": API_REVISION,
+        "features": API_FEATURES,
+    })
+}
+
+async fn get_version() -> Json<serde_json::Value> {
+    Json(version_json())
+}
+
+#[derive(Deserialize)]
+struct SdrFilterReq {
+    #[serde(default)]
+    low_hz: Option<f32>,
+    #[serde(default)]
+    high_hz: Option<f32>,
+    /// Back to the mode's own filter.
+    #[serde(default)]
+    reset: bool,
+}
+
+/// Set the current mode's filter: both edges for sideband (width and
+/// shift), a centered width for AM, NFM and WFM. Saved per mode.
+async fn post_sdr_filter(
+    State(st): State<Arc<AppState>>,
+    Json(req): Json<SdrFilterReq>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let guard = st.sdr.lock().expect("sdr");
+    let sdr = guard
+        .as_ref()
+        .ok_or_else(|| ApiError::BadRequest("the receiver is not running".into()))?;
+    let mode = sdr.status.lock().expect("sdr status").mode;
+    let edges = if req.reset {
+        None
+    } else {
+        let (Some(lo), Some(hi)) = (req.low_hz, req.high_hz) else {
+            return Err(ApiError::BadRequest("give low_hz and high_hz, or reset".into()));
+        };
+        Some(mode.normalize_filter(lo, hi).map_err(ApiError::BadRequest)?)
+    };
+    mode.set_filter(edges);
+    sdr.filter_changed()?;
+    drop(guard);
+    st.update_settings(|s| match edges {
+        Some(e) => {
+            s.filters.insert(mode, e);
+        }
+        None => {
+            s.filters.remove(&mode);
+        }
+    });
+    let (lo, hi) = mode.filter_edges();
+    Ok(Json(serde_json::json!({ "ok": true, "low_hz": lo, "high_hz": hi, "custom": edges.is_some() })))
 }
 
 async fn get_web(State(st): State<Arc<AppState>>) -> Json<serde_json::Value> {
@@ -1324,7 +1398,7 @@ async fn ws_client(mut socket: WebSocket, st: Arc<AppState>, info: ClientInfo) {
         .as_ref()
         .map(|s| s.status.lock().expect("sdr status").clone());
     let Some(sdr_st) = sdr_st else { return };
-    let hello = serde_json::json!({ "type": "hello", "sdr": sdr_st });
+    let hello = serde_json::json!({ "type": "hello", "sdr": sdr_st, "server": version_json() });
     if socket
         .send(Message::Text(hello.to_string().into()))
         .await

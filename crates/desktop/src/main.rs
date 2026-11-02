@@ -48,7 +48,13 @@ fn probe(server: &str) -> anyhow::Result<()> {
     let mut hello = None;
     while std::time::Instant::now() < until {
         match link.events.recv_timeout(std::time::Duration::from_millis(100)) {
-            Ok(net::NetEvent::Connected(s)) => hello = Some(s),
+            Ok(net::NetEvent::Connected(s, info)) => {
+                hello = Some(s);
+                match info {
+                    Some(i) => println!("server    {} {} · API {} · {}", i.name, i.version, i.api, i.features.join(", ")),
+                    None => println!("server    predates API 2 (no presence, filter or shared memories)"),
+                }
+            }
             Ok(net::NetEvent::Fft(f)) => {
                 frames += 1;
                 last = Some(f);

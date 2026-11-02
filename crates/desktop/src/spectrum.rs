@@ -28,6 +28,8 @@ pub enum Act {
     Zoom(f64),
     StoreMemory(f64),
     CopyFreq(f64),
+    /// New passband edges, Hz from the carrier.
+    Filter(f32, f32),
 }
 
 /// Display preferences the panafall reads each frame.
@@ -119,6 +121,37 @@ pub struct Panafall {
     /// Where the panadapter, waterfall, frequency axis and dB scale were
     /// drawn last frame.
     pub regions: Option<[Rect; 4]>,
+    /// The filter the operator may set, with its edges now, Hz from the
+    /// carrier; `None` where the mode or the server fixes it.
+    pub filter: Option<(usdr_proto::FilterRange, f32, f32)>,
+    edge_drag: Option<EdgeDrag>,
+}
+
+/// A passband edge being dragged, or (Ctrl) the whole passband shifted.
+#[derive(Clone, Copy)]
+enum EdgeDrag {
+    Low,
+    High,
+    Shift { from_hz: f64, lo: f32, hi: f32 },
+}
+
+/// New edges for a drag that has reached `rel` Hz from the carrier.
+fn drag_edges(d: EdgeDrag, r: &usdr_proto::FilterRange, lo: f32, hi: f32, rel: f32) -> (f32, f32) {
+    let min_w = r.min_width_hz;
+    if r.symmetric {
+        let half = rel.abs().clamp(min_w / 2.0, r.max_width_hz / 2.0);
+        return (-half, half);
+    }
+    let lim = r.max_edge_hz;
+    match d {
+        EdgeDrag::Low => (rel.clamp(-lim, hi - min_w), hi),
+        EdgeDrag::High => (lo, rel.clamp(lo + min_w, lim)),
+        EdgeDrag::Shift { from_hz, lo, hi } => {
+            let d = rel - from_hz as f32;
+            let d = d.clamp(-lim - lo, lim - hi);
+            (lo + d, hi + d)
+        }
+    }
 }
 
 impl Default for Panafall {
@@ -158,6 +191,8 @@ impl Default for Panafall {
             hover_hz: None,
             last_frame: None,
             regions: None,
+            filter: None,
+            edge_drag: None,
         }
     }
 }
@@ -893,7 +928,66 @@ impl Panafall {
             self.hover_hz = None;
         }
 
-        if self.sql_drag {
+        // Passband edges: drag one to set it; Ctrl-drag inside a sideband
+        // passband to shift it. The filter applet does the same by numbers.
+        if let Some((range, lo, hi)) = self.filter
+            && on_screen
+        {
+            let near = |p: Pos2| -> Option<EdgeDrag> {
+                if !pan.contains(p) {
+                    return None;
+                }
+                if (p.x - px0).abs() < 5.0 {
+                    Some(EdgeDrag::Low)
+                } else if (p.x - px1).abs() < 5.0 {
+                    Some(EdgeDrag::High)
+                } else if !range.symmetric && p.x > px0 && p.x < px1 && ctrl {
+                    Some(EdgeDrag::Shift { from_hz: 0.0, lo, hi })
+                } else {
+                    None
+                }
+            };
+            if let Some(p) = pointer
+                && self.edge_drag.is_none()
+                && let Some(kind) = near(p)
+            {
+                ctx.set_cursor_icon(if matches!(kind, EdgeDrag::Shift { .. }) { egui::CursorIcon::Move } else { egui::CursorIcon::ResizeColumn });
+            }
+            if resp.drag_started()
+                && let Some(p0) = ui.input(|i| i.pointer.press_origin())
+                && let Some(kind) = near(p0)
+            {
+                self.edge_drag = Some(match kind {
+                    EdgeDrag::Shift { lo, hi, .. } => EdgeDrag::Shift { from_hz: self.hz_for(p0.x, pan) - inspect, lo, hi },
+                    k => k,
+                });
+            }
+            if let Some(d) = self.edge_drag {
+                if let Some(p) = resp.interact_pointer_pos()
+                    && resp.dragged()
+                {
+                    let rel = (self.hz_for(p.x, pan) - inspect) as f32;
+                    let (nlo, nhi) = drag_edges(d, &range, lo, hi, rel);
+                    if (nlo - lo).abs() > 1.0 || (nhi - hi).abs() > 1.0 {
+                        acts.push(Act::Filter(nlo.round(), nhi.round()));
+                    }
+                    painter.text(
+                        pos2(p.x, pan.top() + 72.0),
+                        Align2::CENTER_BOTTOM,
+                        format!("{:+.2}k … {:+.2}k", nlo / 1000.0, nhi / 1000.0),
+                        theme::mono(11.0),
+                        theme::AMBER,
+                    );
+                }
+                if resp.drag_stopped() || !ui.input(|i| i.pointer.any_down()) {
+                    self.edge_drag = None;
+                }
+            }
+        }
+
+        if self.edge_drag.is_some() {
+            // The passband has the drag; the display stays put.
+        } else if self.sql_drag {
             if let Some(p) = resp.interact_pointer_pos() {
                 let t = ((pan.bottom() - p.y) / pan.height()).clamp(0.0, 1.0);
                 view.sql_mark = Some((self.min_db + t * (self.max_db - self.min_db)).round());
@@ -1239,6 +1333,45 @@ mod tests {
         wheel(&mut h, db.center(), 1.0, Modifiers::NONE);
         assert!(!h.state().view.auto_range);
         assert!(h.state().acts.is_empty(), "the dB scale never tunes");
+    }
+
+    #[test]
+    fn edge_drags_respect_the_mode() {
+        let sym = usdr_proto::FilterRange { min_width_hz: 2_500.0, max_width_hz: 25_000.0, max_edge_hz: 12_500.0, symmetric: true };
+        // Either edge of a symmetric filter sets a centered width.
+        assert_eq!(drag_edges(EdgeDrag::High, &sym, -6_250.0, 6_250.0, 4_000.0), (-4_000.0, 4_000.0));
+        assert_eq!(drag_edges(EdgeDrag::Low, &sym, -6_250.0, 6_250.0, -100.0), (-1_250.0, 1_250.0));
+        let ssb = usdr_proto::FilterRange { min_width_hz: 200.0, max_width_hz: 4_000.0, max_edge_hz: 4_000.0, symmetric: false };
+        // A sideband edge moves alone, never past the other less the minimum.
+        assert_eq!(drag_edges(EdgeDrag::High, &ssb, 300.0, 2_800.0, 2_000.0), (300.0, 2_000.0));
+        assert_eq!(drag_edges(EdgeDrag::High, &ssb, 300.0, 2_800.0, 350.0), (300.0, 500.0));
+        // A shift keeps the width and stops at the limit.
+        let shift = EdgeDrag::Shift { from_hz: 1_000.0, lo: 300.0, hi: 2_800.0 };
+        assert_eq!(drag_edges(shift, &ssb, 300.0, 2_800.0, 1_500.0), (800.0, 3_300.0));
+        assert_eq!(drag_edges(shift, &ssb, 300.0, 2_800.0, 9_000.0), (1_500.0, 4_000.0));
+    }
+
+    #[test]
+    fn dragging_a_passband_edge_sets_the_filter() {
+        let mut h = harness();
+        let range = usdr_proto::FilterRange { min_width_hz: 2_500.0, max_width_hz: 25_000.0, max_edge_hz: 12_500.0, symmetric: true };
+        h.state_mut().status.bandwidth_hz = 100_000.0;
+        h.state_mut().pan.filter = Some((range, -50_000.0, 50_000.0));
+        h.run_steps(2);
+        let r = pan_rect(&h);
+        let edge = pos2(x_of(r, 146.25e6), r.center().y);
+        h.event(Event::PointerMoved(edge));
+        h.drag_at(edge);
+        h.run_steps(1);
+        for i in 1..=8 {
+            h.event(Event::PointerMoved(edge - egui::vec2(4.0 * i as f32, 0.0)));
+            h.run_steps(1);
+        }
+        h.drop_at(edge - egui::vec2(32.0, 0.0));
+        h.run_steps(1);
+        let acts = &h.state().acts;
+        assert!(matches!(acts.last(), Some(Act::Filter(lo, hi)) if *lo < 0.0 && (*lo + *hi).abs() < 1.0), "{acts:?}");
+        assert!(!acts.iter().any(|a| matches!(a, Act::Center(_) | Act::Tune { .. })), "an edge drag neither pans nor tunes: {acts:?}");
     }
 
     #[test]

@@ -49,10 +49,6 @@ pub const SSB_HIGH_HZ: f32 = 2_800.0;
 /// muting that is the squelch's job, not the AGC's.
 pub const SSB_MAX_GAIN_DB: f32 = 60.0;
 
-/// Weaver shift: the center of the passband.
-const WEAVER_HZ: f64 = (SSB_LOW_HZ as f64 + SSB_HIGH_HZ as f64) / 2.0;
-/// Half the passband width — the low-pass corner after the Weaver shift.
-const HALF_BAND_HZ: f64 = (SSB_HIGH_HZ as f64 - SSB_LOW_HZ as f64) / 2.0;
 /// Chebyshev order and ripple. Order 8 at 0.5 dB puts the nearest
 /// opposite-sideband frequency (−300 Hz, i.e. 1850 Hz after the shift, 1.48×
 /// the corner) ~50 dB down; order 6 manages only ~34 dB.
@@ -115,10 +111,23 @@ pub struct SsbDemod {
     delay: Vec<f32>,
     delay_pos: usize,
     fs: f64,
+    /// The Weaver shift (the passband's center) and its half width, Hz.
+    weaver_hz: f64,
 }
 
 impl SsbDemod {
     pub fn new(fs: f64, sideband: Sideband) -> Self {
+        Self::with_passband(fs, sideband, SSB_LOW_HZ, SSB_HIGH_HZ)
+    }
+
+    /// A demodulator passing `low_hz..high_hz` of audio (both positive, on
+    /// the sideband's side of the carrier). Moving both edges together is
+    /// IF shift; moving them apart or together is the width.
+    pub fn with_passband(fs: f64, sideband: Sideband, low_hz: f32, high_hz: f32) -> Self {
+        let low = low_hz.max(0.0) as f64;
+        let high = (high_hz as f64).max(low + 100.0);
+        let weaver_hz = (low + high) / 2.0;
+        let half_band = (high - low) / 2.0;
         let fs32 = fs as f32;
         let lookahead = ((LOOKAHEAD_S * fs32).round() as usize).max(1);
         let peak_floor = TARGET_PEAK / 10f32.powf(SSB_MAX_GAIN_DB / 20.0);
@@ -127,10 +136,10 @@ impl SsbDemod {
             dc_re: OnePole::new(DC_TAU_S * fs32),
             dc_im: OnePole::new(DC_TAU_S * fs32),
             phasor: Complex32::new(1.0, 0.0),
-            step: Self::rotation(fs, sideband),
+            step: Self::rotation(fs, sideband, weaver_hz),
             renorm_count: 0,
-            lp_re: chebyshev_lowpass(HALF_BAND_HZ, fs, LP_ORDER, LP_RIPPLE_DB),
-            lp_im: chebyshev_lowpass(HALF_BAND_HZ, fs, LP_ORDER, LP_RIPPLE_DB),
+            lp_re: chebyshev_lowpass(half_band, fs, LP_ORDER, LP_RIPPLE_DB),
+            lp_im: chebyshev_lowpass(half_band, fs, LP_ORDER, LP_RIPPLE_DB),
             peak: peak_floor,
             peak_floor,
             hang: 0,
@@ -141,13 +150,14 @@ impl SsbDemod {
             delay: vec![0.0; lookahead],
             delay_pos: 0,
             fs,
+            weaver_hz,
         }
     }
 
     /// Per-sample Weaver rotation for a sideband. Computed in f64 so the
     /// frequency is exact to well under a millihertz at any span rate.
-    fn rotation(fs: f64, sideband: Sideband) -> Complex32 {
-        let w = 2.0 * PI * WEAVER_HZ / fs;
+    fn rotation(fs: f64, sideband: Sideband, weaver_hz: f64) -> Complex32 {
+        let w = 2.0 * PI * weaver_hz / fs;
         let w = match sideband {
             Sideband::Upper => -w,
             Sideband::Lower => w,
@@ -163,7 +173,7 @@ impl SsbDemod {
     /// kept: the next few milliseconds are a short transient, not a click.
     pub fn set_sideband(&mut self, sideband: Sideband) {
         self.sideband = sideband;
-        self.step = Self::rotation(self.fs, sideband);
+        self.step = Self::rotation(self.fs, sideband, self.weaver_hz);
     }
 
     /// Demodulate one block: one audio sample per input sample, at the input
@@ -278,6 +288,43 @@ fn chebyshev_lowpass(fc: f64, fs: f64, order: usize, ripple_db: f64) -> Cascade 
 
 #[cfg(test)]
 mod tests {
+
+    /// Power of `f` in `x`, by Goertzel.
+    fn tone_power(x: &[f32], fs: f64, f: f64) -> f64 {
+        let w = 2.0 * std::f64::consts::PI * f / fs;
+        let (mut s1, mut s2) = (0.0f64, 0.0f64);
+        for &v in x {
+            let s0 = v as f64 + 2.0 * w.cos() * s1 - s2;
+            s2 = s1;
+            s1 = s0;
+        }
+        s1 * s1 + s2 * s2 - 2.0 * w.cos() * s1 * s2
+    }
+
+    #[test]
+    fn a_shifted_narrow_passband_keeps_what_is_inside_it() {
+        let fs = 48_000.0;
+        // USB at 1000-2000 Hz: 1500 Hz is in it, 2600 Hz (inside the default
+        // 300-2800) is not.
+        let mut d = SsbDemod::with_passband(fs, Sideband::Upper, 1_000.0, 2_000.0);
+        let n = 48_000;
+        let x: Vec<Complex32> = (0..n)
+            .map(|i| {
+                let t = i as f64 / fs;
+                let a = 2.0 * std::f64::consts::PI * 1_500.0 * t;
+                let b = 2.0 * std::f64::consts::PI * 2_600.0 * t;
+                Complex32::new((0.1 * (a.cos() + b.cos())) as f32, (0.1 * (a.sin() + b.sin())) as f32)
+            })
+            .collect();
+        let mut out = Vec::new();
+        d.process(&x, &mut out);
+        let tail = &out[n / 2..];
+        let inside = tone_power(tail, fs, 1_500.0);
+        let outside = tone_power(tail, fs, 2_600.0);
+        let db = 10.0 * (inside / outside.max(1e-30)).log10();
+        assert!(db > 30.0, "only {db:.1} dB between the tone in the passband and the one outside it");
+    }
+
     use super::*;
 
     /// Span rates the chain must work at: the odd one is the real case.

@@ -19,7 +19,7 @@ use usdr_proto as proto;
 /// Something the UI should know about.
 pub enum NetEvent {
     Connecting { attempt: u32 },
-    Connected(Box<proto::Status>),
+    Connected(Box<proto::Status>, Option<proto::ServerInfo>),
     Disconnected(String),
     Fft(Box<proto::FftFrame>),
     Status(Box<proto::Status>),
@@ -292,10 +292,10 @@ fn ws_loop(
                         Ok(tungstenite::Message::Text(t)) => {
                             stats.bytes.fetch_add(t.len() as u64, Ordering::Relaxed);
                             match proto::decode_text(&t) {
-                                Ok(proto::Event::Hello(s)) => {
+                                Ok(proto::Event::Hello(s, info)) => {
                                     attempt = 0;
                                     said_hello = true;
-                                    let _ = ev.send(NetEvent::Connected(s));
+                                    let _ = ev.send(NetEvent::Connected(s, info));
                                 }
                                 Ok(proto::Event::Status(s)) => {
                                     let _ = ev.send(NetEvent::Status(s));
