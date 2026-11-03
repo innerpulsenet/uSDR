@@ -485,6 +485,32 @@ fn shots() {
                         st.bandwidth_hz = 150e3;
                         st.filter_low_hz = -75e3;
                         st.filter_high_hz = 75e3;
+                        // A layout fixture, not a decode: the same synthetic
+                        // station the engine's RDS tests transmit, unless
+                        // USDR_SHOTS_STATUS names a status saved from a live
+                        // server (`curl …/api/sdr/status`), whose RDS is then
+                        // drawn instead.
+                        let live = std::env::var_os("USDR_SHOTS_STATUS")
+                            .and_then(|p| std::fs::read_to_string(p).ok())
+                            .and_then(|j| serde_json::from_str::<proto::Status>(&j).ok());
+                        st.rds = live.map(|l| l.rds).unwrap_or_else(|| Some(proto::Rds {
+                            pi: "54A8".into(),
+                            pi_call: Some("KXYZ".into()),
+                            ps: Some("KXYZ FM".into()),
+                            pty: Some(9),
+                            pty_name: Some("Top 40".into()),
+                            tp: true,
+                            rt: Some("Blue Horizon by The Examples".into()),
+                            title: Some("Blue Horizon".into()),
+                            artist: Some("The Examples".into()),
+                            clock_utc: Some("2026-11-03T19:32Z".into()),
+                            clock_offset_min: Some(-300),
+                            locked: true,
+                            pilot: true,
+                            bler: 0.04,
+                            updated_ms: 1_793_820_720_000,
+                            ..Default::default()
+                        }));
                         app.modes = vec![proto::ModeCaps {
                             mode: Mode::Wfm,
                             label: "WFM".into(),

@@ -17,6 +17,18 @@ fn small(t: impl Into<String>) -> RichText {
 pub fn side(app: &mut App, ui: &mut Ui) {
     ui.spacing_mut().item_spacing.y = 8.0;
     egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+        // On broadcast FM the station is what the column is for; it leads.
+        if app.status.mode == Mode::Wfm {
+            let head = |ui: &mut Ui| {
+                let (t, c) = match app.rds() {
+                    Some(r) if r.locked => ("LOCKED", widgets::protocol_color("RDS")),
+                    Some(_) => ("LOST", theme::text_3()),
+                    None => ("SEARCHING", theme::text_3()),
+                };
+                ui.label(RichText::new(t).font(theme::mono(10.5)).color(c));
+            };
+            widgets::applet(ui, "rds", "Station · RDS", head, |ui| station(app, ui));
+        }
         widgets::applet(ui, "gain", "Gain", |_| {}, |ui| gain(app, ui));
         let on = front_end_on(&app.status);
         let head = |ui: &mut Ui| {
@@ -31,11 +43,89 @@ pub fn side(app: &mut App, ui: &mut Ui) {
         if app.status.mode == Mode::P25 {
             widgets::applet(ui, "p25", "P25 channel key", |_| {}, |ui| p25(app, ui));
         }
+
         widgets::applet(ui, "radio", "Radio", |_| {}, |ui| radio(app, ui));
         // Recall is the memory row's; the bank's storing, renaming and
         // clearing open here when wanted.
         widgets::applet_folded(ui, "memory-bank", "Memory bank", |_| {}, |ui| memories(app, ui));
     });
+}
+
+/// What a broadcast station is sending over RDS. Everything shown passed
+/// its checkwords on the server and was heard twice alike; until then the
+/// card says so rather than showing a partial name.
+fn station(app: &App, ui: &mut Ui) {
+    let Some(r) = app.rds() else {
+        ui.label(small("No RDS from this station yet"));
+        return;
+    };
+    let dim = !r.locked;
+    let fade = |c: egui::Color32| if dim { theme::text_3() } else { c };
+    ui.horizontal(|ui| {
+        // Until the name is confirmed, the PI is all there is to call it.
+        let name = r.ps.clone().unwrap_or_else(|| format!("PI {}", r.pi));
+        ui.label(RichText::new(name).font(theme::mono_bold(17.0)).color(fade(if r.ps.is_some() { theme::text() } else { theme::text_3() })));
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if let Some(p) = &r.pty_name
+                && r.pty != Some(0)
+            {
+                ui.label(RichText::new(p.to_uppercase()).font(theme::mono(10.0)).color(fade(widgets::protocol_color("RDS"))));
+            }
+            if r.ps_dynamic {
+                ui.label(RichText::new("SCROLLING").font(theme::mono(10.0)).color(theme::text_3()))
+                    .on_hover_text("This station sends a message a word at a time through its PS, so the name above changes every few seconds");
+            }
+        });
+    });
+    match (&r.title, &r.artist) {
+        (None, None) => {}
+        (t, a) => {
+            egui::Grid::new("rds-tags").num_columns(2).spacing(vec2(8.0, 2.0)).show(ui, |ui| {
+                if let Some(t) = t {
+                    ui.label(small("TITLE"));
+                    ui.add(egui::Label::new(RichText::new(t).font(theme::sans(13.0)).color(fade(theme::text()))).wrap());
+                    ui.end_row();
+                }
+                if let Some(a) = a {
+                    ui.label(small("ARTIST"));
+                    ui.add(egui::Label::new(RichText::new(a).font(theme::sans(13.0)).color(fade(theme::text()))).wrap());
+                    ui.end_row();
+                }
+            });
+        }
+    }
+    // The whole RadioText, wrapped: it is at most 64 characters and never
+    // scrolls.
+    match &r.rt {
+        Some(rt) => {
+            ui.add(egui::Label::new(RichText::new(rt).font(theme::sans(12.0)).color(fade(theme::text_2()))).wrap());
+        }
+        None => {
+            ui.label(small("no RadioText confirmed yet"));
+        }
+    }
+    let mut id = format!("PI {}", r.pi);
+    if let Some(c) = &r.pi_call {
+        id.push_str(&format!(" · {c} (from PI)"));
+    }
+    if r.tp {
+        id.push_str(" · TP");
+    }
+    if r.ta {
+        id.push_str(" · TA");
+    }
+    ui.label(small(id)).on_hover_text("Call letters derived from the PI code by the RBDS mapping; a station that changed calls can keep its old PI");
+    if let Some(c) = crate::bar::rds_clock(r) {
+        ui.label(small(format!("station clock {c}"))).on_hover_text("The clock the station sends (group 4A), as sent");
+    }
+    let health = if r.locked {
+        format!("{:.0}% of blocks unreadable · carrier {}", r.bler * 100.0, if r.pilot { "from the 19 kHz pilot" } else { "free-running (no pilot)" })
+    } else {
+        "lock lost · showing what was last heard".into()
+    };
+    let at = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_millis(r.updated_ms);
+    let upd = if r.updated_ms > 0 { format!(" · changed {} UTC", crate::app::local_hms(at)) } else { String::new() };
+    ui.label(small(format!("{health}{upd}")));
 }
 
 /// The channel's level over its noise floor across the 20 s the server's

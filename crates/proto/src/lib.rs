@@ -385,6 +385,43 @@ pub struct Status {
     pub filter_custom: bool,
     /// The second receiver, when one is listening (API 2, `rx2`).
     pub rx2: Option<SubRx>,
+    /// RDS from the broadcast station on receiver A, once its PI is
+    /// confirmed (WFM only).
+    pub rds: Option<Rds>,
+}
+
+/// What a broadcast FM station is sending over RDS. Every text here passed
+/// its checkwords and was heard twice alike.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Rds {
+    /// Program identification, four hex digits.
+    pub pi: String,
+    /// Call letters derived from the PI by the RBDS mapping.
+    pub pi_call: Option<String>,
+    /// The program service name (up to 8 characters).
+    pub ps: Option<String>,
+    /// The station scrolls words through its PS: `ps` is one word of a
+    /// longer message, not the station's name.
+    pub ps_dynamic: bool,
+    pub pty: Option<u8>,
+    pub pty_name: Option<String>,
+    pub tp: bool,
+    pub ta: bool,
+    pub rt: Option<String>,
+    /// RT+ tags, while the station marks an item as running.
+    pub title: Option<String>,
+    pub artist: Option<String>,
+    /// The station's clock as sent (`2026-11-03T19:32Z`) and its offset.
+    pub clock_utc: Option<String>,
+    pub clock_offset_min: Option<i32>,
+    /// Block sync held now.
+    pub locked: bool,
+    /// The carrier is taken from the 19 kHz pilot.
+    pub pilot: bool,
+    /// Share of the last 50 blocks that could not be read, 0..1.
+    pub bler: f32,
+    pub updated_ms: u64,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -896,6 +933,17 @@ mod tests {
         let h2 = r#"{"type":"hello","sdr":{"tuner":"RSP1A"},"server":{"name":"usdr","version":"0.1.0","api":2,"features":["filter"]}}"#;
         let Event::Hello(_, Some(info)) = decode_text(h2).unwrap() else { panic!() };
         assert!(info.api == 2 && info.has("filter"));
+    }
+
+    #[test]
+    fn decodes_rds_in_status() {
+        let s = r#"{"type":"status","mode":"wfm","rds":{"pi":"54A8","pi_call":"KKQE","ps":"KXYZ FM","pty":9,"pty_name":"Top 40","tp":true,"ta":false,"rt":"Blue Horizon by The Examples","title":"Blue Horizon","locked":true,"pilot":true,"bler":0.04,"updated_ms":5}}"#;
+        let Event::Status(st) = decode_text(s).unwrap() else { panic!() };
+        let r = st.rds.unwrap();
+        assert_eq!(r.ps.as_deref(), Some("KXYZ FM"));
+        assert_eq!(r.pty_name.as_deref(), Some("Top 40"));
+        assert_eq!(r.artist, None);
+        assert!(r.locked && r.pilot);
     }
 
     #[test]

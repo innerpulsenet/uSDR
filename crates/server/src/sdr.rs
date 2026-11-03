@@ -11,6 +11,7 @@ use scannerd_engine::flex::FlexDecoder;
 use scannerd_engine::p25::C4FM_BANDWIDTH_HZ;
 use scannerd_engine::p25::conventional::{P25ChannelReceiver, P25Spec};
 use scannerd_engine::pocsag::PocsagDecoder;
+use scannerd_engine::rds::RdsDecoder;
 use scannerd_engine::{CallEvent, ToneCode};
 use scannerd_engine::leveler::Leveler;
 use scannerd_engine::noisegate::NoiseGate;
@@ -465,7 +466,8 @@ impl SdrMode {
             // their live channel (PAGER's walking-bank channel audio, FLEX's
             // gated monitor) so the operator can hear what is being decoded.
             delivers_audio: true,
-            delivers_decode_events: !matches!(self, SdrMode::Wfm),
+            // WFM's are RDS: the station's name and RadioText.
+            delivers_decode_events: true,
             bandwidth_hz: self.default_bandwidth_hz(),
             filter: self.filter_range(),
             scope_kind: self.scope_kind(),
@@ -772,6 +774,10 @@ pub struct SdrStatus {
     /// The second receiver, when one is listening.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rx2: Option<crate::sub_rx::SubRxStatus>,
+    /// What the broadcast station on receiver A is sending over RDS, once
+    /// its PI has been confirmed (WFM only).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rds: Option<scannerd_engine::rds::RdsStation>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -1894,6 +1900,13 @@ enum Demod {
         /// happy with, the phase carried between blocks.
         decim: usize,
         phase: usize,
+        /// RDS from the 57 kHz subcarrier, which the discriminator's full
+        /// multiplex still carries.
+        rds: Box<RdsDecoder>,
+        /// The decoder's generation last pushed in a status, and when and
+        /// with what error rate a status last went out.
+        rds_seen: u64,
+        rds_pushed: (Instant, f32),
     },
     Packet {
         aprs: AprsDecoder,
@@ -2042,6 +2055,12 @@ impl Demod {
                     lp: wfm_audio_filter(fs_out),
                     decim,
                     phase: 0,
+                    rds: Box::new(RdsDecoder::new(fs_out)),
+                    // Never a generation the decoder has, so the first block
+                    // on a new channel pushes a status without the old
+                    // station's RDS in it.
+                    rds_seen: u64::MAX,
+                    rds_pushed: (Instant::now(), 0.0),
                 }
             }
             SdrMode::Packet => Demod::Packet {
@@ -2078,6 +2097,7 @@ impl Demod {
                 deemph,
                 lp,
                 phase,
+                rds,
                 ..
             } => {
                 fm.reset();
@@ -2085,6 +2105,8 @@ impl Demod {
                 *deemph = scannerd_dsp::OnePole::new(WFM_DEEMPHASIS_TAU * fs_out as f32);
                 lp.reset();
                 *phase = 0;
+                // Same station, new run of samples: keep what it has sent.
+                rds.reset_sync();
             }
             Demod::Packet {
                 aprs,
@@ -5732,6 +5754,9 @@ fn run_sdr(
                     lp,
                     decim,
                     phase,
+                    rds,
+                    rds_seen,
+                    rds_pushed,
                 } = &mut demod
                 {
                     // Instantaneous frequency in Hz, scaled by the deviation
@@ -5753,6 +5778,37 @@ fn run_sdr(
                     // times its real rate. The I/Q would be useless for replay
                     // regardless: 256 kHz is outside the range the classifier
                     // accepts, and none of the digital decoders apply here.
+
+                    // RDS reads the multiplex before de-emphasis, which is
+                    // where the 57 kHz subcarrier still is.
+                    rds.process(disc);
+                    for change in rds.take_changes() {
+                        if let Some(event) = rds.event(&change) {
+                            decode_history.note(inspect_hz, "RDS");
+                            let _ = events.send(SdrEvent::Decode { inspect_hz, event });
+                        }
+                    }
+                    // The station's state rides in the status: pushed when
+                    // it changes, and refreshed (its error rate) with every
+                    // spectrum frame for anyone reading the REST status.
+                    // The error rate alone moves every block; it goes out at
+                    // most every two seconds, and only when it has moved.
+                    let generation = rds.generation();
+                    let bler = rds.station().map_or(0.0, |st| st.bler);
+                    let bler_due = rds_pushed.0.elapsed() >= Duration::from_secs(2) && (bler - rds_pushed.1).abs() >= 0.02;
+                    if generation != *rds_seen || bler_due {
+                        let changed = generation != *rds_seen;
+                        *rds_seen = generation;
+                        *rds_pushed = (Instant::now(), bler);
+                        if let Ok(mut s) = status.lock() {
+                            let kept = s.rds.as_ref().map_or(0, |o| o.updated_ms);
+                            s.rds = rds.station().map(|mut st| {
+                                st.updated_ms = if changed { now_ms() } else { kept };
+                                st
+                            });
+                            let _ = events.send(SdrEvent::Status(s.clone()));
+                        }
+                    }
                 }
                 ClassificationResult {
                     active: true,
@@ -6098,6 +6154,19 @@ fn run_sdr(
                 } else {
                     None
                 };
+                match &demod {
+                    Demod::Wfm { rds, .. } => {
+                        s.rds = rds.station().map(|mut st| {
+                            st.updated_ms = s.rds.as_ref().map_or(0, |o| o.updated_ms);
+                            st
+                        });
+                    }
+                    // Out of WFM: the station's RDS goes, and clients hear so.
+                    _ if s.rds.take().is_some() => {
+                        let _ = events.send(SdrEvent::Status(s.clone()));
+                    }
+                    _ => {}
+                }
                 // Running every decoder at once costs about a core, and scan
                 // runs a rig per configured slot — the heaviest mode there
                 // is. If the span is wide enough that blocks are being
@@ -6579,7 +6648,7 @@ mod tests {
         assert!(by(SdrMode::Nxdn).delivers_audio && by(SdrMode::Nxdn).delivers_decode_events);
         assert!(by(SdrMode::Pager).delivers_audio && by(SdrMode::Pager).delivers_decode_events);
         assert!(by(SdrMode::Flex).delivers_audio && by(SdrMode::Flex).delivers_decode_events);
-        assert!(by(SdrMode::Wfm).delivers_audio && !by(SdrMode::Wfm).delivers_decode_events);
+        assert!(by(SdrMode::Wfm).delivers_audio && by(SdrMode::Wfm).delivers_decode_events);
         for m in [SdrMode::P25, SdrMode::Dmr, SdrMode::Nxdn, SdrMode::Flex] {
             assert_eq!(by(m).scope_kind, "symbols", "{m:?} must draw a symbol scope");
         }
