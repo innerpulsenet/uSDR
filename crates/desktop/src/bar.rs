@@ -781,7 +781,23 @@ fn meter(app: &mut App, ui: &mut Ui, min_w: f32, max_w: f32) {
 /// server measured it.
 fn stereo_badge(ui: &mut Ui, st: &usdr_proto::StereoReading, reduce_motion: bool) {
     let id = ui.id().with("stereo-badge");
-    let blend = if reduce_motion { st.blend } else { ui.ctx().animate_value_with_time(id, st.blend, 0.15) };
+    // The rings' parting follows the blend eased on the motion clock, with
+    // a dead zone: the reading wanders a percent or two frame to frame,
+    // which egui's own easing would chase with a frame every frame.
+    let blend = {
+        let key = id.with("blend");
+        let target = (st.blend * 20.0).round() / 20.0;
+        let cur: f32 = ui.ctx().data(|d| d.get_temp(key)).unwrap_or(target);
+        let next = if reduce_motion || (cur - target).abs() < 0.03 {
+            target
+        } else {
+            let dt = ui.input(|i| i.stable_dt).min(0.1);
+            crate::anim::more(ui.ctx());
+            cur + (target - cur) * (1.0 - (-dt * 14.0).exp())
+        };
+        ui.ctx().data_mut(|d| d.insert_temp(key, next));
+        next
+    };
     let lit = ui.ctx().animate_bool_with_time(id.with("lit"), st.pilot, if reduce_motion { 0.0 } else { 0.2 });
     let col = theme::lerp(theme::text_3(), theme::CYAN, lit);
     let word = if !st.pilot {

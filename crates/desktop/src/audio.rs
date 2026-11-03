@@ -52,7 +52,6 @@ struct Shared {
     level_rms: f32,
     underruns: u64,
     trimmed: u64,
-    recorder: Option<WavWriter>,
     /// Smoothed ratio correction, for display.
     drift_ppm: f64,
     /// A recording being played back in place of the live audio.
@@ -157,6 +156,9 @@ pub struct Player {
     stream: Mutex<Option<cpal::Stream>>,
     pub device_name: Mutex<String>,
     pub error: Mutex<Option<String>>,
+    /// The WAV being written, under a lock of its own: the sound card's
+    /// callback never waits on a disk write.
+    recorder: Mutex<Option<WavWriter>>,
 }
 
 // cpal's Stream is not Send on every host; it is only ever touched from the
@@ -193,6 +195,7 @@ impl Player {
             stream: Mutex::new(None),
             device_name: Mutex::new("none".into()),
             error: Mutex::new(None),
+            recorder: Mutex::new(None),
         })
     }
 
@@ -208,6 +211,7 @@ impl Player {
             stream: Mutex::new(None),
             device_name: Mutex::new(String::new()),
             error: Mutex::new(None),
+            recorder: Mutex::new(None),
         });
         p.open(device);
         p
@@ -340,15 +344,14 @@ impl Player {
     }
 
     pub fn start_recording(&self, path: PathBuf) -> std::io::Result<()> {
-        let mut s = self.shared.lock().unwrap();
-        let rate = s.in_rate.round() as u32;
-        s.recorder = Some(WavWriter::create(path, rate)?);
+        let rate = self.shared.lock().unwrap().in_rate.round() as u32;
+        *self.recorder.lock().unwrap() = Some(WavWriter::create(path, rate)?);
         Ok(())
     }
 
     /// Finish the recording and return where it went.
     pub fn stop_recording(&self) -> Option<(PathBuf, f32)> {
-        let w = self.shared.lock().unwrap().recorder.take()?;
+        let w = self.recorder.lock().unwrap().take()?;
         let secs = w.seconds();
         let path = w.path.clone();
         w.finish().ok()?;
@@ -357,16 +360,19 @@ impl Player {
 
     pub fn reading(&self) -> LevelReading {
         let s = self.shared.lock().unwrap();
-        LevelReading {
+        let mut r = LevelReading {
             peak: s.level_peak,
             rms: s.level_rms,
             queue_ms: (s.queue.len() as f64 / s.in_rate.max(1.0) * 1000.0) as f32,
             drift_ppm: s.drift_ppm as f32,
             underruns: s.underruns,
             in_rate: s.in_rate,
-            recording: s.recorder.as_ref().map(|w| (w.path.clone(), w.seconds())),
+            recording: None,
             stereo: s.stereo.filter(|(at, _)| at.elapsed().as_secs_f32() < 1.0).map(|(_, r)| r),
-        }
+        };
+        drop(s);
+        r.recording = self.recorder.lock().unwrap().as_ref().map(|w| (w.path.clone(), w.seconds()));
+        r
     }
 }
 
@@ -391,38 +397,46 @@ impl Player {
 
     /// Mono (`channels` 1) or interleaved L, R (2).
     pub fn push(&self, rate_hz: u32, channels: usize, samples: &[i16]) {
-        let mut s = self.shared.lock().unwrap();
-        if rate_hz > 0 && (s.in_rate - rate_hz as f64).abs() > 0.5 {
-            // A mode change: the queued audio is at the old rate.
-            s.in_rate = rate_hz as f64;
-            s.queue.clear();
-            s.priming = true;
-            s.phase = 0.0;
-            s.sinc = Some(Sinc::new(s.in_rate, s.out_rate));
-            if let Some(w) = s.recorder.as_mut() {
-                w.note_rate_change(rate_hz);
+        let mut rate_changed = None;
+        {
+            let mut s = self.shared.lock().unwrap();
+            if rate_hz > 0 && (s.in_rate - rate_hz as f64).abs() > 0.5 {
+                // A mode change: the queued audio is at the old rate.
+                s.in_rate = rate_hz as f64;
+                s.queue.clear();
+                s.priming = true;
+                s.phase = 0.0;
+                s.sinc = Some(Sinc::new(s.in_rate, s.out_rate));
+                rate_changed = Some(rate_hz);
+            }
+            let pcm = |v: i16| v as f32 / 32768.0;
+            if channels == 2 {
+                s.queue.extend(samples.chunks_exact(2).map(|p| [pcm(p[0]), pcm(p[1])]));
+            } else {
+                s.queue.extend(samples.iter().map(|&v| [pcm(v); 2]));
+            }
+            let ceiling = (s.in_rate * CEILING_S) as usize;
+            if s.queue.len() > ceiling {
+                let target = (s.in_rate * TARGET_S) as usize;
+                let cut = s.queue.len() - target;
+                s.queue.drain(..cut);
+                s.trimmed += 1;
             }
         }
-        let pcm = |v: i16| v as f32 / 32768.0;
-        if channels == 2 {
-            if let Some(w) = s.recorder.as_mut() {
+        // The recording, with the audio lock released: a disk write that
+        // stalls holds up this thread, never the sound card.
+        let mut rec = self.recorder.lock().unwrap();
+        if let Some(w) = rec.as_mut() {
+            if let Some(r) = rate_changed {
+                w.note_rate_change(r);
+            }
+            if channels == 2 {
                 // Recordings stay mono WAV: the fold of the two.
                 let mono: Vec<i16> = samples.chunks_exact(2).map(|p| ((p[0] as i32 + p[1] as i32) / 2) as i16).collect();
                 w.write(&mono);
-            }
-            s.queue.extend(samples.chunks_exact(2).map(|p| [pcm(p[0]), pcm(p[1])]));
-        } else {
-            if let Some(w) = s.recorder.as_mut() {
+            } else {
                 w.write(samples);
             }
-            s.queue.extend(samples.iter().map(|&v| [pcm(v); 2]));
-        }
-        let ceiling = (s.in_rate * CEILING_S) as usize;
-        if s.queue.len() > ceiling {
-            let target = (s.in_rate * TARGET_S) as usize;
-            let cut = s.queue.len() - target;
-            s.queue.drain(..cut);
-            s.trimmed += 1;
         }
     }
 }

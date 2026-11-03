@@ -2,10 +2,15 @@
 //!
 //! The websocket carries the stream: FFT frames at ~25 fps, audio, status,
 //! decodes and presence. Audio skips the UI thread entirely and goes straight
-//! to the player, so a slow frame never becomes a click. REST carries the
-//! operator's changes; slider drags and wheel spins arrive faster than they
-//! are worth sending, so queued posts to the same control collapse to the
-//! newest before they leave.
+//! to the player, so a slow frame never becomes a click; everything else
+//! asks for a paint the moment it arrives. A stream that goes quiet is
+//! pinged, and one that does not answer is dropped and reopened, so a
+//! server that vanished is noticed in seconds rather than when TCP gives
+//! up. REST carries the operator's changes; slider drags and wheel spins
+//! arrive faster than they are worth sending, so queued posts to the same
+//! control collapse to the newest before they leave, and a capture being
+//! fetched or saved runs on a thread of its own, so a tune never waits
+//! behind twenty seconds of I/Q.
 
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, TryRecvError, channel as unbounded};
 use serde_json::Value;
@@ -262,7 +267,7 @@ fn ws_loop(
     while !stop.load(Ordering::Relaxed) {
         attempt += 1;
         let _ = ev.send(NetEvent::Connecting { attempt });
-        crate::anim::more(&ctx);
+        crate::anim::now(&ctx);
         let reason = match tungstenite::connect(ws_url(&base, id)) {
             Ok((mut ws, _)) => {
                 if let tungstenite::stream::MaybeTlsStream::Plain(s) = ws.get_mut() {
@@ -270,19 +275,29 @@ fn ws_loop(
                     let _ = s.set_read_timeout(Some(Duration::from_millis(400)));
                 }
                 let mut said_hello = false;
+                // The server sends something every 40 ms while it is well.
+                // Quiet for two seconds, it is pinged; quiet for six, it
+                // is gone.
+                let mut heard = Instant::now();
+                let mut pinged = false;
                 loop {
                     if stop.load(Ordering::Relaxed) {
                         let _ = ws.close(None);
                         return;
                     }
-                    match ws.read() {
+                    let msg = ws.read();
+                    if msg.is_ok() {
+                        heard = Instant::now();
+                        pinged = false;
+                    }
+                    match msg {
                         Ok(tungstenite::Message::Binary(b)) => {
                             stats.bytes.fetch_add(b.len() as u64, Ordering::Relaxed);
                             match proto::decode_binary(&b) {
                                 Ok(proto::Binary::Fft(f)) => {
                                     stats.fft_frames.fetch_add(1, Ordering::Relaxed);
                                     let _ = ev.send(NetEvent::Fft(f));
-                                    crate::anim::more(&ctx);
+                                    crate::anim::now(&ctx);
                                 }
                                 Ok(proto::Binary::Audio(a)) => {
                                     stats.audio_frames.fetch_add(1, Ordering::Relaxed);
@@ -319,7 +334,7 @@ fn ws_loop(
                                     stats.decode_errors.fetch_add(1, Ordering::Relaxed);
                                 }
                             }
-                            crate::anim::more(&ctx);
+                            crate::anim::now(&ctx);
                         }
                         Ok(tungstenite::Message::Close(f)) => {
                             break f
@@ -332,7 +347,19 @@ fn ws_loop(
                             if matches!(
                                 e.kind(),
                                 std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
-                            ) => {}
+                            ) =>
+                        {
+                            let quiet = heard.elapsed();
+                            if quiet > Duration::from_secs(6) {
+                                break "stream stalled".to_string();
+                            }
+                            if quiet > Duration::from_secs(2) && !pinged {
+                                pinged = true;
+                                if let Err(e) = ws.send(tungstenite::Message::Ping(Default::default())) {
+                                    break format!("stream lost · {}", plain_error(&e, &base));
+                                }
+                            }
+                        }
                         Err(e) => {
                             break if said_hello {
                                 format!("stream lost · {}", plain_error(&e, &base))
@@ -351,7 +378,7 @@ fn ws_loop(
             Err(e) => plain_error(&e, &base),
         };
         let _ = ev.send(NetEvent::Disconnected(reason));
-        crate::anim::more(&ctx);
+        crate::anim::now(&ctx);
         let backoff = Duration::from_millis((250u64 << attempt.min(4)).min(4000));
         let until = Instant::now() + backoff;
         while Instant::now() < until && !stop.load(Ordering::Relaxed) {
@@ -391,6 +418,36 @@ fn newest_only(batch: &[Req]) -> Vec<bool> {
         .collect()
 }
 
+/// A request that moves a capture or a file: it runs on a thread of its
+/// own, so the controls behind it in the queue are not held up by it.
+fn heavy(req: &Req) -> bool {
+    matches!(req, Req::Download { .. } | Req::Fetch { .. } | Req::Upload { .. })
+}
+
+/// How long a request may take: a control answers in milliseconds, so one
+/// that has not answered in a few seconds is a server that is gone, and
+/// the queue behind it should not wait on it; a capture may be large.
+fn deadline(req: &Req) -> Duration {
+    if heavy(req) { Duration::from_secs(300) } else { Duration::from_secs(5) }
+}
+
+/// Tell the UI how a request ended. A 409 (another client holds the
+/// receiver) is noted once per few seconds, not once per wheel click.
+fn report(out: Result<(), Fail>, ev: &Sender<NetEvent>, refused_note: &Mutex<Instant>, ctx: &egui::Context) {
+    if let Err((what, status, error)) = out {
+        if status == 409 {
+            let mut last = refused_note.lock().unwrap();
+            if last.elapsed() > Duration::from_secs(3) {
+                *last = Instant::now();
+                let _ = ev.send(NetEvent::Refused(error));
+            }
+        } else {
+            let _ = ev.send(NetEvent::Failed { what, error });
+        }
+    }
+    crate::anim::now(ctx);
+}
+
 fn rest_loop(
     base: String,
     id: u64,
@@ -405,8 +462,9 @@ fn rest_loop(
         .http_status_as_error(false)
         .build()
         .into();
-    let client = format!("desktop:{id}");
-    let refused_note = Mutex::new(Instant::now() - Duration::from_secs(10));
+    let client = Arc::new(format!("desktop:{id}"));
+    let base = Arc::new(base);
+    let refused_note = Arc::new(Mutex::new(Instant::now() - Duration::from_secs(10)));
     loop {
         let first = match rx.recv_timeout(Duration::from_millis(250)) {
             Ok(r) => r,
@@ -431,22 +489,18 @@ fn rest_loop(
             if !keep {
                 continue;
             }
+            if heavy(&req) {
+                let (agent, base, client, ev, refused_note, ctx) = (agent.clone(), base.clone(), client.clone(), ev.clone(), refused_note.clone(), ctx.clone());
+                let _ = std::thread::Builder::new().name("usdr-fetch".into()).spawn(move || {
+                    let out = run(&agent, &base, &client, req, &ev);
+                    report(out, &ev, &refused_note, &ctx);
+                });
+                continue;
+            }
             let t0 = Instant::now();
             let out = run(&agent, &base, &client, req, &ev);
             stats.rtt_us.store(t0.elapsed().as_micros() as u64, Ordering::Relaxed);
-            if let Err((what, status, error)) = out {
-                if status == 409 {
-                    // One note per few seconds, not one per wheel click.
-                    let mut last = refused_note.lock().unwrap();
-                    if last.elapsed() > Duration::from_secs(3) {
-                        *last = Instant::now();
-                        let _ = ev.send(NetEvent::Refused(error));
-                    }
-                } else {
-                    let _ = ev.send(NetEvent::Failed { what, error });
-                }
-            }
-            crate::anim::more(&ctx);
+            report(out, &ev, &refused_note, &ctx);
         }
     }
 }
@@ -463,10 +517,14 @@ fn body_text(resp: &mut ureq::http::Response<ureq::Body>) -> String {
 
 fn run(agent: &ureq::Agent, base: &str, client: &str, req: Req, ev: &Sender<NetEvent>) -> Result<(), Fail> {
     let fail = |what: &str, status: u16, e: String| (what.to_string(), status, e);
+    let within = Some(deadline(&req));
     match req {
         Req::Post { path, body, .. } => {
             let mut resp = agent
                 .post(format!("{base}{path}"))
+                .config()
+                .timeout_global(within)
+                .build()
                 .header(proto::CLIENT_HEADER, client)
                 .send_json(&body)
                 .map_err(|e| fail(&path, 0, e.to_string()))?;
@@ -479,6 +537,9 @@ fn run(agent: &ureq::Agent, base: &str, client: &str, req: Req, ev: &Sender<NetE
         Req::Get { path, what } => {
             let r = agent
                 .get(format!("{base}{path}"))
+                .config()
+                .timeout_global(within)
+                .build()
                 .header(proto::CLIENT_HEADER, client)
                 .call();
             let result = json_result(r);
@@ -488,6 +549,9 @@ fn run(agent: &ureq::Agent, base: &str, client: &str, req: Req, ev: &Sender<NetE
         Req::PostGet { path, body, what } => {
             let r = agent
                 .post(format!("{base}{path}"))
+                .config()
+                .timeout_global(within)
+                .build()
                 .header(proto::CLIENT_HEADER, client)
                 .send_json(&body);
             let result = json_result(r);
@@ -497,6 +561,9 @@ fn run(agent: &ureq::Agent, base: &str, client: &str, req: Req, ev: &Sender<NetE
         Req::Upload { path, body, what } => {
             let r = agent
                 .post(format!("{base}{path}"))
+                .config()
+                .timeout_global(within)
+                .build()
                 .header(proto::CLIENT_HEADER, client)
                 .header("content-type", "audio/wav")
                 .send(&body[..]);
@@ -507,6 +574,9 @@ fn run(agent: &ureq::Agent, base: &str, client: &str, req: Req, ev: &Sender<NetE
         Req::Fetch { path, what } => {
             let mut resp = agent
                 .get(format!("{base}{path}"))
+                .config()
+                .timeout_global(within)
+                .build()
                 .header(proto::CLIENT_HEADER, client)
                 .call()
                 .map_err(|e| fail(&path, 0, e.to_string()))?;
@@ -531,6 +601,9 @@ fn run(agent: &ureq::Agent, base: &str, client: &str, req: Req, ev: &Sender<NetE
         Req::Download { path, dest, sidecar } => {
             let mut resp = agent
                 .get(format!("{base}{path}"))
+                .config()
+                .timeout_global(within)
+                .build()
                 .header(proto::CLIENT_HEADER, client)
                 .call()
                 .map_err(|e| fail(&path, 0, e.to_string()))?;
@@ -603,6 +676,15 @@ mod tests {
         // Gain keeps its last; the two front-end posts set different
         // switches and both go; scan control is never merged.
         assert_eq!(newest_only(&batch), vec![false, true, false, true, true, true, true]);
+    }
+
+    #[test]
+    fn captures_leave_the_control_queue() {
+        let tune = post("/api/sdr/inspect", serde_json::json!({"freq_hz": 1e8}));
+        let save = Req::Download { path: "/api/sdr/capture.wav?kind=iq".into(), dest: "/tmp/x.iq".into(), sidecar: None };
+        assert!(!heavy(&tune) && heavy(&save));
+        assert!(deadline(&tune) < Duration::from_secs(10), "a control that has not answered in seconds is a server that is gone");
+        assert!(deadline(&save) > Duration::from_secs(60), "a capture may be large");
     }
 
     #[test]

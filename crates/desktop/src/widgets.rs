@@ -469,6 +469,23 @@ pub fn chip(ui: &mut Ui, tone: Tone, text: &str) -> Response {
     resp
 }
 
+/// A small turning arc, for a wait: on the motion clock, where egui's own
+/// spinner asks for a frame every frame.
+pub fn spinner(ui: &mut Ui, size: f32, color: Color32) {
+    let (rect, _) = ui.allocate_exact_size(vec2(size, size), Sense::hover());
+    let t = ui.input(|i| i.time) as f32;
+    let (c, r) = (rect.center(), size / 2.0 - 1.5);
+    let a0 = if reduced(ui) { 0.0 } else { t * 4.0 };
+    let pts: Vec<egui::Pos2> = (0..=12).map(|k| {
+        let a = a0 + k as f32 / 12.0 * std::f32::consts::PI * 1.4;
+        pos2(c.x + r * a.cos(), c.y + r * a.sin())
+    }).collect();
+    ui.painter().add(egui::Shape::line(pts, Stroke::new(1.5, color)));
+    if !reduced(ui) {
+        crate::anim::more(ui.ctx());
+    }
+}
+
 /// A menu entry for a waterfall palette or a display style: a ramp of the
 /// palette, the color its trace takes when it has one, and the name, lit
 /// when it is the one in use. Clicked chooses it.

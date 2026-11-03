@@ -1055,7 +1055,7 @@ impl App {
             _ => self.display_bins_due = Some((bins, now + 0.4)),
         }
         if self.display_bins_due.is_some() {
-            ctx.request_repaint_after(Duration::from_millis(450));
+            crate::anim::after(ctx, Duration::from_millis(450));
         }
     }
 
@@ -1124,7 +1124,8 @@ impl App {
                 self.presence_badge(ui);
             });
         });
-        ui.ctx().request_repaint_after(Duration::from_millis(500));
+        // The clock: a frame every half second whatever else is quiet.
+        crate::anim::after(ui.ctx(), Duration::from_millis(500));
     }
 
     fn connection_chip(&mut self, ui: &mut Ui) {
@@ -1536,6 +1537,7 @@ impl App {
 
     /// Lay out the window.
     pub fn draw(&mut self, ui: &mut Ui) {
+        crate::anim::frame_begin();
         let ctx = ui.ctx().clone();
         self.prefs.ui_scale = ctx.zoom_factor();
         static QA_FPS: std::sync::OnceLock<bool> = std::sync::OnceLock::new();

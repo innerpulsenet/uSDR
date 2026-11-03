@@ -731,7 +731,7 @@ fn recorder(app: &mut App, ui: &mut Ui) {
     // or not it has anything to say, so nothing under it moves.
     fixed_line(ui, 18.0, |ui| {
         if let Some(b) = &busy {
-            ui.add(egui::Spinner::new().size(12.0).color(theme::AMBER));
+            widgets::spinner(ui, 12.0, theme::AMBER);
             ui.label(small(format!("{b}…")));
         } else if let Some(n) = &app.replay_note {
             ui.add(egui::Label::new(small(n.clone())).truncate()).on_hover_text(n.as_str());
