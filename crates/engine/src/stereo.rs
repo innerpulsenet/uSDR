@@ -1,0 +1,570 @@
+//! Broadcast FM audio from the discriminator's multiplex (MPX): the mono
+//! sum, and the stereo difference on its 38 kHz subcarrier when the station
+//! sends one, blended toward mono as the signal weakens.
+//!
+//! The multiplex, per ITU-R BS.450, at 75 kHz peak deviation:
+//!
+//! ```text
+//!   0.9 · [ (L+R)/2  +  (L−R)/2 · sin 2ωt ]  +  0.1 · sin ωt     (ω = 2π·19 kHz)
+//! ```
+//!
+//! The sum M = (L+R)/2 is the audio band below 15 kHz; it is what a mono
+//! receiver plays, and this path computes it exactly as the mono receiver
+//! always has. The difference S = (L−R)/2 comes back by multiplying the
+//! multiplex by 2·sin 2ωt, the subcarrier regenerated at twice the phase of
+//! a PLL on the pilot, and low-passing what lands in the audio band. Then
+//! L = M + S and R = M − S.
+//!
+//! De-emphasis and the audio low-pass are linear, so running them on M and S
+//! and matrixing afterward is the same filter as running them on L and R:
+//! each channel is de-emphasized after the matrix, never the composite
+//! (which would take the subcarrier down with it). The two branches share one
+//! filter design, so they stay matched and the separation is not spent on a
+//! mismatch.
+//!
+//! The difference channel is where the noise is: an FM discriminator's noise
+//! rises with frequency, and S comes from 23–53 kHz, so stereo is about 22 dB
+//! noisier than mono from the same signal. The decoder measures that noise
+//! two ways and blends S toward zero as the S/N falls:
+//!
+//! - beside the pilot, in quadrature to it, scaled by the discriminator's f²
+//!   noise shape to what the stereo channels carry;
+//! - in the subcarrier's own quadrature (cos 2ωt), which carries the stereo
+//!   band's noise and multipath but no program.
+//!
+//! Each can only read high: a station's audio processing leaves products
+//! near 19 kHz, and loud stereo program leaks into the quadrature when the
+//! station's pilot and subcarrier are a degree or two out of phase. On the
+//! air the two differ by 2–8 dB, never in the same direction for long, so
+//! the lower noise of the two is the reading. The blend falls quickly and recovers slowly, as a car radio's does,
+//! so a fade or a burst of multipath goes to mono at once and a weak station
+//! does not flutter between the two.
+
+use crate::biquad::{Biquad, Cascade};
+use crate::pilot::{PILOT_HZ, PilotPll};
+use crate::rds::{Bq, butter4};
+use scannerd_dsp::OnePole;
+use serde::Serialize;
+
+/// The broadcast audio band: a 12th-order Butterworth at 15 kHz and a notch
+/// on the 19 kHz stereo pilot, run at the discriminator's rate.
+pub fn wfm_audio_filter(fs: f64) -> Cascade {
+    let fs = fs as f32;
+    Cascade::butterworth_lowpass(15_000.0, fs, 6).then(Biquad::notch(19_000.0, fs, 4.0))
+}
+
+/// Full separation at or above this estimated stereo S/N (dB, against full
+/// deviation, de-emphasized, 15 kHz); mono at or below `BLEND_MONO_DB`.
+pub const BLEND_FULL_DB: f32 = 44.0;
+pub const BLEND_MONO_DB: f32 = 26.0;
+/// The blend falls toward mono with this time constant, and climbs back at
+/// no more than the whole way in `RECOVER_S`: a slew rather than a decay, so
+/// a strong station does reach full separation rather than only approach it.
+const ATTACK_S: f64 = 0.03;
+const RECOVER_S: f64 = 2.0;
+/// Pilot injection that counts as a real pilot, as deviation. The standard
+/// is 8–10% of 75 kHz (6–7.5 kHz); this allows for a station run hot or
+/// light, and refuses a stray 19 kHz tone in a mono station's audio, which
+/// would be either faint or far louder than a pilot.
+const PILOT_MIN_HZ: f64 = 3_500.0;
+const PILOT_MAX_HZ: f64 = 12_000.0;
+/// The noise probe's bandwidth either side of the pilot, and how long its
+/// readings are averaged.
+const PROBE_HZ: f64 = 400.0;
+const PROBE_SMOOTH_S: f64 = 0.05;
+/// The blend is reconsidered this often (samples at the MPX rate).
+const BLEND_EVERY: usize = 64;
+
+/// What the stereo decoder measured, for the status and the audio frame.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize)]
+pub struct StereoStatus {
+    /// A pilot is locked and its level is a pilot's.
+    pub pilot: bool,
+    /// How much of the difference signal is in the output, 0 (mono) to 1.
+    pub blend: f32,
+    /// The S/N the stereo channels would have, from the noise beside the
+    /// pilot; only while a pilot is locked.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub snr_db: Option<f32>,
+    /// The pilot's injection, as deviation in Hz; only while locked.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pilot_dev_hz: Option<f32>,
+}
+
+/// The WFM receiver's audio chain, from discriminator hertz to mono and
+/// (when there is a pilot) interleaved stereo at the decimated rate.
+pub struct WfmAudio {
+    fs: f64,
+    deviation_hz: f32,
+    tau_s: f32,
+    /// The mono sum: de-emphasis, then the audio band.
+    deemph: OnePole,
+    lp: Cascade,
+    /// The difference, after the subcarrier is taken off.
+    deemph_s: OnePole,
+    lp_s: Cascade,
+    /// The subcarrier's quadrature, through the same filters as S, and its
+    /// power averaged like the probe's.
+    deemph_q: OnePole,
+    lp_q: Cascade,
+    sq_pow: f64,
+    decim: usize,
+    phase: usize,
+    pilot: PilotPll,
+    /// The pilot mixed to DC: in phase (its level) and in quadrature (the
+    /// noise beside it), each low-passed, then averaged.
+    probe_i: [Bq; 2],
+    probe_q: [Bq; 2],
+    level: f64,
+    q_mean: f64,
+    q_var: f64,
+    smooth_k: f64,
+    /// Noise in the stereo channels per unit of noise density at 19 kHz,
+    /// and the mono branch's share of it against the difference branch's.
+    noise_k: f64,
+    mono_share: f64,
+    blend: f64,
+    attack_k: f64,
+    recover_step: f64,
+    until_blend: usize,
+    /// The difference branch runs (and stereo is delivered) this block.
+    active: bool,
+    status: StereoStatus,
+}
+
+impl WfmAudio {
+    /// `fs` is the discriminator's rate; `decim` the integer step down to
+    /// the audio rate; `deviation_hz` full scale; `tau_s` the de-emphasis
+    /// time constant (75 µs in the Americas, 50 µs elsewhere).
+    pub fn new(fs: f64, decim: usize, deviation_hz: f32, tau_s: f32) -> Self {
+        let dt = BLEND_EVERY as f64 / fs;
+        Self {
+            fs,
+            deviation_hz,
+            tau_s,
+            deemph: OnePole::new(tau_s * fs as f32),
+            lp: wfm_audio_filter(fs),
+            deemph_s: OnePole::new(tau_s * fs as f32),
+            lp_s: wfm_audio_filter(fs),
+            deemph_q: OnePole::new(tau_s * fs as f32),
+            lp_q: wfm_audio_filter(fs),
+            sq_pow: 0.0,
+            decim: decim.max(1),
+            phase: 0,
+            pilot: PilotPll::new(fs),
+            probe_i: butter4(PROBE_HZ, fs),
+            probe_q: butter4(PROBE_HZ, fs),
+            level: 0.0,
+            q_mean: 0.0,
+            q_var: 0.0,
+            smooth_k: 1.0 / (PROBE_SMOOTH_S * fs),
+            noise_k: stereo_noise_factor(tau_s as f64),
+            mono_share: {
+                let (m, s) = noise_parts(tau_s as f64);
+                m / s
+            },
+            blend: 0.0,
+            attack_k: 1.0 - (-dt / ATTACK_S).exp(),
+            recover_step: dt / RECOVER_S,
+            until_blend: BLEND_EVERY,
+            active: false,
+            status: StereoStatus::default(),
+        }
+    }
+
+    pub fn decim(&self) -> usize {
+        self.decim
+    }
+
+    pub fn status(&self) -> StereoStatus {
+        self.status
+    }
+
+    /// Back to nothing heard, after a break in the samples: the pilot's
+    /// phase does not survive a hole in the timeline.
+    pub fn reset(&mut self) {
+        *self = Self::new(self.fs, self.decim, self.deviation_hz, self.tau_s);
+    }
+
+    /// One block of discriminator output, in Hz. Mono audio is appended to
+    /// `mono` (always); interleaved L, R to `stereo` for the whole block when
+    /// the decoder is delivering stereo, so `stereo` either grows by twice
+    /// what `mono` did or not at all.
+    pub fn process(&mut self, disc_hz: &[f32], mono: &mut Vec<f32>, stereo: &mut Vec<f32>) {
+        let active = self.status.pilot || self.blend > 1e-3;
+        if self.active && !active {
+            // Back to mono: the difference branch rests, and starts again
+            // from silence, under a blend that rises from zero.
+            self.deemph_s.reset();
+            self.lp_s.reset();
+            self.deemph_q.reset();
+            self.lp_q.reset();
+            self.blend = 0.0;
+            self.status.blend = 0.0;
+        }
+        if active && !self.active {
+            // The quadrature's average starts from the probe's reading, so
+            // it cannot promise a quiet band before it has heard one.
+            self.sq_pow = self.pilot_side_noise();
+        }
+        self.active = active;
+        for &hz in disc_hz {
+            // Divided, not multiplied by a reciprocal: the mono numbers stay
+            // exactly what the mono receiver produced.
+            let x = hz / self.deviation_hz;
+            let xd = x as f64;
+            let (c, s) = self.pilot.step(xd);
+            // The probe: level in phase, noise in quadrature.
+            let mut i = xd * c;
+            let mut q = xd * s;
+            for f in &mut self.probe_i {
+                i = f.process(i);
+            }
+            for f in &mut self.probe_q {
+                q = f.process(q);
+            }
+            self.level += (i - self.level) * self.smooth_k;
+            self.q_mean += (q - self.q_mean) * self.smooth_k;
+            let d = q - self.q_mean;
+            self.q_var += (d * d - self.q_var) * self.smooth_k;
+
+            let m = self.lp.process(self.deemph.process(x));
+            // The PLL holds the pilot at cos θ, so the subcarrier, which
+            // crosses zero rising with the pilot (sin ωt = cos(θ), sin 2ωt),
+            // is −sin 2θ = −2 sin θ cos θ; times two to bring S back at its
+            // own level.
+            let sd = if active {
+                let quad = (c * c - s * s) as f32;
+                let sq = self.lp_q.process(self.deemph_q.process(2.0 * x * quad)) as f64;
+                self.sq_pow += (sq * sq - self.sq_pow) * self.smooth_k;
+                let sub = -2.0 * s * c;
+                self.lp_s.process(self.deemph_s.process(2.0 * x * sub as f32))
+            } else {
+                0.0
+            };
+            self.phase += 1;
+            if self.phase >= self.decim {
+                self.phase = 0;
+                mono.push(m.clamp(-1.0, 1.0));
+                if active {
+                    let b = self.blend as f32 * sd;
+                    stereo.push((m + b).clamp(-1.0, 1.0));
+                    stereo.push((m - b).clamp(-1.0, 1.0));
+                }
+            }
+            self.until_blend -= 1;
+            if self.until_blend == 0 {
+                self.until_blend = BLEND_EVERY;
+                self.update_blend();
+            }
+        }
+    }
+
+    fn update_blend(&mut self) {
+        let dev_hz = 2.0 * self.level * self.deviation_hz as f64;
+        let pilot = self.pilot.locked && (PILOT_MIN_HZ..=PILOT_MAX_HZ).contains(&dev_hz);
+        let snr_db = pilot.then(|| {
+            // The lower of the two noise readings; the quadrature carries
+            // S's noise, and M's adds under a hundredth of it.
+            let quad = if self.active { self.sq_pow * (1.0 + self.mono_share) } else { f64::MAX };
+            let noise = self.pilot_side_noise().min(quad).max(1e-15);
+            10.0 * (0.5 / noise).log10()
+        });
+        let target = snr_db.map_or(0.0, |db| {
+            ((db - BLEND_MONO_DB as f64) / (BLEND_FULL_DB - BLEND_MONO_DB) as f64).clamp(0.0, 1.0)
+        });
+        if target < self.blend {
+            self.blend += (target - self.blend) * self.attack_k;
+        } else {
+            self.blend = (self.blend + self.recover_step).min(target);
+        }
+        self.status = StereoStatus {
+            pilot,
+            blend: self.blend as f32,
+            snr_db: snr_db.map(|d| d as f32),
+            pilot_dev_hz: pilot.then_some(dev_hz as f32),
+        };
+    }
+
+    /// The noise one stereo channel carries, from the probe beside the
+    /// pilot: the noise density at 19 kHz (each side of the pilot folds onto
+    /// DC at a quarter of its density, through the probe's equivalent noise
+    /// bandwidth), scaled by the f² shape.
+    fn pilot_side_noise(&self) -> f64 {
+        let n19 = 2.0 * self.q_var / (PROBE_HZ * BUTTER4_ENBW);
+        n19 * self.noise_k
+    }
+
+}
+
+/// A fourth-order Butterworth's equivalent noise bandwidth, in units of its
+/// cutoff: (π/8) / sin(π/8).
+const BUTTER4_ENBW: f64 = 1.026_172;
+
+/// The noise power in one stereo channel (L = M + S, so the two branches'
+/// noise adds) per unit of noise density at 19 kHz, for a discriminator
+/// whose noise density rises as f²: the mono band's own, plus what the
+/// 2·sin 2ωt mixer brings down from either side of 38 kHz, both through the
+/// de-emphasis and the audio low-pass.
+fn stereo_noise_factor(tau_s: f64) -> f64 {
+    let (m, s) = noise_parts(tau_s);
+    m + s
+}
+
+/// The mono branch's and the difference branch's parts of that.
+fn noise_parts(tau_s: f64) -> (f64, f64) {
+    let sub = 2.0 * PILOT_HZ;
+    let df = 10.0;
+    let (mut m, mut s) = (0.0, 0.0);
+    let mut f = df / 2.0;
+    while f < 30_000.0 {
+        let wt = std::f64::consts::TAU * f * tau_s;
+        let h = 1.0 / (1.0 + wt * wt) / (1.0 + (f / 15_000.0).powi(24)) * df;
+        m += f * f * h;
+        s += ((sub - f).powi(2) + (sub + f).powi(2)) * h;
+        f += df;
+    }
+    let n = PILOT_HZ * PILOT_HZ;
+    (m / n, s / n)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::nbfm::NbfmDemod;
+    use num_complex::Complex32;
+    use std::f64::consts::TAU;
+
+    const FS: f64 = 256_000.0;
+    const DECIM: usize = 5;
+    const DEV: f32 = 75_000.0;
+    const TAU_S: f32 = 75e-6;
+
+    struct Rng(u64);
+    impl Rng {
+        fn next(&mut self) -> f64 {
+            self.0 ^= self.0 << 13;
+            self.0 ^= self.0 >> 7;
+            self.0 ^= self.0 << 17;
+            (self.0 >> 11) as f64 / (1u64 << 53) as f64
+        }
+        fn gauss(&mut self) -> f64 {
+            let u = self.next().max(1e-300);
+            let v = self.next();
+            (-2.0 * u.ln()).sqrt() * (TAU * v).cos()
+        }
+    }
+
+    /// A stereo multiplex, normalized to full deviation, with `l` and `r`
+    /// as functions of time.
+    fn mpx(secs: f64, pilot: bool, l: impl Fn(f64) -> f64, r: impl Fn(f64) -> f64) -> Vec<f64> {
+        let n = (secs * FS) as usize;
+        (0..n)
+            .map(|k| {
+                let t = k as f64 / FS;
+                let w = TAU * PILOT_HZ * t;
+                let (lv, rv) = (l(t), r(t));
+                let sub = if pilot { (lv - rv) / 2.0 * (2.0 * w).sin() } else { 0.0 };
+                0.9 * ((lv + rv) / 2.0 + sub) + if pilot { 0.1 * w.sin() } else { 0.0 }
+            })
+            .collect()
+    }
+
+    /// The multiplex frequency-modulated onto I/Q with complex noise of
+    /// standard deviation `sigma` per component, through the receiver's own
+    /// discriminator: the noise comes out shaped as it is on the air.
+    fn on_air(mpx: &[f64], sigma: f64, seed: u64) -> Vec<f32> {
+        let mut rng = Rng(seed);
+        let mut ph = 0.0f64;
+        let iq: Vec<Complex32> = mpx
+            .iter()
+            .map(|&x| {
+                ph = (ph + TAU * DEV as f64 * x / FS).rem_euclid(TAU);
+                Complex32::new((ph.cos() + sigma * rng.gauss()) as f32, (ph.sin() + sigma * rng.gauss()) as f32)
+            })
+            .collect();
+        let mut fm = NbfmDemod::with_deviation(FS, DEV);
+        let mut disc = Vec::new();
+        fm.discriminator_hz(&iq, &mut disc);
+        disc
+    }
+
+    /// Run the chain in blocks the size the server uses, returning mono,
+    /// stereo (only from blocks that delivered it, else empty) and the last
+    /// status.
+    fn run(dec: &mut WfmAudio, disc: &[f32]) -> (Vec<f32>, Vec<f32>, StereoStatus) {
+        let (mut mono, mut stereo) = (Vec::new(), Vec::new());
+        let mut st = Vec::new();
+        for block in disc.chunks(2_560) {
+            let before = mono.len();
+            st.clear();
+            dec.process(block, &mut mono, &mut st);
+            if st.is_empty() {
+                stereo.clear();
+            } else {
+                assert_eq!(st.len(), 2 * (mono.len() - before));
+                stereo.extend_from_slice(&st);
+            }
+        }
+        (mono, stereo, dec.status())
+    }
+
+    /// Amplitude of a `hz` tone in `x` at the audio rate.
+    fn tone(x: &[f32], hz: f64) -> f64 {
+        let fs = FS / DECIM as f64;
+        let (mut i, mut q) = (0.0, 0.0);
+        for (k, &v) in x.iter().enumerate() {
+            let w = TAU * hz * k as f64 / fs;
+            i += v as f64 * w.cos();
+            q += v as f64 * w.sin();
+        }
+        2.0 * i.hypot(q) / x.len() as f64
+    }
+
+    /// Channel `ch` of the last `secs` of interleaved stereo.
+    fn channel(stereo: &[f32], ch: usize, secs: f64) -> Vec<f32> {
+        let frames = ((secs * FS / DECIM as f64) as usize).min(stereo.len() / 2);
+        stereo[stereo.len() - 2 * frames..].iter().skip(ch).step_by(2).copied().collect()
+    }
+
+    /// Complex noise per component that gives a stereo S/N of `db`, by the
+    /// same f² model the decoder uses.
+    fn sigma_for(db: f64) -> f64 {
+        // Frequency noise from phase noise σ²/fs per Hz each side: a one-sided
+        // density of 2σ²/fs · f², in units of full deviation.
+        let n19_per_sigma2 = 2.0 / FS * (PILOT_HZ / DEV as f64).powi(2);
+        let noise = 0.5 / 10f64.powf(db / 10.0);
+        (noise / stereo_noise_factor(TAU_S as f64) / n19_per_sigma2).sqrt()
+    }
+
+    #[test]
+    fn a_left_only_tone_stays_left() {
+        let x = mpx(4.0, true, |t| 0.5 * (TAU * 1_000.0 * t).sin(), |_| 0.0);
+        let disc = on_air(&x, sigma_for(60.0), 1);
+        let mut dec = WfmAudio::new(FS, DECIM, DEV, TAU_S);
+        let (_, stereo, st) = run(&mut dec, &disc);
+        assert!(st.pilot && st.blend == 1.0, "{st:?}");
+        let (l, r) = (channel(&stereo, 0, 1.0), channel(&stereo, 1, 1.0));
+        let (al, ar) = (tone(&l, 1_000.0), tone(&r, 1_000.0));
+        let sep = 20.0 * (al / ar).log10();
+        println!("separation {sep:.1} dB (L {al:.4}, R {ar:.6}), {st:?}");
+        assert!(sep >= 30.0, "separation {sep:.1} dB");
+        // And the other way round.
+        let x = mpx(4.0, true, |_| 0.0, |t| 0.5 * (TAU * 3_000.0 * t).sin());
+        let mut dec = WfmAudio::new(FS, DECIM, DEV, TAU_S);
+        let (_, stereo, _) = run(&mut dec, &on_air(&x, sigma_for(60.0), 2));
+        let (l, r) = (channel(&stereo, 0, 1.0), channel(&stereo, 1, 1.0));
+        let sep = 20.0 * (tone(&r, 3_000.0) / tone(&l, 3_000.0)).log10();
+        println!("separation R at 3 kHz {sep:.1} dB");
+        assert!(sep >= 30.0, "separation {sep:.1} dB");
+    }
+
+    #[test]
+    fn no_pilot_stays_mono_and_unchanged() {
+        let x = mpx(1.5, false, |t| 0.5 * (TAU * 1_000.0 * t).sin(), |_| 0.0);
+        let disc = on_air(&x, sigma_for(50.0), 3);
+        let mut dec = WfmAudio::new(FS, DECIM, DEV, TAU_S);
+        let (mono, stereo, st) = run(&mut dec, &disc);
+        assert!(!st.pilot && st.blend == 0.0 && st.snr_db.is_none(), "{st:?}");
+        assert!(stereo.is_empty());
+        // The mono receiver's chain as it always was, sample for sample.
+        let mut deemph = OnePole::new(TAU_S * FS as f32);
+        let mut lp = wfm_audio_filter(FS);
+        let mut want = Vec::new();
+        let mut phase = 0;
+        for &hz in &disc {
+            let v = lp.process(deemph.process(hz / DEV));
+            phase += 1;
+            if phase >= DECIM {
+                want.push(v.clamp(-1.0, 1.0));
+                phase = 0;
+            }
+        }
+        assert_eq!(mono, want);
+    }
+
+    #[test]
+    fn a_loud_19_khz_tone_is_not_a_pilot() {
+        // A mono station with a 19 kHz whistle at three times a pilot's level.
+        let n = (2.0 * FS) as usize;
+        let x: Vec<f64> = (0..n).map(|k| 0.3 * (TAU * PILOT_HZ * k as f64 / FS).sin()).collect();
+        let mut dec = WfmAudio::new(FS, DECIM, DEV, TAU_S);
+        let (_, stereo, st) = run(&mut dec, &on_air(&x, sigma_for(60.0), 4));
+        assert!(!st.pilot && stereo.is_empty(), "{st:?}");
+    }
+
+    #[test]
+    fn the_noise_estimate_matches_the_noise() {
+        // A silent program at 50 dB: full stereo, and the noise in L should
+        // be what the probe beside the pilot predicts.
+        let x = mpx(4.0, true, |_| 0.0, |_| 0.0);
+        let mut dec = WfmAudio::new(FS, DECIM, DEV, TAU_S);
+        let (_, stereo, st) = run(&mut dec, &on_air(&x, sigma_for(50.0), 5));
+        let l = channel(&stereo, 0, 1.5);
+        let p = l.iter().map(|&v| (v as f64).powi(2)).sum::<f64>() / l.len() as f64;
+        let measured = 10.0 * (0.5 / p).log10();
+        let est = st.snr_db.unwrap() as f64;
+        println!("S/N measured {measured:.1} dB, estimated {est:.1} dB, {st:?}");
+        assert!((measured - est).abs() < 2.0, "measured {measured:.1}, estimated {est:.1}");
+        assert!((est - 50.0).abs() < 2.0, "estimated {est:.1}");
+        assert_eq!(st.blend, 1.0);
+    }
+
+    #[test]
+    fn a_skewed_subcarrier_and_loud_stereo_do_not_cost_the_blend() {
+        // Loud, wide stereo on a subcarrier 3° off the pilot: the program
+        // leaks into the subcarrier's quadrature, which the probe beside
+        // the pilot does not see.
+        let n = (4.0 * FS) as usize;
+        let skew = 3f64.to_radians();
+        let x: Vec<f64> = (0..n)
+            .map(|k| {
+                let t = k as f64 / FS;
+                let w = TAU * PILOT_HZ * t;
+                let (l, r) = (0.7 * (TAU * 700.0 * t).sin(), 0.7 * (TAU * 2_300.0 * t).sin());
+                0.9 * ((l + r) / 2.0 + (l - r) / 2.0 * (2.0 * w + skew).sin()) + 0.1 * w.sin()
+            })
+            .collect();
+        let mut dec = WfmAudio::new(FS, DECIM, DEV, TAU_S);
+        let (_, stereo, st) = run(&mut dec, &on_air(&x, sigma_for(50.0), 10));
+        println!("{st:?}");
+        assert_eq!(st.blend, 1.0, "{st:?}");
+        assert!((st.snr_db.unwrap() - 50.0).abs() < 3.0, "{st:?}");
+        let (l, r) = (channel(&stereo, 0, 1.0), channel(&stereo, 1, 1.0));
+        let sep = 20.0 * (tone(&l, 700.0) / tone(&r, 700.0)).log10();
+        assert!(sep >= 30.0, "separation {sep:.1} dB");
+    }
+
+    #[test]
+    fn a_noisy_station_blends_to_mono() {
+        let x = mpx(4.0, true, |t| 0.5 * (TAU * 1_000.0 * t).sin(), |_| 0.0);
+        let mut dec = WfmAudio::new(FS, DECIM, DEV, TAU_S);
+        let (_, stereo, st) = run(&mut dec, &on_air(&x, sigma_for(18.0), 6));
+        println!("{st:?}");
+        assert!(st.blend < 0.02, "{st:?}");
+        assert!(st.snr_db.is_none_or(|d| d < BLEND_MONO_DB), "{st:?}");
+        // Whatever is still delivered as stereo is all but mono.
+        if !stereo.is_empty() {
+            let (l, r) = (channel(&stereo, 0, 1.0), channel(&stereo, 1, 1.0));
+            let diff = l.iter().zip(&r).map(|(a, b)| ((a - b) as f64).powi(2)).sum::<f64>();
+            let sum = l.iter().map(|&a| (a as f64).powi(2)).sum::<f64>();
+            assert!(diff < sum * 1e-3, "L−R {diff} against L {sum}");
+        }
+    }
+
+    #[test]
+    fn a_fade_goes_to_mono_fast_and_comes_back_slowly() {
+        let mut dec = WfmAudio::new(FS, DECIM, DEV, TAU_S);
+        let strong = on_air(&mpx(3.0, true, |_| 0.0, |_| 0.0), sigma_for(55.0), 7);
+        let (_, _, st) = run(&mut dec, &strong);
+        assert!(st.blend > 0.9, "{st:?}");
+        // 150 ms of deep fade.
+        let weak = on_air(&mpx(0.15, true, |_| 0.0, |_| 0.0), sigma_for(12.0), 8);
+        let (_, _, st) = run(&mut dec, &weak);
+        assert!(st.blend < 0.2, "fell to {st:?}");
+        // Strong again: half a second later still well short of full.
+        let back = on_air(&mpx(0.5, true, |_| 0.0, |_| 0.0), sigma_for(55.0), 9);
+        let (_, _, st) = run(&mut dec, &back);
+        assert!(st.blend < 0.6, "recovered to {st:?} in 0.5 s");
+    }
+}

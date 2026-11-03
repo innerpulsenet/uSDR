@@ -9,6 +9,13 @@
 //! ear notices, and enough to hold the delay steady for hours. A queue that
 //! empties waits to refill rather than stuttering; one that backs up past
 //! half a second drops to the present, because this is a live monitor.
+//!
+//! Broadcast FM arrives in stereo when the station sends it; every frame is
+//! queued as L, R pairs (mono as the same sample twice) and each channel
+//! goes through the same interpolator, so a station that blends to mono and
+//! back plays on without a seam. Balance scales the two channels; with the
+//! A/B split on, each receiver folds to mono so its whole program is in its
+//! own ear.
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use std::collections::VecDeque;
@@ -23,7 +30,8 @@ const CEILING_S: f64 = 0.5;
 
 #[derive(Default)]
 struct Shared {
-    queue: VecDeque<f32>,
+    /// L, R pairs at `in_rate`.
+    queue: VecDeque<[f32; 2]>,
     in_rate: f64,
     out_rate: f64,
     /// Fractional read position into the queue's front.
@@ -33,6 +41,11 @@ struct Shared {
     muted: bool,
     /// Left/right balance, −1…1.
     pan: f32,
+    /// Play stereo as mono (L+R)/2: the A/B split, where a receiver's one
+    /// ear must carry the whole program.
+    fold: bool,
+    /// The stereo decoder's reading from the newest frame that carried one.
+    stereo: Option<(std::time::Instant, usdr_proto::StereoReading)>,
     /// Output level for the meter: a decaying peak and the RMS of the last
     /// callback, linear 0…1.
     level_peak: f32,
@@ -159,6 +172,9 @@ pub struct LevelReading {
     pub underruns: u64,
     pub in_rate: f64,
     pub recording: Option<(PathBuf, f32)>,
+    /// What the server's stereo decoder said with the audio now arriving;
+    /// none when the frames carry no reading or have stopped.
+    pub stereo: Option<usdr_proto::StereoReading>,
 }
 
 impl Player {
@@ -291,6 +307,9 @@ impl Player {
     pub fn set_pan(&self, p: f32) {
         self.shared.lock().unwrap().pan = p.clamp(-1.0, 1.0);
     }
+    pub fn set_fold(&self, fold: bool) {
+        self.shared.lock().unwrap().fold = fold;
+    }
     /// Forget what is queued: after a retune the old channel is not worth hearing.
     pub fn flush(&self) {
         let mut s = self.shared.lock().unwrap();
@@ -346,6 +365,7 @@ impl Player {
             underruns: s.underruns,
             in_rate: s.in_rate,
             recording: s.recorder.as_ref().map(|w| (w.path.clone(), w.seconds())),
+            stereo: s.stereo.filter(|(at, _)| at.elapsed().as_secs_f32() < 1.0).map(|(_, r)| r),
         }
     }
 }
@@ -357,13 +377,20 @@ pub struct Speakers {
 }
 
 impl crate::net::AudioSink for Speakers {
-    fn push(&self, rx: u8, rate_hz: u32, samples: &[i16]) {
-        if rx == 0 { &self.a } else { &self.b }.push(rate_hz, samples);
+    fn push(&self, f: &usdr_proto::AudioFrame) {
+        if f.rx == 0 { &self.a } else { &self.b }.push_frame(f);
     }
 }
 
 impl Player {
-    pub fn push(&self, rate_hz: u32, samples: &[i16]) {
+    pub fn push_frame(&self, f: &usdr_proto::AudioFrame) {
+        self.push(f.rate_hz, f.channels(), &f.samples);
+        let mut s = self.shared.lock().unwrap();
+        s.stereo = f.stereo.map(|r| (std::time::Instant::now(), r));
+    }
+
+    /// Mono (`channels` 1) or interleaved L, R (2).
+    pub fn push(&self, rate_hz: u32, channels: usize, samples: &[i16]) {
         let mut s = self.shared.lock().unwrap();
         if rate_hz > 0 && (s.in_rate - rate_hz as f64).abs() > 0.5 {
             // A mode change: the queued audio is at the old rate.
@@ -376,10 +403,20 @@ impl Player {
                 w.note_rate_change(rate_hz);
             }
         }
-        if let Some(w) = s.recorder.as_mut() {
-            w.write(samples);
+        let pcm = |v: i16| v as f32 / 32768.0;
+        if channels == 2 {
+            if let Some(w) = s.recorder.as_mut() {
+                // Recordings stay mono WAV: the fold of the two.
+                let mono: Vec<i16> = samples.chunks_exact(2).map(|p| ((p[0] as i32 + p[1] as i32) / 2) as i16).collect();
+                w.write(&mono);
+            }
+            s.queue.extend(samples.chunks_exact(2).map(|p| [pcm(p[0]), pcm(p[1])]));
+        } else {
+            if let Some(w) = s.recorder.as_mut() {
+                w.write(samples);
+            }
+            s.queue.extend(samples.iter().map(|&v| [pcm(v); 2]));
         }
-        s.queue.extend(samples.iter().map(|&v| v as f32 / 32768.0));
         let ceiling = (s.in_rate * CEILING_S) as usize;
         if s.queue.len() > ceiling {
             let target = (s.in_rate * TARGET_S) as usize;
@@ -448,18 +485,22 @@ fn fill(shared: &Mutex<Shared>, out: &mut [f32], channels: usize) {
         s.sinc = Some(Sinc::new(s.in_rate, s.out_rate));
     }
     let sinc = s.sinc.take().expect("built above");
+    let fold = s.fold || channels < 2;
     for f in 0..frames {
-        let v = if s.priming || s.queue.len() < TAPS {
+        let (l, r) = if s.priming || s.queue.len() < TAPS {
             if !s.priming {
                 s.priming = true;
                 s.underruns += 1;
             }
-            0.0
+            (0.0, 0.0)
         } else {
             let q = &s.queue;
             // The point read sits between q[TAPS/2 − 1] and q[TAPS/2]:
             // half a filter's length of delay, about half a millisecond.
-            let v = sinc.at(|k| q[k], s.phase);
+            // One channel's taps when the two agree, which mono always does.
+            let l = sinc.at(|k| q[k][0], s.phase);
+            let stereo = q.range(..TAPS).any(|p| p[0] != p[1]);
+            let r = if stereo { sinc.at(|k| q[k][1], s.phase) } else { l };
             s.phase += step;
             let whole = s.phase.floor() as usize;
             if whole > 0 {
@@ -467,19 +508,19 @@ fn fill(shared: &Mutex<Shared>, out: &mut [f32], channels: usize) {
                 s.queue.drain(..n);
                 s.phase -= whole as f64;
             }
-            v
+            if fold { ((l + r) * 0.5, (l + r) * 0.5) } else { (l, r) }
         };
-        peak = peak.max(v.abs());
-        sum += v * v;
+        peak = peak.max(l.abs()).max(r.abs());
+        sum += (l * l + r * r) * 0.5;
         let base = f * channels;
         if channels >= 2 {
-            out[base] = v * gl;
-            out[base + 1] = v * gr;
+            out[base] = l * gl;
+            out[base + 1] = r * gr;
             for c in 2..channels {
                 out[base + c] = 0.0;
             }
         } else if channels == 1 {
-            out[base] = v * gain;
+            out[base] = l * gain;
         }
     }
     s.sinc = Some(sinc);
@@ -605,6 +646,46 @@ mod tests {
         }
     }
 
+    /// A second of interleaved stereo through `fill` to a two-channel card,
+    /// returning the card's L and R.
+    fn play_stereo(fold: bool, pan: f32) -> (Vec<f32>, Vec<f32>) {
+        let p = Player::silent();
+        p.set_volume(1.0);
+        p.set_fold(fold);
+        p.set_pan(pan);
+        // A 1 kHz tone in L only, at 51.2 kHz.
+        let lr: Vec<i16> = (0..51_200)
+            .flat_map(|n| [((std::f64::consts::TAU * 1_000.0 * n as f64 / 51_200.0).sin() * 16_000.0) as i16, 0])
+            .collect();
+        let (mut l, mut r) = (Vec::new(), Vec::new());
+        let mut out = vec![0f32; 2 * 480];
+        for chunk in lr.chunks(2 * 512) {
+            p.push(51_200, 2, chunk);
+            fill(&p.shared, &mut out, 2);
+            l.extend(out.iter().step_by(2));
+            r.extend(out.iter().skip(1).step_by(2));
+        }
+        (l, r)
+    }
+
+    fn rms(x: &[f32]) -> f32 {
+        (x.iter().map(|v| v * v).sum::<f32>() / x.len().max(1) as f32).sqrt()
+    }
+
+    #[test]
+    fn stereo_plays_each_channel_in_its_own_ear() {
+        let (l, r) = play_stereo(false, 0.0);
+        assert!(rms(&l) > 0.2, "L {}", rms(&l));
+        assert!(rms(&r) < 1e-6, "R {}", rms(&r));
+        // Balance toward the right turns the left channel down.
+        let (l2, _) = play_stereo(false, 0.5);
+        assert!((rms(&l2) / rms(&l) - 0.5).abs() < 0.01);
+        // The A/B split folds the program into whichever ear it plays in.
+        let (l, r) = play_stereo(true, 1.0);
+        assert!(rms(&l) < 1e-6, "A in the right ear only");
+        assert!(rms(&r) > 0.1, "and it carries the left channel's tone: {}", rms(&r));
+    }
+
     #[test]
     fn steady_queue_holds_its_depth() {
         let shared = Mutex::new(Shared {
@@ -622,7 +703,7 @@ mod tests {
             carry += 48_076.9 * 0.02;
             let n = carry as usize;
             carry -= n as f64;
-            shared.lock().unwrap().queue.extend(std::iter::repeat_n(0.1, n));
+            shared.lock().unwrap().queue.extend(std::iter::repeat_n([0.1; 2], n));
             fill(&shared, &mut out, 1);
         }
         let s = shared.lock().unwrap();

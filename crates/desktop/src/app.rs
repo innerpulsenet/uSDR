@@ -232,6 +232,10 @@ impl App {
         player.set_volume(prefs.volume);
         player.set_muted(prefs.muted);
         player.set_pan(prefs.pan);
+        // The A/B split carries each receiver's whole program in its ear.
+        let split = prefs.pan <= -0.99 && prefs.pan_b >= 0.99;
+        player.set_fold(split);
+        player_b.set_fold(split);
         let connect_input = server
             .clone()
             .or_else(|| prefs.last_server.clone())
@@ -808,6 +812,15 @@ impl App {
     /// real one while it is held.
     /// RDS from the station receiver A is on, when the server has a
     /// confirmed PI for it.
+    /// With A hard left and B hard right (the L|R split), each receiver
+    /// plays as mono, so a stereo station's right channel is not lost from
+    /// A's ear. Balance alone, anywhere else, keeps stereo.
+    pub fn sync_fold(&self) {
+        let split = self.prefs.pan <= -0.99 && self.prefs.pan_b >= 0.99;
+        self.player.set_fold(split);
+        self.player_b.set_fold(split);
+    }
+
     pub fn rds(&self) -> Option<&usdr_proto::Rds> {
         self.status.rds.as_ref().filter(|_| self.status.mode == Mode::Wfm)
     }

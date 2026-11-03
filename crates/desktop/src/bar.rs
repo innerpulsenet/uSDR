@@ -161,6 +161,7 @@ fn switch(app: &mut App, ui: &mut Ui) {
                     app.prefs.pan_b = b;
                     app.player.set_pan(a);
                     app.player_b.set_pan(b);
+                    app.sync_fold();
                 }
                 if widgets::chip_key_w(ui, "✕", false, theme::VIOLET, RX_W - 41.0 - 31.0 - 6.0).on_hover_text("Stop receiver B").clicked() {
                     app.rx2_off();
@@ -577,6 +578,7 @@ fn audio(app: &mut App, ui: &mut Ui, width_px: f32) {
                         app.prefs.pan = pan as f32;
                         app.player.set_pan(app.prefs.pan);
                     }
+                    app.sync_fold();
                 }
                 let r = player.reading();
                 ui.label(small(if r.queue_ms > 0.0 {
@@ -711,6 +713,11 @@ fn meter(app: &mut App, ui: &mut Ui, min_w: f32, max_w: f32) {
                 _ => Tone::Idle,
             };
             widgets::chip(ui, tone, word);
+            if s.mode == Mode::Wfm
+                && let Some(st) = app.player.reading().stereo
+            {
+                stereo_badge(ui, &st, rm);
+            }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.label(small(format!("SNR {snr}")));
                 if !notches.is_empty() {
@@ -739,6 +746,49 @@ fn meter(app: &mut App, ui: &mut Ui, min_w: f32, max_w: f32) {
     if calibrate && let Some(l) = &app.link {
         l.post_get("/api/sdr/calibrate", json!({}), Get::Calibrate);
     }
+}
+
+/// The stereo decoder's reading, as the audio now playing carries it: two
+/// rings that sit on top of each other for mono and part as the blend opens
+/// to full separation, lit while a pilot is locked. Shown only when the
+/// server measured it.
+fn stereo_badge(ui: &mut Ui, st: &usdr_proto::StereoReading, reduce_motion: bool) {
+    let id = ui.id().with("stereo-badge");
+    let blend = if reduce_motion { st.blend } else { ui.ctx().animate_value_with_time(id, st.blend, 0.15) };
+    let lit = ui.ctx().animate_bool_with_time(id.with("lit"), st.pilot, if reduce_motion { 0.0 } else { 0.2 });
+    let col = theme::lerp(theme::text_3(), theme::CYAN, lit);
+    let word = if !st.pilot {
+        "MONO".to_string()
+    } else if st.blend < 0.995 {
+        format!("STEREO {:>3.0}%", st.blend * 100.0)
+    } else {
+        "STEREO".to_string()
+    };
+    // Laid out at its widest, so the row does not shift as the blend moves.
+    let wide = ui.painter().layout_no_wrap("STEREO 100%".into(), theme::mono(10.5), col).size().x;
+    let g = ui.painter().layout_no_wrap(word, theme::mono(10.5), col);
+    let (rect, resp) = ui.allocate_exact_size(vec2(22.0 + wide, 18.0), Sense::hover());
+    let p = ui.painter();
+    let (cy, r) = (rect.center().y, 4.5);
+    let cx = rect.left() + 9.0;
+    let sep = 3.0 * blend;
+    for (k, dx) in [(0, -sep), (1, sep)] {
+        let c = if k == 0 { col } else { alpha(col, 0.55 + 0.45 * lit) };
+        p.circle_stroke(egui::pos2(cx + dx, cy), r, Stroke::new(1.3, c));
+    }
+    p.galley(egui::pos2(rect.left() + 20.0, cy - g.size().y / 2.0), g, col);
+    resp.on_hover_text(if st.pilot {
+        format!(
+            "19 kHz pilot locked{}\nSeparation in use: {:.0}%, blended toward mono as the S/N falls\nStereo S/N {}, from the noise beside the pilot",
+            st.pilot_dev_hz.map(|h| format!(" at {:.2} kHz deviation", h / 1000.0)).unwrap_or_default(),
+            st.blend * 100.0,
+            st.snr_db.map_or("not measured".into(), |d| format!("{d:.0} dB")),
+        )
+    } else if st.blend > 0.0 {
+        format!("Pilot lost: back to mono ({:.0}% separation left)", st.blend * 100.0)
+    } else {
+        "No stereo pilot locked: mono".into()
+    });
 }
 
 /// The SIGNAL bay's one line of RDS: the station's name, then the tagged

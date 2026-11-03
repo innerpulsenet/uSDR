@@ -99,8 +99,9 @@ pub struct Stats {
 }
 
 pub trait AudioSink: Send + Sync {
-    /// Audio from receiver `rx` (0 the main one, 1 the second).
-    fn push(&self, rx: u8, rate_hz: u32, samples: &[i16]);
+    /// Audio from receiver `f.rx` (0 the main one, 1 the second): mono, or
+    /// interleaved L, R when `f.channels()` is 2.
+    fn push(&self, f: &proto::AudioFrame);
 }
 
 pub struct Link {
@@ -243,7 +244,9 @@ fn ws_url(base: &str, id: u64) -> String {
         .chars()
         .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '.')
         .collect();
-    format!("{scheme}://{host}/ws?client=desktop&id={id}&name={name}")
+    // Broadcast FM in stereo, with the decoder's reading; a server older
+    // than that ignores the parameter and sends mono.
+    format!("{scheme}://{host}/ws?client=desktop&id={id}&name={name}&audio=stereo")
 }
 
 fn ws_loop(
@@ -283,7 +286,7 @@ fn ws_loop(
                                 }
                                 Ok(proto::Binary::Audio(a)) => {
                                     stats.audio_frames.fetch_add(1, Ordering::Relaxed);
-                                    audio.push(a.rx, a.rate_hz, &a.samples);
+                                    audio.push(&a);
                                 }
                                 Err(_) => {
                                     stats.decode_errors.fetch_add(1, Ordering::Relaxed);

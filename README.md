@@ -139,7 +139,7 @@ SWR: this is RX-only.
   | `NFM` | Narrowband FM with the full digital classifier |
   | `AM` | Envelope-detected AM with AGC — HF airband and broadcast |
   | `USB` / `LSB` | Single sideband voice for HF: the 300–2800 Hz above (USB) or below (LSB) the suppressed carrier, the opposite side 50 dB down, with a speech AGC (fast attack, 400 ms hang, 15 dB/s release). Tunes on a 100 Hz raster; the passband is drawn beside the carrier |
-  | `WFM` | 200 kHz broadcast FM, 75 µs de-emphasis, for listening; the audio is low-passed at 15 kHz and the 19 kHz pilot notched out before it is decimated, so neither the pilot nor the stereo subcarrier folds into it |
+  | `WFM` | 200 kHz broadcast FM, for listening, in stereo when the station sends a pilot: a PLL on the 19 kHz pilot regenerates the 38 kHz subcarrier, L and R are each de-emphasized (75 µs) and low-passed at 15 kHz with the pilot notched, and the separation blends toward mono as the stereo S/N (measured beside the pilot) falls from 44 to 26 dB, quickly on a fade and slowly back. Without a pilot it is the mono receiver it always was. The desktop app asks for stereo (`/ws?audio=stereo`); the page and older clients get mono |
   | `P25` | P25 Phase 1 C4FM decoded to voice through the IMBE vocoder |
   | `DMR` | DMR Tier II decoded to voice through the AMBE vocoder |
   | `NXDN` | NXDN48/NXDN96 conventional voice through the AMBE+2 vocoder; Type-C/D call assignments surface as trunking events |

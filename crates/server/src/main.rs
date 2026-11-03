@@ -531,7 +531,7 @@ async fn yield_guard(
 /// What this server is and which API revision it speaks, so a client can say
 /// plainly when it needs a newer one rather than failing on a missing route.
 const API_REVISION: u32 = 2;
-const API_FEATURES: &[&str] = &["presence", "web-policy", "memories", "avg-status", "filter", "rx2"];
+const API_FEATURES: &[&str] = &["presence", "web-policy", "memories", "avg-status", "filter", "rx2", "stereo"];
 
 fn version_json() -> serde_json::Value {
     serde_json::json!({
@@ -1448,6 +1448,9 @@ struct WsQuery {
     /// `desktop` for the desktop app; anything else is a browser.
     client: Option<String>,
     name: Option<String>,
+    /// `stereo` for broadcast FM as 0x05 frames (L, R and the stereo
+    /// decoder's reading); anything else hears mono.
+    audio: Option<String>,
 }
 
 async fn ws_upgrade(
@@ -1457,6 +1460,7 @@ async fn ws_upgrade(
     axum::extract::ConnectInfo(addr): axum::extract::ConnectInfo<SocketAddr>,
 ) -> Response {
     let desktop = q.client.as_deref() == Some("desktop");
+    let stereo = q.audio.as_deref() == Some("stereo");
     if !desktop && st.web_policy() == WebPolicy::Off {
         return (StatusCode::FORBIDDEN, "the web interface is turned off").into_response();
     }
@@ -1476,7 +1480,7 @@ async fn ws_upgrade(
             .map(|d| d.as_secs())
             .unwrap_or(0),
     };
-    ws.on_upgrade(move |socket| ws_client(socket, st, info))
+    ws.on_upgrade(move |socket| ws_client(socket, st, info, stereo))
 }
 
 /// Takes a client off the presence list however its socket ends.
@@ -1492,7 +1496,7 @@ impl Drop for Registered {
     }
 }
 
-async fn ws_client(mut socket: WebSocket, st: Arc<AppState>, info: ClientInfo) {
+async fn ws_client(mut socket: WebSocket, st: Arc<AppState>, info: ClientInfo, stereo: bool) {
     let mut sdr_ev = st.sdr_events.subscribe();
     let mut audio = st.audio.subscribe();
     let mut meta = st.meta.subscribe();
@@ -1560,22 +1564,7 @@ async fn ws_client(mut socket: WebSocket, st: Arc<AppState>, info: ClientInfo) {
             },
             frame = audio.recv() => match frame {
                 Ok(f) => {
-                    // [0x01][u32 LE sample rate][i16 LE samples...]. Binary
-                    // because a JSON float array costs about ten times the
-                    // bytes for something that arrives forty times a second.
-                    // The second receiver's is [0x04][u8 rx][u32][i16...],
-                    // which pages that know nothing of it skip.
-                    let mut buf = Vec::with_capacity(6 + f.samples.len() * 2);
-                    if f.rx == 0 {
-                        buf.push(0x01u8);
-                    } else {
-                        buf.push(0x04u8);
-                        buf.push(f.rx);
-                    }
-                    buf.extend_from_slice(&f.rate_hz.to_le_bytes());
-                    for s in &f.samples {
-                        buf.extend_from_slice(&s.to_le_bytes());
-                    }
+                    let buf = sdr::encode_audio_frame(&f, stereo);
                     if socket.send(Message::Binary(buf.into())).await.is_err() {
                         return;
                     }
