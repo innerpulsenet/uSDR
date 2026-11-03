@@ -323,12 +323,17 @@ fn processing(app: &mut App, ui: &mut Ui) {
         });
     };
     let mut post = None;
+    // Keys for processing the mode's audio never passes through are dimmed,
+    // not hidden: the setting holds for when a voice mode comes back.
+    let agc = matches!(mode, Mode::Am | Mode::Usb | Mode::Lsb);
     row(ui, "NOISE RED.", "Spectral noise reduction on voice: NFM, AM, USB and LSB. Higher cuts more hiss and adds about 16 ms of delay.", &mut |ui| {
-        for (v, l) in [("off", "OFF"), ("low", "LOW"), ("medium", "MED"), ("high", "HIGH")] {
-            if widgets::chip_key(ui, l, p.nr == v, theme::CYAN).clicked() {
-                post = Some(json!({ "nr": v }));
+        ui.add_enabled_ui(voice, |ui| {
+            for (v, l) in [("off", "OFF"), ("low", "LOW"), ("medium", "MED"), ("high", "HIGH")] {
+                if widgets::chip_key(ui, l, p.nr == v, theme::CYAN).clicked() {
+                    post = Some(json!({ "nr": v }));
+                }
             }
-        }
+        });
     });
     row(ui, "BLANKER", "Wideband impulse blanker, for ignition and power-line clicks. It also clips the start of strong packet bursts, so leave it off for APRS.", &mut |ui| {
         for (v, l) in [(0u8, "OFF"), (1, "LOW"), (2, "MED"), (3, "HIGH")] {
@@ -338,13 +343,17 @@ fn processing(app: &mut App, ui: &mut Ui) {
         }
     });
     row(ui, "AGC", "AM and sideband AGC speed: fast follows flutter, slow rides through pauses and fades.", &mut |ui| {
-        for (v, l) in [("fast", "FAST"), ("medium", "MED"), ("slow", "SLOW")] {
-            if widgets::chip_key(ui, l, p.agc == v, theme::AMBER).clicked() {
-                post = Some(json!({ "agc": v }));
+        ui.add_enabled_ui(agc, |ui| {
+            for (v, l) in [("fast", "FAST"), ("medium", "MED"), ("slow", "SLOW")] {
+                if widgets::chip_key(ui, l, p.agc == v, theme::AMBER).clicked() {
+                    post = Some(json!({ "agc": v }));
+                }
             }
-        }
+        });
     });
-    if widgets::key(ui, "AUTO NOTCH", p.auto_notch, theme::CYAN)
+    if ui
+        .add_enabled_ui(voice, |ui| widgets::key(ui, "AUTO NOTCH", p.auto_notch, theme::CYAN))
+        .inner
         .on_hover_text("Find and null steady tones (heterodynes, carriers) in voice audio")
         .clicked()
     {
@@ -353,12 +362,14 @@ fn processing(app: &mut App, ui: &mut Ui) {
     if let Some(body) = post {
         app.post("/api/sdr/processing", body);
     }
-    let note = if voice {
+    let note = if agc {
         "applies to this mode's audio"
+    } else if voice {
+        "NFM: noise reduction and notch apply; AGC is AM and sideband only"
     } else if mode == Mode::Wfm {
-        "WFM: broadcast audio is left as it is"
+        "WFM: broadcast audio is left as it is; only the blanker acts"
     } else {
-        "noise reduction and AGC act on NFM, AM, USB and LSB"
+        "noise reduction, notch and AGC act on NFM, AM, USB and LSB"
     };
     ui.label(small(note));
 }

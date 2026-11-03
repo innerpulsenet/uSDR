@@ -227,6 +227,21 @@ pub fn chip_key(ui: &mut Ui, label: &str, on: bool, tally: Color32) -> Response 
     resp
 }
 
+/// A chip-height step key with a drawn chevron: `wider` points right.
+/// Dimmed and inert when there is no further step.
+pub fn step_chip(ui: &mut Ui, wider: bool, enabled: bool) -> Response {
+    let (rect, resp) = ui.allocate_exact_size(vec2(20.0, 22.0), if enabled { Sense::click() } else { Sense::hover() });
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, if wider { "wider" } else { "narrower" }));
+    let hover = ui.ctx().animate_bool_with_time(resp.id.with("hv"), enabled && resp.hovered(), 0.12);
+    let p = ui.painter();
+    p.rect(rect, CornerRadius::same(3), theme::lerp(theme::surface_3(), theme::surface_4(), hover), Stroke::new(1.0, theme::line()), egui::StrokeKind::Inside);
+    let c = if enabled { theme::lerp(theme::text_2(), theme::text(), hover) } else { theme::text_3() };
+    let (x, y, d) = (rect.center().x, rect.center().y, if wider { 1.0 } else { -1.0 });
+    p.line_segment([pos2(x - 2.0 * d, y - 4.0), pos2(x + 2.0 * d, y)], Stroke::new(1.5, c));
+    p.line_segment([pos2(x + 2.0 * d, y), pos2(x - 2.0 * d, y + 4.0)], Stroke::new(1.5, c));
+    resp
+}
+
 /// A plain action key.
 pub fn action(ui: &mut Ui, label: &str) -> Response {
     let galley = ui.painter().layout_no_wrap(label.to_string(), theme::sans_semibold(11.5), Color32::PLACEHOLDER);

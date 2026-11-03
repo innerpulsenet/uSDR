@@ -1653,6 +1653,10 @@ mod tests {
 
     /// The whole window, connected to a server played by the test.
     fn harness() -> Harness<'static, T> {
+        harness_sized(1600.0)
+    }
+
+    fn harness_sized(w: f32) -> Harness<'static, T> {
         let ctx = egui::Context::default();
         let mut prefs = Prefs::default();
         prefs.auto_connect = false;
@@ -1661,7 +1665,7 @@ mod tests {
         app.link = Some(link);
         let info = proto::ServerInfo { name: "usdr".into(), version: "test".into(), api: 2, features: vec!["filter".into(), "rx2".into()] };
         wire.events.send(NetEvent::Connected(Box::new(rsp_status()), Some(info))).unwrap();
-        let mut h = Harness::builder().with_size(egui::vec2(1600.0, 1000.0)).build_ui_state(
+        let mut h = Harness::builder().with_size(egui::vec2(w, 1000.0)).build_ui_state(
             |ui, t: &mut T| {
                 let ctx = ui.ctx().clone();
                 if !t.ready {
@@ -1851,10 +1855,16 @@ mod tests {
         // Its filter is set for its own mode.
         h.state_mut().app.status.rx2.as_mut().unwrap().mode = Mode::Am;
         h.run_steps(2);
-        // (A narrow bar keeps the presets beside B's 25 kHz: 10k, 12k, 16k.)
-        h.get_by_role_and_label(role, "10k").click();
+        // (A narrow bar keeps the presets beside B's 25 kHz: 12k, 16k.)
+        h.get_by_role_and_label(role, "12k").click();
         h.run_steps(2);
-        assert!(drain(&h).contains(&("/api/sdr/filter".into(), json!({ "low_hz": -5000.0, "high_hz": 5000.0, "mode": "am" }))));
+        assert!(drain(&h).contains(&("/api/sdr/filter".into(), json!({ "low_hz": -6000.0, "high_hz": 6000.0, "mode": "am" }))));
+        // AM's own 10k, a step narrower, is B's reset.
+        h.state_mut().app.status.rx2.as_mut().unwrap().bandwidth_hz = 12_000.0;
+        h.run_steps(2);
+        h.get_by_label("narrower").click();
+        h.run_steps(2);
+        assert!(drain(&h).contains(&("/api/sdr/filter".into(), json!({ "reset": true, "mode": "am" }))));
         // And A comes back with a click.
         h.get_by_role_and_label(role, "A").click();
         h.run_steps(2);
@@ -1921,5 +1931,61 @@ mod tests {
         let posts = drain(&h);
         assert!(!posts.iter().any(|(p, _)| p == "/api/sdr/display"), "sent again: {posts:?}");
         assert!(h.state().app.display_bins_sent > 500);
+    }
+
+    /// A receiver in `mode` with the filter at `lo`..`hi`, which the server
+    /// lets the operator set within `min`..`max`.
+    fn filtered(h: &mut Harness<'static, T>, mode: Mode, home: f32, (min, max): (f32, f32), (lo, hi): (f64, f64), custom: bool) {
+        let app = &mut h.state_mut().app;
+        app.modes = vec![proto::ModeCaps {
+            mode,
+            bandwidth_hz: home,
+            filter: Some(proto::FilterRange { min_width_hz: min, max_width_hz: max, max_edge_hz: if matches!(mode, Mode::Usb | Mode::Lsb) { max } else { max / 2.0 }, symmetric: !matches!(mode, Mode::Usb | Mode::Lsb) }),
+            ..Default::default()
+        }];
+        app.status.mode = mode;
+        app.status.filter_low_hz = lo;
+        app.status.filter_high_hz = hi;
+        app.status.bandwidth_hz = hi - lo;
+        app.status.passband_offset_hz = (lo + hi) / 2.0;
+        app.status.filter_custom = custom;
+        h.run_steps(2);
+        drain(h);
+    }
+
+    #[test]
+    fn a_narrow_filter_bay_still_steps_wider() {
+        // The 1500-1640 px band gives the filter its narrowest bay: once
+        // narrowed to 150k the wider presets used to fall off the row.
+        let mut h = harness_sized(1560.0);
+        filtered(&mut h, Mode::Wfm, 200_000.0, (50_000.0, 230_000.0), (-75_000.0, 75_000.0), true);
+        h.get_by_label("wider").click();
+        h.run_steps(2);
+        assert!(drain(&h).contains(&("/api/sdr/filter".into(), json!({ "low_hz": -90000.0, "high_hz": 90000.0 }))));
+        h.get_by_label("narrower").click();
+        h.run_steps(2);
+        assert!(drain(&h).iter().any(|(p, b)| p == "/api/sdr/filter" && b["high_hz"] == json!(75000.0)));
+    }
+
+    #[test]
+    fn stepping_onto_the_modes_own_width_resets_it() {
+        let mut h = harness_sized(1560.0);
+        filtered(&mut h, Mode::Wfm, 200_000.0, (50_000.0, 230_000.0), (-90_000.0, 90_000.0), true);
+        h.get_by_label("wider").click();
+        h.run_steps(2);
+        assert!(drain(&h).contains(&("/api/sdr/filter".into(), json!({ "reset": true }))));
+    }
+
+    #[test]
+    fn the_modes_own_width_is_a_preset_that_resets() {
+        // Sideband's own 2.5k is not among the round presets; it joins them.
+        let mut h = harness_sized(1900.0);
+        filtered(&mut h, Mode::Usb, 2_500.0, (200.0, 4_000.0), (300.0, 2_400.0), true);
+        h.get_by_label("2.5k").click();
+        h.run_steps(2);
+        assert!(drain(&h).contains(&("/api/sdr/filter".into(), json!({ "reset": true }))));
+        h.get_by_label("2.7k").click();
+        h.run_steps(2);
+        assert!(drain(&h).contains(&("/api/sdr/filter".into(), json!({ "low_hz": 300.0, "high_hz": 3000.0 }))));
     }
 }

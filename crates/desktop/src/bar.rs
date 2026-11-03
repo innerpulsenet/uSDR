@@ -331,13 +331,26 @@ fn filter(app: &mut App, ui: &mut Ui, width_px: f32) {
             }));
             return;
         };
-        let presets: &[f32] = match mode {
-            Mode::Usb | Mode::Lsb => &[1_800.0, 2_100.0, 2_400.0, 2_700.0, 3_000.0, 3_600.0],
-            Mode::Am => &[4_000.0, 6_000.0, 8_000.0, 10_000.0, 12_000.0, 16_000.0],
-            Mode::Nfm => &[6_000.0, 8_000.0, 11_000.0, 12_500.0, 16_000.0, 25_000.0],
-            Mode::Wfm => &[100_000.0, 150_000.0, 180_000.0, 200_000.0, 230_000.0],
-            _ => &[],
+        let mut presets: Vec<f32> = match mode {
+            Mode::Usb | Mode::Lsb => vec![1_800.0, 2_100.0, 2_400.0, 2_700.0, 3_000.0, 3_600.0],
+            Mode::Am => vec![4_000.0, 6_000.0, 8_000.0, 10_000.0, 12_000.0, 16_000.0],
+            Mode::Nfm => vec![6_000.0, 8_000.0, 11_000.0, 12_500.0, 16_000.0, 25_000.0],
+            Mode::Wfm => vec![100_000.0, 150_000.0, 180_000.0, 200_000.0, 230_000.0],
+            _ => vec![],
         };
+        // The mode's own width is always a preset, and choosing it is the
+        // reset: no separate key to find once the filter has wandered.
+        let home = app.modes.iter().find(|c| c.mode == mode).map(|c| c.bandwidth_hz).filter(|w| *w > 0.0);
+        if let Some(h) = home
+            && !presets.iter().any(|p| (p - h).abs() < 1.0)
+        {
+            presets.push(h);
+            presets.sort_by(f32::total_cmp);
+        }
+        presets.retain(|p| *p >= range.min_width_hz - 1.0 && *p <= range.max_width_hz + 1.0);
+        if presets.is_empty() {
+            presets.push(width);
+        }
         let around = |w: f32| -> (f32, f32) {
             match mode {
                 Mode::Usb => (lo, (lo + w).min(range.max_edge_hz)),
@@ -346,27 +359,90 @@ fn filter(app: &mut App, ui: &mut Ui, width_px: f32) {
             }
         };
         let mut set: Option<(f32, f32)> = None;
-        // As many presets as the section has room for: where some must go,
-        // the ones either side of the width in use stay.
-        let fit = (((width_px - if custom { 58.0 } else { 0.0 }) / 47.0).floor() as usize).max(2).min(presets.len());
+        let mut reset = false;
+        let is_home = |p: f32| home.is_some_and(|h| (p - h).abs() < 1.0);
+        let label_of = |p: f32| format!("{}k", format!("{:.1}", p / 1000.0).trim_end_matches(".0"));
+        // Arrows either side always reach the next preset narrower and
+        // wider, so a narrow bay never strands the width at one end.
+        let narrower = presets.iter().rev().copied().find(|p| *p < width - 1.0);
+        let wider = presets.iter().copied().find(|p| *p > width + 1.0);
+        // Between them, as many presets as fit, grown outward from the one
+        // nearest the width in use so its neighbors on both sides show.
+        const GAP_X: f32 = 3.0;
+        let chip_w = |p: f32| ui.painter().layout_no_wrap(label_of(p), theme::mono_bold(10.5), egui::Color32::PLACEHOLDER).size().x + 14.0 + GAP_X;
+        let widths: Vec<f32> = presets.iter().map(|p| chip_w(*p)).collect();
+        let room = width_px - 2.0 * (20.0 + GAP_X);
         let near = presets.iter().enumerate().min_by(|a, b| (a.1 - width).abs().total_cmp(&(b.1 - width).abs())).map_or(0, |(i, _)| i);
-        let first = near.saturating_sub(fit / 2).min(presets.len() - fit);
-        ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = 3.0;
-            for p in &presets[first..first + fit] {
-                let label = format!("{}k", format!("{:.1}", p / 1000.0).trim_end_matches(".0"));
-                if widgets::chip_key(ui, &label, (width - p).abs() < 1.0, theme::AMBER).clicked() {
-                    set = Some(around(*p));
+        let (mut first, mut last, mut used) = (near, near, widths[near]);
+        loop {
+            let right = (last + 1 < presets.len()).then(|| widths[last + 1]).filter(|w| used + w <= room);
+            if let Some(w) = right {
+                last += 1;
+                used += w;
+            }
+            let left = (first > 0).then(|| widths[first - 1]).filter(|w| used + w <= room);
+            if let Some(w) = left {
+                first -= 1;
+                used += w;
+            }
+            if right.is_none() && left.is_none() {
+                break;
+            }
+        }
+        let row = ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = GAP_X;
+            if widgets::step_chip(ui, false, narrower.is_some()).on_hover_text("Narrower (wheel down over the presets)").clicked()
+                && let Some(p) = narrower
+            {
+                set = Some(around(p));
+            }
+            for p in &presets[first..=last] {
+                let on = (width - p).abs() < 1.0;
+                let mut r = widgets::chip_key(ui, &label_of(*p), on, theme::AMBER);
+                if is_home(*p) {
+                    // A green pip marks the mode's own filter.
+                    let c = r.rect.right_top() + vec2(-4.0, 4.0);
+                    ui.painter().circle_filled(c, 2.0, if custom { theme::OK } else { alpha(theme::OK, 0.6) });
+                    r = r.on_hover_text(if custom { "The mode's own filter — click to reset" } else { "The mode's own filter (in use)" });
+                }
+                if r.clicked() {
+                    if is_home(*p) {
+                        reset = true;
+                    } else {
+                        set = Some(around(*p));
+                    }
                 }
             }
-            if custom && widgets::chip_key(ui, "RESET", false, theme::OK).on_hover_text("Back to the mode's own filter").clicked() {
-                if b.is_some() {
-                    app.post("/api/sdr/filter", json!({ "reset": true, "mode": mode.wire() }));
-                } else {
-                    app.reset_filter();
-                }
+            if widgets::step_chip(ui, true, wider.is_some()).on_hover_text("Wider (wheel up over the presets)").clicked()
+                && let Some(p) = wider
+            {
+                set = Some(around(p));
             }
         });
+        if row.response.contains_pointer() {
+            let notches = widgets::wheel(ui);
+            if notches != 0.0 {
+                widgets::eat_scroll(ui);
+                if let Some(p) = if notches > 0.0 { wider } else { narrower } {
+                    set = Some(around(p));
+                }
+            }
+        }
+        // Stepping onto the mode's own width is the reset too, so it lands
+        // with the mode's own edges (sideband filters sit off the carrier).
+        if let Some((l, h)) = set
+            && is_home(h - l)
+        {
+            set = None;
+            reset = true;
+        }
+        if reset && custom {
+            if b.is_some() {
+                app.post("/api/sdr/filter", json!({ "reset": true, "mode": mode.wire() }));
+            } else {
+                app.reset_filter();
+            }
+        }
         let mut wv = width as f64;
         let (ch, _) = Fader {
             value: &mut wv,
