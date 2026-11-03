@@ -32,6 +32,13 @@ pub struct AmDemod {
 
 impl AmDemod {
     pub fn new(fs: f64) -> Self {
+        Self::with_audio_lowpass(fs, AM_VOICE_LOWPASS_HZ)
+    }
+
+    /// With the audio band ending at `audio_hz`: half the receive filter's
+    /// width, since AM carries the same audio in both sidebands, so a wider
+    /// filter on broadcast AM brings its treble back.
+    pub fn with_audio_lowpass(fs: f64, audio_hz: f32) -> Self {
         let fs32 = fs as f32;
         Self {
             prev: Complex32::new(0.0, 0.0),
@@ -40,7 +47,9 @@ impl AmDemod {
             agc: 1.0,
             agc_tau: crate::agc::AgcSpeed::Medium.am_tau_s() * fs32,
             fs: fs32,
-            voice_lp: Cascade::lowpass(AM_VOICE_LOWPASS_HZ, fs32, 2),
+            // True Butterworth: flat to the corner, −3 dB there. Identical
+            // Q = 0.707 sections were −3 dB about a fifth of the way below it.
+            voice_lp: Cascade::butterworth_lowpass(audio_hz.min(fs32 * 0.45), fs32, 2),
             // Removes the detected carrier (DC) without touching the
             // modulation sidebands above it.
             hp: OnePole::new(0.0002 * fs32),

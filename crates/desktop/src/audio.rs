@@ -1,7 +1,9 @@
 //! The speaker: server audio into the sound card, at whatever rate it has.
 //!
-//! The server's clock and the sound card's never quite agree (WFM arrives at
-//! 48 076.9 S/s against a 48 000 card), so the resampler steers its ratio by
+//! Audio arrives at the mode's rate (51.2 kHz for WFM, 16 or 48 kHz for
+//! voice) and is resampled to the card's through a windowed-sinc
+//! interpolator, so the conversion adds nothing audible. The server's clock
+//! and the sound card's never quite agree either, so the resampler steers its ratio by
 //! the queue depth: a queue running long plays a hair faster, one running
 //! short a hair slower, never more than half a percent — far under what an
 //! ear notices, and enough to hold the delay steady for hours. A queue that
@@ -42,13 +44,100 @@ struct Shared {
     drift_ppm: f64,
     /// A recording being played back in place of the live audio.
     clip: Option<Clip>,
+    /// The interpolator for `in_rate` to `out_rate`, built off the audio
+    /// thread when either changes.
+    sinc: Option<Sinc>,
 }
 
 struct Clip {
     samples: Vec<f32>,
     rate: f64,
     pos: f64,
+    sinc: Sinc,
 }
+
+/// Taps in the interpolator: half before the point it reads, half after.
+const TAPS: usize = 48;
+/// Fractional positions tabulated; reads in between blend the two nearest.
+const PHASES: usize = 256;
+/// Kaiser window shape: about 90 dB down outside the passband.
+const KAISER_BETA: f64 = 8.6;
+
+/// A windowed-sinc interpolator for one pair of rates: flat through the
+/// audio, its cutoff under both Nyquists, so a rate change neither folds
+/// treble back as harshness nor leaves images of a 16 kHz voice stream in
+/// the top octave. (A four-point Hermite left products 17–32 dB under the
+/// signal, worst on broadcast treble.)
+struct Sinc {
+    rates: (u64, u64),
+    /// `PHASES + 1` rows of `TAPS`, one per fractional position.
+    table: Vec<f32>,
+}
+
+impl Sinc {
+    fn new(in_rate: f64, out_rate: f64) -> Self {
+        // The passband ends a little under the lower Nyquist, in units of
+        // the input's.
+        let fc = (out_rate / in_rate.max(1.0)).min(1.0) * 0.90;
+        let half = (TAPS / 2) as f64;
+        let i0 = |x: f64| {
+            let (mut sum, mut term, mut k) = (1.0, 1.0, 1.0);
+            while term > 1e-12 * sum {
+                term *= (x / (2.0 * k)).powi(2);
+                sum += term;
+                k += 1.0;
+            }
+            sum
+        };
+        let norm = i0(KAISER_BETA);
+        let mut table = Vec::with_capacity((PHASES + 1) * TAPS);
+        for p in 0..=PHASES {
+            let frac = p as f64 / PHASES as f64;
+            let row: Vec<f64> = (0..TAPS)
+                .map(|k| {
+                    // Distance from the point being read, in input samples.
+                    let x = k as f64 - (half - 1.0) - frac;
+                    let r = x / half;
+                    if r.abs() >= 1.0 {
+                        return 0.0;
+                    }
+                    let a = std::f64::consts::PI * fc * x;
+                    let sinc = if a.abs() < 1e-9 { 1.0 } else { a.sin() / a };
+                    fc * sinc * i0(KAISER_BETA * (1.0 - r * r).sqrt()) / norm
+                })
+                .collect();
+            // Unity gain at DC for every position.
+            let sum: f64 = row.iter().sum();
+            table.extend(row.iter().map(|v| (v / sum) as f32));
+        }
+        Sinc { rates: Self::key(in_rate, out_rate), table }
+    }
+
+    fn key(in_rate: f64, out_rate: f64) -> (u64, u64) {
+        (in_rate.round() as u64, out_rate.round() as u64)
+    }
+
+    fn fits(&self, in_rate: f64, out_rate: f64) -> bool {
+        self.rates == Self::key(in_rate, out_rate)
+    }
+
+    /// The signal `frac` of a sample after tap `TAPS / 2 - 1`, from the
+    /// `TAPS` samples `get` returns.
+    fn at(&self, get: impl Fn(usize) -> f32, frac: f64) -> f32 {
+        let p = (frac.clamp(0.0, 1.0) * PHASES as f64).min(PHASES as f64 - 1e-6);
+        let i = p as usize;
+        let t = (p - i as f64) as f32;
+        let (r0, r1) = (&self.table[i * TAPS..(i + 1) * TAPS], &self.table[(i + 1) * TAPS..(i + 2) * TAPS]);
+        let (mut a, mut b) = (0f32, 0f32);
+        for k in 0..TAPS {
+            let x = get(k);
+            a += r0[k] * x;
+            b += r1[k] * x;
+        }
+        a + (b - a) * t
+    }
+}
+
 
 pub struct Player {
     shared: Arc<Mutex<Shared>>,
@@ -146,7 +235,11 @@ impl Player {
         };
         let channels = cfg.channels() as usize;
         let config: cpal::StreamConfig = cfg.config();
-        self.shared.lock().unwrap().out_rate = config.sample_rate as f64;
+        {
+            let mut s = self.shared.lock().unwrap();
+            s.out_rate = config.sample_rate as f64;
+            s.sinc = Some(Sinc::new(s.in_rate, s.out_rate));
+        }
         let shared = self.shared.clone();
         let err_name = name.clone();
         let on_err = move |e: cpal::Error| eprintln!("audio output {err_name}: {e}");
@@ -207,12 +300,11 @@ impl Player {
 
     /// Play a recording instead of the live audio until it ends.
     pub fn play_clip(&self, samples: Vec<i16>, rate: u32) {
+        let rate = rate.max(1) as f64;
+        let out_rate = self.shared.lock().unwrap().out_rate;
+        let sinc = Sinc::new(rate, out_rate);
         let mut s = self.shared.lock().unwrap();
-        s.clip = Some(Clip {
-            samples: samples.iter().map(|&v| v as f32 / 32768.0).collect(),
-            rate: rate.max(1) as f64,
-            pos: 0.0,
-        });
+        s.clip = Some(Clip { samples: samples.iter().map(|&v| v as f32 / 32768.0).collect(), rate, pos: 0.0, sinc });
     }
 
     pub fn stop_clip(&self) {
@@ -279,6 +371,7 @@ impl Player {
             s.queue.clear();
             s.priming = true;
             s.phase = 0.0;
+            s.sinc = Some(Sinc::new(s.in_rate, s.out_rate));
             if let Some(w) = s.recorder.as_mut() {
                 w.note_rate_change(rate_hz);
             }
@@ -295,14 +388,6 @@ impl Player {
             s.trimmed += 1;
         }
     }
-}
-
-/// Catmull-Rom between p1 and p2.
-fn hermite(p0: f32, p1: f32, p2: f32, p3: f32, t: f32) -> f32 {
-    let c1 = 0.5 * (p2 - p0);
-    let c2 = p0 - 2.5 * p1 + 2.0 * p2 - 0.5 * p3;
-    let c3 = 0.5 * (p3 - p0) + 1.5 * (p1 - p2);
-    ((c3 * t + c2) * t + c1) * t + p1
 }
 
 fn fill(shared: &Mutex<Shared>, out: &mut [f32], channels: usize) {
@@ -331,8 +416,11 @@ fn fill(shared: &Mutex<Shared>, out: &mut [f32], channels: usize) {
         for f in 0..frames {
             let i = clip.pos as usize;
             let v = if i + 1 < clip.samples.len() {
-                let t = (clip.pos - i as f64) as f32;
-                clip.samples[i] * (1.0 - t) + clip.samples[i + 1] * t
+                let samples = &clip.samples;
+                // Taps run from TAPS/2 − 1 before the point to TAPS/2 after;
+                // past either end of the clip is silence.
+                let get = |k: usize| (i + k).checked_sub(TAPS / 2 - 1).and_then(|j| samples.get(j)).copied().unwrap_or(0.0);
+                clip.sinc.at(get, clip.pos - i as f64)
             } else {
                 0.0
             };
@@ -355,8 +443,13 @@ fn fill(shared: &Mutex<Shared>, out: &mut [f32], channels: usize) {
         s.level_rms = (sum / frames.max(1) as f32).sqrt();
         return;
     }
+    // Built in `push` and `open`; here only if neither has run yet.
+    if !s.sinc.as_ref().is_some_and(|k| k.fits(s.in_rate, s.out_rate)) {
+        s.sinc = Some(Sinc::new(s.in_rate, s.out_rate));
+    }
+    let sinc = s.sinc.take().expect("built above");
     for f in 0..frames {
-        let v = if s.priming || s.queue.len() < 4 {
+        let v = if s.priming || s.queue.len() < TAPS {
             if !s.priming {
                 s.priming = true;
                 s.underruns += 1;
@@ -364,8 +457,9 @@ fn fill(shared: &Mutex<Shared>, out: &mut [f32], channels: usize) {
             0.0
         } else {
             let q = &s.queue;
-            let t = s.phase as f32;
-            let v = hermite(q[0], q[1], q[2], q[3], t);
+            // The point read sits between q[TAPS/2 − 1] and q[TAPS/2]:
+            // half a filter's length of delay, about half a millisecond.
+            let v = sinc.at(|k| q[k], s.phase);
             s.phase += step;
             let whole = s.phase.floor() as usize;
             if whole > 0 {
@@ -388,6 +482,7 @@ fn fill(shared: &Mutex<Shared>, out: &mut [f32], channels: usize) {
             out[base] = v * gain;
         }
     }
+    s.sinc = Some(sinc);
     let rms = (sum / frames.max(1) as f32).sqrt();
     s.level_peak = peak.max(s.level_peak * 0.92);
     s.level_rms = rms;
@@ -465,11 +560,49 @@ pub fn wav_header(rate: u32, samples: u64) -> [u8; 44] {
 mod tests {
     use super::*;
 
+    /// Everything the resampler adds, as dB under a tone it carries: the
+    /// residual against the exact sine at each output instant.
+    fn added_db(in_rate: f64, out_rate: f64, hz: f64) -> f64 {
+        let sinc = Sinc::new(in_rate, out_rate);
+        let x: Vec<f32> = (0..20_000).map(|n| (std::f64::consts::TAU * hz * n as f64 / in_rate).sin() as f32).collect();
+        let (mut err, mut sig) = (0f64, 0f64);
+        let mut pos = 200.0;
+        while pos < 19_000.0 {
+            let i = pos as usize;
+            let got = sinc.at(|k| x[i + k - (TAPS / 2 - 1)], pos - i as f64) as f64;
+            let want = (std::f64::consts::TAU * hz * pos / in_rate).sin();
+            err += (got - want).powi(2);
+            sig += want * want;
+            pos += in_rate / out_rate;
+        }
+        10.0 * (err / sig).log10()
+    }
+
     #[test]
-    fn hermite_passes_through_its_points() {
-        assert_eq!(hermite(0.0, 1.0, 2.0, 3.0, 0.0), 1.0);
-        assert!((hermite(0.0, 1.0, 2.0, 3.0, 1.0) - 2.0).abs() < 1e-6);
-        assert!((hermite(0.0, 1.0, 2.0, 3.0, 0.5) - 1.5).abs() < 1e-6);
+    fn broadcast_treble_comes_through_clean() {
+        // WFM's 51.2 kHz to a 48 kHz card, up to the 15 kHz the server keeps.
+        for hz in [1_000.0, 5_000.0, 10_000.0, 12_000.0, 15_000.0] {
+            let db = added_db(51_200.0, 48_000.0, hz);
+            assert!(db < -80.0, "{hz} Hz: {db:.1} dB added");
+        }
+    }
+
+    #[test]
+    fn voice_upsampled_leaves_no_images() {
+        // A 16 kHz voice stream to a 48 kHz card.
+        for hz in [300.0, 1_000.0, 3_000.0, 5_000.0] {
+            let db = added_db(16_000.0, 48_000.0, hz);
+            assert!(db < -80.0, "{hz} Hz: {db:.1} dB added");
+        }
+    }
+
+    #[test]
+    fn the_interpolator_passes_dc_at_every_position() {
+        let sinc = Sinc::new(51_200.0, 48_000.0);
+        for p in 0..=20 {
+            let v = sinc.at(|_| 0.5, p as f64 / 20.0);
+            assert!((v - 0.5).abs() < 1e-5, "{v} at {p}/20");
+        }
     }
 
     #[test]

@@ -117,8 +117,13 @@ impl NbfmDemod {
             scale: fs32 / (std::f32::consts::TAU * deviation_hz),
             deviation_hz,
             deemph: OnePole::new(DEEMPHASIS_TAU * fs32),
-            voice_hp: Cascade::highpass(VOICE_CORNER_HZ, fs32, 2),
-            voice_lp: Cascade::lowpass(VOICE_LOWPASS_HZ, fs32, 2),
+            // True Butterworth edges: −3 dB at 300 Hz and 3 kHz and flat
+            // between. Identical Q = 0.707 sections were −6 dB at each corner,
+            // −3 dB at about 375 Hz and 2.4 kHz, so voices came out thin and
+            // dull. Sixth order below keeps the top CTCSS tone (250.3 Hz) as
+            // far down as the old cascade did, and the lower tones further.
+            voice_hp: Cascade::butterworth_highpass(VOICE_CORNER_HZ, fs32, 3),
+            voice_lp: Cascade::butterworth_lowpass(VOICE_LOWPASS_HZ, fs32, 2),
             sub_lp: Cascade::lowpass(SUBAUDIBLE_CORNER_HZ, fs32, 2),
             noise_hp: Cascade::highpass(NOISE_CORNER_HZ, fs32, 2),
             noise_lp: Cascade::lowpass(NOISE_BAND_TOP_HZ.min(fs32 * 0.45), fs32, 2),
@@ -243,12 +248,12 @@ mod tests {
             rms(&out.voice[4096..])
         };
         // One pole at 212 Hz: |H| is 0.209 at 1 kHz and 0.108 at 2 kHz
-        // (ratio 1.93). The 3 kHz voice LPF (two Q=0.707 sections) then
-        // takes another ~1.6 dB off 2 kHz, so the combined ratio is ~2.18.
+        // (ratio 1.93). The 3 kHz Butterworth voice LPF takes only ~0.2 dB
+        // off 2 kHz, so the combined ratio is ~1.97.
         let ratio = level(1000.0) / level(2000.0);
         assert!(
-            (ratio / 2.18 - 1.0).abs() < 0.1,
-            "1 kHz / 2 kHz ratio {ratio:.2}, expected about 2.18"
+            (ratio / 1.97 - 1.0).abs() < 0.05,
+            "1 kHz / 2 kHz ratio {ratio:.2}, expected about 1.97"
         );
     }
 

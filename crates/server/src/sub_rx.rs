@@ -6,10 +6,11 @@
 //! for the new centre, and if its frequency is no longer inside the span it
 //! stops and says why, rather than playing whatever the chain now points at.
 
-use crate::sdr::{SdrMode, WFM_DEEMPHASIS_TAU, WFM_DEVIATION_HZ};
+use crate::sdr::{SdrMode, WFM_DEEMPHASIS_TAU, WFM_DEVIATION_HZ, wfm_audio_filter};
 use num_complex::Complex32;
 use scannerd_dsp::{DecodeChain, OnePole};
 use scannerd_engine::am::AmDemod;
+use scannerd_engine::biquad::Cascade;
 use scannerd_engine::nbfm::NbfmDemod;
 use scannerd_engine::ssb::{Sideband, SsbDemod};
 use serde::Serialize;
@@ -42,7 +43,7 @@ enum Demod {
     Fm { fm: NbfmDemod, disc: Vec<f32>, dc: OnePole },
     Am { am: AmDemod },
     Ssb { ssb: SsbDemod },
-    Wfm { fm: NbfmDemod, disc: Vec<f32>, deemph: OnePole, decim: usize, phase: usize, acc: f32 },
+    Wfm { fm: NbfmDemod, disc: Vec<f32>, deemph: OnePole, lp: Cascade, decim: usize, phase: usize },
 }
 
 pub struct SubRx {
@@ -84,7 +85,11 @@ impl SubRx {
         chain.set_offset(self.freq_hz - centre - lo_off);
         let fs = chain.fs_out();
         self.demod = Some(match self.mode {
-            SdrMode::Am => Demod::Am { am: AmDemod::new(fs) },
+            SdrMode::Am => {
+                // The audio band follows the filter, as on receiver A.
+                let (lo, hi) = self.mode.filter_edges();
+                Demod::Am { am: AmDemod::with_audio_lowpass(fs, ((hi - lo) / 2.0).clamp(2_500.0, 10_000.0)) }
+            }
             SdrMode::Usb | SdrMode::Lsb => {
                 let (lo, hi) = self.mode.filter_edges();
                 let side = if self.mode == SdrMode::Usb { Sideband::Upper } else { Sideband::Lower };
@@ -94,9 +99,12 @@ impl SubRx {
                 fm: NbfmDemod::with_deviation(fs, WFM_DEVIATION_HZ),
                 disc: Vec::new(),
                 deemph: OnePole::new(WFM_DEEMPHASIS_TAU * fs as f32),
+                // Band-limited before it is decimated, as on receiver A: an
+                // average alone folds the pilot and the stereo subcarrier
+                // back into the audio as whistle and hiss.
+                lp: wfm_audio_filter(fs),
                 decim: (fs / AUDIO_RATE).round().max(1.0) as usize,
                 phase: 0,
-                acc: 0.0,
             },
             _ => Demod::Fm {
                 fm: NbfmDemod::with_deviation(fs, NFM_DEVIATION_HZ),
@@ -151,14 +159,13 @@ impl SubRx {
                 }
                 fs
             }
-            Demod::Wfm { fm, disc, deemph, decim, phase, acc } => {
+            Demod::Wfm { fm, disc, deemph, lp, decim, phase } => {
                 fm.discriminator_hz(&self.iq, disc);
                 for &hz in disc.iter() {
-                    *acc += deemph.process(hz / WFM_DEVIATION_HZ);
+                    let v = lp.process(deemph.process(hz / WFM_DEVIATION_HZ));
                     *phase += 1;
                     if *phase >= *decim {
-                        self.audio.push((*acc / *decim as f32).clamp(-1.0, 1.0));
-                        *acc = 0.0;
+                        self.audio.push(v.clamp(-1.0, 1.0));
                         *phase = 0;
                     }
                 }

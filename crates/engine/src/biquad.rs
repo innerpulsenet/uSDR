@@ -75,6 +75,15 @@ fn common(fc: f32, fs: f32, q: f32) -> (f32, f32, f32, f32) {
     (cs, alpha, 1.0 / (1.0 + alpha), w0)
 }
 
+/// The Qs of the `n` pole pairs of a Butterworth filter of order `2n`.
+fn butterworth_qs(n: usize) -> impl Iterator<Item = f32> {
+    let order = 2 * n;
+    (1..=n).map(move |k| {
+        let theta = (2 * k - 1) as f32 * std::f32::consts::PI / (2 * order) as f32;
+        1.0 / (2.0 * theta.cos())
+    })
+}
+
 /// A cascade of identical sections, for when one is not steep enough.
 #[derive(Clone, Debug)]
 pub struct Cascade {
@@ -105,15 +114,13 @@ impl Cascade {
     /// then 12n dB/octave. Identical 0.707 sections droop by 3 dB each at
     /// the corner; these take the pole pairs' own Qs instead.
     pub fn butterworth_lowpass(fc: f32, fs: f32, n: usize) -> Self {
-        let order = 2 * n;
-        Self::new(
-            (1..=n)
-                .map(|k| {
-                    let theta = (2 * k - 1) as f32 * std::f32::consts::PI / (2 * order) as f32;
-                    Biquad::lowpass(fc, fs, 1.0 / (2.0 * theta.cos()))
-                })
-                .collect(),
-        )
+        Self::new(butterworth_qs(n).map(|q| Biquad::lowpass(fc, fs, q)).collect())
+    }
+
+    /// A true Butterworth high-pass of order `2n`, the low-pass's mirror:
+    /// flat above `fc`, −3 dB there, 12n dB/octave below.
+    pub fn butterworth_highpass(fc: f32, fs: f32, n: usize) -> Self {
+        Self::new(butterworth_qs(n).map(|q| Biquad::highpass(fc, fs, q)).collect())
     }
 
     /// Add a section after the others.
@@ -190,6 +197,27 @@ mod tests {
             voice < -20.0,
             "1 kHz speech should be down, got {voice:.1} dB"
         );
+    }
+
+    /// The voice band's own edges: flat between them, −3 dB at each, and the
+    /// highest CTCSS tone still well down.
+    #[test]
+    fn butterworth_voice_edges_are_minus_three_db() {
+        let fs = 48_000.0;
+        let hp = || Cascade::butterworth_highpass(300.0, fs, 3);
+        let lp = || Cascade::butterworth_lowpass(3_000.0, fs, 2);
+        for (got, want, what) in [
+            (response_db(hp(), 300.0, fs), -3.0, "HP at 300 Hz"),
+            (response_db(lp(), 3_000.0, fs), -3.0, "LP at 3 kHz"),
+            (response_db(hp(), 1_000.0, fs), 0.0, "HP at 1 kHz"),
+            (response_db(lp(), 2_000.0, fs), -0.2, "LP at 2 kHz"),
+        ] {
+            assert!((got - want).abs() < 0.3, "{what}: {got:.2} dB, want {want:.1}");
+        }
+        let top_tone = response_db(hp(), 250.3, fs);
+        assert!(top_tone < -9.5, "250.3 Hz CTCSS {top_tone:.1} dB");
+        let low_tone = response_db(hp(), 192.8, fs);
+        assert!(low_tone < -20.0, "192.8 Hz CTCSS {low_tone:.1} dB");
     }
 
     #[test]

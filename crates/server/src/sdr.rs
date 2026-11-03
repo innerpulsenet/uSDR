@@ -112,7 +112,7 @@ impl Default for Processing {
 
 /// The broadcast audio band: a 12th-order Butterworth at 15 kHz and a notch
 /// on the 19 kHz stereo pilot, run at the discriminator's rate.
-fn wfm_audio_filter(fs: f64) -> Cascade {
+pub(crate) fn wfm_audio_filter(fs: f64) -> Cascade {
     let fs = fs as f32;
     Cascade::butterworth_lowpass(15_000.0, fs, 6).then(Biquad::notch(19_000.0, fs, 4.0))
 }
@@ -1997,7 +1997,13 @@ impl Demod {
             SdrMode::Nfm => Demod::Nfm,
             SdrMode::Scan => Demod::Scan,
             SdrMode::Am => Demod::Am {
-                demod: scannerd_engine::am::AmDemod::new(fs_out),
+                demod: {
+                    // The audio band follows the filter: half its width, as
+                    // AM sends the audio in both sidebands. A filter change
+                    // rebuilds the demodulator (see `remix_inspect`).
+                    let (lo, hi) = mode.filter_edges();
+                    scannerd_engine::am::AmDemod::with_audio_lowpass(fs_out, ((hi - lo) / 2.0).clamp(2_500.0, 10_000.0))
+                },
                 audio: Vec::new(),
             },
             SdrMode::Usb | SdrMode::Lsb => Demod::Ssb {
