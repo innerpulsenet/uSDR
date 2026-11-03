@@ -1879,17 +1879,11 @@ impl SliceFlag {
             (None, Some(s)) => format!("SNR {s:.1} dB"),
             _ => String::new(),
         };
-        // The card grows to fit a long protocol name, up to a point. It is
-        // sized by the widest SNR, not the one showing, so it does not
-        // breathe (or, left of the line, slide) as the figure changes.
+        // One width whatever it says or whether it is recording (the line is
+        // cut to it), so the card's edges, and its left edge when it sits
+        // left of the carrier, hold still as the protocol and SNR change.
         let rec_w = if self.recording { 16.0 } else { 0.0 };
-        let sizing = match (&self.protocol, self.snr_db) {
-            (Some(p), Some(_)) => format!("{p} · SNR 99.9 dB"),
-            (None, Some(_)) => "SNR 99.9 dB".into(),
-            _ => bottom.clone(),
-        };
-        let bottom_w = painter.layout_no_wrap(sizing, theme::sans(11.0), Color32::PLACEHOLDER).size().x;
-        let w = (bottom_w + 16.0 + rec_w).clamp(168.0, 240.0);
+        let w = 248.0;
         let h = 62.0;
         let right_side = x + 10.0 + w < pan.right() - 4.0;
         let left = if right_side { x + 10.0 } else { x - 10.0 - w };
@@ -1934,12 +1928,11 @@ impl SliceFlag {
         let snr = self.snr_db.map(|s| format!("SNR {s:.1}"));
         // Sized by what it says, within bounds, and by the widest SNR so it
         // does not breathe as the figure changes.
-        let who_w = painter.layout_no_wrap(format!("{}{kind}", rds.station), who_font.clone(), Color32::PLACEHOLDER).size().x
-            + snr.as_ref().map_or(0.0, |_| painter.layout_no_wrap("SNR 99.9".into(), theme::mono(10.0), Color32::PLACEHOLDER).size().x + 12.0);
-        let now_w = rds.now.as_ref().map_or(0.0, |(n, _)| painter.layout_no_wrap(n.clone(), theme::sans(11.5), Color32::PLACEHOLDER).size().x);
-        let w = (who_w.max(now_w) + 16.0 + rec_w).clamp(200.0, 300.0);
-        // A line for what is on only once there is something to say.
-        let h = if rds.now.is_some() { 84.0 } else { 64.0 };
+        // One size whatever arrives or whether it is recording (each line is
+        // cut to it), so the card does not grow under the pointer as the
+        // station's text comes in.
+        let w = 296.0;
+        let h = 84.0;
         let right_side = x + 10.0 + w < pan.right() - 4.0;
         let left = if right_side { x + 10.0 } else { x - 10.0 - w };
         let top = (pan.top() + 8.0).max((trace_y - h - 14.0).min(pan.top() + 8.0));

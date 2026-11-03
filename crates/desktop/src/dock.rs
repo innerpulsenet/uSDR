@@ -74,7 +74,10 @@ fn tab(ui: &mut Ui, label: &str, count: Option<usize>, on: bool) -> egui::Respon
     let p = ui.painter().clone();
     let g = p.layout_no_wrap(label.to_string(), theme::sans_semibold(12.0), egui::Color32::PLACEHOLDER);
     let badge = count.map(|n| p.layout_no_wrap(n.to_string(), theme::mono_bold(10.0), egui::Color32::PLACEHOLDER));
-    let bw = badge.as_ref().map_or(0.0, |b| b.size().x + 10.0 + 6.0);
+    // The pill holds three digits whatever the count, so a log growing past
+    // 9 or 99 does not move the tabs after it.
+    let pill_w = |b: &std::sync::Arc<egui::Galley>| b.size().x.max(p.layout_no_wrap("999".into(), theme::mono_bold(10.0), egui::Color32::PLACEHOLDER).size().x) + 10.0;
+    let bw = badge.as_ref().map_or(0.0, |b| pill_w(b) + 6.0);
     let (rect, resp) = ui.allocate_exact_size(vec2(g.size().x + bw + 16.0, 26.0), egui::Sense::click());
     resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, on, label));
     let hover = ui.ctx().animate_bool_with_time(resp.id.with("hv"), resp.hovered(), 0.12);
@@ -82,7 +85,7 @@ fn tab(ui: &mut Ui, label: &str, count: Option<usize>, on: bool) -> egui::Respon
     let y = rect.center().y - 1.0;
     p.galley(egui::pos2(rect.left() + 8.0, y - g.size().y / 2.0), g.clone(), c);
     if let (Some(b), Some(n)) = (badge, count) {
-        let pill = egui::Rect::from_min_size(egui::pos2(rect.left() + 8.0 + g.size().x + 6.0, y - 8.0), vec2(b.size().x + 10.0, 16.0));
+        let pill = egui::Rect::from_min_size(egui::pos2(rect.left() + 8.0 + g.size().x + 6.0, y - 8.0), vec2(pill_w(&b), 16.0));
         let (fill, text) = if n > 0 && on { (alpha(theme::AMBER, 0.22), theme::AMBER) } else if n > 0 { (theme::surface_3(), theme::text_2()) } else { (theme::surface_2(), theme::text_3()) };
         p.rect(pill, egui::CornerRadius::same(8), fill, egui::Stroke::new(1.0, if n > 0 && on { alpha(theme::AMBER, 0.5) } else { theme::line() }), egui::StrokeKind::Inside);
         p.galley(pill.center() - b.size() / 2.0, b, text);
@@ -150,10 +153,10 @@ fn decodes(app: &mut App, ui: &mut Ui) {
             let proto_w = visible.iter().map(|&i| app.decodes[i].ev.protocol.chars().count() + 3).max().unwrap_or(6).clamp(6, 11) as f32 * char_w;
             let kind_w = visible.iter().map(|&i| app.decodes[i].ev.kind.chars().count()).max().unwrap_or(4).clamp(4, 16) as f32 * char_w;
             let count = if visible.len() == total { format!("{total} frames") } else { format!("{} of {total} frames", visible.len()) };
-            if total == 0 {
-                ui.label(mono(count, theme::text_3()));
-            } else {
-                // Column heads over the columns, the count at the end.
+            {
+                // Column heads over the columns, the count at the end: there
+                // from the start, so the first frame does not push the list
+                // down a row.
                 let head = |t: &str| RichText::new(t).font(theme::mono(10.0)).color(theme::text_3()).extra_letter_spacing(0.6);
                 let r = ui.horizontal(|ui| {
                     ui.set_min_height(18.0);

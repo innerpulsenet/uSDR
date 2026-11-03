@@ -27,14 +27,20 @@ pub fn toolbar(app: &mut App, ui: &mut Ui) {
         // Span and zoom.
         let s = app.status.clone();
         let span = (s.max_freq_hz - s.min_freq_hz).max(s.rate_hz);
-        widgets::menu_chip(ui, &format!("SPAN {}", crate::tuning::fmt_short_hz(span)), theme::CYAN, |ui| {
+        // As wide as the widest span this radio offers, so a span change
+        // does not move the keys after it.
+        let spans: Vec<String> = s.rates_hz.iter().map(|r| format!("SPAN {}", crate::tuning::fmt_short_hz(*r))).collect();
+        let spans: Vec<&str> = spans.iter().map(String::as_str).collect();
+        widgets::menu_chip_fit(ui, &format!("SPAN {}", crate::tuning::fmt_short_hz(span)), &spans, theme::CYAN, |ui| {
             ui.set_min_width(300.0);
             span_zoom(app, ui);
         });
         if widgets::chip_key(ui, "−", false, theme::CYAN).on_hover_text("Zoom out (−)").clicked() {
             app.set_zoom(app.zoom_ui / 2.0);
         }
-        ui.label(RichText::new(format!("{:>4.1}×", app.zoom_ui.max(1.0))).font(theme::mono(10.5)).color(theme::text_2()));
+        // Padded to the widest zoom (32.0×), so + does not move under the
+        // pointer as the zoom grows.
+        ui.label(RichText::new(format!("{:>5.1}×", app.zoom_ui.max(1.0))).font(theme::mono(10.5)).color(theme::text_2()));
         if widgets::chip_key(ui, "+", false, theme::CYAN).on_hover_text("Zoom in (+)").clicked() {
             app.set_zoom(app.zoom_ui * 2.0);
         }
@@ -83,13 +89,15 @@ pub fn toolbar(app: &mut App, ui: &mut Ui) {
                 waterfall(app, ui);
             });
         } else {
-            widgets::menu_chip(ui, if v.auto_range { "RANGE AUTO" } else { "RANGE" }, theme::AMBER, |ui| {
+            widgets::menu_chip_fit(ui, if v.auto_range { "RANGE AUTO" } else { "RANGE" }, &["RANGE AUTO"], theme::AMBER, |ui| {
                 ui.set_min_width(260.0);
                 range(app, ui);
             });
             divider(ui);
             let label = format!("STYLE {}", app.prefs.view.style.label().to_uppercase());
-            widgets::menu_chip(ui, &label, theme::AMBER, |ui| style(app, ui));
+            let styles: Vec<String> = crate::spectrum::Style::ALL.iter().map(|s| format!("STYLE {}", s.label().to_uppercase())).collect();
+            let styles: Vec<&str> = styles.iter().map(String::as_str).collect();
+            widgets::menu_chip_fit(ui, &label, &styles, theme::AMBER, |ui| style(app, ui));
             widgets::menu_chip(ui, "WATERFALL", theme::AMBER, |ui| {
                 ui.set_min_width(280.0);
                 waterfall(app, ui);

@@ -1595,13 +1595,14 @@ impl App {
                 let b = ui.ctx().animate_bool_with_time(egui::Id::new("rx-b-wash"), self.active_b && self.status.rx2.is_some(), 0.2);
                 ui.painter().rect_filled(Rect::from_min_size(r.left_top(), vec2(16.0, 2.0)), CornerRadius::ZERO, theme::lerp(theme::EMBER, theme::VIOLET, b));
             });
-        // The toolbar's own items take about 870 px; the memories about 140
-        // for their label and STORE, 115 a stored slot and 26 an empty one.
+        // The toolbar's own items take about 880 px; the memories about 140
+        // for their label and STORE and a fixed width a slot, so where they
+        // go depends on the window alone, never on how many are stored.
         // The toolbar runs the width of the display, beside the column.
         let toolbar_room = ui.available_width() - if self.prefs.show_side { self.prefs.side_width } else { 0.0 };
-        let stored = self.memories().len();
-        let mem_w = 140.0 + 115.0 * stored as f32 + 26.0 * 8usize.saturating_sub(stored) as f32;
-        self.memories_on_toolbar = toolbar_room >= 870.0 + mem_w;
+        let slots = self.memories().len().max(8);
+        let mem_w = 140.0 + (crate::bar::SLOT_W + 4.0) * slots as f32;
+        self.memories_on_toolbar = toolbar_room >= 880.0 + mem_w;
         if self.prefs.show_memories && !self.memories_on_toolbar {
             egui::Panel::top("memories")
                 .exact_size(30.0)
@@ -1945,6 +1946,90 @@ mod tests {
         h.get_by_role_and_label(role, "A").click();
         h.run_steps(2);
         assert!(!h.state().app.active_b);
+    }
+
+    /// The top of the side column's card titled `title`, after a few frames.
+    fn card_top(h: &mut Harness<'static, T>, title: &str) -> f32 {
+        h.run_steps(4);
+        h.get_by_label(title).rect().top()
+    }
+
+    #[test]
+    fn the_side_column_holds_still_as_rds_arrives() {
+        let mut h = harness();
+        h.state_mut().app.status.mode = Mode::Wfm;
+        let base = proto::Rds { pi: "81C7".into(), pi_call: Some("WRCH".into()), locked: true, pilot: true, bler: 0.02, ..Default::default() };
+        let states = [
+            None,
+            Some(base.clone()),
+            Some(proto::Rds { ps: Some("Breaking".into()), ps_dynamic: true, rt_partial: Some("Matthew Wil\u{2591}\u{2591}r - Break".into()), rt_progress: 0.4, ..base.clone() }),
+            Some(proto::Rds {
+                ps: Some("Lite 100".into()),
+                ps_steady: true,
+                pty: Some(5),
+                pty_name: Some("Soft Adult Hits".into()),
+                tp: true,
+                rt: Some("Matthew Wilder - Break My Stride, and a long tail to wrap the line twice over".into()),
+                title: Some("Break My Stride".into()),
+                artist: Some("Matthew Wilder".into()),
+                clock_utc: Some("2026-11-03T19:32Z".into()),
+                clock_offset_min: Some(-300),
+                ..base.clone()
+            }),
+            Some(proto::Rds { locked: false, ..base.clone() }),
+        ];
+        let mut tops = Vec::new();
+        for rds in states {
+            h.state_mut().app.status.rds = rds;
+            tops.push(card_top(&mut h, "GAIN"));
+        }
+        assert!(tops.windows(2).all(|w| w[0] == w[1]), "the Gain card moved: {tops:?}");
+    }
+
+    #[test]
+    fn the_recorder_card_keeps_its_height() {
+        let mut h = harness();
+        let mut tops = Vec::new();
+        for (busy, note, err) in [(None, None, None), (Some("iq"), None, None), (None, Some("replayed 20 s through the decoders: 3 frames"), None), (None, None, Some("no IQ for 3s"))] {
+            let app = &mut h.state_mut().app;
+            app.recorder_busy = busy.map(String::from);
+            app.replay_note = note.map(String::from);
+            app.status.error = err.map(String::from);
+            tops.push(card_top(&mut h, "RADIO"));
+        }
+        assert!(tops.windows(2).all(|w| w[0] == w[1]), "the Radio card moved: {tops:?}");
+    }
+
+    #[test]
+    fn memory_slots_hold_their_places() {
+        let mut h = harness();
+        h.run_steps(3);
+        // Slot 8 is "FM BC" in the default bank.
+        let before = h.get_by_label("FM BC").rect();
+        let list = vec![
+            crate::prefs::Memory { name: "NOAA WX".into(), freq_hz: 162.475e6, mode: Mode::Nfm },
+            crate::prefs::Memory { name: "A".into(), freq_hz: 1.0e6, mode: Mode::Am },
+            crate::prefs::Memory { name: "A long name for a memory".into(), freq_hz: 146.52e6, mode: Mode::Nfm },
+        ];
+        h.state_mut().app.save_memories(list);
+        h.run_steps(3);
+        // Three slots of other lengths, the rest empty: slot 8 has not moved.
+        assert_eq!(h.get_by_label("empty slot 8").rect(), before);
+    }
+
+    #[test]
+    fn dock_tabs_hold_still_as_the_logs_grow() {
+        let mut h = harness();
+        h.run_steps(2);
+        let before = h.get_by_label("Scan").rect();
+        for n in 0..120 {
+            let ev = proto::DecodeEvent { protocol: "DMR".into(), kind: "burst".into(), summary: format!("frame {n}"), valid: true, fields: Default::default() };
+            h.state().wire.events.send(NetEvent::Decode { inspect_hz: 146.52e6, event: ev, at: SystemTime::now() }).unwrap();
+            if n == 8 || n == 9 || n == 99 || n == 119 {
+                h.run_steps(2);
+                assert_eq!(h.get_by_label("Scan").rect(), before, "after {} decodes", n + 1);
+            }
+        }
     }
 
     #[test]

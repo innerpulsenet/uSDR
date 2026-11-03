@@ -284,9 +284,37 @@ fn mode_tally(m: Mode) -> egui::Color32 {
     }
 }
 
+/// The listening modes, with AUTO and SCAN: receiver A's first row.
+const LISTEN: [Mode; 7] = [Mode::Nfm, Mode::Am, Mode::Usb, Mode::Lsb, Mode::Wfm, Mode::Auto, Mode::Scan];
+
+/// The MODE bay's width: the widest of what it shows for A and for B, so
+/// switching receivers does not move the bays after it.
+fn modes_width(ui: &Ui) -> f32 {
+    let chip = |l: &str| ui.painter().layout_no_wrap(l.to_string(), theme::mono_bold(10.5), egui::Color32::PLACEHOLDER).size().x + 14.0;
+    let row = |ms: &mut dyn Iterator<Item = Mode>| {
+        let ws: Vec<f32> = ms.map(|m| chip(m.label())).collect();
+        ws.iter().sum::<f32>() + 3.0 * ws.len().saturating_sub(1) as f32
+    };
+    let note = ui.painter().layout_no_wrap(B_NOTE.into(), theme::mono(10.5), egui::Color32::PLACEHOLDER).size().x;
+    row(&mut LISTEN.into_iter())
+        .max(row(&mut Mode::ALL.into_iter().filter(|m| !LISTEN.contains(m))))
+        .max(row(&mut B_MODES.into_iter()))
+        .max(note)
+}
+
+const B_NOTE: &str = "receiver B listens; the decoders run on A";
+
 fn modes(app: &mut App, ui: &mut Ui) {
     let b = app.status.rx2.clone().filter(|_| app.active_b);
-    bay(ui, "MODE", |ui| match b {
+    let w = modes_width(ui);
+    bay(ui, "MODE", |ui| {
+        ui.set_min_width(w);
+        modes_inner(app, ui, b)
+    });
+}
+
+fn modes_inner(app: &mut App, ui: &mut Ui, b: Option<usdr_proto::SubRx>) {
+    match b {
         Some(b) => {
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 3.0;
@@ -296,14 +324,13 @@ fn modes(app: &mut App, ui: &mut Ui) {
                     }
                 }
             });
-            ui.label(small("receiver B listens; the decoders run on A"));
+            ui.label(small(B_NOTE));
         }
         None => {
             // Listening modes and the two that pick for you on the first
             // row, the decoders on the second.
-            let listen = [Mode::Nfm, Mode::Am, Mode::Usb, Mode::Lsb, Mode::Wfm, Mode::Auto, Mode::Scan];
-            let decode: Vec<Mode> = Mode::ALL.iter().copied().filter(|m| !listen.contains(m)).collect();
-            for row in [&listen[..], &decode[..]] {
+            let decode: Vec<Mode> = Mode::ALL.iter().copied().filter(|m| !LISTEN.contains(m)).collect();
+            for row in [&LISTEN[..], &decode[..]] {
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = 3.0;
                     for m in row {
@@ -318,7 +345,7 @@ fn modes(app: &mut App, ui: &mut Ui) {
                 });
             }
         }
-    });
+    }
 }
 
 fn filter(app: &mut App, ui: &mut Ui, width_px: f32) {
@@ -919,9 +946,14 @@ pub fn memory_row(app: &mut App, ui: &mut Ui) {
     ui.horizontal(|ui| memory_chips(app, ui));
 }
 
+/// Every memory slot's width, filled or empty, so a slot is always in the
+/// same place: storing one never moves the slots after it.
+pub const SLOT_W: f32 = 108.0;
+
 /// A memory slot: its number (Ctrl+number recalls it), the frequency and
-/// its name in the mode's color; an empty slot is a dashed outline with its
-/// number, which brightens while STORE is waiting for a slot.
+/// its name in the mode's color, the name cut to the slot; an empty slot is
+/// a dashed outline with its number, which brightens while STORE is waiting
+/// for a slot.
 fn memory_pill(ui: &mut Ui, slot: usize, m: Option<&crate::prefs::Memory>, lit: bool, armed: bool) -> egui::Response {
     let num_f = theme::mono(10.0);
     let font = theme::mono_bold(10.5);
@@ -930,10 +962,12 @@ fn memory_pill(ui: &mut Ui, slot: usize, m: Option<&crate::prefs::Memory>, lit: 
     let parts = m.map(|m| {
         let mhz = crate::tuning::fmt_mhz(m.freq_hz, 4);
         let mhz = mhz.trim_end_matches('0').trim_end_matches('.').to_string();
-        (p.layout_no_wrap(mhz, font.clone(), egui::Color32::PLACEHOLDER), p.layout_no_wrap(m.name.clone(), theme::mono_bold(9.5), egui::Color32::PLACEHOLDER), mode_tally(m.mode))
+        let f = p.layout_no_wrap(mhz, font.clone(), egui::Color32::PLACEHOLDER);
+        let room = SLOT_W - 8.0 - num.size().x - 6.0 - f.size().x - 5.0 - 8.0;
+        let name = widgets::ellipsize(&p, &m.name, theme::mono_bold(9.5), room);
+        (f, p.layout_no_wrap(name, theme::mono_bold(9.5), egui::Color32::PLACEHOLDER), mode_tally(m.mode))
     });
-    let w = 8.0 + num.size().x + parts.as_ref().map_or(0.0, |(f, n, _)| 6.0 + f.size().x + 5.0 + n.size().x) + 8.0;
-    let (rect, resp) = ui.allocate_exact_size(vec2(w, 22.0), Sense::click());
+    let (rect, resp) = ui.allocate_exact_size(vec2(SLOT_W, 22.0), Sense::click());
     let name = m.map_or_else(|| format!("empty slot {slot}"), |m| m.name.clone());
     resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, lit, &name));
     let hover = ui.ctx().animate_bool_with_time(resp.id.with("hv"), resp.hovered(), 0.12);

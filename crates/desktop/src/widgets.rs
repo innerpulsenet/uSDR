@@ -117,8 +117,18 @@ pub fn ellipsize(painter: &egui::Painter, text: &str, font: egui::FontId, max_w:
 /// A chip that opens a menu: a `chip_key` with a chevron, so every menu on
 /// the bars looks like the chips beside it and says it opens.
 pub fn menu_chip<R>(ui: &mut Ui, label: &str, tally: Color32, add: impl FnOnce(&mut Ui) -> R) -> Option<R> {
+    menu_chip_fit(ui, label, &[], tally, add)
+}
+
+/// A menu chip as wide as the widest of `labels` (and `label`), so a label
+/// that changes with its setting does not move the chips after it.
+pub fn menu_chip_fit<R>(ui: &mut Ui, label: &str, labels: &[&str], tally: Color32, add: impl FnOnce(&mut Ui) -> R) -> Option<R> {
     let galley = ui.painter().layout_no_wrap(format!("{label} ▾"), theme::mono_bold(10.5), Color32::PLACEHOLDER);
-    let (rect, resp) = ui.allocate_exact_size(vec2(galley.size().x + 14.0, 22.0), Sense::click());
+    let widest = labels
+        .iter()
+        .map(|l| ui.painter().layout_no_wrap(format!("{l} ▾"), theme::mono_bold(10.5), Color32::PLACEHOLDER).size().x)
+        .fold(galley.size().x, f32::max);
+    let (rect, resp) = ui.allocate_exact_size(vec2(widest + 14.0, 22.0), Sense::click());
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, label));
     let open = egui::Popup::is_id_open(ui.ctx(), egui::Popup::default_response_id(&resp));
     let t = ui.ctx().animate_bool_with_time(resp.id.with("on"), open, 0.15);

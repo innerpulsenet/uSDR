@@ -6,7 +6,7 @@ use crate::app::App;
 use crate::net::{Fetch, Get};
 use crate::theme::{self, alpha};
 use crate::widgets::{self, Fader, Tone};
-use egui::{RichText, Ui, vec2};
+use egui::{Align2, RichText, Ui, vec2};
 use serde_json::{Value, json};
 use usdr_proto::Mode;
 
@@ -51,107 +51,171 @@ pub fn side(app: &mut App, ui: &mut Ui) {
     });
 }
 
-/// What a broadcast station is sending over RDS. Everything shown passed
-/// its checkwords on the server and was heard twice alike; until then the
-/// card says so rather than showing a partial name.
+/// What a broadcast station is sending over RDS, in rows of fixed height:
+/// the card is the same size from "searching" to a full RadioText, so the
+/// cards under it never move while it fills in. Everything shown passed
+/// its checkwords on the server; a row with nothing confirmed for it says
+/// so in its own place.
 fn station(app: &App, ui: &mut Ui) {
-    let Some(r) = app.rds() else {
-        ui.label(small("No RDS from this station yet"));
-        return;
-    };
-    let dim = !r.locked;
+    let r = app.rds();
+    let w = ui.available_width();
+    let dim = r.is_none_or(|r| !r.locked);
     let fade = |c: egui::Color32| if dim { theme::text_3() } else { c };
-    ui.horizontal(|ui| {
-        // The name; for a station that scrolls its PS, the call letters its
-        // PI maps to, with the word showing now under them. Until either is
-        // in, the PI is all there is to call it.
-        let name = crate::bar::rds_station(r);
-        let known = (r.ps_steady && !r.ps_dynamic) || r.pi_call.is_some();
-        ui.label(RichText::new(name).font(theme::mono_bold(17.0)).color(fade(if known { theme::text() } else { theme::text_3() })));
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if let Some(p) = &r.pty_name
-                && r.pty != Some(0)
-            {
-                ui.label(RichText::new(p.to_uppercase()).font(theme::mono(10.0)).color(fade(widgets::protocol_color("RDS"))));
+    let rds_c = widgets::protocol_color("RDS");
+    ui.spacing_mut().item_spacing.y = 2.0;
+    let row = |ui: &mut Ui, h: f32| ui.allocate_exact_size(vec2(w, h), egui::Sense::hover());
+    let fit = |ui: &Ui, t: &str, font: egui::FontId, room: f32| widgets::ellipsize(ui.painter(), t, font, room.max(0.0));
+
+    // Who: the name, and the program type as a tag at the right.
+    let (rect, resp) = row(ui, 26.0);
+    let p = ui.painter().clone();
+    let mut room = w;
+    if let Some(pty) = r.and_then(|r| r.pty_name.clone().filter(|_| r.pty != Some(0))) {
+        let g = p.layout_no_wrap(pty.to_uppercase(), theme::mono(10.0), fade(rds_c));
+        let tag = egui::Rect::from_min_size(egui::pos2(rect.right() - g.size().x - 12.0, rect.center().y - 9.0), g.size() + vec2(12.0, 0.0)).with_max_y(rect.center().y + 9.0);
+        p.rect(tag, egui::CornerRadius::same(9), alpha(fade(rds_c), 0.10), egui::Stroke::new(1.0, alpha(fade(rds_c), 0.5)), egui::StrokeKind::Inside);
+        p.galley(tag.center() - g.size() / 2.0, g, fade(rds_c));
+        room -= tag.width() + 10.0;
+    }
+    let (name, known) = match r {
+        Some(r) => (crate::bar::rds_station(r), (r.ps_steady && !r.ps_dynamic) || r.pi_call.is_some()),
+        None => ("Searching…".to_string(), false),
+    };
+    let font = theme::mono_bold(18.0);
+    p.text(egui::pos2(rect.left(), rect.center().y), Align2::LEFT_CENTER, fit(ui, &name, font.clone(), room), font, if known { fade(theme::text()) } else { theme::text_3() });
+    if r.is_some() {
+        resp.on_hover_text("The station's PS once it has held steady, else the call letters its PI code maps to by the RBDS rules");
+    }
+
+    // The station's code and flags at the left; the PS at the right while
+    // it is not the name above (a scrolling station's word of the moment).
+    let (rect, resp) = row(ui, 16.0);
+    let p = ui.painter().clone();
+    let id = match r {
+        Some(r) => {
+            let mut id = format!("PI {}", r.pi);
+            if let Some(c) = &r.pi_call {
+                id.push_str(&format!(" · {c}"));
             }
-            if r.ps_dynamic {
-                ui.label(RichText::new("SCROLLING").font(theme::mono(10.0)).color(theme::text_3()))
-                    .on_hover_text("This station sends a message a word at a time through its PS, so the name above changes every few seconds");
+            if r.tp {
+                id.push_str(" · TP");
             }
-        });
+            if r.ta {
+                id.push_str(" · TA");
+            }
+            id
+        }
+        None => "no station code yet".into(),
+    };
+    let ps_word = r.and_then(|r| r.ps.clone().filter(|_| r.ps_dynamic || !r.ps_steady).map(|ps| (ps, r.ps_dynamic)));
+    let right_w = match &ps_word {
+        Some((ps, _)) => p.layout_no_wrap(format!("PS {ps}"), theme::mono(10.5), theme::text_2()).size().x + 8.0,
+        None => 0.0,
+    };
+    p.text(egui::pos2(rect.left(), rect.center().y), Align2::LEFT_CENTER, fit(ui, &id, theme::mono(10.5), w - right_w - 8.0), theme::mono(10.5), theme::text_3());
+    if let Some((ps, scrolling)) = &ps_word {
+        p.text(egui::pos2(rect.right(), rect.center().y), Align2::RIGHT_CENTER, format!("PS {ps}"), theme::mono(10.5), fade(if *scrolling { theme::text_2() } else { theme::text_3() }));
+    }
+    resp.on_hover_text(match &ps_word {
+        Some((_, true)) => "Call letters come from the PI code by the RBDS mapping. The PS at the right scrolls a message a word at a time.",
+        Some((_, false)) => "Call letters come from the PI code by the RBDS mapping. The PS at the right is taken for the name once it has held for ten seconds.",
+        None => "Call letters come from the PI code by the RBDS mapping; a station that changed calls can keep its old PI.",
     });
-    match (&r.title, &r.artist) {
-        (None, None) => {}
-        (t, a) => {
-            egui::Grid::new("rds-tags").num_columns(2).spacing(vec2(8.0, 2.0)).show(ui, |ui| {
-                if let Some(t) = t {
-                    ui.label(small("TITLE"));
-                    ui.add(egui::Label::new(RichText::new(t).font(theme::sans(13.0)).color(fade(theme::text()))).wrap());
-                    ui.end_row();
-                }
-                if let Some(a) = a {
-                    ui.label(small("ARTIST"));
-                    ui.add(egui::Label::new(RichText::new(a).font(theme::sans(13.0)).color(fade(theme::text()))).wrap());
-                    ui.end_row();
-                }
-            });
+
+    // What is on: two lines, always. Tagged title and artist each on their
+    // own; else the RadioText across both, a text still arriving with its
+    // gaps; and a hairline under it that fills as a new text comes in.
+    ui.add_space(4.0);
+    let (rect, _) = row(ui, 38.0);
+    let p = ui.painter().clone();
+    let (line1, line2) = (egui::Rect::from_min_size(rect.min, vec2(w, 20.0)), egui::Rect::from_min_size(rect.min + vec2(0.0, 20.0), vec2(w, 18.0)));
+    let partial = r.and_then(|r| r.rt_partial.clone().filter(|p| !p.is_empty()).map(|p| (p, r.rt_progress)));
+    match (r, &partial) {
+        (Some(r), None) if r.title.is_some() || r.artist.is_some() => {
+            let t = r.title.clone().unwrap_or_default();
+            let a = r.artist.clone().unwrap_or_default();
+            p.text(line1.left_center(), Align2::LEFT_CENTER, fit(ui, &t, theme::sans_semibold(14.0), w), theme::sans_semibold(14.0), fade(theme::text()));
+            p.text(line2.left_center(), Align2::LEFT_CENTER, fit(ui, &a, theme::sans(12.5), w), theme::sans(12.5), fade(theme::text_2()));
         }
-    }
-    // The PS itself, while it is not the name above: a scrolling station's
-    // word of the moment, or a name not yet steady.
-    if let Some(ps) = r.ps.as_ref().filter(|_| r.ps_dynamic || !r.ps_steady) {
-        let tip = if r.ps_dynamic {
-            "The word the station's PS shows now; it scrolls a message a word at a time"
-        } else {
-            "The station's PS, taken for its name once it has held for ten seconds"
-        };
-        ui.label(RichText::new(format!("PS  {ps}")).font(theme::mono(12.0)).color(fade(theme::text_2()))).on_hover_text(tip);
-    }
-    // The whole RadioText, wrapped: it is at most 64 characters and never
-    // scrolls. One still coming in shows what is in, its gaps as dots, and
-    // how much has arrived.
-    match (&r.rt_partial, &r.rt) {
-        (Some(p), _) if !p.is_empty() => {
-            ui.add(egui::Label::new(crate::bar::gapped(p, theme::sans(12.0), fade(theme::text_2()))).wrap());
-            let (bar, _) = ui.allocate_exact_size(vec2(ui.available_width(), 3.0), egui::Sense::hover());
-            let c = widgets::protocol_color("RDS");
-            ui.painter().rect_filled(bar, egui::CornerRadius::same(1), alpha(c, 0.15));
-            ui.painter().rect_filled(egui::Rect::from_min_size(bar.min, vec2(bar.width() * r.rt_progress.clamp(0.0, 1.0), 3.0)), egui::CornerRadius::same(1), alpha(c, 0.8));
-        }
-        (_, Some(rt)) => {
-            ui.add(egui::Label::new(RichText::new(rt).font(theme::sans(12.0)).color(fade(theme::text_2()))).wrap());
+        (Some(r), _) if partial.is_some() || r.rt.is_some() => {
+            let text = partial.as_ref().map(|p| p.0.clone()).or_else(|| r.rt.clone()).unwrap_or_default();
+            let mut job = crate::bar::gapped(&text, theme::sans(12.5), fade(theme::text()));
+            job.wrap = egui::text::TextWrapping { max_width: w, max_rows: 2, break_anywhere: false, overflow_character: Some('…') };
+            let g = p.layout_job(job);
+            let y = rect.top() + (rect.height() - g.size().y).max(0.0) / 2.0;
+            p.galley(egui::pos2(rect.left(), y), g, theme::text());
         }
         _ => {
-            ui.label(small("no RadioText confirmed yet"));
+            p.text(line1.left_center(), Align2::LEFT_CENTER, "no RadioText yet", theme::sans(12.5), theme::text_3());
         }
     }
-    let mut id = format!("PI {}", r.pi);
-    if let Some(c) = &r.pi_call {
-        id.push_str(&format!(" · {c} (from PI)"));
+    let (bar, _) = row(ui, 3.0);
+    if let Some((_, progress)) = &partial {
+        let p = ui.painter();
+        p.rect_filled(bar, egui::CornerRadius::same(1), alpha(rds_c, 0.15));
+        p.rect_filled(egui::Rect::from_min_size(bar.min, vec2(bar.width() * progress.clamp(0.0, 1.0), 3.0)), egui::CornerRadius::same(1), alpha(rds_c, 0.8));
     }
-    if r.tp {
-        id.push_str(" · TP");
+
+    // How it is being received: a meter of the blocks read (out of every 50),
+    // the carrier's source, and the station's clock.
+    ui.add_space(4.0);
+    let (rect, resp) = row(ui, 16.0);
+    let p = ui.painter().clone();
+    let segs = 10;
+    let meter = egui::Rect::from_min_size(egui::pos2(rect.left(), rect.center().y - 4.0), vec2(48.0, 8.0));
+    let good = r.map_or(0.0, |r| if r.locked { 1.0 - r.bler } else { 0.0 });
+    let c = if good >= 0.9 { theme::OK } else if good >= 0.7 { theme::WARN } else { theme::ERR };
+    for k in 0..segs {
+        let x = meter.left() + k as f32 * (meter.width() / segs as f32);
+        let seg = egui::Rect::from_min_size(egui::pos2(x, meter.top()), vec2(meter.width() / segs as f32 - 1.5, meter.height()));
+        let lit = (k as f32 + 0.5) / segs as f32 <= good;
+        p.rect_filled(seg, egui::CornerRadius::same(1), if lit { c } else { alpha(theme::text_3(), 0.25) });
     }
-    if r.ta {
-        id.push_str(" · TA");
-    }
-    ui.label(small(id)).on_hover_text("Call letters derived from the PI code by the RBDS mapping; a station that changed calls can keep its old PI");
-    if let Some(c) = crate::bar::rds_clock(r) {
-        ui.label(small(format!("station clock {c}"))).on_hover_text("The clock the station sends (group 4A), as sent");
-    }
-    let health = if r.locked {
-        format!("{:.0}% of blocks unreadable · carrier {}", r.bler * 100.0, if r.pilot { "from the 19 kHz pilot" } else { "free-running (no pilot)" })
-    } else {
-        "lock lost · showing what was last heard".into()
+    let status = match r {
+        Some(r) if r.locked => {
+            let mut s = format!("{:.0}% read · {}", good * 100.0, if r.pilot { "pilot" } else { "no pilot" });
+            if let Some(clk) = crate::bar::rds_clock(r) {
+                s.push_str(&format!(" · clock {}", clk.split(' ').next().unwrap_or("")));
+            }
+            s
+        }
+        Some(_) => "lock lost · last heard shown".into(),
+        None => "listening for RDS".into(),
     };
-    let at = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_millis(r.updated_ms);
-    let upd = if r.updated_ms > 0 { format!(" · changed {} UTC", crate::app::local_hms(at)) } else { String::new() };
-    ui.label(small(format!("{health}{upd}")));
+    let x0 = meter.right() + 8.0;
+    p.text(egui::pos2(x0, rect.center().y), Align2::LEFT_CENTER, fit(ui, &status, theme::mono(10.0), rect.right() - x0), theme::mono(10.0), theme::text_3());
+    if let Some(r) = r {
+        let at = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_millis(r.updated_ms);
+        let mut tip = format!(
+            "{:.0}% of the last 50 blocks read · carrier {}",
+            good * 100.0,
+            if r.pilot { "from the 19 kHz pilot" } else { "free-running (no pilot)" }
+        );
+        if let Some(clk) = crate::bar::rds_clock(r) {
+            tip.push_str(&format!("\nstation clock {clk}, as the station sends it (group 4A)"));
+        }
+        if r.updated_ms > 0 {
+            tip.push_str(&format!("\nlast changed {} UTC", crate::app::local_hms(at)));
+        }
+        resp.on_hover_text(tip);
+    }
+}
+
+/// A row `h` high the whole width, laid out left to right, whatever `add`
+/// puts in it (or nothing), so a message that comes and goes moves nothing.
+fn fixed_line(ui: &mut Ui, h: f32, add: impl FnOnce(&mut Ui)) {
+    let w = ui.available_width();
+    ui.allocate_ui_with_layout(vec2(w, h), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+        ui.set_min_size(vec2(w, h));
+        ui.set_max_height(h);
+        add(ui);
+    });
 }
 
 /// The channel's level over its noise floor across the 20 s the server's
 /// buffer holds, so a burst worth saving can be seen before it is saved.
-fn activity(app: &App, ui: &mut Ui) {
+/// Without a buffer (`live` false) the same strip says so, at the same size.
+fn activity(app: &App, ui: &mut Ui, live: bool) {
     let w = ui.available_width();
     let (r, _) = ui.allocate_exact_size(vec2(w, 30.0), egui::Sense::hover());
     let p = ui.painter();
@@ -160,12 +224,13 @@ fn activity(app: &App, ui: &mut Ui) {
     let x_at = |t: f64| r.right() - ((now - t) / 20.0).clamp(0.0, 1.0) as f32 * r.width();
     // 0–40 dB over the floor, bottom to top.
     let y_at = |snr: f32| r.bottom() - 2.0 - (snr / 40.0).clamp(0.0, 1.0) * (r.height() - 4.0);
-    let pts: Vec<egui::Pos2> = app.activity.iter().map(|&(t, ch, nz)| egui::pos2(x_at(t), y_at(ch - nz))).collect();
+    let pts: Vec<egui::Pos2> = if live { app.activity.iter().map(|&(t, ch, nz)| egui::pos2(x_at(t), y_at(ch - nz))).collect() } else { Vec::new() };
     if pts.len() > 1 {
         crate::spectrum::fill_under(p, &pts, r.bottom(), theme::AMBER, 0.5);
         p.add(egui::Shape::line(pts, egui::Stroke::new(1.0, theme::AMBER)));
     } else {
-        p.text(r.center(), egui::Align2::CENTER_CENTER, "nothing measured on this channel yet", theme::mono(10.5), theme::text_3());
+        let note = if live { "nothing measured on this channel yet".to_string() } else { format!("{} keeps no buffer", app.status.mode.label()) };
+        p.text(r.center(), egui::Align2::CENTER_CENTER, note, theme::mono(10.5), theme::text_3());
     }
     ui.horizontal(|ui| {
         ui.label(small("−20 s"));
@@ -593,7 +658,15 @@ fn processing(app: &mut App, ui: &mut Ui) {
     } else {
         "noise reduction, notch and AGC act on NFM, AM, USB and LSB"
     };
-    ui.label(small(note));
+    // Two lines kept for it, whichever mode's note it is.
+    let w = ui.available_width();
+    let (rect, resp) = ui.allocate_exact_size(vec2(w, 30.0), egui::Sense::hover());
+    let mut job = egui::text::LayoutJob::simple(note.to_string(), theme::mono(10.5), theme::text_3(), w);
+    job.wrap.max_rows = 2;
+    job.wrap.overflow_character = Some('…');
+    let g = ui.painter().layout_job(job);
+    ui.painter().galley(rect.min, g, theme::text_3());
+    resp.on_hover_text(note);
 }
 
 fn recorder(app: &mut App, ui: &mut Ui) {
@@ -609,9 +682,9 @@ fn recorder(app: &mut App, ui: &mut Ui) {
         };
         ui.label(small(head));
     });
-    if receiving {
-        activity(app, ui);
-    }
+    // Drawn whether or not this mode keeps a buffer, so the card keeps its
+    // height when the mode or the radio's state changes it.
+    activity(app, ui, receiving);
     let dir = app.prefs.record_dir();
     let busy = app.recorder_busy.clone();
     ui.horizontal_wrapped(|ui| {
@@ -654,15 +727,16 @@ fn recorder(app: &mut App, ui: &mut Ui) {
             }
         });
     });
-    if let Some(b) = &busy {
-        ui.horizontal(|ui| {
+    // One line for what the recorder is doing or last did, there whether
+    // or not it has anything to say, so nothing under it moves.
+    fixed_line(ui, 18.0, |ui| {
+        if let Some(b) = &busy {
             ui.add(egui::Spinner::new().size(12.0).color(theme::AMBER));
             ui.label(small(format!("{b}…")));
-        });
-    }
-    if let Some(n) = &app.replay_note {
-        ui.label(small(n.clone()));
-    }
+        } else if let Some(n) = &app.replay_note {
+            ui.add(egui::Label::new(small(n.clone())).truncate()).on_hover_text(n.as_str());
+        }
+    });
     ui.horizontal_wrapped(|ui| {
         if widgets::action(ui, "LOAD I/Q…").on_hover_text("Decode a .iq (with its .json) or an I/Q WAV on the server").clicked() {
             crate::app::pick(app, "replay");
@@ -833,9 +907,12 @@ fn p25(app: &mut App, ui: &mut Ui) {
             post = Some(json!({ "frequency_hz": freq, "action": "remove" }));
         }
     });
-    if let Some((tone, m)) = &f.message {
-        widgets::chip(ui, *tone, m);
-    }
+    // The last key action's result, in a line kept for it.
+    fixed_line(ui, 22.0, |ui| {
+        if let Some((tone, m)) = &f.message {
+            widgets::chip(ui, *tone, m);
+        }
+    });
     for (hz, alg, kid) in &f.entries {
         let cur = (*hz - freq as f64).abs() < 1.0;
         ui.label(RichText::new(format!("{} MHz · {} · KID 0x{kid:04X}", crate::tuning::fmt_mhz(*hz, 6), alg_name(*alg))).font(theme::mono(10.5)).color(if cur { theme::AMBER } else { theme::text_3() }));
