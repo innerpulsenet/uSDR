@@ -1,0 +1,25 @@
+# The uSDR server as a daemon beside its radio: in CT 216 ("rsp") the RSP1A
+# is on the container's own USB, so the I/Q never crosses the network; only
+# spectrum frames and audio go out to the clients. Installed and restarted
+# by tools/deploy-server.sh.
+[Unit]
+Description=uSDR receiver server
+Wants=network-online.target sdrplay.service
+After=network-online.target sdrplay.service
+
+[Service]
+User=usdr
+Group=usdr
+# Settings live in $HOME/.config/usdr, as they do on a desktop.
+StateDirectory=usdr
+Environment=HOME=/var/lib/usdr
+# No authentication: the container's nftables "clients" set is the access
+# control, as it is for SoapyRemote.
+ExecStart=/usr/local/bin/usdr --bind 0.0.0.0:8073
+Restart=on-failure
+RestartSec=3
+# The container has 1 GB; the server runs in about 50 MB.
+MemoryMax=512M
+
+[Install]
+WantedBy=multi-user.target

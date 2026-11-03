@@ -186,8 +186,10 @@ pub struct DeviceConfig {
     pub cover_hz: f64,
     pub role: Role,
     /// SoapyRemote URL of the host the device is on (`tcp://172.16.0.216:55132`),
-    /// or `None` for a dongle on this machine's USB.
+    /// or `None` for a radio on this machine's USB.
     pub remote: Option<String>,
+    /// The Soapy driver that owns the radio: `rtlsdr` or `sdrplay`.
+    pub driver: &'static str,
     /// Power the antenna port. Off unless asked for: DC on a feedline that
     /// does not expect it is the wrong default. On where the feedline has a
     /// preamp that needs it, or the receiver is deaf.
@@ -208,6 +210,7 @@ impl DeviceConfig {
             cover_hz: 0.0,
             role: Role::Idle,
             remote: None,
+            driver: RTLSDR,
             bias_t: false,
             rf_notch: None,
             dab_notch: None,
@@ -224,7 +227,7 @@ impl DeviceConfig {
     /// lost samples.
     pub fn soapy_args(&self) -> String {
         match &self.remote {
-            None => format!("driver=rtlsdr,serial={}", self.serial),
+            None => format!("driver={},serial={}", self.driver, self.serial),
             Some(url) => format!(
                 "driver=remote,remote={url},remote:driver=sdrplay,remote:prot=tcp,serial={}",
                 self.serial
@@ -232,6 +235,10 @@ impl DeviceConfig {
         }
     }
 }
+
+/// The Soapy driver keys this server opens radios through.
+pub const RTLSDR: &str = "rtlsdr";
+pub const SDRPLAY: &str = "sdrplay";
 
 /// SoapyRemote's default port.
 pub const REMOTE_PORT: u16 = 55132;
@@ -456,10 +463,13 @@ pub struct DeviceInfo {
     pub tuner: String,
     /// SoapyRemote URL when the device is on another host.
     pub remote: Option<String>,
+    /// [`RTLSDR`] or [`SDRPLAY`].
+    pub driver: &'static str,
 }
 
-/// Enumerate attached RTL-SDR dongles, then the SDRplay receivers on each
-/// SoapyRemote host in `remotes` (`172.16.0.216`, `rsp:55132`, or a URL).
+/// Enumerate attached RTL-SDR dongles and SDRplay receivers, then the SDRplay
+/// receivers on each SoapyRemote host in `remotes` (`172.16.0.216`,
+/// `rsp:55132`, or a URL).
 ///
 /// Pinned to `driver=rtlsdr` on purpose: the osmosdr Soapy module is also
 /// installed on this host and will happily claim the same hardware, which makes
@@ -469,7 +479,9 @@ pub struct DeviceInfo {
 /// network scans included, which takes seconds instead of milliseconds.
 ///
 /// A remote that does not answer is skipped, not an error: the local radios
-/// are still worth listing while another host is down.
+/// are still worth listing while another host is down. So is a local SDRplay
+/// search that fails, as it does where the SDRplay module or its API service
+/// is missing.
 pub fn enumerate(remotes: &[String]) -> Result<Vec<DeviceInfo>> {
     let found = soapysdr::enumerate("driver=rtlsdr").context("enumerating rtlsdr devices")?;
     let mut out: Vec<DeviceInfo> = found
@@ -479,8 +491,13 @@ pub fn enumerate(remotes: &[String]) -> Result<Vec<DeviceInfo>> {
             label: a.get("label").unwrap_or_default().to_string(),
             tuner: a.get("tuner").unwrap_or_default().to_string(),
             remote: None,
+            driver: RTLSDR,
         })
         .collect();
+    // The RSP on this host's own USB, as where the server runs beside it.
+    if let Ok(found) = soapysdr::enumerate("driver=sdrplay") {
+        out.extend(found.iter().map(|a| sdrplay_info(a, None)));
+    }
     for spec in remotes {
         let url = remote_url(spec);
         let Ok(found) =
@@ -488,17 +505,20 @@ pub fn enumerate(remotes: &[String]) -> Result<Vec<DeviceInfo>> {
         else {
             continue;
         };
-        out.extend(found.iter().map(|a| {
-            let label = a.get("label").unwrap_or_default().to_string();
-            DeviceInfo {
-                serial: a.get("serial").unwrap_or_default().to_string(),
-                tuner: sdrplay_model(&label).to_string(),
-                label,
-                remote: Some(url.clone()),
-            }
-        }));
+        out.extend(found.iter().map(|a| sdrplay_info(a, Some(url.clone()))));
     }
     Ok(out)
+}
+
+fn sdrplay_info(a: &soapysdr::Args, remote: Option<String>) -> DeviceInfo {
+    let label = a.get("label").unwrap_or_default().to_string();
+    DeviceInfo {
+        serial: a.get("serial").unwrap_or_default().to_string(),
+        tuner: sdrplay_model(&label).to_string(),
+        label,
+        remote,
+        driver: SDRPLAY,
+    }
 }
 
 /// The model in an SDRplay enumeration label (`SDRplay Dev0 RSP1A 210304DD98`
@@ -1965,6 +1985,13 @@ mod tests {
     fn config_addresses_a_device_by_serial() {
         let c = DeviceConfig::new("00000003", 155_107_500.0, 2_400_000.0);
         assert_eq!(c.soapy_args(), "driver=rtlsdr,serial=00000003");
+    }
+
+    #[test]
+    fn a_local_sdrplay_is_addressed_by_its_own_driver() {
+        let mut c = DeviceConfig::new("210304DD98", 100e6, 6e6);
+        c.driver = SDRPLAY;
+        assert_eq!(c.soapy_args(), "driver=sdrplay,serial=210304DD98");
     }
 
     #[test]

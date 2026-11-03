@@ -1,7 +1,8 @@
 # uSDR
 
-A single-radio spectrum inspector for RTL-SDR hardware, and for an SDRplay
-receiver on another machine (see [Remote SDRplay](#remote-sdrplay-soapyremote)):
+A single-radio spectrum inspector for RTL-SDR and SDRplay hardware (the RSP1A
+runs as a [daemon beside its radio](#the-server-daemon-in-ct-216), or is
+reached [over SoapyRemote](#remote-sdrplay-soapyremote)):
 one radio, served to a web page and to a native desktop console
 ([Desktop app](#desktop-app)). It began as the SDR mode of
 [`scannerd`](#provenance) lifted out on its own — a live FFT and waterfall over
@@ -339,9 +340,43 @@ gain in dB does not mean the same thing on two different front ends.
 The server has no authentication. It binds to localhost by default and should
 not be exposed to a network you do not control.
 
+## The server daemon in CT 216
+
+Day to day, the server runs in the RSP1A's own container (`rsp`, CT 216 on
+vault, `172.16.0.216`; see [below](#the-server-container-216-on-vault)) as the
+systemd unit `usdr`, and opens the radio on that container's USB with
+`driver=sdrplay`. The I/Q never crosses the network: a client gets spectrum
+frames and audio, about 2 Mbit/s against the 200 Mbit/s of 6 MS/s I/Q over
+SoapyRemote. At 6 MS/s in WFM it takes about a quarter of one of the
+container's two cores, and SDRplay's API service another 8%.
+
+```bash
+tools/deploy-server.sh                 # build for Debian 13, install, restart
+usdr-desktop 172.16.0.216:8073         # or the page at http://172.16.0.216:8073
+```
+
+- **Build.** The container is Debian 13 (glibc 2.41), older than this host, so
+  the script builds in a `rust:1.93-trixie` podman container into
+  `target/trixie`, then copies the binary and
+  [`crates/server/packaging/usdr.service`](crates/server/packaging/usdr.service)
+  over SSH and restarts the unit.
+- **Settings.** The daemon runs as the `usdr` user with its settings in
+  `/var/lib/usdr/.config/usdr/` (`usdr.toml`, `devices.toml`). The first deploy
+  seeds them from this host's `~/.config/usdr`, dropping `remotes`; later
+  deploys leave them alone.
+- **Access.** It binds `0.0.0.0:8073` with no authentication. The container's
+  nftables `clients` set is the access control, as it is for SoapyRemote; to
+  let another machine in (the Windows PC, say), add its address there.
+- **Logs.** `ssh root@172.16.0.216 journalctl -u usdr -f`.
+
+The SDRplay API lets one process have the radio at a time. To run a server
+from this checkout instead (`cargo run` against the RSP over SoapyRemote, as
+below), stop the daemon first, and start it again after:
+`ssh root@172.16.0.216 systemctl stop usdr`.
+
 ## Remote SDRplay (SoapyRemote)
 
-The RSP1A is used from here over the network with
+The RSP1A can also be used from another machine over the network with
 [SoapyRemote](https://github.com/pothosware/SoapyRemote). It lives in its own
 container on the Proxmox host `vault`, which runs `SoapySDRServer`, and this
 machine opens `driver=remote`. That proxies the whole Soapy API — both gain
@@ -359,7 +394,8 @@ default has no retransmission and a lost datagram is a hole in the samples.
 `--remote` is saved, so later runs find the RSP on their own. With no RTL-SDR
 plugged in it is the radio the server opens; with one, pick it in the
 Advanced drawer's device list, where it shows as `RSP1A @ 172.16.0.216`. Only
-SDRplay receivers are looked for on a remote host. An RTL-SDR's I2C faults
+SDRplay receivers are looked for on a remote host; on the server's own USB both
+RTL-SDRs and SDRplay receivers are. An RTL-SDR's I2C faults
 show up only on the stderr of the process that owns it (see
 [`i2c wr failed=-9`](#i2c-wr-failed-9-and-tuning-that-does-not-take)), and
 across the network that process is the server.
@@ -368,7 +404,8 @@ across the network that process is the server.
 
 `rsp` (CT 216, `172.16.0.216`) is an unprivileged Debian 13 container that
 does nothing else. It runs SDRplay's API 3.15 service, SoapySDRPlay3 (built
-from source, at the commit MARIO had), and Debian's `soapyremote-server`.
+from source, at the commit MARIO had), Debian's `soapyremote-server`, and the
+[`usdr` daemon](#the-server-daemon-in-ct-216).
 
 - **USB.** The container bind-mounts `/dev/bus/usb` and may open USB devices
   (`lxc.cgroup2.devices.allow: c 189:* rwm` in `/etc/pve/lxc/216.conf`). A

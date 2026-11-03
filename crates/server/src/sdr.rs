@@ -1707,8 +1707,8 @@ fn open_sdr(
         all.first().unwrap()
     };
     // The LO plan belongs to the radio, so it is settled before the first
-    // tune: RTL dongles are local, SDRplay receivers are reached remotely.
-    LO_PLAN_ZERO_IF.store(info.remote.is_some(), std::sync::atomic::Ordering::Relaxed);
+    // tune: zero-IF for an SDRplay, wherever it is reached from.
+    LO_PLAN_ZERO_IF.store(info.driver == device::SDRPLAY, std::sync::atomic::Ordering::Relaxed);
     if !lo.chosen {
         *lo.on = lo_plan_zero_if();
     }
@@ -1719,6 +1719,7 @@ fn open_sdr(
     cfg.ppm = cal.ppm_for(&info.serial);
     cfg.bias_t = cal.bias_t_for(&info.serial);
     cfg.remote = info.remote.clone();
+    cfg.driver = info.driver;
     cfg.rf_notch = notches.rf;
     cfg.dab_notch = notches.dab;
     // With the LO parked off-centre the analog IF has to reach past the
