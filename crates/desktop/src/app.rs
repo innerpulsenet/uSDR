@@ -34,12 +34,14 @@ pub struct DecodeRow {
     pub open: bool,
     /// Protocol, kind and summary in lower case, for the filter.
     pub key: String,
+    /// Its height in the log when last laid out; 0 until it has been.
+    pub height: f32,
 }
 
 impl DecodeRow {
     pub fn new(at: SystemTime, freq_hz: f64, ev: proto::DecodeEvent) -> Self {
         let key = format!("{} {} {}", ev.protocol, ev.kind, ev.summary).to_lowercase();
-        Self { at, freq_hz, ev, open: false, key }
+        Self { at, freq_hz, ev, open: false, key, height: 0.0 }
     }
 }
 
@@ -1489,7 +1491,8 @@ impl App {
     pub fn draw(&mut self, ui: &mut Ui) {
         let ctx = ui.ctx().clone();
         self.prefs.ui_scale = ctx.zoom_factor();
-        if std::env::var_os("USDR_QA_FPS").is_some() {
+        static QA_FPS: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        if *QA_FPS.get_or_init(|| std::env::var_os("USDR_QA_FPS").is_some()) {
             use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
             static N: AtomicU64 = AtomicU64::new(0);
             static T: std::sync::Mutex<Option<Instant>> = std::sync::Mutex::new(None);

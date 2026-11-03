@@ -193,11 +193,30 @@ struct ArchRow {
 /// The waterfall held for replay: how many rows back from the newest the
 /// top of the display is, and the picture of that stretch.
 pub struct Hold {
-    back: usize,
+    pub(crate) back: usize,
     shown: Option<(usize, usize, (f32, f32, Colormap), u64)>,
     tex: Option<egui::TextureHandle>,
 }
 const WF_MAX_COLS: usize = 4096;
+/// The waterfall history is kept as hundredths of a dB above −200 dBFS, so
+/// one table lookup colors a cell; 0 is the "nothing yet" of an empty row.
+const WF_Q_FLOOR_DB: f32 = -200.0;
+const WF_Q_PER_DB: f32 = 100.0;
+
+fn wf_quantize(db: f32) -> u16 {
+    ((db - WF_Q_FLOOR_DB) * WF_Q_PER_DB).round().clamp(0.0, 65535.0) as u16
+}
+
+/// A palette change in progress: the picture in the old palette, fading
+/// out over the new one, with what it takes to keep its newest rows
+/// current until it has gone.
+struct Fade {
+    tex: egui::TextureHandle,
+    lut: Vec<Color32>,
+    start: f64,
+    /// Rows that arrived since the fade began, to color in the old palette.
+    fresh: Vec<usize>,
+}
 
 pub struct Panafall {
     smooth: Vec<f32>,
@@ -208,8 +227,7 @@ pub struct Panafall {
     after: Vec<f32>,
     /// Where the carrier is drawn: it glides to the receive frequency.
     marker_hz: f64,
-    /// A palette change in progress: the palette it came from, and when.
-    fade: Option<(Colormap, f64)>,
+    fade: Option<Fade>,
     pub center_hz: f64,
     pub span_hz: f64,
     /// Animated display range.
@@ -220,16 +238,21 @@ pub struct Panafall {
     /// Noise floor estimate (15th percentile), smoothed.
     pub floor_est: f32,
     wf_shift_db: f32,
-    // Waterfall: history in dB, newest at `head`, rows going back in time.
+    // Waterfall: history quantized (`wf_quantize`), newest at `head`, rows
+    // going back in time.
     wf_cols: usize,
-    wf_db: Vec<f32>,
+    wf_q: Vec<u16>,
     wf_time: Vec<f64>,
     wf_head: usize,
     wf_count: usize,
     wf_tex: Option<egui::TextureHandle>,
-    wf_dirty_all: bool,
-    wf_new_rows: VecDeque<usize>,
+    /// Rows whose texture row is out of date. Only rows on screen are
+    /// colored, so a recolor costs what is shown, not the whole history.
+    wf_stale: Vec<bool>,
     wf_levels: (f32, f32, Colormap),
+    /// Every quantized level to its color at the current levels and palette.
+    wf_lut: Vec<Color32>,
+    wf_lut_key: Option<(f32, f32, Colormap, Color32)>,
     /// The auto black level in use; moves only when the floor has moved
     /// 1.5 dB from it, so a floor wandering across a rounding boundary does
     /// not recolor the whole history every frame.
@@ -310,14 +333,15 @@ impl Default for Panafall {
             floor_est: -100.0,
             wf_shift_db: 0.0,
             wf_cols: 0,
-            wf_db: Vec::new(),
+            wf_q: Vec::new(),
             wf_time: Vec::new(),
             wf_head: 0,
             wf_count: 0,
             wf_tex: None,
-            wf_dirty_all: true,
-            wf_new_rows: VecDeque::new(),
+            wf_stale: Vec::new(),
             wf_levels: (0.0, 0.0, Colormap::Ember),
+            wf_lut: Vec::new(),
+            wf_lut_key: None,
             auto_black: f32::NAN,
             tone: (0..1024).map(|i| ((i as f32 / 1023.0).powf(0.86) * 255.0).round() as u8).collect(),
             row_interval: 0.04,
@@ -455,7 +479,7 @@ impl Panafall {
             }
             *a += (s - *a) * if s > *a { 0.5 } else { 0.06 };
         }
-        self.max_hold = f.max_hold.clone();
+        self.max_hold.clone_from(&f.max_hold);
 
         // Auto range: floor just under the 15th percentile, ceiling over the
         // strongest signals, eased so the scale glides instead of jumping.
@@ -492,30 +516,45 @@ impl Panafall {
         let cols = n.min(WF_MAX_COLS);
         if cols != self.wf_cols {
             self.wf_cols = cols;
-            self.wf_db = vec![-200.0; cols * WF_ROWS];
+            self.wf_q = vec![0; cols * WF_ROWS];
             self.wf_time = vec![0.0; WF_ROWS];
+            self.wf_stale = vec![true; WF_ROWS];
             self.wf_count = 0;
             self.wf_tex = None;
-            self.wf_dirty_all = true;
+            self.fade = None;
         }
         self.wf_head = (self.wf_head + WF_ROWS - 1) % WF_ROWS;
-        let row = &mut self.wf_db[self.wf_head * cols..(self.wf_head + 1) * cols];
-        for (c, out) in row.iter_mut().enumerate() {
-            // Each column keeps the strongest bin it covers.
-            let a = c * n / cols;
-            let b = ((c + 1) * n / cols).max(a + 1);
-            *out = row_src[a..b].iter().copied().fold(f32::MIN, f32::max) - self.wf_shift_db;
+        let row = &mut self.wf_q[self.wf_head * cols..(self.wf_head + 1) * cols];
+        if cols == n {
+            for (out, &v) in row.iter_mut().zip(row_src) {
+                *out = wf_quantize(v - self.wf_shift_db);
+            }
+        } else {
+            for (c, out) in row.iter_mut().enumerate() {
+                // Each column keeps the strongest bin it covers.
+                let a = c * n / cols;
+                let b = ((c + 1) * n / cols).max(a + 1);
+                *out = wf_quantize(row_src[a..b].iter().copied().fold(f32::MIN, f32::max) - self.wf_shift_db);
+            }
         }
         self.wf_time[self.wf_head] = now;
-        // The replay history: strongest bin per column, quantized.
-        let q = (0..ARCH_W)
-            .map(|c| {
-                let a = c * n / ARCH_W;
-                let b = ((c + 1) * n / ARCH_W).max(a + 1).min(n);
-                let v = row_src[a.min(n - 1)..b].iter().copied().fold(f32::MIN, f32::max) - self.wf_shift_db;
-                ((v - ARCH_FLOOR_DB) / ARCH_STEP_DB).clamp(0.0, 255.0) as u8
-            })
-            .collect();
+        self.wf_stale[self.wf_head] = true;
+        if let Some(f) = &mut self.fade {
+            f.fresh.push(self.wf_head);
+        }
+        // The replay history: strongest bin per column, quantized, in the
+        // buffer of the row about to fall off the end.
+        let mut q = match self.archive.len() >= ARCH_ROWS {
+            true => self.archive.pop_back().map(|r| r.q).unwrap_or_default(),
+            false => Vec::with_capacity(ARCH_W),
+        };
+        q.clear();
+        q.extend((0..ARCH_W).map(|c| {
+            let a = c * n / ARCH_W;
+            let b = ((c + 1) * n / ARCH_W).max(a + 1).min(n);
+            let v = row_src[a.min(n - 1)..b].iter().copied().fold(f32::MIN, f32::max) - self.wf_shift_db;
+            ((v - ARCH_FLOOR_DB) / ARCH_STEP_DB).clamp(0.0, 255.0) as u8
+        }));
         self.archive.push_front(ArchRow {
             utc: std::time::SystemTime::now(),
             lo_hz: f.center_hz - f.rate_hz / 2.0,
@@ -525,11 +564,6 @@ impl Panafall {
         self.archive.truncate(ARCH_ROWS);
         self.archived += 1;
         self.wf_count = (self.wf_count + 1).min(WF_ROWS);
-        self.wf_new_rows.push_back(self.wf_head);
-        if self.wf_new_rows.len() > 64 {
-            self.wf_dirty_all = true;
-            self.wf_new_rows.clear();
-        }
         if self.last_row_at > 0.0 {
             let dt = (now - self.last_row_at).clamp(0.005, 0.5);
             self.row_interval += (dt - self.row_interval) * 0.05;
@@ -539,6 +573,8 @@ impl Panafall {
     }
 
     pub fn toggle_hold(&mut self) {
+        // The live texture is not kept current while held.
+        self.fade = None;
         self.hold = match self.hold {
             Some(_) => None,
             None => Some(Hold { back: 0, shown: None, tex: None }),
@@ -567,24 +603,34 @@ impl Panafall {
         let key = (h.back, rows_vis, (black, top, view.palette), (lo as u64) ^ (span as u64).rotate_left(32));
         if h.shown != Some(key) || h.tex.is_none() {
             let scale = 1023.0 / (top - black).max(1.0);
+            let ink = theme::ink();
+            // Every archived level to its color, once for the whole picture.
+            let colors: [Color32; 256] = std::array::from_fn(|q| {
+                let v = q as f32 * ARCH_STEP_DB + ARCH_FLOOR_DB;
+                let k = ((v - black) * scale).clamp(0.0, 1023.0) as usize;
+                lut[self.tone[k] as usize]
+            });
+            // Display column to archived column, `u32::MAX` where the row
+            // did not reach; rows of one span share it.
+            let mut map: Vec<u32> = Vec::with_capacity(ARCH_W);
+            let mut map_for = (f64::NAN, f64::NAN);
             let mut px = Vec::with_capacity(ARCH_W * rows_vis);
             for r in 0..rows_vis {
                 match self.archive.get(h.back + r) {
                     Some(row) => {
-                        let w = (row.hi_hz - row.lo_hz).max(1.0);
-                        for c in 0..ARCH_W {
-                            let hz = lo + c as f64 / (ARCH_W - 1) as f64 * span;
-                            let src = (hz - row.lo_hz) / w * (ARCH_W - 1) as f64;
-                            if src < 0.0 || src > (ARCH_W - 1) as f64 {
-                                px.push(theme::ink());
-                                continue;
-                            }
-                            let v = row.q[src as usize] as f32 * ARCH_STEP_DB + ARCH_FLOOR_DB;
-                            let k = ((v - black) * scale).clamp(0.0, 1023.0) as usize;
-                            px.push(lut[self.tone[k] as usize]);
+                        if map_for != (row.lo_hz, row.hi_hz) {
+                            map_for = (row.lo_hz, row.hi_hz);
+                            let w = (row.hi_hz - row.lo_hz).max(1.0);
+                            map.clear();
+                            map.extend((0..ARCH_W).map(|c| {
+                                let hz = lo + c as f64 / (ARCH_W - 1) as f64 * span;
+                                let src = (hz - row.lo_hz) / w * (ARCH_W - 1) as f64;
+                                if src < 0.0 || src > (ARCH_W - 1) as f64 { u32::MAX } else { src as u32 }
+                            }));
                         }
+                        px.extend(map.iter().map(|&m| if m == u32::MAX { ink } else { colors[row.q[m as usize] as usize] }));
                     }
-                    None => px.extend(std::iter::repeat_n(theme::ink(), ARCH_W)),
+                    None => px.extend(std::iter::repeat_n(ink, ARCH_W)),
                 }
             }
             let img = egui::ColorImage::new([ARCH_W, rows_vis], px);
@@ -625,14 +671,19 @@ impl Panafall {
             return;
         }
         let shift = (frac * cols as f64).round() as isize;
+        if shift == 0 {
+            return;
+        }
         if shift.unsigned_abs() >= cols {
-            self.wf_db.fill(-200.0);
+            self.wf_q.fill(0);
         } else {
-            for r in 0..WF_ROWS {
-                shift_vec(&mut self.wf_db[r * cols..(r + 1) * cols], shift, -200.0);
+            for row in self.wf_q.chunks_exact_mut(cols) {
+                shift_vec(row, shift, 0);
             }
         }
-        self.wf_dirty_all = true;
+        self.wf_stale.fill(true);
+        // The old palette's picture no longer lines up; finish the fade now.
+        self.fade = None;
     }
 
     /// Black and white points of the waterfall, dB.
@@ -649,21 +700,26 @@ impl Panafall {
         (black, black + view.wf_range.max(6.0))
     }
 
-    fn color_row(&self, row: usize, black: f32, top: f32, lut: &[Color32; 256], out: &mut Vec<Color32>) {
-        let cols = self.wf_cols;
+    /// The table that colors every quantized level at these levels, in
+    /// this palette: below −190 dBFS is "nothing yet", drawn as the ground.
+    fn build_lut(&self, black: f32, top: f32, palette: &[Color32; 256], ink: Color32) -> Vec<Color32> {
         let scale = 1023.0 / (top - black).max(1.0);
-        for &v in &self.wf_db[row * cols..(row + 1) * cols] {
-            if v < -190.0 {
-                out.push(theme::ink());
-                continue;
-            }
-            // The tone table lifts weak signals off the floor.
-            let k = ((v - black) * scale).clamp(0.0, 1023.0) as usize;
-            out.push(lut[self.tone[k] as usize]);
-        }
+        (0..=u16::MAX)
+            .map(|q| {
+                let v = q as f32 / WF_Q_PER_DB + WF_Q_FLOOR_DB;
+                if v < -190.0 {
+                    return ink;
+                }
+                // The tone table lifts weak signals off the floor.
+                let k = ((v - black) * scale).clamp(0.0, 1023.0) as usize;
+                palette[self.tone[k] as usize]
+            })
+            .collect()
     }
 
-    fn upload(&mut self, ctx: &egui::Context, view: &View, now: f64, reduce_motion: bool) {
+    /// Bring the waterfall texture up to date for the `rows_vis` rows on
+    /// screen: new rows, and every row after a palette, level or retune.
+    fn upload(&mut self, ctx: &egui::Context, view: &View, now: f64, reduce_motion: bool, rows_vis: usize) {
         if self.wf_cols == 0 {
             return;
         }
@@ -671,63 +727,81 @@ impl Panafall {
         let want = (black, top, view.palette);
         if want != self.wf_levels {
             // A new palette crossfades over the whole history, a quarter of
-            // a second, rather than snapping; levels and ranges snap as
-            // before, since those are readings.
-            if self.wf_levels.2 != view.palette && self.wf_tex.is_some() && !reduce_motion {
-                let from = match self.fade {
-                    Some((f, _)) => f,
-                    None => self.wf_levels.2,
-                };
-                self.fade = Some((from, now));
-            }
-            self.wf_levels = want;
-            self.wf_dirty_all = true;
-        }
-        let mut blended = [Color32::TRANSPARENT; 256];
-        let lut: &[Color32; 256] = match self.fade {
-            Some((from, start)) => {
-                let t = ((now - start) / 0.25) as f32;
-                if t >= 1.0 || reduce_motion {
-                    self.fade = None;
-                    view.palette.lut()
-                } else {
-                    let e = 1.0 - (1.0 - t).powi(3);
-                    let (a, b) = (from.lut(), view.palette.lut());
-                    for i in 0..256 {
-                        blended[i] = theme::lerp(a[i], b[i], e);
+            // a second, rather than snapping: the picture in the old one
+            // fades out over the new. Levels and ranges snap as before,
+            // since those are readings.
+            if self.wf_levels.2 != view.palette && !reduce_motion && self.wf_tex.is_some() {
+                let old = self.wf_tex.take().expect("checked");
+                match &mut self.fade {
+                    // Changed again mid-fade: the first palette keeps fading.
+                    Some(f) => f.start = now,
+                    None => {
+                        self.fade = Some(Fade { tex: old, lut: std::mem::take(&mut self.wf_lut), start: now, fresh: Vec::new() });
+                        self.wf_lut_key = None;
                     }
-                    self.wf_dirty_all = true;
-                    crate::anim::more(ctx);
-                    &blended
                 }
             }
-            None => view.palette.lut(),
-        };
+            self.wf_levels = want;
+            self.wf_stale.fill(true);
+        }
+        if self.fade.as_ref().is_some_and(|f| reduce_motion || now - f.start >= 0.25) {
+            self.fade = None;
+        }
+        let ink = theme::ink();
+        let key = (black, top, view.palette, ink);
+        if self.wf_lut_key != Some(key) {
+            self.wf_lut = self.build_lut(black, top, view.palette.lut(), ink);
+            self.wf_lut_key = Some(key);
+            self.wf_stale.fill(true);
+        }
         let opts = egui::TextureOptions {
             magnification: egui::TextureFilter::Linear,
             minification: egui::TextureFilter::Linear,
             ..Default::default()
         };
-        if self.wf_dirty_all || self.wf_tex.is_none() {
-            let mut px = Vec::with_capacity(self.wf_cols * WF_ROWS);
-            for r in 0..WF_ROWS {
-                self.color_row(r, black, top, lut, &mut px);
-            }
-            let img = egui::ColorImage::new([self.wf_cols, WF_ROWS], px);
-            match &mut self.wf_tex {
-                Some(t) => t.set(img, opts),
-                None => self.wf_tex = Some(ctx.load_texture("waterfall", img, opts)),
-            }
-            self.wf_dirty_all = false;
-            self.wf_new_rows.clear();
-        } else {
-            while let Some(r) = self.wf_new_rows.pop_front() {
-                let mut px = Vec::with_capacity(self.wf_cols);
-                self.color_row(r, black, top, lut, &mut px);
-                if let Some(t) = &mut self.wf_tex {
-                    t.set_partial([0, r], egui::ColorImage::new([self.wf_cols, 1], px), opts);
+        let cols = self.wf_cols;
+        let color = |q: &[u16], lut: &[Color32], out: &mut Vec<Color32>| out.extend(q.iter().map(|&v| lut[v as usize]));
+        if self.wf_tex.is_none() {
+            // A new texture: the rows on screen colored, the rest left as
+            // ground until they are shown.
+            let mut px = vec![ink; cols * WF_ROWS];
+            for i in 0..(rows_vis + 1).min(WF_ROWS) {
+                let r = (self.wf_head + i) % WF_ROWS;
+                let row = &mut px[r * cols..(r + 1) * cols];
+                for (o, &v) in row.iter_mut().zip(&self.wf_q[r * cols..(r + 1) * cols]) {
+                    *o = self.wf_lut[v as usize];
                 }
+                self.wf_stale[r] = false;
             }
+            self.wf_tex = Some(ctx.load_texture("waterfall", egui::ColorImage::new([cols, WF_ROWS], px), opts));
+        }
+        // Stale rows on screen, newest first, sent as runs of adjacent rows.
+        let tex = self.wf_tex.as_mut().expect("made above");
+        let shown = (rows_vis + 1).min(WF_ROWS);
+        let mut i = 0;
+        while i < shown {
+            let r0 = (self.wf_head + i) % WF_ROWS;
+            if !self.wf_stale[r0] {
+                i += 1;
+                continue;
+            }
+            let mut r1 = r0;
+            while i < shown && r1 < WF_ROWS && self.wf_stale[r1] && (self.wf_head + i) % WF_ROWS == r1 {
+                self.wf_stale[r1] = false;
+                r1 += 1;
+                i += 1;
+            }
+            let mut px = Vec::with_capacity(cols * (r1 - r0));
+            color(&self.wf_q[r0 * cols..r1 * cols], &self.wf_lut, &mut px);
+            tex.set_partial([0, r0], egui::ColorImage::new([cols, r1 - r0], px), opts);
+        }
+        if let Some(f) = &mut self.fade {
+            for r in f.fresh.drain(..) {
+                let mut px = Vec::with_capacity(cols);
+                color(&self.wf_q[r * cols..(r + 1) * cols], &f.lut, &mut px);
+                f.tex.set_partial([0, r], egui::ColorImage::new([cols, 1], px), opts);
+            }
+            crate::anim::more(ctx);
         }
     }
 
@@ -886,11 +960,13 @@ impl Panafall {
         }
 
         // ---- waterfall
-        self.upload(&ctx, view, now, reduce_motion);
+        let rows_vis = (wf.height().round() as usize).clamp(1, WF_ROWS);
         if self.hold.is_some() {
             self.draw_held(ui, wf, time_axis, view);
-        } else if let Some(tex) = &self.wf_tex {
-            let rows_vis = (wf.height().round() as usize).clamp(1, WF_ROWS);
+        } else if let Some(tex) = {
+            self.upload(&ctx, view, now, reduce_motion, rows_vis);
+            &self.wf_tex
+        } {
             let row_px = wf.height() / rows_vis as f32;
             // Smooth scroll: the newest row slides in over one row interval.
             let frac = if reduce_motion {
@@ -901,23 +977,32 @@ impl Panafall {
             let painter_wf = ui.painter_at(wf);
             let x0 = self.drag_offset_px;
             let top = wf.top() - (1.0 - frac) * row_px;
-            // Rows head, head+1, … wrap at WF_ROWS. Draw in at most two runs.
-            let mut drawn = 0usize;
-            let mut start = self.wf_head;
-            while drawn < rows_vis + 1 {
-                let run = (WF_ROWS - start).min(rows_vis + 1 - drawn);
-                let y0 = top + drawn as f32 * row_px;
-                let rect = Rect::from_min_max(
-                    pos2(wf.left() + x0, y0),
-                    pos2(wf.right() + x0, y0 + run as f32 * row_px),
-                );
-                let uv = Rect::from_min_max(
-                    pos2(0.0, start as f32 / WF_ROWS as f32),
-                    pos2(1.0, (start + run) as f32 / WF_ROWS as f32),
-                );
-                painter_wf.image(tex.id(), rect, uv, Color32::WHITE);
-                drawn += run;
-                start = (start + run) % WF_ROWS;
+            // Rows head, head+1, … wrap at WF_ROWS. Draw in at most two runs;
+            // mid-fade, the old palette's picture over the new one.
+            let fade = self.fade.as_ref().map(|f| {
+                let t = ((now - f.start) / 0.25).clamp(0.0, 1.0) as f32;
+                (f.tex.id(), 1.0 - (1.0 - t).powi(3))
+            });
+            for (id, tint) in std::iter::once((tex.id(), Color32::WHITE))
+                .chain(fade.map(|(id, e)| (id, Color32::from_white_alpha(((1.0 - e) * 255.0) as u8))))
+            {
+                let mut drawn = 0usize;
+                let mut start = self.wf_head;
+                while drawn < rows_vis + 1 {
+                    let run = (WF_ROWS - start).min(rows_vis + 1 - drawn);
+                    let y0 = top + drawn as f32 * row_px;
+                    let rect = Rect::from_min_max(
+                        pos2(wf.left() + x0, y0),
+                        pos2(wf.right() + x0, y0 + run as f32 * row_px),
+                    );
+                    let uv = Rect::from_min_max(
+                        pos2(0.0, start as f32 / WF_ROWS as f32),
+                        pos2(1.0, (start + run) as f32 / WF_ROWS as f32),
+                    );
+                    painter_wf.image(id, rect, uv, tint);
+                    drawn += run;
+                    start = (start + run) % WF_ROWS;
+                }
             }
             if !reduce_motion && frac < 1.0 {
                 crate::anim::more(&ctx);
@@ -1011,10 +1096,19 @@ impl Panafall {
         // strongest bin under it, so a narrow carrier never vanishes).
         let n = self.smooth.len();
         let cols = (pan.width().round() as usize).clamp(2, 8192);
+        // The bins under each column and where it is drawn, worked out once
+        // for every trace.
+        let bins: Vec<(usize, usize)> = (0..cols)
+            .map(|c| {
+                let a = c * n / cols;
+                let b = ((c + 1) * n / cols).max(a + 1).min(n);
+                (a.min(n.saturating_sub(1)), b)
+            })
+            .collect();
+        let xs: Vec<f32> = (0..cols).map(|c| pan.left() + c as f32 / (cols - 1) as f32 * pan.width() + self.drag_offset_px).collect();
         let column = |v: &[f32], c: usize| -> f32 {
-            let a = c * n / cols;
-            let b = ((c + 1) * n / cols).max(a + 1).min(n);
-            v[a.min(n - 1)..b].iter().copied().fold(f32::MIN, f32::max)
+            let (a, b) = bins[c];
+            v[a..b].iter().copied().fold(f32::MIN, f32::max)
         };
         let mut line: Vec<Pos2> = Vec::with_capacity(cols);
         if n >= 2 {
@@ -1026,8 +1120,7 @@ impl Panafall {
                     raw[i] = 0.18 * src[i - 1] + 0.64 * src[i] + 0.18 * src[i + 1];
                 }
             }
-            for (c, v) in raw.iter().enumerate() {
-                let x = pan.left() + c as f32 / (cols - 1) as f32 * pan.width() + self.drag_offset_px;
+            for (&x, v) in xs.iter().zip(&raw) {
                 line.push(pos2(x, self.y_for(*v, pan)));
             }
             let pan_painter = ui.painter_at(pan);
@@ -1051,30 +1144,15 @@ impl Panafall {
             // The afterglow: what the trace showed a moment ago, wide and
             // faint under it. Classic keeps its flat look.
             if view.style != Style::Classic && self.after.len() == n {
-                let pts: Vec<Pos2> = (0..cols)
-                    .map(|c| {
-                        let x = pan.left() + c as f32 / (cols - 1) as f32 * pan.width() + self.drag_offset_px;
-                        pos2(x, self.y_for(column(&self.after, c), pan))
-                    })
-                    .collect();
+                let pts: Vec<Pos2> = xs.iter().enumerate().map(|(c, &x)| pos2(x, self.y_for(column(&self.after, c), pan))).collect();
                 pan_painter.add(Shape::line(pts, Stroke::new(4.5, alpha(look.glow, 0.11))));
             }
             if self.max_hold.len() == n {
-                let pts: Vec<Pos2> = (0..cols)
-                    .map(|c| {
-                        let x = pan.left() + c as f32 / (cols - 1) as f32 * pan.width() + self.drag_offset_px;
-                        pos2(x, self.y_for(column(&self.max_hold, c), pan))
-                    })
-                    .collect();
+                let pts: Vec<Pos2> = xs.iter().enumerate().map(|(c, &x)| pos2(x, self.y_for(column(&self.max_hold, c), pan))).collect();
                 pan_painter.add(Shape::line(pts, Stroke::new(1.0, alpha(look.max_hold, 0.35))));
             }
             if view.peak_hold && self.peak.len() == n {
-                let pts: Vec<Pos2> = (0..cols)
-                    .map(|c| {
-                        let x = pan.left() + c as f32 / (cols - 1) as f32 * pan.width() + self.drag_offset_px;
-                        pos2(x, self.y_for(column(&self.peak, c), pan))
-                    })
-                    .collect();
+                let pts: Vec<Pos2> = xs.iter().enumerate().map(|(c, &x)| pos2(x, self.y_for(column(&self.peak, c), pan))).collect();
                 pan_painter.add(Shape::line(pts, Stroke::new(1.0, alpha(look.peak, 0.5))));
             }
             pan_painter.add(Shape::line(line.clone(), Stroke::new(3.2, alpha(look.glow, 0.22))));
@@ -1601,7 +1679,7 @@ fn line_y_at(line: &[Pos2], x: f32) -> Option<f32> {
     line.iter().min_by(|a, b| (a.x - x).abs().total_cmp(&(b.x - x).abs())).map(|p| p.y)
 }
 
-fn shift_vec(v: &mut [f32], shift: isize, fill: f32) {
+fn shift_vec<T: Copy>(v: &mut [T], shift: isize, fill: T) {
     let n = v.len() as isize;
     if shift == 0 || n == 0 {
         return;
@@ -2016,6 +2094,54 @@ mod tests {
     }
 
     #[test]
+    fn the_quantized_waterfall_colors_as_the_levels_say() {
+        let pan = Panafall::default();
+        let (black, top) = (-105.0, -40.0);
+        let palette = Colormap::Ember.lut();
+        let lut = pan.build_lut(black, top, palette, theme::ink());
+        let scale = 1023.0 / (top - black);
+        let mut off = 0;
+        let mut v = -189.0f32;
+        while v < 10.0 {
+            // The color the level itself maps to, unquantized.
+            let k = ((v - black) * scale).clamp(0.0, 1023.0) as usize;
+            if lut[wf_quantize(v) as usize] != palette[pan.tone[k] as usize] {
+                off += 1;
+            }
+            v += 0.37;
+        }
+        // A hundredth of a dB can tip a level across a step of the tone
+        // table, and no more than that.
+        assert!(off < 6, "{off} levels colored differently");
+        assert_eq!(lut[0], theme::ink(), "an empty row is ground");
+    }
+
+    #[test]
+    fn a_palette_change_crossfades_and_finishes() {
+        let ctx = egui::Context::default();
+        let mut pan = Panafall::default();
+        let mut view = View::default();
+        let mut pwr = vec![-100.0f32; 512];
+        pwr[200] = -40.0;
+        pan.push(&FftFrame { center_hz: 100e6, rate_hz: 1e6, pwr, ..Default::default() }, &view, 0.0);
+        pan.upload(&ctx, &view, 0.0, false, 300);
+        assert!(pan.fade.is_none());
+        assert!((0..301).all(|i| !pan.wf_stale[(pan.wf_head + i) % WF_ROWS]), "the rows on screen are colored");
+        assert!(pan.wf_stale[(pan.wf_head + 400) % WF_ROWS], "the rest wait until shown");
+        view.palette = Colormap::Classic;
+        pan.upload(&ctx, &view, 1.0, false, 300);
+        assert!(pan.fade.is_some(), "the old picture fades out over the new");
+        pan.upload(&ctx, &view, 1.1, false, 300);
+        assert!(pan.fade.is_some());
+        pan.upload(&ctx, &view, 1.3, false, 300);
+        assert!(pan.fade.is_none(), "gone after a quarter of a second");
+        // Reduced motion snaps.
+        view.palette = Colormap::Ember;
+        pan.upload(&ctx, &view, 2.0, true, 300);
+        assert!(pan.fade.is_none());
+    }
+
+    #[test]
     fn waterfall_keeps_its_history_across_a_retune() {
         let mut pan = Panafall::default();
         let view = View::default();
@@ -2029,8 +2155,8 @@ mod tests {
         pan.push(&g, &view, 0.04);
         let cols = pan.wf_cols;
         let older = (pan.wf_head + 1) % WF_ROWS;
-        let row = &pan.wf_db[older * cols..(older + 1) * cols];
-        let hot = row.iter().enumerate().max_by(|a, b| a.1.total_cmp(b.1)).unwrap().0;
+        let row = &pan.wf_q[older * cols..(older + 1) * cols];
+        let hot = row.iter().enumerate().max_by_key(|a| *a.1).unwrap().0;
         assert!((hot as i64 - 256).abs() <= 2, "carrier now at column {hot}");
     }
 }

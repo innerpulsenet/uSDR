@@ -12,6 +12,8 @@ mod app;
 mod audio;
 mod bar;
 mod bandplan;
+#[cfg(test)]
+mod bench;
 mod brand;
 mod colormap;
 mod dock;

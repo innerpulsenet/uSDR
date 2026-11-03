@@ -93,11 +93,11 @@ fn decodes(app: &mut App, ui: &mut Ui) {
         }
         widgets::menu_chip(ui, "···", theme::text_2(), |ui| {
             if ui.button("Expand all").clicked() {
-                app.decodes.iter_mut().for_each(|d| d.open = true);
+                app.decodes.iter_mut().for_each(|d| (d.open, d.height) = (true, 0.0));
                 ui.close();
             }
             if ui.button("Collapse all").clicked() {
-                app.decodes.iter_mut().for_each(|d| d.open = false);
+                app.decodes.iter_mut().for_each(|d| (d.open, d.height) = (false, 0.0));
                 ui.close();
             }
         });
@@ -147,6 +147,14 @@ fn decodes(app: &mut App, ui: &mut Ui) {
                     empty_state(ui, text);
                 }
                 for &i in &visible {
+                    // Off screen, a row is only its height: a full log costs
+                    // what is in view, not four hundred rows of layout.
+                    let y0 = ui.cursor().top();
+                    let h = app.decodes[i].height;
+                    if h > 0.0 && !ui.is_rect_visible(egui::Rect::from_min_size(ui.cursor().min, vec2(ui.available_width(), h))) {
+                        ui.allocate_space(vec2(ui.available_width(), h));
+                        continue;
+                    }
                     let d = &app.decodes[i];
                     let sel = app.selected_decode == Some(i);
                     let resp = ui
@@ -186,6 +194,7 @@ fn decodes(app: &mut App, ui: &mut Ui) {
                             });
                         });
                     }
+                    app.decodes[i].height = (ui.cursor().top() - y0 - ui.spacing().item_spacing.y).max(1.0);
                 }
             });
             app.decode_scroll = out.state.offset.y;
