@@ -151,17 +151,254 @@ pub const LO_OFFSET_FRACTION: f64 = 0.125;
 pub const LO_USABLE_FRACTION: f64 = 0.20;
 
 /// How far in the display can zoom, and how many bins it aims to keep across
-/// the window. Zooming raises the FFT size with the zoom factor, so a narrower
-/// window is genuinely finer-grained rather than the same data stretched wider.
+/// the window. Zoomed in, the window is not cut from the full-span FFT: it is
+/// mixed to baseband, decimated to a little more than its own width and
+/// transformed at that rate (see [`ZoomPath`]), so the bin width shrinks with
+/// the zoom instead of staying the full span's.
 pub const ZOOM_MAX: f64 = 32.0;
 const ZOOM_TARGET_BINS: usize = 1024;
 
-/// FFT size for a display `bins` wide at `zoom`: more zoom, more bins, so the
-/// window narrows and resolution improves instead of the same bins being
-/// drawn further apart. A power of two, 256..=8192.
-fn fft_size_for(bins: usize, zoom: f64) -> usize {
-    let want = (bins as f64 * zoom).round().clamp(256.0, 8192.0) as usize;
-    want.next_power_of_two().min(8192)
+/// FFT size for the full-span spectrum on a display `bins` wide. A power of
+/// two, 256..=8192. This spectrum draws the 1x view and feeds the scanner's
+/// whole-span search; the zoomed view has its own transform.
+fn fft_size_for(bins: usize) -> usize {
+    bins.clamp(256, 8192).next_power_of_two().min(8192)
+}
+
+/// The decimated rate stays at least this many times the shown width, so the
+/// window sits inside the last stage's flat passband — never on its skirt,
+/// and never where something just outside the window folds back onto it.
+const ZOOM_GUARD: f64 = 1.5;
+
+/// How a zoomed window is produced from the sampled span.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct ZoomPlan {
+    /// Sample rate going in.
+    fs_in: f64,
+    /// Decimate-by-two stages, so the rate out is `fs_in / 2^stages`.
+    stages: u32,
+    /// Sample rate of the decimated stream, which the zoom FFT spans.
+    rate_hz: f64,
+    /// Size of that FFT.
+    fft_size: usize,
+}
+
+impl ZoomPlan {
+    /// Width of one bin of the zoom FFT.
+    #[cfg(test)]
+    fn bin_hz(&self) -> f64 {
+        self.rate_hz / self.fft_size as f64
+    }
+}
+
+/// Plan the zoom path for a window `shown_rate` wide on a display
+/// `display_bins` wide: halve the rate while a halving still leaves the
+/// guard band, then size the FFT so the window covers at least
+/// `display_bins` bins (and under twice that). The bin width is then between
+/// a half and one display pixel wide at any zoom, instead of the full span's.
+///
+/// With no stage left to take (the window is wider than a third of the
+/// span) the transform runs at the full rate, so it is capped at 8192 as the
+/// full-span one is; decimated, it is cheap enough to go to 16384.
+fn zoom_plan(fs_in: f64, shown_rate: f64, display_bins: usize) -> ZoomPlan {
+    let shown_rate = shown_rate.max(1.0);
+    let mut rate_hz = fs_in;
+    let mut stages = 0u32;
+    while rate_hz / 2.0 >= shown_rate * ZOOM_GUARD && stages < 16 {
+        rate_hz /= 2.0;
+        stages += 1;
+    }
+    let want = (display_bins as f64 * rate_hz / shown_rate).ceil().max(256.0) as usize;
+    let cap = if stages == 0 { 8192 } else { 16384 };
+    let fft_size = want.next_power_of_two().min(cap);
+    ZoomPlan { fs_in, stages, rate_hz, fft_size }
+}
+
+/// The window the display shows, in the terms the rest of the loop uses.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct ShownWindow {
+    /// Where the hardware LO sits relative to the receive frequency.
+    lo_off: f64,
+    /// The span available to show at 1x.
+    full_rate: f64,
+    /// The width shown at the current zoom.
+    shown_rate: f64,
+    /// The window's center, relative to the receive frequency.
+    centre_off: f64,
+    /// The window's center, absolute.
+    shown_centre: f64,
+}
+
+impl ShownWindow {
+    /// The FFT covers the sampled span around the *hardware* center. With
+    /// the LO parked off-center that is not the window being shown, so the
+    /// shown part is the bins either side of the requested frequency that
+    /// stay inside the tuner's passband. Zoomed in, the window is on what is
+    /// being received, not on the middle of the span: the operator is
+    /// looking at a signal, not at a coordinate.
+    fn new(rate_hz: f64, lo_on: bool, mode: SdrMode, zoom: f64, tuned_freq: f64, inspect_hz: f64) -> Self {
+        let lo_off = lo_offset_for(rate_hz, lo_on, mode);
+        let full_rate = display_rate_for(rate_hz, lo_on, mode);
+        let shown_rate = full_rate / zoom;
+        let want_centre = if zoom > 1.0 { inspect_hz } else { tuned_freq };
+        // Keep the window inside the part of the span that is usable.
+        let limit = (full_rate / 2.0 - shown_rate / 2.0).max(0.0);
+        let centre_off = (want_centre - tuned_freq).clamp(-limit, limit);
+        Self { lo_off, full_rate, shown_rate, centre_off, shown_centre: tuned_freq + centre_off }
+    }
+
+    /// The window's center as an offset from the hardware center — what the
+    /// zoom path mixes down to DC.
+    fn mix_offset_hz(&self) -> f64 {
+        self.centre_off - self.lo_off
+    }
+}
+
+/// The bins of a spectrum `n_src` bins wide at `src_rate` that cover a
+/// window `shown_rate` wide centered `src_off` Hz from the spectrum's DC.
+/// Whole bins, so the window's true edges land up to half a bin inside
+/// them: the frame's axis is stamped from the bins (see [`frame_axis`]),
+/// never from the request.
+fn window_bins(src_rate: f64, n_src: usize, src_off: f64, shown_rate: f64) -> (usize, usize) {
+    let bin_of = |offset_hz: f64| -> usize {
+        let f = (offset_hz / src_rate + 0.5) * n_src as f64;
+        f.round().clamp(0.0, n_src as f64 - 1.0) as usize
+    };
+    let lo = bin_of(src_off - shown_rate / 2.0);
+    let hi = bin_of(src_off + shown_rate / 2.0).max(lo + 1).min(n_src);
+    (lo, hi)
+}
+
+/// The frequency axis a frame carries: `center_hz` and `rate_hz` such that
+/// bin 0 is at `center - rate / 2` and the last bin at `center + rate / 2`,
+/// which is where every viewer draws them (and where `channel_level`,
+/// `notch_display` and `find_peaks` read them). For the bins `lo..hi` cut
+/// from an fftshifted spectrum of `n_src` bins spanning `src_rate` with its
+/// DC at `src_dc_hz`, bin `k` sits at `(k - n_src / 2)` bin widths from DC,
+/// so the rate is `n - 1` bin widths and the center the midpoint of the
+/// first and last bins. Stamping the requested window instead drew every
+/// signal up to a bin off: the bins are whole, the request was not.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct FrameAxis {
+    center_hz: f64,
+    rate_hz: f64,
+}
+
+fn frame_axis(src_dc_hz: f64, src_rate: f64, n_src: usize, lo: usize, hi: usize) -> FrameAxis {
+    let bin_hz = src_rate / n_src.max(1) as f64;
+    let n = hi.saturating_sub(lo).max(1);
+    let first = src_dc_hz + (lo as f64 - (n_src / 2) as f64) * bin_hz;
+    let span = (n - 1) as f64 * bin_hz;
+    FrameAxis { center_hz: first + span / 2.0, rate_hz: span.max(bin_hz) }
+}
+
+impl FrameAxis {
+    /// Where bin `i` of an `n`-bin frame on this axis sits.
+    #[cfg(test)]
+    fn bin_hz(&self, i: usize, n: usize) -> f64 {
+        self.center_hz - self.rate_hz / 2.0 + i as f64 * self.rate_hz / (n.max(2) - 1) as f64
+    }
+}
+
+/// The size of the transform the display is drawn from, for the status:
+/// the zoom path's when zoomed in, else the full span's.
+fn displayed_fft_size(full: usize, zoom: f64, rate_hz: f64, lo_on: bool, mode: SdrMode, display_bins: usize) -> usize {
+    if zoom > 1.0 {
+        zoom_plan(rate_hz, display_rate_for(rate_hz, lo_on, mode) / zoom, display_bins).fft_size
+    } else {
+        full
+    }
+}
+
+/// The zoomed window's own spectrum: the span mixed so the window's center
+/// is at DC, decimated by halfband stages to a rate just over the window's
+/// width, and Welch-transformed there. At 8 MS/s zoomed 32x onto a 2048-bin
+/// display that is 250 kHz across 2048 bins of 122 Hz, where one FFT over
+/// the span, capped at 8192 bins, gave 256 bins of 977 Hz and drew a 3 kHz
+/// sideband signal three bins wide.
+///
+/// The full-span spectrum keeps running beside it (at a lower duty), since
+/// the scanner searches the whole span whatever the display shows.
+struct ZoomPath {
+    plan: ZoomPlan,
+    offset_hz: f64,
+    nco: scannerd_dsp::Nco,
+    decim: scannerd_dsp::HalfbandChain,
+    spectrum: Spectrum,
+    mixed: Vec<num_complex::Complex32>,
+    iq: Vec<num_complex::Complex32>,
+    /// This interval's Welch mean, its per-bin peak, and the mean smoothed
+    /// across bins for the trace — the zoom's counterparts of `pwr`,
+    /// `pwr_peak` and `smoothed`.
+    pwr: Vec<f32>,
+    pwr_peak: Vec<f32>,
+    smoothed: Vec<f32>,
+    /// At least one segment has been taken since the path was built or
+    /// retuned, so `pwr` describes the window and not a placeholder.
+    ready: bool,
+}
+
+impl ZoomPath {
+    fn new(plan: ZoomPlan, shown_rate: f64, offset_hz: f64) -> Self {
+        let mut nco = scannerd_dsp::Nco::new();
+        nco.set_freq(offset_hz, plan.fs_in);
+        Self {
+            plan,
+            offset_hz,
+            nco,
+            decim: scannerd_dsp::HalfbandChain::new(plan.fs_in, shown_rate / 2.0, plan.stages),
+            spectrum: Spectrum::new(plan.fft_size),
+            mixed: Vec::new(),
+            iq: Vec::new(),
+            pwr: Vec::with_capacity(plan.fft_size),
+            pwr_peak: Vec::with_capacity(plan.fft_size),
+            smoothed: Vec::with_capacity(plan.fft_size),
+            ready: false,
+        }
+    }
+
+    /// Move the window: the mixer follows at once, and the partial segment
+    /// and accumulators from the old window are dropped rather than
+    /// averaged into the first frame of the new one. The filters' few
+    /// samples of history are left; their transient is microseconds.
+    fn retune(&mut self, offset_hz: f64) {
+        if (offset_hz - self.offset_hz).abs() < 0.01 {
+            return;
+        }
+        self.offset_hz = offset_hz;
+        self.nco.set_freq(offset_hz, self.plan.fs_in);
+        self.spectrum.clear();
+        self.ready = false;
+    }
+
+    /// A break in the sample timeline: nothing from before it is stitched
+    /// onto what follows.
+    fn reset(&mut self) {
+        self.nco.reset_phase();
+        self.decim.reset();
+        self.spectrum.clear();
+        self.ready = false;
+    }
+
+    fn ingest(&mut self, span_iq: &[num_complex::Complex32]) {
+        self.nco.mix(span_iq, &mut self.mixed);
+        self.decim.process(&self.mixed, &mut self.iq);
+        self.spectrum.ingest_welch(&self.iq);
+    }
+
+    /// Take this frame's estimate. Returns the segments it covers; with
+    /// none, the previous frame's arrays are left in place.
+    fn take(&mut self) -> usize {
+        let full_duty =
+            (self.plan.rate_hz / f64::from(DEFAULT_FPS) / (self.plan.fft_size as f64 / 2.0)).ceil() as usize;
+        self.spectrum.set_max_segments_per_take((full_duty * 13 / 10).max(8));
+        let nseg = self.spectrum.take_dbfs(&mut self.pwr, Some(&mut self.pwr_peak));
+        if nseg > 0 {
+            self.ready = true;
+            smooth_bins(&self.pwr, 3, &mut self.smoothed);
+        }
+        nseg
+    }
 }
 
 /// What the inspect chain is being used for. This picks the channel width, the
@@ -2981,7 +3218,9 @@ pub(crate) fn find_peaks(
             && p > smoothed[i + 1]
             && p >= smoothed[i + 2]
         {
-            let freq_hz = center_hz - rate_hz * 0.5 + (i as f64 + 0.5) * bin_hz;
+            // The same axis the offsets above and every viewer use: bin 0
+            // at the low edge, the last bin at the high edge.
+            let freq_hz = center_hz - rate_hz * 0.5 + i as f64 * rate_hz / (n - 1) as f64;
             let snr_db = p - floor[i];
             peaks.push(PeakMarker {
                 freq_hz,
@@ -3406,6 +3645,10 @@ fn run_sdr(
     let mut rx_opt = Some(rx);
 
     let mut spectrum = Spectrum::new(fft_size);
+    // The zoomed window's own transform, built when the zoom goes past 1x
+    // and rebuilt whenever the rate, the window width or the display width
+    // change its plan (see ZoomPath).
+    let mut zoom: Option<ZoomPath> = None;
     let mut pwr: Vec<f32> = Vec::with_capacity(fft_size);
     // Per-bin peak of each frame's segments. Always sent: whether the
     // waterfall paints from it is each browser's own choice (WF PEAK), and
@@ -3913,26 +4156,9 @@ fn run_sdr(
                     let bins = bins.clamp(ZOOM_TARGET_BINS, 4096).next_power_of_two();
                     if bins != display_bins {
                         display_bins = bins;
-                        let want = fft_size_for(display_bins, current_zoom);
-                        if want != fft_size {
-                            fft_size = want;
-                            spectrum = Spectrum::new(fft_size);
-                            pwr = Vec::with_capacity(fft_size);
-                            smoothed = Vec::with_capacity(fft_size);
-                            let mut s = status.lock().unwrap();
-                            s.fft_size = fft_size;
-                            let _ = events.send(SdrEvent::Status(s.clone()));
-                        }
-                    }
-                }
-                SdrCmd::Zoom(z) => {
-                    let z = z.clamp(1.0, ZOOM_MAX);
-                    if (z - current_zoom).abs() > 0.001 {
-                        current_zoom = z;
-                        // More zoom, more bins: the window narrows and the FFT
-                        // grows with it, so resolution improves instead of the
-                        // same bins being drawn further apart.
-                        let want = fft_size_for(display_bins, current_zoom);
+                        // The zoom path picks the new width up on the next
+                        // block, when its plan is compared.
+                        let want = fft_size_for(display_bins);
                         if want != fft_size {
                             fft_size = want;
                             spectrum = Spectrum::new(fft_size);
@@ -3940,8 +4166,19 @@ fn run_sdr(
                             smoothed = Vec::with_capacity(fft_size);
                         }
                         let mut s = status.lock().unwrap();
+                        s.fft_size = displayed_fft_size(fft_size, current_zoom, current_rate, lo_offset, current_mode, display_bins);
+                        let _ = events.send(SdrEvent::Status(s.clone()));
+                    }
+                }
+                SdrCmd::Zoom(z) => {
+                    let z = z.clamp(1.0, ZOOM_MAX);
+                    if (z - current_zoom).abs() > 0.001 {
+                        current_zoom = z;
+                        // The zoom path is (re)built on the next block from
+                        // the new window; the full-span FFT does not change.
+                        let mut s = status.lock().unwrap();
                         s.zoom = current_zoom;
-                        s.fft_size = fft_size;
+                        s.fft_size = displayed_fft_size(fft_size, current_zoom, current_rate, lo_offset, current_mode, display_bins);
                         let shown = display_rate_for(current_rate, lo_offset, current_mode)
                             / current_zoom;
                         s.min_freq_hz = inspect_hz - shown / 2.0;
@@ -4538,6 +4775,9 @@ fn run_sdr(
             // the accepted-tune path keeps it).
             front.reset();
             spectrum.clear();
+            if let Some(z) = zoom.as_mut() {
+                z.reset();
+            }
             inspect_chain.reset();
             classifier.reset();
             demod.reset_timeline(inspect_chain.fs_out());
@@ -4603,15 +4843,38 @@ fn run_sdr(
         let frame_quantum = (current_rate / f64::from(DEFAULT_FPS)).round().max(1.0) as u64;
         frame_pending_samples += block.len() as u64;
         let frame_due = frame_pending_samples >= frame_quantum;
+        // The window this block's frame will show. Decided here, before the
+        // samples are mixed, so the zoom path and the frame that reads it
+        // agree on where the window is.
+        let window = ShownWindow::new(current_rate, lo_offset, current_mode, current_zoom, tuned_freq, inspect_hz);
+        if current_zoom > 1.0 {
+            let plan = zoom_plan(current_rate, window.shown_rate, display_bins);
+            match zoom.as_mut() {
+                Some(z) if z.plan == plan => z.retune(window.mix_offset_hz()),
+                _ => zoom = Some(ZoomPath::new(plan, window.shown_rate, window.mix_offset_hz())),
+            }
+        } else {
+            zoom = None;
+        }
         // Every sample reaches the display: segments are windowed and
         // averaged as they arrive (Welch, half-overlapped), so a burst
         // between two frames is in the next one instead of thrown away. The
         // cap only bounds a late or slow frame, about 30% over full duty.
+        // Zoomed in, the display reads the zoom path and the full span only
+        // serves the scanner, so the full-span transform drops to a quarter
+        // duty rather than costing a second full one.
         spectrum.ingest_welch(&clean);
+        if let Some(z) = zoom.as_mut() {
+            z.ingest(&clean);
+        }
         if frame_due {
             let full_duty = (current_rate / f64::from(DEFAULT_FPS) / (fft_size as f64 / 2.0)).ceil() as usize;
-            spectrum.set_max_segments_per_take((full_duty * 13 / 10).max(8));
+            let duty = if zoom.is_some() { full_duty / 4 } else { full_duty };
+            spectrum.set_max_segments_per_take((duty * 13 / 10).max(8));
             spectrum.take_dbfs(&mut pwr, Some(&mut pwr_peak));
+            if let Some(z) = zoom.as_mut() {
+                z.take();
+            }
         }
 
         // Process channel for classifier. In Scan the chain is purely
@@ -6209,6 +6472,7 @@ fn run_sdr(
             };
             if let Ok(mut s) = status.lock() {
                 s.inspect_rate_hz = inspect_chain.fs_out();
+                s.fft_size = zoom.as_ref().map_or(fft_size, |z| z.plan.fft_size);
                 s.dropped_blocks = dropped_blocks;
                 s.lagged_blocks = lagged_blocks;
                 s.lost_samples = lost_samples;
@@ -6270,28 +6534,25 @@ fn run_sdr(
             }
             smooth_bins(&pwr, 3, &mut smoothed);
 
-            // The FFT covers the sampled span around the *hardware* centre.
-            // With the LO parked off-centre that is not the window being
-            // shown, so cut out the part that is: the bins either side of the
-            // requested frequency that stay inside the tuner's passband.
-            let lo_off = lo_offset_for(current_rate, lo_offset, current_mode);
-            let full_rate = display_rate_for(current_rate, lo_offset, current_mode);
-            let shown_rate = full_rate / current_zoom;
-            // Zoom in on what is being received, not on the middle of the
-            // span: the operator is looking at a signal, not at a coordinate.
-            let want_centre = if current_zoom > 1.0 { inspect_hz } else { tuned_freq };
-            // Keep the window inside the part of the span that is usable.
-            let limit = full_rate / 2.0 - shown_rate / 2.0;
-            let centre_off = (want_centre - tuned_freq).clamp(-limit.max(0.0), limit.max(0.0));
-            let shown_centre = tuned_freq + centre_off;
-            let n = smoothed.len();
-            let bin_of = |offset_hz: f64| -> usize {
-                let f = (offset_hz / current_rate + 0.5) * n as f64;
-                f.round().clamp(0.0, n as f64 - 1.0) as usize
-            };
-            let lo_bin = bin_of(centre_off - lo_off - shown_rate / 2.0);
-            let hi_bin = bin_of(centre_off - lo_off + shown_rate / 2.0).max(lo_bin + 1);
-            let mut shown_buf = smoothed[lo_bin..hi_bin.min(n)].to_vec();
+            let lo_off = window.lo_off;
+            // Which spectrum the window is cut from. Zoomed in, the zoom
+            // path's, once it has a frame of its own: its transform spans
+            // the decimated rate with the window's center at DC. Otherwise
+            // the full span's, with the hardware center at DC (see
+            // ShownWindow).
+            let (src_smoothed, src_pwr, src_peak, src_rate, src_off, src_dc): (&[f32], &[f32], &[f32], f64, f64, f64) =
+                match zoom.as_ref() {
+                    Some(z) if z.ready => (&z.smoothed, &z.pwr, &z.pwr_peak, z.plan.rate_hz, 0.0, window.shown_centre),
+                    _ => (&smoothed, &pwr, &pwr_peak, current_rate, window.mix_offset_hz(), tuned_freq + lo_off),
+                };
+            let n = src_smoothed.len();
+            let (lo_bin, hi_bin) = window_bins(src_rate, n, src_off, window.shown_rate);
+            // From here on the window is the bins in the frame, not the
+            // request: its axis is theirs, so what the viewers draw and
+            // what is measured below both sit exactly on the signal.
+            let axis = frame_axis(src_dc, src_rate, n, lo_bin, hi_bin);
+            let (shown_centre, shown_rate) = (axis.center_hz, axis.rate_hz);
+            let mut shown_buf = src_smoothed[lo_bin..hi_bin].to_vec();
             // Guard scales with the bin width so the notch stays a few bins
             // wide whatever the span and FFT size are.
             let guard_hz = (shown_rate / shown_buf.len().max(1) as f64 * 3.0).max(4_000.0);
@@ -6308,8 +6569,8 @@ fn run_sdr(
                 notch_display(&mut shown_buf, shown_rate, &[dc_rel], dc_guard);
             }
             let shown: &[f32] = &shown_buf;
-            let wf_peak_shown: Vec<f32> = if pwr_peak.len() == n {
-                let mut v = pwr_peak[lo_bin..hi_bin.min(n)].to_vec();
+            let wf_peak_shown: Vec<f32> = if src_peak.len() == n {
+                let mut v = src_peak[lo_bin..hi_bin].to_vec();
                 notch_display(&mut v, shown_rate, &spurs, guard_hz);
                 if lo_off != 0.0 {
                     notch_display(&mut v, shown_rate, &[dc_rel], dc_guard);
@@ -6321,7 +6582,7 @@ fn run_sdr(
             // The waterfall's row: the same window, notched the same way,
             // but neither bin-smoothed nor averaged across frames.
             let wf_row: Vec<f32> = {
-                let mut v = pwr[lo_bin..hi_bin.min(n)].to_vec();
+                let mut v = src_pwr[lo_bin..hi_bin].to_vec();
                 notch_display(&mut v, shown_rate, &spurs, guard_hz);
                 if lo_off != 0.0 {
                     notch_display(&mut v, shown_rate, &[dc_rel], dc_guard);
@@ -6709,6 +6970,254 @@ mod tests {
         SdrMode::Lsb.set_filter(None);
     }
     use super::*;
+
+    /// The zoom path's bin shrinks with the zoom: between a half and one
+    /// display pixel wide at every zoom, where one FFT over the span, capped
+    /// at 8192, left a 977 Hz bin at 8 MS/s whatever the zoom.
+    #[test]
+    fn zoom_bins_narrow_with_the_zoom() {
+        let bins = 2048usize;
+        for &fs in &[8.0e6, 2.4e6, 2.048e6] {
+            assert_eq!(fft_size_for(bins), bins, "the 1x view keeps one bin per pixel");
+            for &zoom in &[2.0, 3.0, 4.0, 8.0, 11.3, 16.0, 32.0] {
+                let shown = fs / zoom;
+                let p = zoom_plan(fs, shown, bins);
+                let pixel_hz = shown / bins as f64;
+                assert!(
+                    p.bin_hz() <= pixel_hz * 1.0001 && p.bin_hz() > pixel_hz / 2.0,
+                    "fs {fs} zoom {zoom}: bin {} Hz for a {pixel_hz} Hz pixel ({p:?})",
+                    p.bin_hz()
+                );
+                assert!(p.rate_hz >= shown * ZOOM_GUARD, "guard band kept: {p:?}");
+                assert!(p.stages == 0 || p.rate_hz < shown * ZOOM_GUARD * 2.0, "no stage left on the table: {p:?}");
+                assert!(p.fft_size <= if p.stages == 0 { 8192 } else { 16384 }, "{p:?}");
+                assert!((p.fs_in / 2f64.powi(p.stages as i32) - p.rate_hz).abs() < 1e-6);
+            }
+        }
+        // The case that prompted this: 40 m at 8 MS/s, zoomed 32x on a
+        // 2048-bin display. 250 kHz across 2048 bins of 122 Hz, where the
+        // full-span FFT gave 256 bins of 977 Hz.
+        let p = zoom_plan(8.0e6, 8.0e6 / 32.0, 2048);
+        assert_eq!((p.stages, p.rate_hz, p.fft_size), (4, 500_000.0, 4096));
+        assert!((p.bin_hz() - 122.07).abs() < 0.01, "{}", p.bin_hz());
+        let old_bin = 8.0e6 / 8192.0;
+        assert!(old_bin / p.bin_hz() > 7.9);
+    }
+
+    /// Run a span through a zoom path the way the loop does, in blocks, and
+    /// take one frame's spectrum.
+    fn zoom_take(fs: f64, zoom: f64, bins: usize, mix_offset_hz: f64, tones: &[(f64, f32)], seconds: f64) -> ZoomPath {
+        let shown = fs / zoom;
+        let mut z = ZoomPath::new(zoom_plan(fs, shown, bins), shown, mix_offset_hz);
+        let n = (fs * seconds) as usize;
+        let mut block = Vec::with_capacity(16_384);
+        let mut t = 0usize;
+        while t < n {
+            block.clear();
+            for i in t..(t + 16_384).min(n) {
+                let mut s = num_complex::Complex32::new(0.0, 0.0);
+                for &(hz, amp) in tones {
+                    let ph = 2.0 * std::f64::consts::PI * hz * i as f64 / fs;
+                    s += num_complex::Complex32::new((ph.cos() * f64::from(amp)) as f32, (ph.sin() * f64::from(amp)) as f32);
+                }
+                block.push(s);
+            }
+            z.ingest(&block);
+            t += block.len();
+        }
+        assert!(z.take() > 0, "a frame's worth of samples completes at least one segment");
+        assert!(z.ready);
+        z
+    }
+
+    /// A tone in the window lands in the bin its frequency says, at its
+    /// level, after the mix and the halfband cascade; one outside the
+    /// window, where it would fold onto the window without the filters,
+    /// is stopped.
+    #[test]
+    fn a_tone_lands_in_its_zoom_bin_after_mix_and_decimation() {
+        let (fs, zoom, bins) = (8.0e6, 32.0, 2048usize);
+        let plan = zoom_plan(fs, fs / zoom, bins);
+        assert_eq!(plan.fft_size, 4096);
+        let bin_hz = plan.bin_hz();
+        // The window sits 1 MHz above the hardware center, as it does with
+        // the receive frequency off the LO; the tone 303 bins above the
+        // window's center, on a bin so the level reads true.
+        let mix = 1.0e6;
+        let tone_off = 303.0 * bin_hz;
+        let z = zoom_take(fs, zoom, bins, mix, &[(mix + tone_off, 0.5)], 0.03);
+        let n = z.pwr.len();
+        assert_eq!(n, plan.fft_size);
+        let (peak_bin, &peak_db) = z.pwr.iter().enumerate().max_by(|a, b| a.1.total_cmp(b.1)).unwrap();
+        let expect = n / 2 + 303;
+        assert!(
+            peak_bin.abs_diff(expect) <= 1,
+            "tone at +{tone_off:.0} Hz read in bin {peak_bin}, expected {expect}"
+        );
+        // 0.5 amplitude is -6 dBFS; the cascade has unity gain in its passband.
+        assert!((peak_db + 6.0).abs() < 1.0, "tone level {peak_db:.2} dBFS");
+        // Away from the tone the window is clean to the window's sidelobes.
+        let far = z.pwr[..expect - 40].iter().chain(&z.pwr[expect + 40..]).cloned().fold(f32::MIN, f32::max);
+        assert!(far < -80.0, "leakage {far:.1} dBFS");
+        // The same read through the frame's own mapping: the window is the
+        // middle 250 kHz of the 500 kHz the transform spans, so the tone
+        // sits at its offset from the window's center.
+        let shown = fs / zoom;
+        let lo_bin = ((-shown / 2.0 / plan.rate_hz + 0.5) * n as f64).round() as usize;
+        let hi_bin = ((shown / 2.0 / plan.rate_hz + 0.5) * n as f64).round() as usize;
+        assert_eq!(hi_bin - lo_bin, bins, "the window covers one bin per display pixel");
+        let row = &z.pwr[lo_bin..hi_bin];
+        let hz_of = |i: usize| -shown / 2.0 + (i as f64 + 0.5) * shown / row.len() as f64;
+        let (i, _) = row.iter().enumerate().max_by(|a, b| a.1.total_cmp(b.1)).unwrap();
+        assert!((hz_of(i) - tone_off).abs() <= bin_hz, "row peak at {:.0} Hz, tone at {tone_off:.0}", hz_of(i));
+
+        // Aliases. A tone the decimation would fold onto the window — at
+        // the decimated rate less its offset, on either side — must not
+        // show there. At the edge of the guard band the last stage is just
+        // reaching its stopband; deeper in, the floor is the window's.
+        for (alias_off, limit_db) in [(plan.rate_hz - 125_000.0, -75.0), (plan.rate_hz - 60_000.0, -80.0), (-(plan.rate_hz - 20_000.0), -80.0)] {
+            let z = zoom_take(fs, zoom, bins, mix, &[(mix + alias_off, 0.5)], 0.03);
+            let folded = if alias_off > 0.0 { alias_off - plan.rate_hz } else { alias_off + plan.rate_hz };
+            let bin = ((folded / plan.rate_hz + 0.5) * n as f64).round() as usize;
+            let worst = z.pwr[bin.saturating_sub(3)..(bin + 4).min(n)].iter().cloned().fold(f32::MIN, f32::max);
+            assert!(worst < limit_db, "tone at {alias_off:.0} Hz folds to {folded:.0} Hz at {worst:.1} dBFS (limit {limit_db})");
+        }
+    }
+
+    /// What the zoom path costs per second of span at the heaviest zoom,
+    /// against the full-span transform it replaces there. Run with
+    /// `cargo test --release -p usdr-server zoom_path_cost -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn zoom_path_cost() {
+        use std::time::Instant;
+        let (fs, bins) = (8.0e6, 2048usize);
+        let block: Vec<num_complex::Complex32> = (0..16_384)
+            .map(|i| num_complex::Complex32::new((i as f32 * 0.37).sin() * 0.3, (i as f32 * 0.11).cos() * 0.3))
+            .collect();
+        let blocks = (fs / block.len() as f64) as usize;
+        for zoom in [2.0, 8.0, 32.0] {
+            let shown = fs / zoom;
+            let plan = zoom_plan(fs, shown, bins);
+            let mut z = ZoomPath::new(plan, shown, 1.0e6);
+            let at = Instant::now();
+            for _ in 0..blocks {
+                z.ingest(&block);
+            }
+            z.take();
+            let ms = at.elapsed().as_secs_f64() * 1000.0;
+            println!("zoom {zoom:>4}x: {plan:?} taps {:?}: {ms:.0} ms per second of span", z.decim.taps());
+            // And its parts.
+            let mut nco = scannerd_dsp::Nco::new();
+            nco.set_freq(1.0e6, fs);
+            let mut mixed = Vec::new();
+            let at = Instant::now();
+            for _ in 0..blocks {
+                nco.mix(&block, &mut mixed);
+            }
+            let mix_ms = at.elapsed().as_secs_f64() * 1000.0;
+            let mut decim = scannerd_dsp::HalfbandChain::new(fs, shown / 2.0, plan.stages);
+            let mut out = Vec::new();
+            let at = Instant::now();
+            for _ in 0..blocks {
+                decim.process(&block, &mut out);
+            }
+            let decim_ms = at.elapsed().as_secs_f64() * 1000.0;
+            println!("             mix {mix_ms:.0} ms, decimate {decim_ms:.0} ms");
+        }
+        // The old way: one 8192-point transform over the span at full duty.
+        let mut full = Spectrum::new(8192);
+        let at = Instant::now();
+        for _ in 0..blocks {
+            full.ingest_welch(&block);
+        }
+        let mut out = Vec::new();
+        full.take_dbfs(&mut out, None);
+        println!("full-span 8192: {:.0} ms per second of span", at.elapsed().as_secs_f64() * 1000.0);
+    }
+
+    /// The frame's own axis puts a tone exactly where it is, at every zoom
+    /// and wherever the window sits: the stamped center and rate describe
+    /// the bins in the frame, not the window that was asked for. Stamping
+    /// the request drew signals up to a bin off (half a bin from rounding
+    /// the first bin, up to another half from the two edges rounding
+    /// differently) — 488 Hz against a 3.6 kHz passband at 32x on 40 m.
+    #[test]
+    fn the_frame_axis_puts_a_tone_where_its_bin_says() {
+        let (fs, bins) = (8.0e6, 2048usize);
+        let peak_of = |row: &[f32]| row.iter().enumerate().max_by(|a, b| a.1.total_cmp(b.1)).unwrap().0;
+        // Zoomed: the window's center is at the zoom path's DC.
+        for (zoom, mix, k) in [(32.0, 1.0e6, 300i64), (32.0, -2.3e6, -517), (8.0, 0.0, 777), (2.0, 123_456.7, -1_013), (11.3, 0.9e6, 41)] {
+            let shown = fs / zoom;
+            let plan = zoom_plan(fs, shown, bins);
+            let bin = plan.bin_hz();
+            // The tone on a bin of the zoom transform, so the read is exact.
+            let tone = mix + k as f64 * bin;
+            let z = zoom_take(fs, zoom, bins, mix, &[(tone, 0.5)], 0.03);
+            let n = z.pwr.len();
+            let (lo, hi) = window_bins(plan.rate_hz, n, 0.0, shown);
+            let axis = frame_axis(mix, plan.rate_hz, n, lo, hi);
+            let row = &z.pwr[lo..hi];
+            assert!(row.len() >= bins && row.len() < 2 * bins, "{} bins for {bins} pixels", row.len());
+            let i = peak_of(row);
+            let at = axis.bin_hz(i, row.len());
+            assert!((at - tone).abs() < bin * 1e-3, "zoom {zoom} window {mix}: tone {tone:.1} drawn at {at:.1} ({axis:?}, bin {i} of {})", row.len());
+            // The axis spans the bins, not the request: a bin width less
+            // than the window asked for, and never more.
+            assert!((axis.rate_hz - (row.len() - 1) as f64 * bin).abs() < 1e-6);
+            assert!(axis.rate_hz <= shown);
+        }
+        // 1x: the full span with the LO 100 kHz off the receive frequency,
+        // as the zero-IF plan parks it. The frame's DC is the hardware
+        // center; the window is the part either side of the dial.
+        let (tuned, lo_off) = (7.150e6, 100_000.0);
+        let n = fft_size_for(bins);
+        let full = Spectrum::new(n);
+        let mut spectrum = full;
+        let bin = fs / n as f64;
+        // On a bin of the full-span transform, whose DC is the hardware center.
+        let tone = tuned + lo_off + 234.0 * bin;
+        let mut block = Vec::new();
+        for i in 0..(fs * 0.02) as usize {
+            let ph = 2.0 * std::f64::consts::PI * (tone - (tuned + lo_off)) * i as f64 / fs;
+            block.push(num_complex::Complex32::new(ph.cos() as f32 * 0.5, ph.sin() as f32 * 0.5));
+        }
+        spectrum.ingest_welch(&block);
+        let mut pwr = Vec::new();
+        assert!(spectrum.take_dbfs(&mut pwr, None) > 0);
+        let shown = fs - 2.0 * lo_off;
+        let (lo, hi) = window_bins(fs, n, -lo_off, shown);
+        let axis = frame_axis(tuned + lo_off, fs, n, lo, hi);
+        let row = &pwr[lo..hi];
+        let i = peak_of(row);
+        let at = axis.bin_hz(i, row.len());
+        assert!((at - tone).abs() < bin * 1e-3, "1x: tone {tone:.1} drawn at {at:.1} ({axis:?})");
+        // And the old stamp — the request — really was off here.
+        let requested = FrameAxis { center_hz: tuned, rate_hz: shown };
+        assert!((requested.bin_hz(i, row.len()) - tone).abs() > bin * 0.1);
+    }
+
+    /// Moving the window re-tunes the mixer and drops the old window's
+    /// accumulators; a plan that has not changed keeps its filters.
+    #[test]
+    fn a_zoom_retune_moves_the_window_without_a_rebuild() {
+        let (fs, zoom, bins) = (8.0e6, 32.0, 2048usize);
+        let plan = zoom_plan(fs, fs / zoom, bins);
+        let bin_hz = plan.bin_hz();
+        let mut z = zoom_take(fs, zoom, bins, 1.0e6, &[(1.0e6 + 100.0 * bin_hz, 0.5)], 0.03);
+        let n = z.pwr.len();
+        let peak = |p: &[f32]| p.iter().enumerate().max_by(|a, b| a.1.total_cmp(b.1)).unwrap().0;
+        assert_eq!(peak(&z.pwr), n / 2 + 100);
+        // Same window: nothing happens.
+        z.retune(1.0e6);
+        assert!(z.ready);
+        // Window 50 bins up: the tone reads 50 bins lower.
+        z.retune(1.0e6 + 50.0 * bin_hz);
+        assert!(!z.ready);
+        assert_eq!(z.plan, plan);
+        let moved = zoom_take(fs, zoom, bins, 1.0e6 + 50.0 * bin_hz, &[(1.0e6 + 100.0 * bin_hz, 0.5)], 0.03);
+        assert_eq!(peak(&moved.pwr), n / 2 + 50);
+    }
 
     /// The capability table the `/api/sdr/modes` endpoint serves must cover
     /// exactly the modes the server accepts, and each entry's serde name must
