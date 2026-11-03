@@ -212,8 +212,15 @@ pub fn key_sized(ui: &mut Ui, label: &str, on: bool, tally: Color32, size: egui:
 /// A compact selector chip: lit with its tally color when on, no LED.
 /// For rows of choices (modes, presets) where a full key is too wide.
 pub fn chip_key(ui: &mut Ui, label: &str, on: bool, tally: Color32) -> Response {
+    chip_key_w(ui, label, on, tally, 0.0)
+}
+
+/// A chip key `width` wide (0: as wide as its label), for grids of chips
+/// whose edges line up.
+pub fn chip_key_w(ui: &mut Ui, label: &str, on: bool, tally: Color32, width: f32) -> Response {
     let galley = ui.painter().layout_no_wrap(label.to_string(), theme::mono_bold(10.5), Color32::PLACEHOLDER);
-    let (rect, resp) = ui.allocate_exact_size(vec2(galley.size().x + 14.0, 22.0), Sense::click());
+    let w = if width > 0.0 { width } else { galley.size().x + 14.0 };
+    let (rect, resp) = ui.allocate_exact_size(vec2(w, 22.0), Sense::click());
     let enabled = ui.is_enabled();
     resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, enabled, on, label));
     let t = ui.ctx().animate_bool_with_time(resp.id.with("on"), on, 0.15);
@@ -224,6 +231,24 @@ pub fn chip_key(ui: &mut Ui, label: &str, on: bool, tally: Color32) -> Response 
     p.rect(rect, CornerRadius::same(3), bg, Stroke::new(1.0, stroke), egui::StrokeKind::Inside);
     let c = theme::lerp(theme::text_2(), theme::text(), t.max(hover));
     p.galley(rect.center() - galley.size() / 2.0, galley, if enabled { c } else { theme::text_3() });
+    resp
+}
+
+/// A small outlined key for a header line, 18 px tall: the tally outlines
+/// it always, so it reads as something to press, and fills it when `lit`.
+pub fn mini_key(ui: &mut Ui, label: &str, tally: Color32, lit: bool) -> Response {
+    let galley = ui.painter().layout_no_wrap(label.to_string(), theme::mono_bold(10.0), Color32::PLACEHOLDER);
+    let (rect, resp) = ui.allocate_exact_size(vec2(galley.size().x + 12.0, 18.0), Sense::click());
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, label));
+    let hover = ui.ctx().animate_bool_with_time(resp.id.with("hv"), resp.hovered(), 0.12);
+    let t = ui.ctx().animate_bool_with_time(resp.id.with("lit"), lit, 0.2);
+    let p = ui.painter();
+    let bg = theme::lerp(alpha(tally, 0.06 + 0.10 * hover), alpha(tally, 0.24), t);
+    p.rect(rect, CornerRadius::same(3), bg, Stroke::new(1.0, alpha(tally, 0.45 + 0.4 * hover.max(t))), egui::StrokeKind::Inside);
+    p.galley(rect.center() - galley.size() / 2.0, galley, theme::lerp(alpha(tally, 0.85), theme::text(), t));
+    if resp.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
     resp
 }
 
@@ -306,10 +331,15 @@ impl<F: Fn(f64) -> String> Fader<'_, F> {
         let value_text = (self.text)(*self.value);
         let track = if compact {
             let lw = p.layout_no_wrap(self.label.to_string(), theme::mono(10.5), theme::text_3()).size().x;
-            let vw = p.layout_no_wrap(value_text.clone(), theme::mono_bold(11.0), theme::text()).size().x.max(44.0);
+            // Room for the widest the readout gets over the range, no more,
+            // and the value set just after the track's end, so a short
+            // reading sits by the thumb rather than across a gap.
+            let width_of = |t: String| p.layout_no_wrap(t, theme::mono_bold(11.0), theme::text()).size().x;
+            let vw = width_of(value_text.clone()).max(width_of((self.text)(self.min))).max(width_of((self.text)(self.max)));
             p.text(pos2(rect.left(), rect.center().y), Align2::LEFT_CENTER, self.label, theme::mono(10.5), alpha(theme::text_3(), a));
-            p.text(pos2(rect.right(), rect.center().y), Align2::RIGHT_CENTER, &value_text, theme::mono_bold(11.0), alpha(self.color, a.max(0.7)));
-            Rect::from_min_max(pos2(rect.left() + lw + 10.0, rect.center().y - 3.0), pos2(rect.right() - vw - 10.0, rect.center().y + 3.0))
+            let track = Rect::from_min_max(pos2(rect.left() + lw + 10.0, rect.center().y - 3.0), pos2(rect.right() - vw - 8.0, rect.center().y + 3.0));
+            p.text(pos2(track.right() + 8.0, rect.center().y), Align2::LEFT_CENTER, &value_text, theme::mono_bold(11.0), alpha(self.color, a.max(0.7)));
+            track
         } else {
             p.text(rect.left_top(), Align2::LEFT_TOP, self.label, theme::mono(10.5), alpha(theme::text_3(), a));
             p.text(rect.right_top(), Align2::RIGHT_TOP, &value_text, theme::mono_bold(11.5), alpha(self.color, a.max(0.7)));
@@ -447,4 +477,72 @@ pub fn protocol_color(p: &str) -> Color32 {
     } else {
         theme::CYAN
     }
+}
+
+fn reduce_motion_id() -> egui::Id {
+    egui::Id::new("usdr-reduce-motion")
+}
+
+/// Tell the widgets whether the operator has asked for less motion.
+pub fn set_reduce_motion(ctx: &egui::Context, on: bool) {
+    ctx.data_mut(|d| d.insert_temp(reduce_motion_id(), on));
+}
+
+fn reduced(ui: &Ui) -> bool {
+    ui.data(|d| d.get_temp(reduce_motion_id()).unwrap_or(false))
+}
+
+/// One choice of several, in one recessed track: the segments are set into
+/// it and the lit one slides to the choice, so it reads as "pick one" where
+/// a row of separate chips reads as "switch any". Returns the segment
+/// clicked when it is not the one already chosen.
+pub fn segmented(ui: &mut Ui, id: &str, labels: &[&str], current: Option<usize>, tally: Color32) -> Option<usize> {
+    let id = ui.make_persistent_id(("segmented", id));
+    let font = theme::mono_bold(10.5);
+    let widths: Vec<f32> = labels.iter().map(|l| ui.painter().layout_no_wrap(l.to_string(), font.clone(), Color32::PLACEHOLDER).size().x + 14.0).collect();
+    let pad = 2.0;
+    let total = widths.iter().sum::<f32>() + 2.0 * pad;
+    let (track, _) = ui.allocate_exact_size(vec2(total, 22.0), Sense::hover());
+    let enabled = ui.is_enabled();
+    let p = ui.painter().clone();
+    theme::well(&p, track, None);
+    let mut x = track.left() + pad;
+    let cells: Vec<Rect> = widths
+        .iter()
+        .map(|w| {
+            let r = Rect::from_min_size(pos2(x, track.top() + pad), vec2(*w, track.height() - 2.0 * pad));
+            x += w;
+            r
+        })
+        .collect();
+    // The lit segment glides between choices.
+    if let Some(c) = current.and_then(|i| cells.get(i)) {
+        let t = if reduced(ui) { 0.0 } else { 0.14 };
+        let l = ui.ctx().animate_value_with_time(id.with("l"), c.left(), t);
+        let r = ui.ctx().animate_value_with_time(id.with("r"), c.right(), t);
+        let lit = Rect::from_min_max(pos2(l, c.top()), pos2(r, c.bottom()));
+        let a = if enabled { 1.0 } else { 0.45 };
+        p.rect(lit, CornerRadius::same(3), alpha(tally, 0.24 * a), Stroke::new(1.0, alpha(tally, 0.7 * a)), egui::StrokeKind::Inside);
+    }
+    let mut out = None;
+    for (i, (cell, label)) in cells.iter().zip(labels).enumerate() {
+        let resp = ui.interact(*cell, id.with(i), if enabled { Sense::click() } else { Sense::hover() });
+        let on = current == Some(i);
+        resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::RadioButton, enabled, on, *label));
+        let hover = ui.ctx().animate_bool_with_time(resp.id.with("hv"), enabled && resp.hovered() && !on, 0.12);
+        if hover > 0.0 {
+            p.rect_filled(*cell, CornerRadius::same(3), alpha(theme::surface_4(), 0.6 * hover));
+        }
+        // A hairline between two unlit neighbors, so the segments read as set
+        // into one track.
+        if i > 0 && !on && current != Some(i - 1) {
+            p.line_segment([pos2(cell.left(), cell.top() + 4.0), pos2(cell.left(), cell.bottom() - 4.0)], Stroke::new(1.0, theme::line()));
+        }
+        let c = if !enabled { theme::text_3() } else if on { theme::text() } else { theme::lerp(theme::text_3(), theme::text_2(), 0.6 + 0.4 * hover) };
+        p.text(cell.center(), Align2::CENTER_CENTER, *label, font.clone(), c);
+        if resp.clicked() && !on {
+            out = Some(i);
+        }
+    }
+    out
 }

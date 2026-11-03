@@ -292,6 +292,29 @@ pub fn glass_top(painter: &egui::Painter, r: egui::Rect) {
     );
 }
 
+/// A recessed instrument well: the ground sunk into the panel, a shadow
+/// along its top inner edge, a lit lip along its foot, and a hairline that
+/// takes the tint of what the well belongs to (amber for A, violet for B).
+pub fn well(painter: &egui::Painter, r: egui::Rect, tint: Option<Color32>) {
+    let cr = egui::CornerRadius::same(RADIUS);
+    painter.rect_filled(r, cr, ink());
+    let shade = egui::Rect::from_min_size(r.min, egui::vec2(r.width(), (r.height() * 0.4).min(7.0)));
+    let mut mesh = egui::Mesh::default();
+    mesh.colored_vertex(shade.left_top(), Color32::from_black_alpha(110));
+    mesh.colored_vertex(shade.right_top(), Color32::from_black_alpha(110));
+    mesh.colored_vertex(shade.left_bottom(), Color32::TRANSPARENT);
+    mesh.colored_vertex(shade.right_bottom(), Color32::TRANSPARENT);
+    mesh.add_triangle(0, 1, 2);
+    mesh.add_triangle(2, 1, 3);
+    painter.add(egui::Shape::mesh(mesh));
+    painter.line_segment(
+        [r.left_bottom() + egui::vec2(RADIUS as f32, 0.5), r.right_bottom() + egui::vec2(-(RADIUS as f32), 0.5)],
+        Stroke::new(1.0, Color32::from_white_alpha(14)),
+    );
+    let edge = tint.map_or(line(), |t| alpha(t, 0.30));
+    painter.rect_stroke(r, cr, Stroke::new(1.0, edge), egui::StrokeKind::Inside);
+}
+
 /// Text in brushed steel: bright above the crease, dark through it, and a
 /// lighter band below, the chrome masthead's ramp in three cuts. Gunmetal
 /// tones on Ink would fight the warm ground, so there it is plain text.

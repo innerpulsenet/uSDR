@@ -575,17 +575,21 @@ The window is laid out by what each control acts on:
 
 What it has that the page does not:
 
-- **The panafall.** A trace that rises fast and falls slowly, a fill whose
-  heat follows level, peak hold and the server's max hold, decode spots as
-  labels that stack instead of overlapping, and a slice flag at the carrier
-  with the frequency, mode, filter, a meter and what the classifier hears.
-  Five styles (Ember, Midnight, Classic, Glacier, Phosphor) each bring their
-  waterfall palette. The waterfall keeps its history in dB, so a palette,
-  black level or contrast change recolors all of it (a palette crossfades),
-  a retune slides it under the frequencies it was recorded at, and it
-  scrolls on the frame clock with a sub-row offset. Its time marks are
-  measured from the rows. Drag the display to pan, drag the dB scale to set
-  the range, drag the bar under the spectrum to resize the two.
+- **The panafall.** A trace that rises at once and falls slowly, a fill
+  whose heat follows level, peak hold and the server's max hold, decode
+  spots as labels that stack instead of overlapping, and a slice flag at the
+  carrier with the frequency, mode, filter, a meter and what the classifier
+  hears. Five styles (Ember, Midnight, Classic, Glacier, Phosphor) each
+  bring their waterfall palette. The waterfall paints what was measured:
+  each frame's own row (AVG and the trace's bin smoothing never reach it),
+  every screen column the strongest bin under it, bins as crisp columns when
+  zoomed in, and each row the moment it arrives. It keeps its history in dB,
+  so a palette, black level or contrast change recolors all of it (a palette
+  crossfades), and a retune slides it under the frequencies it was recorded
+  at. Its time marks are measured from the rows, and the palette's ramp runs
+  down the gutter beside them. Drag the display to pan, drag the dB scale to
+  set the range, drag the grip under the spectrum to resize the two, and
+  drag the grips on the passband's edges to set the filter.
 - **A second receiver.** Receiver B listens anywhere inside the span (NFM,
   AM, USB, LSB or WFM) with its own flag, passband and meter; middle-click
   or the context menu puts it there. The page skips B's audio.

@@ -392,6 +392,7 @@ impl Scope {
         if let Some(tex) = &self.mini_tex {
             painter.image(tex.id(), mini, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
         }
+        painter.rect_stroke(mini, egui::CornerRadius::ZERO, Stroke::new(1.0, theme::line()), egui::StrokeKind::Inside);
 
         // ---- right: time domain
         grid(&painter, right, 8, 4);

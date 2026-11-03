@@ -27,17 +27,18 @@ pub fn dock(app: &mut App, ui: &mut Ui) {
             .show(ui, |ui| scope(app, ui));
         app.prefs.scope_width = resp.response.rect.width();
     }
-    ui.horizontal(|ui| {
+    let row = ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 4.0;
         let tabs = [
-            (DockTab::Decodes, format!("Decodes {}", app.decodes.len())),
-            (DockTab::Classifier, format!("Classifier {}", app.class_log.len())),
-            (DockTab::Calls, format!("Last heard {}", app.calls.len())),
-            (DockTab::Scan, "Scan".to_string()),
+            (DockTab::Decodes, "Decodes", Some(app.decodes.len())),
+            (DockTab::Classifier, "Classifier", Some(app.class_log.len())),
+            (DockTab::Calls, "Last heard", Some(app.calls.len())),
+            (DockTab::Scan, "Scan", None),
         ];
         let mut under: Option<egui::Rect> = None;
-        for (t, label) in tabs {
+        for (t, label, count) in tabs {
             let on = app.dock_tab == t;
-            let r = ui.add(egui::Button::selectable(on, RichText::new(label).font(theme::sans_semibold(12.0)).color(if on { theme::text() } else { theme::text_2() })).frame_when_inactive(false));
+            let r = tab(ui, label, count, on);
             if on {
                 under = Some(r.rect);
             }
@@ -51,16 +52,42 @@ pub fn dock(app: &mut App, ui: &mut Ui) {
             let rm = app.reduce_motion();
             let ease = |id: &str, v: f32| if rm { v } else { ctx.animate_value_with_time(egui::Id::new(("dock-tab", id)), v, 0.15) };
             let (l, r) = (ease("l", rr.left() + 4.0), ease("r", rr.right() - 4.0));
-            ui.painter().rect_filled(egui::Rect::from_min_max(egui::pos2(l, rr.bottom()), egui::pos2(r, rr.bottom() + 2.0)), egui::CornerRadius::same(1), theme::AMBER);
+            ui.painter().rect_filled(egui::Rect::from_min_max(egui::pos2(l, rr.bottom() - 1.0), egui::pos2(r, rr.bottom() + 1.0)), egui::CornerRadius::same(1), theme::AMBER);
         }
     });
-    ui.add_space(4.0);
+    // A rule the width of the logs under the tabs, the underline riding on it.
+    let y = row.response.rect.bottom();
+    let x1 = ui.max_rect().right();
+    let p = ui.painter();
+    p.line_segment([egui::pos2(row.response.rect.left(), y), egui::pos2(x1, y)], egui::Stroke::new(1.0, theme::line()));
+    ui.add_space(6.0);
     match app.dock_tab {
         DockTab::Decodes => decodes(app, ui),
         DockTab::Classifier => classifier(app, ui),
         DockTab::Calls => calls(app, ui),
         DockTab::Scan => scan(app, ui),
     }
+}
+
+/// A dock tab: its name and, when it keeps a log, a pill with the count.
+fn tab(ui: &mut Ui, label: &str, count: Option<usize>, on: bool) -> egui::Response {
+    let p = ui.painter().clone();
+    let g = p.layout_no_wrap(label.to_string(), theme::sans_semibold(12.0), egui::Color32::PLACEHOLDER);
+    let badge = count.map(|n| p.layout_no_wrap(n.to_string(), theme::mono_bold(10.0), egui::Color32::PLACEHOLDER));
+    let bw = badge.as_ref().map_or(0.0, |b| b.size().x + 10.0 + 6.0);
+    let (rect, resp) = ui.allocate_exact_size(vec2(g.size().x + bw + 16.0, 26.0), egui::Sense::click());
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, on, label));
+    let hover = ui.ctx().animate_bool_with_time(resp.id.with("hv"), resp.hovered(), 0.12);
+    let c = if on { theme::text() } else { theme::lerp(theme::text_2(), theme::text(), hover) };
+    let y = rect.center().y - 1.0;
+    p.galley(egui::pos2(rect.left() + 8.0, y - g.size().y / 2.0), g.clone(), c);
+    if let (Some(b), Some(n)) = (badge, count) {
+        let pill = egui::Rect::from_min_size(egui::pos2(rect.left() + 8.0 + g.size().x + 6.0, y - 8.0), vec2(b.size().x + 10.0, 16.0));
+        let (fill, text) = if n > 0 && on { (alpha(theme::AMBER, 0.22), theme::AMBER) } else if n > 0 { (theme::surface_3(), theme::text_2()) } else { (theme::surface_2(), theme::text_3()) };
+        p.rect(pill, egui::CornerRadius::same(8), fill, egui::Stroke::new(1.0, if n > 0 && on { alpha(theme::AMBER, 0.5) } else { theme::line() }), egui::StrokeKind::Inside);
+        p.galley(pill.center() - b.size() / 2.0, b, text);
+    }
+    resp
 }
 
 /// A fixed-width column of a log row, so the columns after it line up.
@@ -118,7 +145,29 @@ fn decodes(app: &mut App, ui: &mut Ui) {
         // Top-down: inside the row above, a plain allocation would lay the
         // frames out side by side.
         ui.allocate_ui_with_layout(vec2(list_w, avail.y), egui::Layout::top_down(egui::Align::Min), |ui| {
-            ui.label(mono(if visible.len() == total { format!("{total} frames") } else { format!("{} of {total} frames", visible.len()) }, theme::text_3()));
+            // Fixed columns, sized to the longest protocol and kind in view.
+            let char_w = 6.7;
+            let proto_w = visible.iter().map(|&i| app.decodes[i].ev.protocol.chars().count() + 3).max().unwrap_or(6).clamp(6, 11) as f32 * char_w;
+            let kind_w = visible.iter().map(|&i| app.decodes[i].ev.kind.chars().count()).max().unwrap_or(4).clamp(4, 16) as f32 * char_w;
+            let count = if visible.len() == total { format!("{total} frames") } else { format!("{} of {total} frames", visible.len()) };
+            if total == 0 {
+                ui.label(mono(count, theme::text_3()));
+            } else {
+                // Column heads over the columns, the count at the end.
+                let head = |t: &str| RichText::new(t).font(theme::mono(10.0)).color(theme::text_3()).extra_letter_spacing(0.6);
+                let r = ui.horizontal(|ui| {
+                    ui.set_min_height(18.0);
+                    ui.label(mono("▸", egui::Color32::TRANSPARENT));
+                    cell(ui, 8.0 * char_w, head("TIME"), egui::Sense::hover());
+                    cell(ui, 9.0 * char_w, head("FREQ MHz"), egui::Sense::hover());
+                    cell(ui, proto_w, head("PROTO"), egui::Sense::hover());
+                    cell(ui, kind_w, head("KIND"), egui::Sense::hover());
+                    ui.label(head("SUMMARY"));
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| ui.label(mono(count, theme::text_3())));
+                });
+                let y = r.response.rect.bottom() + 1.0;
+                ui.painter().line_segment([egui::pos2(r.response.rect.left(), y), egui::pos2(r.response.rect.right(), y)], egui::Stroke::new(1.0, theme::line()));
+            }
             // Said inside the list, so a short dock scrolls it rather than
             // growing past its panel.
             let empty = (total == 0).then_some(match app.status.mode {
@@ -137,10 +186,6 @@ fn decodes(app: &mut App, ui: &mut Ui) {
                 area = area.vertical_scroll_offset(app.decode_scroll + app.decodes_added as f32 * row_h);
             }
             app.decodes_added = 0;
-            // Fixed columns, sized to the longest protocol and kind in view.
-            let char_w = 6.7;
-            let proto_w = visible.iter().map(|&i| app.decodes[i].ev.protocol.chars().count() + 2).max().unwrap_or(5).clamp(5, 10) as f32 * char_w;
-            let kind_w = visible.iter().map(|&i| app.decodes[i].ev.kind.chars().count()).max().unwrap_or(4).clamp(4, 16) as f32 * char_w;
             let mut toggle: Option<usize> = None;
             let out = area.show(ui, |ui| {
                 if let Some(text) = empty {
@@ -324,21 +369,16 @@ fn scope(app: &mut App, ui: &mut Ui) {
             ui.add_space(4.0);
             ui.spacing_mut().item_spacing.x = 3.0;
             let cur = app.scope.sub_for(mode);
-            for &v in views {
-                if widgets::chip_key(ui, v.label(), cur == v, theme::AMBER).clicked() {
-                    app.scope.set_view(mode, v);
-                }
+            let labels: Vec<&str> = views.iter().map(|v| v.label()).collect();
+            if let Some(i) = widgets::segmented(ui, "scope-view", &labels, views.iter().position(|v| *v == cur), theme::AMBER) {
+                app.scope.set_view(mode, views[i]);
             }
         }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            ui.spacing_mut().item_spacing.x = 3.0;
-            for hz in [25.0f32, 10.0, 5.0] {
-                if widgets::chip_key(ui, &format!("{hz:.0} Hz"), (app.prefs.scope_rate_hz - hz).abs() < 0.1, theme::OK)
-                    .on_hover_text("How often the spectrum side updates; the waveform takes every frame")
-                    .clicked()
-                {
-                    app.prefs.scope_rate_hz = hz;
-                }
+            let rates = [5.0f32, 10.0, 25.0];
+            let cur = rates.iter().position(|hz| (app.prefs.scope_rate_hz - hz).abs() < 0.1);
+            if let Some(i) = widgets::segmented(ui, "scope-rate", &["5 Hz", "10 Hz", "25 Hz"], cur, theme::OK) {
+                app.prefs.scope_rate_hz = rates[i];
             }
         });
     });

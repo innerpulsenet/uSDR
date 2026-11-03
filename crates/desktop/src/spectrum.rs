@@ -1,13 +1,17 @@
 //! The panafall: panadapter over waterfall, one widget, one frequency axis.
 //!
 //! The panadapter draws the server's Welch-averaged trace with a little
-//! visual smoothing (it rises fast and falls slowly, so a burst shows at full
-//! level and the floor stops flickering), a fill whose heat follows level, a
-//! decaying peak hold, the server's max hold, the passband with its slice
-//! flag, decode spots, spurs and scan marks. The waterfall keeps its history
+//! visual smoothing (it rises at once and falls slowly, so a burst shows at
+//! full level on its first frame and the floor stops flickering), a fill
+//! whose heat follows level, a decaying peak hold, the server's max hold, the
+//! passband with its slice flag, decode spots, spurs and scan marks.
+//!
+//! The waterfall paints what was measured: each frame's own row (not the
+//! trace's smoothed or averaged one, when the server sends it), every screen
+//! column the strongest bin under it, bins drawn as crisp columns when
+//! zoomed in, and each row shown the moment it arrives. It keeps its history
 //! in dB, so a palette or contrast change recolors all of it, not just the
-//! rows that arrive afterwards; it scrolls on the frame clock with a
-//! sub-row offset, so it moves smoothly at any refresh rate.
+//! rows that arrive afterwards.
 
 use crate::colormap::Colormap;
 use crate::theme::{self, alpha};
@@ -199,9 +203,9 @@ pub struct Hold {
 }
 
 /// What a held picture shows: its top row (counted from the first row ever
-/// archived, so it does not change as rows arrive), its height, the levels
+/// archived, so it does not change as rows arrive), its size, the levels
 /// and palette, and the frequency axis.
-type HeldKey = (u64, usize, (f32, f32, Colormap), u64);
+type HeldKey = (u64, [usize; 2], (f32, f32, Colormap), u64);
 const WF_MAX_COLS: usize = 4096;
 /// The waterfall history is kept as hundredths of a dB above −200 dBFS, so
 /// one table lookup colors a cell; 0 is the "nothing yet" of an empty row.
@@ -210,6 +214,31 @@ const WF_Q_PER_DB: f32 = 100.0;
 
 fn wf_quantize(db: f32) -> u16 {
     ((db - WF_Q_FLOOR_DB) * WF_Q_PER_DB).round().clamp(0.0, 65535.0) as u16
+}
+
+/// The bins under each of `out_cols` texture columns, as the trace is
+/// decimated; empty when there are no more bins than columns.
+fn col_bounds(n: usize, out_cols: usize) -> Vec<(usize, usize)> {
+    if out_cols >= n {
+        return Vec::new();
+    }
+    (0..out_cols)
+        .map(|c| {
+            let a = c * n / out_cols;
+            (a, ((c + 1) * n / out_cols).max(a + 1).min(n))
+        })
+        .collect()
+}
+
+/// One history row as texture columns: as it is when `bounds` is empty,
+/// else each column the strongest bin it covers, so the waterfall and the
+/// trace agree on what is there.
+fn color_row(q: &[u16], bounds: &[(usize, usize)], lut: &[Color32], out: &mut Vec<Color32>) {
+    if bounds.is_empty() {
+        out.extend(q.iter().map(|&v| lut[v as usize]));
+        return;
+    }
+    out.extend(bounds.iter().map(|&(a, b)| lut[q[a..b].iter().copied().max().unwrap_or(0) as usize]));
 }
 
 /// A palette change in progress: the picture in the old palette, fading
@@ -256,6 +285,9 @@ pub struct Panafall {
     wf_head: usize,
     wf_count: usize,
     wf_tex: Option<egui::TextureHandle>,
+    /// Columns in the texture: the history's, or the screen's when the
+    /// history has more, each then the strongest bin under it.
+    wf_tex_cols: usize,
     /// Rows whose texture row is out of date. Only rows on screen are
     /// colored, so a recolor costs what is shown, not the whole history.
     wf_stale: Vec<bool>,
@@ -270,7 +302,6 @@ pub struct Panafall {
     /// Level (0..1 of the range) to palette index, with the tone curve baked in.
     tone: Vec<u8>,
     row_interval: f64,
-    last_row_at: f64,
     // Interaction
     drag_origin: Option<(f64, f32)>,
     drag_offset_px: f32,
@@ -351,6 +382,7 @@ impl Default for Panafall {
             wf_head: 0,
             wf_count: 0,
             wf_tex: None,
+            wf_tex_cols: 0,
             wf_stale: Vec::new(),
             wf_levels: (0.0, 0.0, Colormap::Ember),
             wf_lut: Vec::new(),
@@ -358,7 +390,6 @@ impl Default for Panafall {
             auto_black: f32::NAN,
             tone: (0..1024).map(|i| ((i as f32 / 1023.0).powf(0.86) * 255.0).round() as u8).collect(),
             row_interval: 0.04,
-            last_row_at: 0.0,
             drag_origin: None,
             drag_offset_px: 0.0,
             sql_drag: false,
@@ -478,7 +509,13 @@ impl Panafall {
             if *s < -190.0 {
                 *s = v;
             }
-            *s += (v - *s) * if v > *s { 0.6 } else { 0.22 };
+            // Up at once, so nothing waits a frame to show its level; down
+            // gently, so the floor does not flicker.
+            if v > *s {
+                *s = v;
+            } else {
+                *s += (v - *s) * 0.22;
+            }
         }
         for (p, &s) in self.peak.iter_mut().zip(&self.smooth) {
             *p = s.max(*p - 0.25);
@@ -510,13 +547,16 @@ impl Panafall {
             self.target_max = view.ceiling_db.max(view.floor_db + 10.0);
         }
 
-        // Waterfall row, from the burst-peak array when WF PEAK is on. The
-        // peak array runs hotter than the average; its median excess is
-        // taken off so the floor stays where the average put it.
+        // Waterfall row: the frame's own measurement, before the bin
+        // smoothing and AVG the trace gets (an older server sends only the
+        // trace's). From the burst-peak array when WF PEAK is on: it runs
+        // hotter than the mean, so its median excess is taken off and the
+        // floor stays where the mean put it.
+        let base: &[f32] = if f.wf_row.len() == n { &f.wf_row } else { &f.pwr };
         let row_src: &[f32] = if view.wf_peak && f.wf_peak.len() == n {
             let mut diffs: Vec<f32> = (0..n)
                 .step_by((n / 128).max(1))
-                .map(|i| f.wf_peak[i] - f.pwr[i])
+                .map(|i| f.wf_peak[i] - base[i])
                 .collect();
             diffs.sort_by(|a, b| a.total_cmp(b));
             let med = percentile(&diffs, 0.5);
@@ -524,7 +564,7 @@ impl Panafall {
             &f.wf_peak
         } else {
             self.wf_shift_db = 0.0;
-            &f.pwr
+            base
         };
         let cols = n.min(WF_MAX_COLS);
         if cols != self.wf_cols {
@@ -585,11 +625,11 @@ impl Panafall {
             h.back += 1;
         }
         self.wf_count = (self.wf_count + 1).min(WF_ROWS);
-        if self.last_row_at > 0.0 {
-            let dt = (now - self.last_row_at).clamp(0.005, 0.5);
+        let prev = self.wf_time[(self.wf_head + 1) % WF_ROWS];
+        if self.wf_count > 1 && prev > 0.0 {
+            let dt = (now - prev).clamp(0.005, 0.5);
             self.row_interval += (dt - self.row_interval) * 0.05;
         }
-        self.last_row_at = now;
         self.last_frame = Some(Instant::now());
     }
 
@@ -612,8 +652,10 @@ impl Panafall {
 
     /// The held waterfall: the archived rows from `back` downward, mapped to
     /// the display's current frequency axis, with UTC times beside them.
-    fn draw_held(&mut self, ui: &mut Ui, wf: Rect, time_axis: Rect, view: &View) {
+    fn draw_held(&mut self, ui: &mut Ui, wf: Rect, time_axis: Rect, view: &View, px_w: usize) {
         let rows_vis = (wf.height().round() as usize).clamp(1, 2048);
+        // As live: no more columns than pixels, each the strongest it covers.
+        let cols = ARCH_W.min(px_w.max(16));
         let (black, top) = self.wf_levels(view);
         let lut = view.palette.lut();
         let lo = self.center_hz - self.span_hz / 2.0;
@@ -623,7 +665,7 @@ impl Panafall {
         h.back = h.back.min(max_back);
         let key: HeldKey = (
             self.archived - h.back as u64,
-            rows_vis,
+            [cols, rows_vis],
             (black, top, view.palette),
             (lo as u64) ^ (span as u64).rotate_left(32),
         );
@@ -636,31 +678,39 @@ impl Panafall {
                 let k = ((v - black) * scale).clamp(0.0, 1023.0) as usize;
                 lut[self.tone[k] as usize]
             });
-            // Display column to archived column, `u32::MAX` where the row
-            // did not reach; rows of one span share it.
-            let mut map: Vec<u32> = Vec::with_capacity(ARCH_W);
+            // Display column to the archived columns it covers, `None`
+            // where the row did not reach; rows of one span share it.
+            let mut map: Vec<Option<(usize, usize)>> = Vec::with_capacity(cols);
             let mut map_for = (f64::NAN, f64::NAN);
-            let mut px = Vec::with_capacity(ARCH_W * rows_vis);
+            let mut px = Vec::with_capacity(cols * rows_vis);
             for r in 0..rows_vis {
                 match self.archive.get(h.back + r) {
                     Some(row) => {
                         if map_for != (row.lo_hz, row.hi_hz) {
                             map_for = (row.lo_hz, row.hi_hz);
                             let w = (row.hi_hz - row.lo_hz).max(1.0);
+                            let at = |hz: f64| (hz - row.lo_hz) / w * ARCH_W as f64;
                             map.clear();
-                            map.extend((0..ARCH_W).map(|c| {
-                                let hz = lo + c as f64 / (ARCH_W - 1) as f64 * span;
-                                let src = (hz - row.lo_hz) / w * (ARCH_W - 1) as f64;
-                                if src < 0.0 || src > (ARCH_W - 1) as f64 { u32::MAX } else { src as u32 }
+                            map.extend((0..cols).map(|c| {
+                                let a = at(lo + c as f64 / cols as f64 * span);
+                                let b = at(lo + (c + 1) as f64 / cols as f64 * span);
+                                if b <= 0.0 || a >= ARCH_W as f64 {
+                                    return None;
+                                }
+                                let a = a.max(0.0) as usize;
+                                Some((a, (b.ceil() as usize).clamp(a + 1, ARCH_W)))
                             }));
                         }
-                        px.extend(map.iter().map(|&m| if m == u32::MAX { ink } else { colors[row.q[m as usize] as usize] }));
+                        px.extend(map.iter().map(|m| match m {
+                            Some((a, b)) => colors[row.q[*a..*b].iter().copied().max().unwrap_or(0) as usize],
+                            None => ink,
+                        }));
                     }
-                    None => px.extend(std::iter::repeat_n(ink, ARCH_W)),
+                    None => px.extend(std::iter::repeat_n(ink, cols)),
                 }
             }
-            let img = egui::ColorImage::new([ARCH_W, rows_vis], px);
-            let opts = egui::TextureOptions::LINEAR;
+            let img = egui::ColorImage::new([cols, rows_vis], px);
+            let opts = egui::TextureOptions::NEAREST;
             match &mut h.tex {
                 Some(t) => t.set(img, opts),
                 None => h.tex = Some(ui.ctx().load_texture("waterfall-held", img, opts)),
@@ -682,7 +732,7 @@ impl Panafall {
             let secs = row.utc.duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
             p.line_segment([pos2(time_axis.left(), y), pos2(time_axis.left() + 4.0, y)], Stroke::new(1.0, theme::text_3()));
             p.text(
-                pos2(time_axis.right() - 2.0, y + 1.0),
+                pos2(time_axis.right() - 7.0, y + 1.0),
                 Align2::RIGHT_TOP,
                 format!("{:02}:{:02}", (secs / 60) % 60, secs % 60),
                 theme::mono(10.0),
@@ -723,10 +773,21 @@ impl Panafall {
     }
 
     /// Bring the waterfall texture up to date for the `rows_vis` rows on
-    /// screen: new rows, and every row after a palette, level or retune.
-    fn upload(&mut self, ctx: &egui::Context, view: &View, now: f64, reduce_motion: bool, rows_vis: usize) {
+    /// screen, `px_w` pixels wide: new rows, and every row after a palette,
+    /// level, width or retune.
+    fn upload(&mut self, ctx: &egui::Context, view: &View, now: f64, reduce_motion: bool, rows_vis: usize, px_w: usize) {
         if self.wf_cols == 0 {
             return;
+        }
+        // Never more columns than pixels: the GPU would sample between
+        // them and a narrow carrier could fall through. Fewer bins than
+        // pixels stay as they are and are drawn as crisp columns.
+        let tex_cols = self.wf_cols.min(px_w.max(16));
+        if tex_cols != self.wf_tex_cols {
+            self.wf_tex_cols = tex_cols;
+            self.wf_tex = None;
+            self.fade = None;
+            self.wf_stale.fill(true);
         }
         let (black, top) = self.wf_levels(view);
         let want = (black, top, view.palette);
@@ -759,26 +820,27 @@ impl Panafall {
             self.wf_lut_key = Some(key);
             self.wf_stale.fill(true);
         }
-        let opts = egui::TextureOptions {
-            magnification: egui::TextureFilter::Linear,
-            minification: egui::TextureFilter::Linear,
-            ..Default::default()
-        };
+        let opts = egui::TextureOptions::NEAREST;
         let cols = self.wf_cols;
-        let color = |q: &[u16], lut: &[Color32], out: &mut Vec<Color32>| out.extend(q.iter().map(|&v| lut[v as usize]));
+        let bounds = col_bounds(cols, tex_cols);
+        let color = |rows: &[u16], lut: &[Color32], out: &mut Vec<Color32>| {
+            for q in rows.chunks_exact(cols) {
+                color_row(q, &bounds, lut, out);
+            }
+        };
         if self.wf_tex.is_none() {
             // A new texture: the rows on screen colored, the rest left as
             // ground until they are shown.
-            let mut px = vec![ink; cols * WF_ROWS];
+            let mut px = vec![ink; tex_cols * WF_ROWS];
+            let mut row = Vec::with_capacity(tex_cols);
             for i in 0..(rows_vis + 1).min(WF_ROWS) {
                 let r = (self.wf_head + i) % WF_ROWS;
-                let row = &mut px[r * cols..(r + 1) * cols];
-                for (o, &v) in row.iter_mut().zip(&self.wf_q[r * cols..(r + 1) * cols]) {
-                    *o = self.wf_lut[v as usize];
-                }
+                row.clear();
+                color_row(&self.wf_q[r * cols..(r + 1) * cols], &bounds, &self.wf_lut, &mut row);
+                px[r * tex_cols..(r + 1) * tex_cols].copy_from_slice(&row);
                 self.wf_stale[r] = false;
             }
-            self.wf_tex = Some(ctx.load_texture("waterfall", egui::ColorImage::new([cols, WF_ROWS], px), opts));
+            self.wf_tex = Some(ctx.load_texture("waterfall", egui::ColorImage::new([tex_cols, WF_ROWS], px), opts));
         }
         // Stale rows on screen, newest first, sent as runs of adjacent rows.
         let tex = self.wf_tex.as_mut().expect("made above");
@@ -796,15 +858,15 @@ impl Panafall {
                 r1 += 1;
                 i += 1;
             }
-            let mut px = Vec::with_capacity(cols * (r1 - r0));
+            let mut px = Vec::with_capacity(tex_cols * (r1 - r0));
             color(&self.wf_q[r0 * cols..r1 * cols], &self.wf_lut, &mut px);
-            tex.set_partial([0, r0], egui::ColorImage::new([cols, r1 - r0], px), opts);
+            tex.set_partial([0, r0], egui::ColorImage::new([tex_cols, r1 - r0], px), opts);
         }
         if let Some(f) = &mut self.fade {
             for r in f.fresh.drain(..) {
-                let mut px = Vec::with_capacity(cols);
+                let mut px = Vec::with_capacity(tex_cols);
                 color(&self.wf_q[r * cols..(r + 1) * cols], &f.lut, &mut px);
-                f.tex.set_partial([0, r], egui::ColorImage::new([cols, 1], px), opts);
+                f.tex.set_partial([0, r], egui::ColorImage::new([tex_cols, 1], px), opts);
             }
             crate::anim::more(ctx);
         }
@@ -966,22 +1028,20 @@ impl Panafall {
 
         // ---- waterfall
         let rows_vis = (wf.height().round() as usize).clamp(1, WF_ROWS);
+        let px_w = (wf.width() * ctx.pixels_per_point()).round() as usize;
         if self.hold.is_some() {
-            self.draw_held(ui, wf, time_axis, view);
+            self.draw_held(ui, wf, time_axis, view, px_w);
         } else if let Some(tex) = {
-            self.upload(&ctx, view, now, reduce_motion, rows_vis);
+            self.upload(&ctx, view, now, reduce_motion, rows_vis, px_w);
             &self.wf_tex
         } {
             let row_px = wf.height() / rows_vis as f32;
-            // Smooth scroll: the newest row slides in over one row interval.
-            let frac = if reduce_motion {
-                0.0
-            } else {
-                (((now - self.last_row_at) / self.row_interval.max(0.01)) as f32).clamp(0.0, 1.0)
-            };
+            // The newest row is drawn at the top as soon as it arrives: no
+            // slide-in that would hold it back by a row interval, and no
+            // sub-row offset that would blend it with its neighbor.
             let painter_wf = ui.painter_at(wf);
             let x0 = self.drag_offset_px;
-            let top = wf.top() - (1.0 - frac) * row_px;
+            let top = wf.top();
             // Rows head, head+1, … wrap at WF_ROWS. Drawn in runs of rows
             // that arrived on the same span, each moved by how far the span
             // has panned since; mid-fade, the old palette's picture over the
@@ -1020,9 +1080,6 @@ impl Panafall {
                     i += run;
                 }
             }
-            if !reduce_motion && frac < 1.0 {
-                crate::anim::more(&ctx);
-            }
             // Time marks, measured from the rows themselves, spaced for
             // about one label per 70 px whatever the row rate.
             painter.rect_filled(time_axis, CornerRadius::ZERO, theme::surface_1());
@@ -1040,7 +1097,7 @@ impl Panafall {
                         Stroke::new(1.0, theme::text_3()),
                     );
                     painter.text(
-                        pos2(time_axis.right() - 6.0, y),
+                        pos2(time_axis.right() - 7.0, y),
                         Align2::RIGHT_CENTER,
                         fmt_age(next_mark, step_s),
                         theme::mono(10.0),
@@ -1048,6 +1105,34 @@ impl Panafall {
                     );
                     next_mark += step_s;
                 }
+            }
+        }
+
+        // ---- the palette's ramp down the gutter's edge, top level at the
+        // top and black at the foot, with the levels on hover.
+        {
+            let (black, top) = self.wf_levels(view);
+            let lut = view.palette.lut();
+            let ramp = Rect::from_min_max(pos2(time_axis.right() - 4.0, wf.top() + 2.0), pos2(time_axis.right() - 2.0, wf.bottom() - 2.0));
+            if ramp.height() > 8.0 {
+                let mut mesh = Mesh::default();
+                let steps = 48;
+                for k in 0..=steps {
+                    let f = k as f32 / steps as f32;
+                    let c = lut[self.tone[((1.0 - f) * 1023.0) as usize] as usize];
+                    let y = ramp.top() + f * ramp.height();
+                    mesh.colored_vertex(pos2(ramp.left(), y), c);
+                    mesh.colored_vertex(pos2(ramp.right(), y), c);
+                    if k > 0 {
+                        let i = mesh.vertices.len() as u32;
+                        mesh.add_triangle(i - 4, i - 3, i - 2);
+                        mesh.add_triangle(i - 3, i - 1, i - 2);
+                    }
+                }
+                painter.add(Shape::mesh(mesh));
+                painter.rect_stroke(ramp.expand(0.5), CornerRadius::same(1), Stroke::new(1.0, theme::line()), egui::StrokeKind::Outside);
+                ui.interact(time_axis, resp.id.with("ramp"), Sense::hover())
+                    .on_hover_text(format!("Waterfall colors: {black:.0} dBFS and below is the ground, {top:.0} dBFS and above the top of the palette"));
             }
         }
 
@@ -1356,6 +1441,12 @@ impl Panafall {
             view.split = ((p.y - full.top()) / (full.height() - axis_h)).clamp(0.15, 0.85);
             self.split_drag = true;
         }
+        // Its grip: a pill on the seam, so the seam says it moves.
+        {
+            let hot = ctx.animate_bool_with_time(resp.id.with("split-hot"), split_resp.hovered() || split_resp.dragged(), 0.12);
+            let grip = Rect::from_center_size(pos2(pan.center().x, axis.top()), vec2(40.0 + 8.0 * hot, 4.0));
+            painter.rect(grip, CornerRadius::same(2), theme::lerp(theme::surface_4(), theme::AMBER, hot), Stroke::new(1.0, theme::ink()), egui::StrokeKind::Outside);
+        }
 
         // dB axis: drag shifts the range, wheel widens or narrows it.
         let db_resp = ui.interact(db_axis, resp.id.with("db"), Sense::drag());
@@ -1517,11 +1608,26 @@ impl Panafall {
                     None
                 }
             };
-            if let Some(p) = pointer
-                && self.edge_drag.is_none()
-                && let Some(kind) = near(p)
-            {
+            let hot = pointer.filter(|_| self.edge_drag.is_none()).and_then(near);
+            if let Some(kind) = hot {
                 ctx.set_cursor_icon(if matches!(kind, EdgeDrag::Shift { .. }) { egui::CursorIcon::Move } else { egui::CursorIcon::ResizeColumn });
+            }
+            // Grips on the edges, so they say they can be dragged before
+            // the pointer finds them; brighter under the pointer or in hand.
+            if px1 - px0 > 16.0 {
+                let held = |e: EdgeDrag| match (self.edge_drag, e) {
+                    (Some(EdgeDrag::Low), EdgeDrag::Low) | (Some(EdgeDrag::High), EdgeDrag::High) => true,
+                    (Some(_), _) => false,
+                    (None, EdgeDrag::Low) => matches!(hot, Some(EdgeDrag::Low)),
+                    (None, _) => matches!(hot, Some(EdgeDrag::High)),
+                };
+                for (x, e, key) in [(px0, EdgeDrag::Low, "grip-lo"), (px1, EdgeDrag::High, "grip-hi")] {
+                    let t = ctx.animate_bool_with_time(resp.id.with(key), held(e), 0.12);
+                    let g = Rect::from_center_size(pos2(x, pan.center().y), vec2(4.0, 22.0 + 6.0 * t));
+                    if pan.contains_rect(g) && !self.flags[0].is_some_and(|f| f.intersects(g.expand(2.0))) {
+                        painter.rect(g, CornerRadius::same(2), alpha(theme::AMBER, 0.55 + 0.45 * t), Stroke::new(1.0, alpha(theme::ink(), 0.8)), egui::StrokeKind::Outside);
+                    }
+                }
             }
             if resp.drag_started()
                 && let Some(p0) = ui.input(|i| i.pointer.press_origin())
@@ -1786,10 +1892,7 @@ impl SliceFlag {
         painter.text(r.right_top() + vec2(-8.0, 9.0), Align2::RIGHT_TOP, chip, theme::mono(10.0), theme::AMBER);
         // Mini S-meter.
         let bar = Rect::from_min_size(r.left_top() + vec2(8.0, 30.0), vec2(w - 64.0, 6.0));
-        painter.rect_filled(bar, CornerRadius::same(1), theme::surface_4());
-        let lit = Rect::from_min_size(bar.min, vec2(bar.width() * self.meter.clamp(0.0, 1.0), bar.height()));
-        let c = if self.meter > 0.556 { theme::WARN } else { theme::OK };
-        painter.rect_filled(lit, CornerRadius::same(1), c);
+        mini_meter(painter, bar, self.meter, theme::OK);
         painter.text(pos2(r.right() - 8.0, bar.center().y), Align2::RIGHT_CENTER, &self.s_label, theme::mono_bold(11.0), theme::text());
         // The bottom line is cut to the card, clear of the recording dot.
         let bottom = crate::widgets::ellipsize(painter, &bottom, theme::sans(11.0), w - 16.0 - rec_w);
@@ -1799,6 +1902,22 @@ impl SliceFlag {
         }
         r
     }
+}
+
+/// A flag's S-meter: segments in the receiver's color up to S9 and amber
+/// past it, the unlit ones faint, and a tick where S9 is.
+fn mini_meter(painter: &egui::Painter, bar: Rect, pos: f32, below: Color32) {
+    let s9 = bar.left() + bar.width() * crate::meter::frac(crate::meter::S9_DBFS);
+    let lit_to = bar.left() + bar.width() * pos.clamp(0.0, 1.0);
+    painter.rect_filled(bar.expand(1.0), CornerRadius::same(1), theme::ink());
+    let mut x = bar.left();
+    while x < bar.right() - 0.5 {
+        let c = if x < s9 { below } else { theme::AMBER };
+        let seg = Rect::from_min_max(pos2(x, bar.top()), pos2((x + 2.0).min(bar.right()), bar.bottom()));
+        painter.rect_filled(seg, CornerRadius::ZERO, if x < lit_to { c } else { alpha(c, 0.14) });
+        x += 3.0;
+    }
+    painter.line_segment([pos2(s9, bar.top() - 2.0), pos2(s9, bar.bottom() + 2.0)], Stroke::new(1.0, alpha(theme::text(), 0.85)));
 }
 
 /// The receiver's letter as a small tab at the top-left of its flag, lit
@@ -1869,9 +1988,7 @@ fn paint_b_flag(painter: &egui::Painter, pan: Rect, x: f32, b: &RxB) -> Rect {
         }
         (None, Some(l)) => {
             let bar = Rect::from_min_size(r.left_top() + vec2(8.0, 29.0), vec2(w - 64.0, 5.0));
-            painter.rect_filled(bar, CornerRadius::same(1), theme::surface_4());
-            let f = crate::meter::frac(l);
-            painter.rect_filled(Rect::from_min_size(bar.min, vec2(bar.width() * f, bar.height())), CornerRadius::same(1), theme::VIOLET);
+            mini_meter(painter, bar, crate::meter::frac(l), theme::VIOLET);
             painter.text(pos2(r.right() - 8.0, bar.center().y), Align2::RIGHT_CENTER, crate::meter::s_label(Some(l)), theme::mono_bold(10.5), theme::text());
         }
         _ => {}
@@ -2140,6 +2257,22 @@ mod tests {
     }
 
     #[test]
+    fn a_one_bin_carrier_survives_a_narrow_waterfall() {
+        let lut: Vec<Color32> = (0..=u16::MAX).map(|q| if q > wf_quantize(-60.0) { Color32::RED } else { Color32::BLACK }).collect();
+        let mut q = vec![wf_quantize(-100.0); 4096];
+        q[2049] = wf_quantize(-30.0);
+        // 4096 bins on 1100 pixels: every column is the strongest it covers.
+        let mut out = Vec::new();
+        color_row(&q, &col_bounds(4096, 1100), &lut, &mut out);
+        assert_eq!(out.len(), 1100);
+        assert_eq!(out.iter().filter(|c| **c == Color32::RED).count(), 1);
+        // Fewer bins than pixels: the bins as they are.
+        out.clear();
+        color_row(&q[..512], &col_bounds(512, 1100), &lut, &mut out);
+        assert_eq!(out.len(), 512);
+    }
+
+    #[test]
     fn the_quantized_waterfall_colors_as_the_levels_say() {
         let pan = Panafall::default();
         let (black, top) = (-105.0, -40.0);
@@ -2170,20 +2303,20 @@ mod tests {
         let mut pwr = vec![-100.0f32; 512];
         pwr[200] = -40.0;
         pan.push(&FftFrame { center_hz: 100e6, rate_hz: 1e6, pwr, ..Default::default() }, &view, 0.0);
-        pan.upload(&ctx, &view, 0.0, false, 300);
+        pan.upload(&ctx, &view, 0.0, false, 300, 4096);
         assert!(pan.fade.is_none());
         assert!((0..301).all(|i| !pan.wf_stale[(pan.wf_head + i) % WF_ROWS]), "the rows on screen are colored");
         assert!(pan.wf_stale[(pan.wf_head + 400) % WF_ROWS], "the rest wait until shown");
         view.palette = Colormap::Classic;
-        pan.upload(&ctx, &view, 1.0, false, 300);
+        pan.upload(&ctx, &view, 1.0, false, 300, 4096);
         assert!(pan.fade.is_some(), "the old picture fades out over the new");
-        pan.upload(&ctx, &view, 1.1, false, 300);
+        pan.upload(&ctx, &view, 1.1, false, 300, 4096);
         assert!(pan.fade.is_some());
-        pan.upload(&ctx, &view, 1.3, false, 300);
+        pan.upload(&ctx, &view, 1.3, false, 300, 4096);
         assert!(pan.fade.is_none(), "gone after a quarter of a second");
         // Reduced motion snaps.
         view.palette = Colormap::Ember;
-        pan.upload(&ctx, &view, 2.0, true, 300);
+        pan.upload(&ctx, &view, 2.0, true, 300, 4096);
         assert!(pan.fade.is_none());
     }
 

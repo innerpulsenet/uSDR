@@ -3,7 +3,7 @@
 //! A short `request_repaint_after` keeps eframe's event loop spinning on
 //! this platform (a full core at the display's 120 Hz for a 25 fps
 //! picture), so everything that wants a frame — a new spectrum, a moving
-//! needle, the waterfall's sub-row scroll — asks this ticker instead. It
+//! needle, a palette crossfade — asks this ticker instead. It
 //! wakes the UI at most 30 times a second, and egui paints two passes per
 //! wake-up, so the window draws at up to 60 fps and idles when nothing moves.
 

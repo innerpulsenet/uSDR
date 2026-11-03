@@ -48,6 +48,7 @@ fn frame(n: usize, i: usize, rng: &mut Rng) -> FftFrame {
     }
     let max_hold = pwr.iter().map(|v| v + 4.0).collect();
     let wf_peak = pwr.iter().map(|v| v + 2.0 + rng.next() * 3.0).collect();
+    let wf_row = pwr.iter().map(|v| v - 1.5 + rng.next() * 3.0).collect();
     let scope = (0..480).map(|k| ((k as f32 * 0.21).sin() * 9000.0 + rng.next() * 900.0) as i16).collect();
     FftFrame {
         center_hz: 146e6,
@@ -61,6 +62,7 @@ fn frame(n: usize, i: usize, rng: &mut Rng) -> FftFrame {
         pwr,
         max_hold,
         wf_peak,
+        wf_row,
         peaks: vec![
             Peak { freq_hz: 145.36e6, snr_db: 50.0, label: Some("NFM".into()) },
             Peak { freq_hz: 146.04e6, snr_db: 70.0, label: Some("P25".into()) },
@@ -70,7 +72,7 @@ fn frame(n: usize, i: usize, rng: &mut Rng) -> FftFrame {
     }
 }
 
-/// `f` as the server puts it on the wire (v4, no classification block).
+/// `f` as the server puts it on the wire (v5, no classification block).
 fn encode(f: &FftFrame) -> Vec<u8> {
     let mut b = vec![proto::FFT_FRAME_MAGIC];
     b.extend_from_slice(&f.center_hz.to_le_bytes());
@@ -102,6 +104,10 @@ fn encode(f: &FftFrame) -> Vec<u8> {
     b.push(0);
     b.extend_from_slice(&(f.wf_peak.len() as u32).to_le_bytes());
     for v in &f.wf_peak {
+        b.extend_from_slice(&v.to_le_bytes());
+    }
+    b.extend_from_slice(&(f.wf_row.len() as u32).to_le_bytes());
+    for v in &f.wf_row {
         b.extend_from_slice(&v.to_le_bytes());
     }
     b
@@ -207,7 +213,7 @@ fn step(ctx: &egui::Context, t: f64, size: egui::Vec2, tally: Option<&mut Tally>
 enum Case {
     /// A new spectrum every frame: the trace, a waterfall row.
     Live,
-    /// No new spectrum: the sub-row scroll alone.
+    /// No new spectrum: the display redrawn as it stands.
     Idle,
     /// A palette change every frame: the whole history recolored.
     Palette,
@@ -415,4 +421,115 @@ fn bench_startup_devices() {
         let d = Player::devices();
         println!("BENCH audio device list: {} devices in {:.1} ms", d.len(), t0.elapsed().as_secs_f64() * 1e3);
     }
+}
+
+/// Renders of the whole window on the GPU, for looking at the layout: a
+/// live NFM receiver at three window sizes, and one with receiver B on.
+///
+/// ```text
+/// USDR_SHOTS=/some/dir cargo test -p usdr-desktop --release shots -- --ignored --nocapture
+/// ```
+#[test]
+#[ignore]
+fn shots() {
+    use egui_kittest::Harness;
+    let out = std::path::PathBuf::from(std::env::var("USDR_SHOTS").unwrap_or_else(|_| std::env::temp_dir().to_string_lossy().into()));
+    let dir = std::env::temp_dir().join(format!("usdr-shots-{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&dir);
+    // SAFETY: set before anything reads it, on this test's own thread.
+    unsafe { std::env::set_var("USDR_DESKTOP_PREFS", dir.join("desktop.toml")) };
+    struct S {
+        app: Option<App>,
+        wire: Option<crate::net::Wire>,
+        with_b: bool,
+        wfm: bool,
+    }
+    for (w, h, with_b, wfm) in [(1600.0, 980.0, false, false), (1900.0, 980.0, false, false), (1400.0, 900.0, false, false), (1600.0, 980.0, true, false), (1600.0, 980.0, false, true)] {
+        let mut harness = Harness::builder().with_size(egui::vec2(w, h)).wgpu().build_ui_state(
+            |ui, s: &mut S| {
+                let ctx = ui.ctx().clone();
+                if s.app.is_none() {
+                    let prefs = Prefs { auto_connect: false, ..Default::default() };
+                    let mut app = App::build(&ctx, prefs, Player::silent(), Player::silent(), None);
+                    let (link, wire) = Link::wire();
+                    app.link = Some(link);
+                    let info = proto::ServerInfo { name: "usdr".into(), version: "shots".into(), api: 2, features: vec!["filter".into(), "rx2".into()] };
+                    let mut st = status();
+                    st.freq_error_hz = Some(1_900.0);
+                    st.rf_notch = Some(false);
+                    st.dab_notch = Some(false);
+                    st.iq_correction = Some(true);
+                    st.bias_t = Some(true);
+                    st.lo_offset = true;
+                    st.lo_offset_hz = 150e3;
+                    st.agc_setpoint_dbfs = Some(-30.0);
+                    st.rfgr_db = Some(8.0);
+                    st.ifgr_db = Some(35.0);
+                    st.if_bandwidths_hz = vec![200e3, 300e3, 600e3, 1536e3, 5e6, 6e6];
+                    st.if_bandwidth_hz = Some(1536e3);
+                    st.processing = Some(Default::default());
+                    st.avg = Some("off".into());
+                    if s.with_b {
+                        st.rx2 = Some(proto::SubRx { freq_hz: 146.52e6, mode: Mode::Nfm, bandwidth_hz: 12_500.0, passband_offset_hz: 0.0, note: None });
+                    }
+                    if s.wfm {
+                        st.mode = Mode::Wfm;
+                        st.bandwidth_hz = 150e3;
+                        st.filter_low_hz = -75e3;
+                        st.filter_high_hz = 75e3;
+                        app.modes = vec![proto::ModeCaps {
+                            mode: Mode::Wfm,
+                            label: "WFM".into(),
+                            bandwidth_hz: 150e3,
+                            filter: Some(proto::FilterRange { min_width_hz: 50e3, max_width_hz: 250e3, max_edge_hz: 125e3, symmetric: true }),
+                            ..Default::default()
+                        }];
+                        for k in 0..6 {
+                            let mut fields = std::collections::BTreeMap::new();
+                            fields.insert("nac".into(), "0x293".into());
+                            let event = proto::DecodeEvent {
+                                protocol: if k % 2 == 0 { "P25".into() } else { "DMR".into() },
+                                kind: "voice header".into(),
+                                summary: format!("group call TG {} from {}", 1000 + k, 4_000_000 + k * 17),
+                                valid: true,
+                                fields,
+                            };
+                            wire.events.send(NetEvent::Decode { inspect_hz: 146.04e6, event, at: std::time::SystemTime::now() }).unwrap();
+                        }
+                    }
+                    wire.events.send(NetEvent::Connected(Box::new(st), Some(info))).unwrap();
+                    crate::theme::install(&ctx, app.prefs.ground);
+                    app.save_memories(vec![
+                        crate::prefs::Memory { name: "NFM".into(), freq_hz: 146.04e6, mode: Mode::Nfm },
+                        crate::prefs::Memory { name: "WFM".into(), freq_hz: 95.1e6, mode: Mode::Wfm },
+                        crate::prefs::Memory { name: "NOAA".into(), freq_hz: 162.475e6, mode: Mode::Nfm },
+                    ]);
+                    s.app = Some(app);
+                    s.wire = Some(wire);
+                    return;
+                }
+                let app = s.app.as_mut().unwrap();
+                app.tick(&ctx);
+                app.draw(ui);
+                if let Some(wire) = &s.wire {
+                    while wire.reqs.try_recv().is_ok() {}
+                }
+            },
+            S { app: None, wire: None, with_b, wfm },
+        );
+        let mut rng = Rng(0x2545_f491_4f6c_dd1d);
+        harness.run_steps(2);
+        for i in 0..360 {
+            let mut f = frame(2048, i, &mut rng);
+            f.classification = Some(proto::Classification { active: true, protocol: "Analog Voice (NFM)".into(), modulation: "FM".into(), snr_db: 38.0, rf_dbfs: -30.0, ..Default::default() });
+            harness.state().wire.as_ref().unwrap().events.send(NetEvent::Fft(Box::new(f))).unwrap();
+            harness.step();
+        }
+        harness.run_steps(20);
+        let img = harness.render().expect("render");
+        let name = format!("shot-{}x{}{}{}.png", w as u32, h as u32, if with_b { "-b" } else { "" }, if wfm { "-wfm" } else { "" });
+        img.save(out.join(&name)).expect("save");
+        println!("SHOT {}", out.join(&name).display());
+    }
+    let _ = std::fs::remove_dir_all(&dir);
 }

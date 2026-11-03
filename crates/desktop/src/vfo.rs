@@ -1,4 +1,6 @@
-//! The receive-frequency readout: ten digits, GHz to Hz.
+//! The receive-frequency readout: ten digits, GHz to Hz, in a recessed
+//! well. Below 1 GHz the GHz digit and its gap are left out, so 95.1 MHz
+//! reads `095.100 000`, not `0 095.100 000`.
 //!
 //! Every digit is a dial. The wheel over a digit turns it; a click on its
 //! upper half adds one and on its lower half takes one away; arrow keys turn
@@ -8,7 +10,7 @@
 //! `146520`, `146520000`, `146.520.000` and `7.2m` alike.
 
 use crate::theme;
-use egui::{Align2, CornerRadius, Rect, Sense, Stroke, Ui, pos2, vec2};
+use egui::{Align2, Color32, CornerRadius, Rect, Sense, Stroke, Ui, pos2, vec2};
 
 
 pub enum VfoAct {
@@ -31,12 +33,14 @@ pub struct Vfo {
     /// A digit rolling over: when it started, the glyph leaving, and which
     /// way (up for a higher frequency).
     roll: [Option<(f64, char, i8)>; DIGITS],
+    /// The tint of the well's edge: the receiver the readout belongs to.
+    pub tint: Option<Color32>,
 }
 
 impl Default for Vfo {
     fn default() -> Self {
         // The 10 kHz digit.
-        Self { selected: 5, entry: None, focus_entry: false, scroll_accum: 0.0, open_entry_request: false, cells: Vec::new(), shown: None, roll: [None; DIGITS] }
+        Self { selected: 5, entry: None, focus_entry: false, scroll_accum: 0.0, open_entry_request: false, cells: Vec::new(), shown: None, roll: [None; DIGITS], tint: None }
     }
 }
 
@@ -98,6 +102,11 @@ impl Vfo {
 
         let units = (hz.max(0.0).round() as u64).min(9_999_999_999);
         let s = format!("{units:010}");
+        // Under 1 GHz the GHz digit is always a zero; it and its gap go.
+        let no_ghz = units < 1_000_000_000;
+        if no_ghz && self.selected == 0 {
+            self.selected = 1;
+        }
         let big = theme::mono_bold(height * 0.78);
         let small = theme::mono_bold(height * 0.56);
         let dw = ui.painter().layout_no_wrap("0".into(), big.clone(), theme::text()).size().x;
@@ -107,9 +116,15 @@ impl Vfo {
         let point = dw * 0.38;
         let gap = dw * 0.24;
         let widths: Vec<f32> = (0..DIGITS).map(|i| if i >= 7 { sw } else { dw }).collect();
-        let total: f32 = widths.iter().sum::<f32>() + 2.0 * gap + point + 8.0 + 40.0;
-        let (rect, resp) = ui.allocate_exact_size(vec2(total, height), Sense::click());
-        let painter = ui.painter_at(rect.expand(2.0));
+        let shown_w: f32 = if no_ghz { widths[1..].iter().sum::<f32>() + gap } else { widths.iter().sum::<f32>() + 2.0 * gap };
+        let unit_w = ui.painter().layout_no_wrap("MHz".into(), theme::mono(height * 0.26), theme::text_3()).size().x;
+        // The digits sit in a well, inset from its edges.
+        let (pad_x, pad_y) = (10.0, 3.0);
+        let total = shown_w + point + 8.0 + unit_w + 2.0 * pad_x;
+        let (outer, resp) = ui.allocate_exact_size(vec2(total, height + 2.0 * pad_y), Sense::click());
+        theme::well(ui.painter(), outer, self.tint);
+        let rect = outer.shrink2(vec2(pad_x, pad_y));
+        let painter = ui.painter_at(outer);
         let first_sig = s.find(|c: char| c != '0').unwrap_or(DIGITS - 1).min(3);
         let now = ui.input(|i| i.time);
         // Which digits changed since the last draw, and which way: each
@@ -132,7 +147,12 @@ impl Vfo {
         self.cells.clear();
         let pointer = resp.hover_pos();
         for (i, ch) in s.chars().enumerate() {
-            if i == 1 {
+            if i == 0 && no_ghz {
+                // Kept as an empty cell, so a digit's index is its weight.
+                self.cells.push(Rect::from_min_size(pos2(x, rect.top()), vec2(0.0, rect.height())));
+                continue;
+            }
+            if i == 1 && !no_ghz {
                 x += gap;
             } else if i == 4 {
                 painter.text(pos2(x + point / 2.0, rect.bottom() - height * 0.16), Align2::CENTER_BOTTOM, ".", big.clone(), theme::text_2());
@@ -261,7 +281,7 @@ pub fn tune_strip(ui: &mut Ui, hz: f64, step: f64, width: f32, height: f32) -> O
     ui.data_mut(|d| d.insert_temp(id, offset));
 
     let p = ui.painter_at(rect);
-    p.rect(rect, egui::CornerRadius::same(theme::RADIUS), theme::ink(), Stroke::new(1.0, theme::line()), egui::StrokeKind::Inside);
+    theme::well(&p, rect, None);
     // The scale moves under the hairline as the dial turns.
     let frac = ((hz / st) - (hz / st).round()) as f32 * STRIP_PX;
     let c = rect.center().x - frac + offset;

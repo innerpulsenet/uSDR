@@ -849,6 +849,10 @@ pub enum SdrEvent {
         /// waterfall that shows bursts at full level.
         #[serde(default)]
         wf_peak: Vec<f32>,
+        /// This frame's own Welch mean per bin, before the display's bin
+        /// smoothing and AVG, so the waterfall shows what was measured.
+        #[serde(default)]
+        wf_row: Vec<f32>,
         peak_iq: f32,
         inspect_hz: f64,
         classification: Option<ClassificationResult>,
@@ -965,6 +969,7 @@ pub fn encode_fft_frame(ev: &SdrEvent) -> Option<Vec<u8>> {
         pwr,
         max_hold,
         wf_peak,
+        wf_row,
         peak_iq,
         inspect_hz,
         classification,
@@ -981,7 +986,7 @@ pub fn encode_fft_frame(ev: &SdrEvent) -> Option<Vec<u8>> {
     };
     let classification = classification.as_ref().map(FrameClassification::from);
     let mut buf = Vec::with_capacity(
-        48 + (pwr.len() + max_hold.len()) * 4 + scope.len() * 2 + peaks.len() * 16,
+        56 + (pwr.len() + max_hold.len() + wf_peak.len() + wf_row.len()) * 4 + scope.len() * 2 + peaks.len() * 16,
     );
     buf.push(FFT_FRAME_MAGIC);
     buf.extend_from_slice(&center_hz.to_le_bytes());
@@ -1027,9 +1032,18 @@ pub fn encode_fft_frame(ev: &SdrEvent) -> Option<Vec<u8>> {
     encode_classification(&mut buf, classification.as_ref());
     // v4: an optional per-frame peak array for the waterfall, after
     // everything a v3 reader knows. A v3 reader stops before it.
-    if !wf_peak.is_empty() {
+    // v5: the unsmoothed row after it. The peak count is then written
+    // even when empty, so a v4 reader takes a zero-length peak array and
+    // stops before the row.
+    if !wf_peak.is_empty() || !wf_row.is_empty() {
         buf.extend_from_slice(&(wf_peak.len() as u32).to_le_bytes());
         for &v in wf_peak {
+            buf.extend_from_slice(&v.to_le_bytes());
+        }
+    }
+    if !wf_row.is_empty() {
+        buf.extend_from_slice(&(wf_row.len() as u32).to_le_bytes());
+        for &v in wf_row {
             buf.extend_from_slice(&v.to_le_bytes());
         }
     }
@@ -6130,6 +6144,16 @@ fn run_sdr(
             } else {
                 Vec::new()
             };
+            // The waterfall's row: the same window, notched the same way,
+            // but neither bin-smoothed nor averaged across frames.
+            let wf_row: Vec<f32> = {
+                let mut v = pwr[lo_bin..hi_bin.min(n)].to_vec();
+                notch_display(&mut v, shown_rate, &spurs, guard_hz);
+                if lo_off != 0.0 {
+                    notch_display(&mut v, shown_rate, &[dc_rel], dc_guard);
+                }
+                v
+            };
             // Update the per-bin floor from this frame before anything reads it.
             let floor = bin_floor.update(shown);
             // The shared sorted copy backs every per-frame measurement below.
@@ -6404,6 +6428,7 @@ fn run_sdr(
                 },
                 max_hold: max_hold.clone(),
                 wf_peak: wf_peak_shown,
+                wf_row,
                 peak_iq,
                 inspect_hz,
                 classification: Some(classification),
@@ -6622,6 +6647,7 @@ mod tests {
             pwr: vec![0.0; 64],
             max_hold: vec![0.0; 64],
             wf_peak: Vec::new(),
+            wf_row: Vec::new(),
             peak_iq: 0.25,
             inspect_hz: 155_000_000.0,
             classification: Some(ClassificationResult {

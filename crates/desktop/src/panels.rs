@@ -18,7 +18,12 @@ pub fn side(app: &mut App, ui: &mut Ui) {
     ui.spacing_mut().item_spacing.y = 8.0;
     egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
         widgets::applet(ui, "gain", "Gain", |_| {}, |ui| gain(app, ui));
-        widgets::applet(ui, "frontend", "Front end", |_| {}, |ui| front_end(app, ui));
+        let on = front_end_on(&app.status);
+        let head = |ui: &mut Ui| {
+            let (t, c) = if on == 0 { ("ALL OFF".to_string(), theme::text_3()) } else { (format!("{on} ON"), theme::CYAN) };
+            ui.label(RichText::new(t).font(theme::mono(10.5)).color(c));
+        };
+        widgets::applet(ui, "frontend", "Front end", head, |ui| front_end(app, ui));
         if app.status.processing.is_some() {
             widgets::applet(ui, "processing", "Noise and AGC", |_| {}, |ui| processing(app, ui));
         }
@@ -248,45 +253,68 @@ fn gain(app: &mut App, ui: &mut Ui) {
     });
 }
 
+/// Front-end switches on, for the card's header.
+fn front_end_on(s: &usdr_proto::Status) -> usize {
+    [s.rf_notch, s.dab_notch, s.iq_correction, s.bias_t].iter().filter(|v| **v == Some(true)).count() + usize::from(s.lo_offset) + usize::from(!s.spurs_hz.is_empty())
+}
+
+#[derive(Clone, Copy)]
+enum FrontKey {
+    RfNotch,
+    DabNotch,
+    LoOffset,
+    IqCorr,
+    BiasT,
+    Spur,
+}
+
 fn front_end(app: &mut App, ui: &mut Ui) {
     let s = app.status.clone();
-    ui.horizontal_wrapped(|ui| {
-        if let Some(on) = s.rf_notch
-            && widgets::key(ui, "AM/FM NOTCH", on, theme::VIOLET).clicked()
-        {
-            app.post("/api/sdr/frontend", json!({ "rf_notch": !on }));
-        }
-        if let Some(on) = s.dab_notch
-            && widgets::key(ui, "DAB NOTCH", on, theme::VIOLET).clicked()
-        {
-            app.post("/api/sdr/frontend", json!({ "dab_notch": !on }));
-        }
-        let lo = if s.lo_offset { format!("LO {:+}", crate::tuning::fmt_short_hz(s.lo_offset_hz)) } else { "LO OFFSET".into() };
-        if widgets::key(ui, &lo, s.lo_offset, theme::CYAN).on_hover_text("Park the tuner off-center so its DC spur stays out of the channel").clicked() {
-            app.post("/api/sdr/frontend", json!({ "lo_offset": !s.lo_offset }));
-        }
-        if let Some(on) = s.iq_correction
-            && widgets::key(ui, "IQ CORR", on, theme::CYAN).clicked()
-        {
-            app.post("/api/sdr/frontend", json!({ "iq_correction": !on }));
-        }
-        if let Some(on) = s.bias_t
-            && widgets::key(ui, "BIAS-T", on, theme::WARN).on_hover_text("DC on the antenna feed, for an inline preamp; saved per radio").clicked()
-        {
-            app.post("/api/sdr/frontend", json!({ "bias_t": !on }));
-        }
-        let spur_on = !s.spurs_hz.is_empty();
-        let checking = app.spur.is_some();
-        let label = if checking { "CHECKING…".to_string() } else if spur_on { format!("SPUR NOTCH {}", s.spurs_hz.len()) } else { "SPUR NOTCH".into() };
-        if widgets::key(ui, &label, spur_on || checking, theme::VIOLET)
-            .on_hover_text("Find the receiver's own spurs by moving the span an eighth and back, then notch them. Click again to clear.")
-            .clicked()
-            && !checking
-        {
+    let spur_on = !s.spurs_hz.is_empty();
+    let checking = app.spur.is_some();
+    let lo = if s.lo_offset { format!("LO {:+}", crate::tuning::fmt_short_hz(s.lo_offset_hz)) } else { "LO OFFSET".into() };
+    let spur = if checking { "CHECKING…".to_string() } else if spur_on { format!("SPUR NOTCH {}", s.spurs_hz.len()) } else { "SPUR NOTCH".into() };
+    // The keys this radio has, two to a row at one width, so the card's
+    // edges line up whatever the labels.
+    let mut keys: Vec<(String, bool, egui::Color32, &str, FrontKey)> = Vec::new();
+    if let Some(on) = s.rf_notch {
+        keys.push(("AM/FM NOTCH".into(), on, theme::VIOLET, "The tuner's broadcast-band notch", FrontKey::RfNotch));
+    }
+    if let Some(on) = s.dab_notch {
+        keys.push(("DAB NOTCH".into(), on, theme::VIOLET, "The tuner's DAB-band notch", FrontKey::DabNotch));
+    }
+    keys.push((lo, s.lo_offset, theme::CYAN, "Park the tuner off-center so its DC spur stays out of the channel", FrontKey::LoOffset));
+    if let Some(on) = s.iq_correction {
+        keys.push(("IQ CORR".into(), on, theme::CYAN, "Correct I/Q imbalance, so the image of a strong signal does not show", FrontKey::IqCorr));
+    }
+    if let Some(on) = s.bias_t {
+        keys.push(("BIAS-T".into(), on, theme::WARN, "DC on the antenna feed, for an inline preamp; saved per radio", FrontKey::BiasT));
+    }
+    keys.push((spur, spur_on || checking, theme::VIOLET, "Find the receiver's own spurs by moving the span an eighth and back, then notch them. Click again to clear.", FrontKey::Spur));
+    let mut hit = None;
+    let col_w = ((ui.available_width() - 6.0) / 2.0).floor();
+    for pair in keys.chunks(2) {
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 6.0;
+            for (label, on, tally, tip, k) in pair {
+                if widgets::key_sized(ui, label, *on, *tally, vec2(col_w, 26.0)).on_hover_text(*tip).clicked() {
+                    hit = Some(*k);
+                }
+            }
+        });
+    }
+    match hit {
+        Some(FrontKey::RfNotch) => app.post("/api/sdr/frontend", json!({ "rf_notch": s.rf_notch != Some(true) })),
+        Some(FrontKey::DabNotch) => app.post("/api/sdr/frontend", json!({ "dab_notch": s.dab_notch != Some(true) })),
+        Some(FrontKey::LoOffset) => app.post("/api/sdr/frontend", json!({ "lo_offset": !s.lo_offset })),
+        Some(FrontKey::IqCorr) => app.post("/api/sdr/frontend", json!({ "iq_correction": s.iq_correction != Some(true) })),
+        Some(FrontKey::BiasT) => app.post("/api/sdr/frontend", json!({ "bias_t": s.bias_t != Some(true) })),
+        Some(FrontKey::Spur) if !checking => {
             let now = ui.input(|i| i.time);
             app.start_spur_check(now);
         }
-    });
+        _ => {}
+    }
     if !s.if_bandwidths_hz.is_empty() {
         let cur = s.if_bandwidth_hz.unwrap_or(0.0);
         let label = if s.if_bandwidth_manual { crate::tuning::fmt_hz(cur) } else { format!("AUTO · {}", crate::tuning::fmt_hz(cur)) };
@@ -306,8 +334,6 @@ fn front_end(app: &mut App, ui: &mut Ui) {
             });
         });
     }
-    let n = [s.rf_notch, s.dab_notch, s.iq_correction, s.bias_t].iter().filter(|v| **v == Some(true)).count() + usize::from(s.lo_offset);
-    ui.label(small(format!("{} · {}", s.tuner.trim_start_matches("Rafael Micro "), if n == 0 { "all off".into() } else { format!("{n} on") })));
 }
 
 fn processing(app: &mut App, ui: &mut Ui) {
@@ -328,26 +354,22 @@ fn processing(app: &mut App, ui: &mut Ui) {
     let agc = matches!(mode, Mode::Am | Mode::Usb | Mode::Lsb);
     row(ui, "NOISE RED.", "Spectral noise reduction on voice: NFM, AM, USB and LSB. Higher cuts more hiss and adds about 16 ms of delay.", &mut |ui| {
         ui.add_enabled_ui(voice, |ui| {
-            for (v, l) in [("off", "OFF"), ("low", "LOW"), ("medium", "MED"), ("high", "HIGH")] {
-                if widgets::chip_key(ui, l, p.nr == v, theme::CYAN).clicked() {
-                    post = Some(json!({ "nr": v }));
-                }
+            let vals = ["off", "low", "medium", "high"];
+            if let Some(i) = widgets::segmented(ui, "nr", &["OFF", "LOW", "MED", "HIGH"], vals.iter().position(|v| *v == p.nr), theme::CYAN) {
+                post = Some(json!({ "nr": vals[i] }));
             }
         });
     });
     row(ui, "BLANKER", "Wideband impulse blanker, for ignition and power-line clicks. It also clips the start of strong packet bursts, so leave it off for APRS.", &mut |ui| {
-        for (v, l) in [(0u8, "OFF"), (1, "LOW"), (2, "MED"), (3, "HIGH")] {
-            if widgets::chip_key(ui, l, p.blanker == v, theme::VIOLET).clicked() {
-                post = Some(json!({ "blanker": v }));
-            }
+        if let Some(i) = widgets::segmented(ui, "blanker", &["OFF", "LOW", "MED", "HIGH"], Some(p.blanker.min(3) as usize), theme::VIOLET) {
+            post = Some(json!({ "blanker": i }));
         }
     });
-    row(ui, "AGC", "AM and sideband AGC speed: fast follows flutter, slow rides through pauses and fades.", &mut |ui| {
+    row(ui, "VOICE AGC", "AM and sideband AGC speed: fast follows flutter, slow rides through pauses and fades.", &mut |ui| {
         ui.add_enabled_ui(agc, |ui| {
-            for (v, l) in [("fast", "FAST"), ("medium", "MED"), ("slow", "SLOW")] {
-                if widgets::chip_key(ui, l, p.agc == v, theme::AMBER).clicked() {
-                    post = Some(json!({ "agc": v }));
-                }
+            let vals = ["fast", "medium", "slow"];
+            if let Some(i) = widgets::segmented(ui, "agc", &["FAST", "MED", "SLOW"], vals.iter().position(|v| *v == p.agc), theme::AMBER) {
+                post = Some(json!({ "agc": vals[i] }));
             }
         });
     });

@@ -7,7 +7,7 @@
 //! marker that holds a second and then falls at 30% of the scale per second.
 
 use crate::theme;
-use egui::{Align2, CornerRadius, Rect, Sense, Stroke, Ui, pos2, vec2};
+use egui::{CornerRadius, Rect, Sense, Stroke, Ui, pos2, vec2};
 
 pub const S9_DBFS: f32 = -60.0;
 
@@ -72,72 +72,86 @@ impl Meter {
         self.pos
     }
 
-    /// The meter on two short lines: S-units, the bar and dBFS on one, the
-    /// scale under the bar.
-    pub fn ui_compact(&mut self, ui: &mut Ui, reduce_motion: bool, mark: Option<f32>) {
+    /// The S-units and dBFS for the bay's header, each with its color.
+    pub fn readout(&self) -> ((String, egui::Color32), (String, egui::Color32)) {
+        let over = self.rf.is_some_and(|d| d >= S9_DBFS);
+        let s = (s_label(self.rf), if over { theme::AMBER } else { theme::text() });
+        let d = if self.clipping {
+            ("CLIP".to_string(), theme::ERR)
+        } else {
+            (self.rf.map_or("— dBFS".into(), |d| format!("{d:.1} dBFS")), theme::text_2())
+        };
+        (s, d)
+    }
+
+    /// The bargraph across the whole of its bay, in a recessed well: lit
+    /// segments green to S9, amber to +40, ember past it; the floor caret,
+    /// the peak pip and the scale inside the well under the segments.
+    pub fn ui_bar(&mut self, ui: &mut Ui, reduce_motion: bool, mark: Option<f32>) {
         let now = ui.input(|i| i.time);
         let dt = ui.input(|i| i.stable_dt).clamp(0.001, 0.05);
         let pos = self.tick(now, dt, reduce_motion);
         let w = ui.available_width();
-        let (rect, _) = ui.allocate_exact_size(vec2(w, 32.0), Sense::hover());
-        let p = ui.painter_at(rect.expand(2.0));
-        let s = s_label(self.rf);
-        let over = self.rf.is_some_and(|d| d >= S9_DBFS);
-        p.text(pos2(rect.left(), rect.top() + 9.0), Align2::LEFT_CENTER, &s, theme::mono_bold(16.0), if over { theme::WARN } else { theme::text() });
-        let dbfs = self.rf.map_or("— dBFS".into(), |d| format!("{d:.1} dBFS"));
-        let dc = if self.clipping { theme::ERR } else { theme::text_2() };
-        p.text(pos2(rect.right(), rect.top() + 9.0), Align2::RIGHT_CENTER, if self.clipping { "CLIP".to_string() } else { dbfs }, theme::mono(11.0), dc);
-        let bar = Rect::from_min_max(pos2(rect.left() + 76.0, rect.top() + 4.0), pos2(rect.right() - 82.0, rect.top() + 14.0));
-        p.rect_filled(bar, CornerRadius::same(2), theme::ink());
+        let (rect, _) = ui.allocate_exact_size(vec2(w, 22.0), Sense::hover());
+        let p = ui.painter_at(rect.expand(3.0));
+        theme::well(&p, rect, None);
+        let bar = Rect::from_min_max(pos2(rect.left() + 6.0, rect.top() + 4.0), pos2(rect.right() - 6.0, rect.top() + 11.0));
         let lit_to = bar.left() + bar.width() * pos;
-        let s9_x = bar.left() + bar.width() * frac(S9_DBFS);
-        let mut x = bar.left() + 1.0;
-        while x < bar.right() - 1.0 {
-            let r = Rect::from_min_max(pos2(x, bar.top() + 2.0), pos2((x + 2.0).min(bar.right() - 1.0), bar.bottom() - 2.0));
-            let c = if x < lit_to {
-                if x < s9_x { theme::lerp(theme::OK, theme::AMBER, (x - bar.left()) / (s9_x - bar.left()).max(1.0) * 0.4) } else { theme::lerp(theme::AMBER, theme::EMBER, (x - s9_x) / (bar.right() - s9_x).max(1.0)) }
+        let at = |db: f32| bar.left() + bar.width() * frac(db);
+        let (s9_x, p40_x) = (at(S9_DBFS), at(-20.0));
+        let mut x = bar.left();
+        while x < bar.right() - 0.5 {
+            let r = Rect::from_min_max(pos2(x, bar.top()), pos2((x + 2.0).min(bar.right()), bar.bottom()));
+            let c = if x < s9_x {
+                theme::OK
+            } else if x < p40_x {
+                theme::AMBER
             } else {
-                theme::surface_3()
+                theme::EMBER
             };
-            p.rect_filled(r, CornerRadius::ZERO, c);
+            p.rect_filled(r, CornerRadius::ZERO, if x < lit_to { c } else { theme::alpha(c, 0.10) });
             x += 3.0;
         }
         if let Some(fl) = self.floor {
-            let fx = bar.left() + bar.width() * frac(fl);
-            p.line_segment([pos2(fx, bar.top() - 2.0), pos2(fx, bar.bottom() + 2.0)], Stroke::new(1.5, theme::text_3()));
+            let fx = at(fl);
+            p.line_segment([pos2(fx, bar.top() - 2.0), pos2(fx, bar.bottom() + 2.0)], Stroke::new(1.5, theme::CYAN));
         }
         if self.peak > pos + 0.008 {
             let px = bar.left() + bar.width() * self.peak;
-            p.line_segment([pos2(px, bar.top()), pos2(px, bar.bottom())], Stroke::new(2.0, if self.clipping { theme::ERR } else { theme::text() }));
+            p.line_segment([pos2(px, bar.top() - 1.0), pos2(px, bar.bottom() + 1.0)], Stroke::new(2.0, if self.clipping { theme::ERR } else { theme::text() }));
         }
         if let Some(m) = mark {
-            let mx = bar.left() + bar.width() * frac(m);
+            let mx = at(m);
             let open = self.rf.is_some_and(|r| r >= m);
-            let tri = vec![pos2(mx, bar.top()), pos2(mx - 3.5, bar.top() - 5.0), pos2(mx + 3.5, bar.top() - 5.0)];
+            let tri = vec![pos2(mx, bar.top()), pos2(mx - 3.5, rect.top() - 1.0), pos2(mx + 3.5, rect.top() - 1.0)];
             if open {
                 p.add(egui::Shape::convex_polygon(tri, theme::ERR, Stroke::NONE));
             } else {
                 p.add(egui::Shape::closed_line(tri, Stroke::new(1.0, theme::ERR)));
             }
         }
-        // The scale, leaving out any label that would run into the last one
-        // drawn, so a narrow meter thins its scale rather than overprinting.
+        // The scale under the segments, each label on a tick; a label that
+        // would run into the last one drawn is left out, so a narrow meter
+        // thins its scale rather than overprinting.
         let mut last_right = f32::NEG_INFINITY;
-        for (label, db, hi) in [("1", -108.0, false), ("3", -96.0, false), ("5", -84.0, false), ("7", -72.0, false), ("9", -60.0, false), ("+20", -40.0, true), ("+40", -20.0, true), ("+60", 0.0, true)] {
-            let tx = bar.left() + bar.width() * frac(db);
-            let g = p.layout_no_wrap(label.to_string(), theme::mono(9.0), if hi { theme::WARN } else { theme::text_3() });
+        for (label, db, hi) in [("S1", -108.0, false), ("3", -96.0, false), ("5", -84.0, false), ("7", -72.0, false), ("S9", -60.0, false), ("+20", -40.0, true), ("+40", -20.0, true), ("+60", 0.0, true)] {
+            let tx = at(db);
+            // The end labels sit inside the ends; only the inner ones get a tick.
+            if db > -108.0 && db < 0.0 {
+                p.line_segment([pos2(tx, bar.bottom() + 1.0), pos2(tx, bar.bottom() + 3.0)], Stroke::new(1.0, theme::text_3()));
+            }
+            let g = p.layout_no_wrap(label.to_string(), theme::mono(9.0), if hi { theme::alpha(theme::AMBER, 0.8) } else { theme::text_3() });
             let x0 = if db <= -108.0 { tx } else if db >= 0.0 { tx - g.size().x } else { tx - g.size().x / 2.0 };
             if x0 < last_right + 4.0 {
                 continue;
             }
             last_right = x0 + g.size().x;
-            p.galley(pos2(x0, bar.bottom() + 3.0), g, theme::text_3());
+            p.galley(pos2(x0, rect.bottom() - g.size().y), g, theme::text_3());
         }
         if !reduce_motion && (pos - self.rf.map(frac).unwrap_or(0.0)).abs() > 0.002 {
             crate::anim::more(ui.ctx());
         }
     }
-
 }
 
 #[cfg(test)]

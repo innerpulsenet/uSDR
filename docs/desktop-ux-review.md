@@ -229,3 +229,37 @@ Two new widgets and a sweep of about thirty call sites.
    logic is covered without timing.
 4. Control language: a day, mechanical.
 5. Motion 6–9 as taste allows.
+
+## Second review (2026-11-03): what was taken
+
+A second outside review with mockups (`~/usdr-report`) was checked against
+the code and acted on the same day, under three standing priorities:
+waterfall accuracy over averaging, as little latency as possible, and
+advanced visual polish.
+
+**Taken.** A fixed-geometry RX bay (starting B moves nothing); the readout
+in a recessed well without the GHz zero below 1 GHz; the tune strip between
+the jog keys at every width; modes grouped by kind (listening and AUTO/SCAN
+on the first row, decoders on the second); `150k`, not `150.00k`; a
+two-tier S-meter whose bar has the bay's whole width, with a CAL key; a real
+output level meter with a clip lamp; segmented flag meters with an S9 tick
+(the amber threshold was at S9+12, now at S9); faders whose value sits by
+the track; segmented tracks for one-of-several choices (NR, blanker, voice
+AGC, AVG, scope view and rate); the Front End keys in two equal columns
+with the count in the header; numbered memory pills with dashed empties;
+grips on the passband edges and the splitter; the palette's ramp in the
+waterfall gutter; dock tabs with count pills, a baseline and column heads
+for the decode log; a framed scope waterfall; errors as status-bar chips
+(audio's retries on a click).
+
+**Taken further, for accuracy and latency.** The waterfall now paints each
+frame's own row (proto v5 `wf_row`: the Welch mean before the trace's
+bin smoothing and AVG), every screen column the strongest bin under it,
+bins as crisp columns when zoomed, each row the moment it arrives (no
+slide-in), and the trace rises at once.
+
+**Left.** The mockups' soft, averaged-looking waterfall; their invented
+content (RDS decodes, "Stereo + RDS", diagnostics back in the status bar);
+the band-plan channel, thumb grips and MPX guides, which the code already
+had; a segmented track around the analog modes only (all thirteen modes
+are one choice).

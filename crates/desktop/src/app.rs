@@ -1252,13 +1252,20 @@ impl App {
             if a.underruns > 0 {
                 small(ui, format!("{:>5} underruns", a.underruns), theme::WARN);
             }
+            // Errors as chips: the gist, the whole of it on hover, so one
+            // long driver message cannot push the rest off the bar.
             if self.have_status
-                && let Some(e) = &self.status.error
+                && let Some(e) = self.status.error.clone()
             {
-                small(ui, e.clone(), theme::ERR);
+                error_chip(ui, "SERVER", &e, false);
             }
-            if let Some(e) = self.player.error.lock().unwrap().clone() {
-                small(ui, format!("audio: {e}"), theme::ERR);
+            let audio_err = self.player.error.lock().unwrap().clone();
+            if let Some(e) = audio_err
+                && error_chip(ui, "AUDIO", &e, true).clicked()
+            {
+                let dev = self.prefs.audio_device.clone();
+                self.player.open(dev.as_deref());
+                self.player_b.open(dev.as_deref());
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 brand::credit(ui);
@@ -1465,6 +1472,8 @@ impl eframe::App for App {
 impl App {
     /// Take what the network delivered, poll, and read the keyboard.
     pub fn tick(&mut self, ctx: &egui::Context) {
+        // For the house widgets, which have no App to ask.
+        crate::widgets::set_reduce_motion(ctx, self.reduce_motion());
         let events: Vec<NetEvent> = match &self.link {
             Some(l) => l.events.try_iter().take(512).collect(),
             None => Vec::new(),
@@ -1559,10 +1568,13 @@ impl App {
                 let b = ui.ctx().animate_bool_with_time(egui::Id::new("rx-b-wash"), self.active_b && self.status.rx2.is_some(), 0.2);
                 ui.painter().rect_filled(Rect::from_min_size(r.left_top(), vec2(16.0, 2.0)), CornerRadius::ZERO, theme::lerp(theme::EMBER, theme::VIOLET, b));
             });
-        // The toolbar's own items take about 830 px and the memories about
-        // 470; the toolbar runs the width of the display, beside the column.
+        // The toolbar's own items take about 870 px; the memories about 140
+        // for their label and STORE, 115 a stored slot and 26 an empty one.
+        // The toolbar runs the width of the display, beside the column.
         let toolbar_room = ui.available_width() - if self.prefs.show_side { self.prefs.side_width } else { 0.0 };
-        self.memories_on_toolbar = toolbar_room >= 1340.0;
+        let stored = self.memories().len();
+        let mem_w = 140.0 + 115.0 * stored as f32 + 26.0 * 8usize.saturating_sub(stored) as f32;
+        self.memories_on_toolbar = toolbar_room >= 870.0 + mem_w;
         if self.prefs.show_memories && !self.memories_on_toolbar {
             egui::Panel::top("memories")
                 .exact_size(30.0)
@@ -1617,6 +1629,29 @@ impl App {
         }
     }
 
+}
+
+/// The gist of a driver's error: what it quotes as the reason, or else what
+/// follows its last colon.
+fn error_gist(e: &str) -> &str {
+    if let Some(a) = e.rfind("error '")
+        && let Some(b) = e[a + 7..].find('\'')
+    {
+        return &e[a + 7..a + 7 + b];
+    }
+    e.rsplit(": ").next().unwrap_or(e).trim()
+}
+
+/// A status-bar error: an outlined chip with the subsystem and the gist,
+/// the full message on hover; `retry` says a click tries again.
+fn error_chip(ui: &mut Ui, what: &str, e: &str, retry: bool) -> egui::Response {
+    let text = format!("▲ {what}: {}{}", crate::widgets::ellipsize(ui.painter(), error_gist(e), theme::mono(10.5), 280.0), if retry { " · RETRY" } else { "" });
+    let g = ui.painter().layout_no_wrap(text, theme::mono(10.5), theme::ERR);
+    let (rect, resp) = ui.allocate_exact_size(g.size() + vec2(14.0, 6.0), if retry { egui::Sense::click() } else { egui::Sense::hover() });
+    let hover = ui.ctx().animate_bool_with_time(resp.id.with("hv"), retry && resp.hovered(), 0.12);
+    ui.painter().rect(rect, CornerRadius::same(3), alpha(theme::ERR, 0.08 + 0.10 * hover), Stroke::new(1.0, alpha(theme::ERR, 0.55)), egui::StrokeKind::Inside);
+    ui.painter().galley(rect.min + vec2(7.0, 3.0), g, theme::ERR);
+    resp.on_hover_text(if retry { format!("{e}\n\nClick to open the audio output again") } else { e.to_string() })
 }
 
 #[cfg(test)]
@@ -1843,6 +1878,13 @@ mod tests {
         h.state_mut().app.tune(146.1e6, true);
         let posts = drain(&h);
         assert_eq!(posts, vec![("/api/sdr/rx2".into(), json!({ "freq_hz": 146.1e6, "mode": "nfm" }))]);
+    }
+
+    #[test]
+    fn an_error_chip_says_the_gist() {
+        assert_eq!(error_gist("Default Audio Device: ALSA function 'snd_pcm_open' failed with error 'Host is down (112)'"), "Host is down (112)");
+        assert_eq!(error_gist("pipewire: no audio output device"), "no audio output device");
+        assert_eq!(error_gist("no audio output device"), "no audio output device");
     }
 
     #[test]

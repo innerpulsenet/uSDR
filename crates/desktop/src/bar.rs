@@ -20,10 +20,15 @@ fn small(t: impl Into<String>) -> RichText {
 
 /// A bay: a labelled section of the bar, divided from the next by a hairline.
 fn bay<R>(ui: &mut Ui, label: &str, add: impl FnOnce(&mut Ui) -> R) -> R {
+    bay_with(ui, |ui| ui.label(RichText::new(label).font(theme::mono(10.5)).color(theme::text_3()).extra_letter_spacing(1.0)), add)
+}
+
+/// A bay whose top line is more than its label.
+fn bay_with<R, H>(ui: &mut Ui, head: impl FnOnce(&mut Ui) -> H, add: impl FnOnce(&mut Ui) -> R) -> R {
     let r = ui
         .vertical(|ui| {
             ui.spacing_mut().item_spacing.y = 4.0;
-            ui.label(RichText::new(label).font(theme::mono(10.5)).color(theme::text_3()).extra_letter_spacing(1.0));
+            head(ui);
             add(ui)
         })
         .inner;
@@ -56,18 +61,18 @@ pub fn receiver_bar(app: &mut App, ui: &mut Ui) {
         ui.horizontal_top(|ui| {
             switch(app, ui);
             readout(app, ui);
-            tuning(app, ui, true);
+            tuning(app, ui);
             modes(app, ui);
             filter(app, ui, 310.0);
             audio(app, ui, 220.0);
             meter(app, ui, 300.0, 560.0);
         });
     } else if w >= 1640.0 {
-        // The tune strip folds away (the jog keys stay); filter and meter narrow.
+        // The filter and the meter narrow.
         ui.horizontal_top(|ui| {
             switch(app, ui);
             readout(app, ui);
-            tuning(app, ui, false);
+            tuning(app, ui);
             modes(app, ui);
             filter(app, ui, 250.0);
             audio(app, ui, 220.0);
@@ -80,7 +85,7 @@ pub fn receiver_bar(app: &mut App, ui: &mut Ui) {
         ui.horizontal_top(|ui| {
             switch(app, ui);
             readout_sized(app, ui, 34.0);
-            tuning(app, ui, false);
+            tuning(app, ui);
             modes(app, ui);
             // The filter and the audio give up a little so the signal bay
             // can say what it hears.
@@ -92,8 +97,9 @@ pub fn receiver_bar(app: &mut App, ui: &mut Ui) {
         ui.horizontal_top(|ui| {
             switch(app, ui);
             readout(app, ui);
-            tuning(app, ui, false);
-            meter(app, ui, 260.0, 560.0);
+            tuning(app, ui);
+            // A long bar is a finer one: on its own row the meter may run on.
+            meter(app, ui, 260.0, 900.0);
         });
         ui.add_space(4.0);
         // A fader wider than this is a slab of empty track.
@@ -106,30 +112,40 @@ pub fn receiver_bar(app: &mut App, ui: &mut Ui) {
     }
 }
 
+/// Width of the RX bay's two rows: the same with or without B, so starting
+/// or stopping B moves nothing else on the bar.
+const RX_W: f32 = 96.0;
+
 fn switch(app: &mut App, ui: &mut Ui) {
     bay(ui, "RX", |ui| {
         let has_b = app.status.rx2.is_some();
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 3.0;
-            if widgets::chip_key(ui, "A", !app.active_b || !has_b, theme::AMBER).on_hover_text("Drive receiver A (B toggles)").clicked() {
+            let half = (RX_W - 3.0) / 2.0;
+            if widgets::chip_key_w(ui, "A", !app.active_b || !has_b, theme::AMBER, half).on_hover_text("Drive receiver A (B toggles)").clicked() {
                 app.active_b = false;
             }
             if has_b {
-                if widgets::chip_key(ui, "B", app.active_b, theme::VIOLET).on_hover_text("Drive receiver B (B toggles)").clicked() {
+                if widgets::chip_key_w(ui, "B", app.active_b, theme::VIOLET, half).on_hover_text("Drive receiver B (B toggles)").clicked() {
                     app.active_b = true;
                 }
-            } else if app.rx2_available()
-                && widgets::chip_key(ui, "+B", false, theme::VIOLET)
+            } else {
+                let can = app.rx2_available();
+                let r = ui
+                    .add_enabled_ui(can, |ui| widgets::chip_key_w(ui, "+B", false, theme::VIOLET, half))
+                    .inner
                     .on_hover_text("Start receiver B beside A (or middle-click the display)")
-                    .clicked()
-            {
-                start_b(app);
+                    .on_disabled_hover_text("This server has no second receiver");
+                if r.clicked() {
+                    start_b(app);
+                }
             }
         });
-        if has_b {
+        // B's own keys, always laid out and dimmed while B is off.
+        ui.add_enabled_ui(has_b, |ui| {
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 3.0;
-                if widgets::chip_key(ui, "SWAP", false, theme::VIOLET).on_hover_text("Trade frequencies between A and B").clicked()
+                if widgets::chip_key_w(ui, "SWAP", false, theme::VIOLET, 41.0).on_hover_text("Trade frequencies between A and B").clicked()
                     && let Some(b) = app.status.rx2.clone()
                 {
                     let a = app.inspect_hz();
@@ -137,20 +153,20 @@ fn switch(app: &mut App, ui: &mut Ui) {
                     app.tune(b.freq_hz, false);
                     app.set_rx2(a, b.mode);
                 }
-                if widgets::chip_key(ui, "B OFF", false, theme::VIOLET).clicked() {
-                    app.rx2_off();
-                }
                 // One ear each, for following two channels at once.
-                let split = app.prefs.pan <= -0.99 && app.prefs.pan_b >= 0.99;
-                if widgets::chip_key(ui, "L|R", split, theme::VIOLET).on_hover_text(if split { "Both receivers back to the center" } else { "A in the left ear, B in the right" }).clicked() {
+                let split = has_b && app.prefs.pan <= -0.99 && app.prefs.pan_b >= 0.99;
+                if widgets::chip_key_w(ui, "L|R", split, theme::VIOLET, 31.0).on_hover_text(if split { "Both receivers back to the center" } else { "A in the left ear, B in the right" }).clicked() {
                     let (a, b) = if split { (0.0, 0.0) } else { (-1.0, 1.0) };
                     app.prefs.pan = a;
                     app.prefs.pan_b = b;
                     app.player.set_pan(a);
                     app.player_b.set_pan(b);
                 }
+                if widgets::chip_key_w(ui, "✕", false, theme::VIOLET, RX_W - 41.0 - 31.0 - 6.0).on_hover_text("Stop receiver B").clicked() {
+                    app.rx2_off();
+                }
             });
-        }
+        });
     });
 }
 
@@ -188,6 +204,7 @@ fn readout_sized(app: &mut App, ui: &mut Ui, digits_px: f32) {
             };
             ui.label(small(agc));
         });
+        app.vfo.tint = Some(if b.is_some() { theme::VIOLET } else { theme::AMBER });
         app.vfo.ui(ui, hz, digits_px, rm, &mut acts);
     });
     for a in acts {
@@ -201,7 +218,7 @@ fn readout_sized(app: &mut App, ui: &mut Ui, digits_px: f32) {
     }
 }
 
-fn tuning(app: &mut App, ui: &mut Ui, strip: bool) {
+fn tuning(app: &mut App, ui: &mut Ui) {
     let hz = app.active_hz();
     bay(ui, "STEP", |ui| {
         let auto = crate::tuning::mode_raster_hz(app.status.mode, hz);
@@ -210,7 +227,7 @@ fn tuning(app: &mut App, ui: &mut Ui, strip: bool) {
             Some(s) => crate::tuning::fmt_short_hz(s),
         };
         let color = if app.prefs.step_hz.is_some() { theme::WARN } else { theme::text() };
-        ui.horizontal(|ui| {
+        let top = ui.horizontal(|ui| {
             widgets::selector(ui, "step", &label, color, 118.0, |ui| {
                 if ui.selectable_label(app.prefs.step_hz.is_none(), format!("Auto · mode raster ({})", crate::tuning::fmt_short_hz(auto))).clicked() {
                     app.prefs.step_hz = None;
@@ -231,7 +248,10 @@ fn tuning(app: &mut App, ui: &mut Ui, strip: bool) {
                 app.prefs.span_lock = !lock;
             }
         });
-        // The jog keys either side of the strip: « ‹ [strip] › ».
+        // The jog keys either side of the strip, « ‹ [strip] › », as wide
+        // as the row above, so the dial is there at every window width.
+        let chev = ui.painter().layout_no_wrap("«".into(), theme::mono_bold(10.5), egui::Color32::PLACEHOLDER).size().x + 14.0;
+        let strip_w = (top.response.rect.width() - 4.0 * chev - 4.0 * 3.0).max(48.0);
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 3.0;
             let jog = |ui: &mut Ui, app: &mut App, lbl: &str, n: f64| {
@@ -244,7 +264,7 @@ fn tuning(app: &mut App, ui: &mut Ui, strip: bool) {
             };
             jog(ui, app, "«", -10.0);
             jog(ui, app, "‹", -1.0);
-            if strip && let Some(d) = crate::vfo::tune_strip(ui, hz, app.step_hz(), 150.0, 24.0) {
+            if let Some(d) = crate::vfo::tune_strip(ui, hz, app.step_hz(), strip_w, 22.0) {
                 let target = app.active_hz() + d;
                 app.tune(target, true);
             }
@@ -278,7 +298,11 @@ fn modes(app: &mut App, ui: &mut Ui) {
             ui.label(small("receiver B listens; the decoders run on A"));
         }
         None => {
-            for row in [&Mode::ALL[..7], &Mode::ALL[7..]] {
+            // Listening modes and the two that pick for you on the first
+            // row, the decoders on the second.
+            let listen = [Mode::Nfm, Mode::Am, Mode::Usb, Mode::Lsb, Mode::Wfm, Mode::Auto, Mode::Scan];
+            let decode: Vec<Mode> = Mode::ALL.iter().copied().filter(|m| !listen.contains(m)).collect();
+            for row in [&listen[..], &decode[..]] {
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = 3.0;
                     for m in row {
@@ -451,7 +475,7 @@ fn filter(app: &mut App, ui: &mut Ui, width_px: f32) {
             step: if range.max_width_hz > 50_000.0 { 5_000.0 } else { 100.0 },
             fine: if range.max_width_hz > 50_000.0 { 1_000.0 } else { 50.0 },
             label: "WIDTH",
-            text: |v| format!("{:.2}k", v / 1000.0),
+            text: |v| k(v as f32),
             color: theme::AMBER,
             enabled: true,
             ticks: vec![],
@@ -527,13 +551,8 @@ fn audio(app: &mut App, ui: &mut Ui, width_px: f32) {
             }
             // Output level, beside the keys.
             let r = player.reading();
-            let lw = (ui.available_width() - 30.0).clamp(30.0, 120.0);
-            let (rect, _) = ui.allocate_exact_size(vec2(lw, 4.0), Sense::hover());
-            ui.painter().rect_filled(rect, egui::CornerRadius::same(1), theme::ink());
-            let lvl = |v: f32| ((20.0 * v.max(1e-5).log10() + 60.0) / 60.0).clamp(0.0, 1.0);
-            ui.painter().rect_filled(egui::Rect::from_min_size(rect.min, vec2(rect.width() * lvl(r.rms), rect.height())), egui::CornerRadius::same(1), alpha(theme::OK, 0.8));
-            let px = rect.left() + rect.width() * lvl(r.peak);
-            ui.painter().line_segment([egui::pos2(px, rect.top()), egui::pos2(px, rect.bottom())], Stroke::new(1.5, theme::text()));
+            let lw = (ui.available_width() - 34.0).clamp(40.0, 140.0);
+            level_meter(ui, lw, r.rms, r.peak);
             widgets::menu_chip(ui, "···", theme::text_2(), |ui| {
                 ui.set_min_width(220.0);
                 let mut pan = if is_b { app.prefs.pan_b } else { app.prefs.pan } as f64;
@@ -575,33 +594,104 @@ fn audio(app: &mut App, ui: &mut Ui, width_px: f32) {
     });
 }
 
+/// What the receiver is playing, −60 to 0 dBFS, in a well at chip height:
+/// RMS as lit segments (green, amber from −12, red from −3), the peak as a
+/// pip, ticks at −40, −20 and −6, and a clip lamp that holds a second.
+fn level_meter(ui: &mut Ui, w: f32, rms: f32, peak: f32) {
+    let (rect, resp) = ui.allocate_exact_size(vec2(w, 22.0), Sense::hover());
+    let p = ui.painter_at(rect.expand(1.0));
+    theme::well(&p, rect, None);
+    let db = |v: f32| 20.0 * v.max(1e-6).log10();
+    let lamp_w = 10.0;
+    let bar = egui::Rect::from_min_max(egui::pos2(rect.left() + 5.0, rect.top() + 6.0), egui::pos2(rect.right() - 5.0 - lamp_w, rect.top() + 13.0));
+    let x_of = |d: f32| bar.left() + bar.width() * ((d + 60.0) / 60.0).clamp(0.0, 1.0);
+    let lit_to = x_of(db(rms));
+    let mut x = bar.left();
+    while x < bar.right() - 0.5 {
+        let d = (x - bar.left()) / bar.width() * 60.0 - 60.0;
+        let c = if d >= -3.0 { theme::ERR } else if d >= -12.0 { theme::AMBER } else { theme::OK };
+        let seg = egui::Rect::from_min_max(egui::pos2(x, bar.top()), egui::pos2((x + 2.0).min(bar.right()), bar.bottom()));
+        p.rect_filled(seg, egui::CornerRadius::ZERO, if x < lit_to { c } else { alpha(c, 0.10) });
+        x += 3.0;
+    }
+    if peak > 1e-4 {
+        let px = x_of(db(peak));
+        p.line_segment([egui::pos2(px, bar.top() - 1.0), egui::pos2(px, bar.bottom() + 1.0)], Stroke::new(1.5, theme::text()));
+    }
+    for d in [-40.0, -20.0, -6.0] {
+        let tx = x_of(d);
+        p.line_segment([egui::pos2(tx, bar.bottom() + 2.0), egui::pos2(tx, bar.bottom() + 5.0)], Stroke::new(1.0, theme::text_3()));
+    }
+    let id = resp.id.with("clip");
+    let now = ui.input(|i| i.time);
+    if peak >= 0.99 {
+        ui.data_mut(|d| d.insert_temp(id, now));
+    }
+    let clipped_at: f64 = ui.data(|d| d.get_temp(id).unwrap_or(f64::NEG_INFINITY));
+    let on = now - clipped_at < 1.0;
+    let lamp = egui::pos2(rect.right() - 4.0 - lamp_w / 2.0, bar.center().y);
+    if on {
+        p.circle_filled(lamp, 5.0, alpha(theme::ERR, 0.25));
+        crate::anim::more(ui.ctx());
+    }
+    p.circle_filled(lamp, 2.5, if on { theme::ERR } else { alpha(theme::ERR, 0.18) });
+    resp.on_hover_text(if rms > 1e-5 {
+        format!("Output: {:.0} dBFS RMS, peak {:.0} dBFS · ticks at −40, −20, −6 · the lamp lights on a clip", db(rms), db(peak))
+    } else {
+        "Output level: nothing playing".into()
+    });
+}
+
 fn meter(app: &mut App, ui: &mut Ui, min_w: f32, max_w: f32) {
     let is_b = app.active_b && app.status.rx2.is_some();
     let rm = app.reduce_motion();
     let mark = app.prefs.view.sql_mark;
     // The last bay takes whatever width the row has left.
     let w = (ui.available_width() - 20.0).clamp(min_w, max_w);
-    bay(ui, if is_b { "SIGNAL B" } else { "SIGNAL" }, |ui| {
+    let s = &app.status;
+    let err = s.freq_error_hz.filter(|_| !is_b);
+    let now = ui.input(|i| i.time);
+    if err.is_some_and(|e| e.abs() > 2000.0) {
+        app.err_warn_until = now + 5.0;
+    }
+    let err_warn = now < app.err_warn_until;
+    let ((s_txt, s_col), (db_txt, db_col)) = if is_b { app.meter_b.readout() } else { app.meter.readout() };
+    let mut calibrate = false;
+    // The header is the bay's label, with the reading beside it, so the
+    // bar below can have the bay's whole width.
+    let head = |ui: &mut Ui| {
+        // The bay's width is set here, before the CAL key is pushed to its
+        // right edge.
         ui.set_min_width(w);
         ui.set_max_width(w);
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 8.0;
+            ui.label(RichText::new(if is_b { "SIGNAL B" } else { "SIGNAL" }).font(theme::mono(10.5)).color(theme::text_3()).extra_letter_spacing(1.0));
+            // Fixed widths in the mono face, so nothing after them moves
+            // while the numbers change.
+            fixed(ui, &s_txt, theme::mono_bold(15.0), s_col, "S9+60");
+            fixed(ui, &db_txt, theme::mono(11.0), db_col, "-100.0 dBFS");
+            if let Some(e) = err {
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let t = if e.abs() >= 1_000.0 { format!("CAL {:+.1}k", e / 1000.0) } else { format!("CAL {e:+.0}") };
+                    let r = widgets::mini_key(ui, &t, theme::AMBER, err_warn)
+                        .on_hover_text("The carrier is this far from where the receiver put it: click to calibrate the ppm from it");
+                    calibrate = r.clicked();
+                });
+            }
+        });
+    };
+    bay_with(ui, head, |ui| {
+        ui.spacing_mut().item_spacing.y = 3.0;
         if is_b {
-            app.meter_b.ui_compact(ui, rm, mark);
+            app.meter_b.ui_bar(ui, rm, mark);
             let snr = app.meter_b.snr.map_or(format!("{:>4} dB", "—"), |s| format!("{s:>4.1} dB"));
             ui.label(small(format!("SNR {snr} · measured from the spectrum")));
             return;
         }
-        app.meter.ui_compact(ui, rm, mark);
+        app.meter.ui_bar(ui, rm, mark);
         let s = &app.status;
-        // Fixed widths in the mono face, so the chip and the station name
-        // after them hold still while the numbers change.
         let snr = app.meter.snr.map_or(format!("{:>4} dB", "—"), |d| format!("{d:>4.1} dB"));
-        let err = s.freq_error_hz.map_or("—".into(), |e| if e.abs() >= 1_000.0 { format!("{:+.1}k", e / 1000.0) } else { format!("{e:+.0} Hz") });
-        let err = format!("{err:>7}");
-        let now = ui.input(|i| i.time);
-        if s.freq_error_hz.is_some_and(|e| e.abs() > 2000.0) {
-            app.err_warn_until = now + 5.0;
-        }
-        let err_warn = now < app.err_warn_until;
         let mut notches = Vec::new();
         if s.rf_notch == Some(true) {
             notches.push("AM/FM".to_string());
@@ -614,21 +704,6 @@ fn meter(app: &mut App, ui: &mut Ui, min_w: f32, max_w: f32) {
         }
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 6.0;
-            ui.label(small(format!("SNR {snr}")));
-            // A narrow meter keeps its room for what is heard; the carrier
-            // error is in the Radio card too, with CALIBRATE.
-            let ec = if err_warn { theme::WARN } else { theme::text_3() };
-            if w >= 330.0 || err_warn {
-                let r = ui.add(egui::Label::new(RichText::new(format!("err {err}")).font(theme::mono(10.0)).color(ec)).sense(Sense::click()));
-                if r.on_hover_text("Click to calibrate the ppm from this carrier").clicked()
-                    && let Some(l) = &app.link
-                {
-                    l.post_get("/api/sdr/calibrate", json!({}), Get::Calibrate);
-                }
-            }
-            if !notches.is_empty() {
-                ui.label(RichText::new(format!("notch {}", notches.join(" "))).font(theme::mono(10.0)).color(theme::VIOLET));
-            }
             let (c, word) = app.shown_class();
             let tone = match word {
                 "ACTIVE" => Tone::Ok,
@@ -636,25 +711,88 @@ fn meter(app: &mut App, ui: &mut Ui, min_w: f32, max_w: f32) {
                 _ => Tone::Idle,
             };
             widgets::chip(ui, tone, word);
-            // The protocol alone, without its qualifier, so it fits; the
-            // whole of it and the modulation are a hover away.
-            let short = |p: &str| p.split(" (").next().unwrap_or(p).to_string();
-            let (txt, tip, col) = match &c {
-                Some(c) if word != "IDLE" => (short(&c.protocol), Some(format!("{} · {}", c.protocol, c.modulation)), widgets::protocol_color(&c.protocol)),
-                _ => (crate::app::mode_idle_text(app.status.mode).to_string(), None, theme::text_3()),
-            };
-            let r = ui.add(egui::Label::new(RichText::new(txt).font(theme::sans(12.0)).color(col)).truncate());
-            if let Some(t) = tip {
-                r.on_hover_text(t);
-            }
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.label(small(format!("SNR {snr}")));
+                if !notches.is_empty() {
+                    ui.label(RichText::new(format!("notch {}", notches.join(" "))).font(theme::mono(10.0)).color(theme::VIOLET));
+                }
+                ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                    // The protocol alone, without its qualifier, so it
+                    // fits; the whole of it and the modulation are a hover
+                    // away.
+                    let short = |p: &str| p.split(" (").next().unwrap_or(p).to_string();
+                    let (txt, tip, col) = match &c {
+                        Some(c) if word != "IDLE" => (short(&c.protocol), Some(format!("{} · {}", c.protocol, c.modulation)), widgets::protocol_color(&c.protocol)),
+                        _ => (crate::app::mode_idle_text(app.status.mode).to_string(), None, theme::text_3()),
+                    };
+                    let r = ui.add(egui::Label::new(RichText::new(txt).font(theme::sans(12.0)).color(col)).truncate());
+                    if let Some(t) = tip {
+                        r.on_hover_text(t);
+                    }
+                });
+            });
         });
     });
+    if calibrate && let Some(l) = &app.link {
+        l.post_get("/api/sdr/calibrate", json!({}), Get::Calibrate);
+    }
+}
+
+/// `text` in a box as wide as `widest` would be, so what follows holds still.
+fn fixed(ui: &mut Ui, text: &str, font: egui::FontId, color: egui::Color32, widest: &str) {
+    let w = ui.painter().layout_no_wrap(widest.into(), font.clone(), color).size().x;
+    let g = ui.painter().layout_no_wrap(text.into(), font, color);
+    let (r, _) = ui.allocate_exact_size(vec2(w, g.size().y), Sense::hover());
+    ui.painter().galley(r.left_top(), g, color);
 }
 
 /// One-click memories under the bar, like a radio's band buttons. Storing
 /// and renaming live in the Tools tab.
 pub fn memory_row(app: &mut App, ui: &mut Ui) {
     ui.horizontal(|ui| memory_chips(app, ui));
+}
+
+/// A memory slot: its number (Ctrl+number recalls it), the frequency and
+/// its name in the mode's color; an empty slot is a dashed outline with its
+/// number, which brightens while STORE is waiting for a slot.
+fn memory_pill(ui: &mut Ui, slot: usize, m: Option<&crate::prefs::Memory>, lit: bool, armed: bool) -> egui::Response {
+    let num_f = theme::mono(10.0);
+    let font = theme::mono_bold(10.5);
+    let p = ui.painter().clone();
+    let num = p.layout_no_wrap(slot.to_string(), num_f, egui::Color32::PLACEHOLDER);
+    let parts = m.map(|m| {
+        let mhz = crate::tuning::fmt_mhz(m.freq_hz, 4);
+        let mhz = mhz.trim_end_matches('0').trim_end_matches('.').to_string();
+        (p.layout_no_wrap(mhz, font.clone(), egui::Color32::PLACEHOLDER), p.layout_no_wrap(m.name.clone(), theme::mono_bold(9.5), egui::Color32::PLACEHOLDER), mode_tally(m.mode))
+    });
+    let w = 8.0 + num.size().x + parts.as_ref().map_or(0.0, |(f, n, _)| 6.0 + f.size().x + 5.0 + n.size().x) + 8.0;
+    let (rect, resp) = ui.allocate_exact_size(vec2(w, 22.0), Sense::click());
+    let name = m.map_or_else(|| format!("empty slot {slot}"), |m| m.name.clone());
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, lit, &name));
+    let hover = ui.ctx().animate_bool_with_time(resp.id.with("hv"), resp.hovered(), 0.12);
+    let t = ui.ctx().animate_bool_with_time(resp.id.with("on"), lit, 0.15);
+    let cr = egui::CornerRadius::same(3);
+    let y = rect.center().y;
+    match parts {
+        Some((f, n, tally)) => {
+            let bg = theme::lerp(theme::lerp(theme::surface_3(), theme::surface_4(), hover), alpha(theme::AMBER, 0.20), t);
+            p.rect(rect, cr, bg, Stroke::new(1.0, theme::lerp(theme::line(), alpha(theme::AMBER, 0.75), t)), egui::StrokeKind::Inside);
+            let mut x = rect.left() + 8.0;
+            p.galley(egui::pos2(x, y - num.size().y / 2.0), num.clone(), theme::text_3());
+            x += num.size().x + 6.0;
+            p.galley(egui::pos2(x, y - f.size().y / 2.0), f.clone(), theme::lerp(theme::text_2(), theme::text(), t.max(hover)));
+            x += f.size().x + 5.0;
+            p.galley(egui::pos2(x, y - n.size().y / 2.0 + 0.5), n, alpha(tally, 0.9));
+        }
+        None => {
+            let c = if armed { alpha(theme::AMBER, 0.8) } else { theme::lerp(theme::line_2(), theme::text_3(), hover) };
+            let r = rect.shrink(0.5);
+            let pts = [r.left_top(), r.right_top(), r.right_bottom(), r.left_bottom(), r.left_top()];
+            p.extend(egui::Shape::dashed_line(&pts, Stroke::new(1.0, c), 3.0, 2.0));
+            p.galley(rect.center() - num.size() / 2.0, num, if armed { theme::AMBER } else { theme::text_3() });
+        }
+    }
+    resp
 }
 
 /// The memory chips themselves, for a row of their own or the end of the
@@ -674,10 +812,10 @@ pub fn memory_chips(app: &mut App, ui: &mut Ui) {
         for i in 0..slots {
             let m = list.get(i);
             let lit = m.is_some_and(|m| m.mode == app.status.mode && (m.freq_hz - inspect).abs() <= (crate::tuning::mode_raster_hz(m.mode, m.freq_hz) / 2.0).max(1000.0));
-            let r = widgets::chip_key(ui, m.map_or("—", |m| m.name.as_str()), lit, theme::AMBER);
+            let r = memory_pill(ui, i + 1, m, lit, app.memory_armed);
             let r = match m {
-                Some(m) => r.on_hover_text(format!("{} MHz · {} · Ctrl+{}", crate::tuning::fmt_mhz(m.freq_hz, 5), m.mode.label(), i + 1)),
-                None => r.on_hover_text("Empty: STORE, then this slot"),
+                Some(m) => r.on_hover_text(format!("{} · {} MHz · {} · Ctrl+{}", m.name, crate::tuning::fmt_mhz(m.freq_hz, 5), m.mode.label(), i + 1)),
+                None => r.on_hover_text(format!("Slot {} is empty: STORE, then this slot", i + 1)),
             };
             if r.clicked() {
                 if app.memory_armed || ui.input(|i| i.modifiers.shift) {

@@ -108,7 +108,7 @@ fn probe(server: &str) -> anyhow::Result<()> {
         let mut sorted = f.pwr.clone();
         sorted.sort_by(|a, b| a.total_cmp(b));
         println!(
-            "frame     {} bins over {:.6}–{:.6} MHz · floor {:.1} · max {:.1} dBFS · {} peaks · scope {} @ {} Hz ({:?}) · wf_peak {}",
+            "frame     {} bins over {:.6}–{:.6} MHz · floor {:.1} · max {:.1} dBFS · {} peaks · scope {} @ {} Hz ({:?}) · wf_peak {} · wf_row {}",
             f.pwr.len(),
             (f.center_hz - f.rate_hz / 2.0) / 1e6,
             (f.center_hz + f.rate_hz / 2.0) / 1e6,
@@ -118,7 +118,8 @@ fn probe(server: &str) -> anyhow::Result<()> {
             f.scope.len(),
             f.scope_rate_hz,
             f.scope_kind,
-            f.wf_peak.len()
+            f.wf_peak.len(),
+            f.wf_row.len()
         );
         println!("channel   {:.1} dBFS over a {:.1} dBFS floor", f.channel_dbfs, f.noise_dbfs);
     }

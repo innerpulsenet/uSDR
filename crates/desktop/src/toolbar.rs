@@ -44,17 +44,17 @@ pub fn toolbar(app: &mut App, ui: &mut Ui) {
         }
         divider(ui);
         // Averaging, on the server, so every client sees the same.
-        ui.label(small("AVG"));
+        ui.label(small("AVG")).on_hover_text("Average the trace over frames, to pull a weak steady carrier out of the noise. The waterfall still paints every frame as measured.");
         let avg = match s.avg.as_deref() {
             Some("slow") => 1,
             Some("deep") => 2,
             _ => 0,
         };
-        for (i, (label, mode)) in [("OFF", "off"), ("0.5 s", "slow"), ("2 s", "deep")].into_iter().enumerate() {
-            if widgets::chip_key(ui, label, avg == i, theme::CYAN).clicked() && avg != i {
-                app.post("/api/sdr/avg", json!({ "mode": mode }));
-                app.status.avg = Some(mode.into());
-            }
+        let modes = ["off", "slow", "deep"];
+        // The trace only: the waterfall paints each frame as measured.
+        if let Some(i) = widgets::segmented(ui, "avg", &["OFF", "0.5 s", "2 s"], Some(avg), theme::CYAN) {
+            app.post("/api/sdr/avg", json!({ "mode": modes[i] }));
+            app.status.avg = Some(modes[i].into());
         }
         divider(ui);
         let v = &mut app.prefs.view;

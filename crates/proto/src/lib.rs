@@ -44,6 +44,9 @@ pub struct FftFrame {
     pub max_hold: Vec<f32>,
     /// Strongest segment per bin in this frame's interval, when sent (v4).
     pub wf_peak: Vec<f32>,
+    /// The frame's own Welch mean per bin, before the display's bin
+    /// smoothing and averaging, for the waterfall (v5; empty before).
+    pub wf_row: Vec<f32>,
     pub peaks: Vec<Peak>,
     pub classification: Option<Classification>,
 }
@@ -262,6 +265,13 @@ pub fn decode_fft(buf: &[u8]) -> Result<FftFrame, DecodeError> {
     } else {
         Vec::new()
     };
+    // v5: the unsmoothed waterfall row.
+    let wf_row = if r.remaining() >= 4 {
+        let n = r.count(4)?;
+        r.f32s(n)?
+    } else {
+        Vec::new()
+    };
     Ok(FftFrame {
         center_hz,
         rate_hz,
@@ -276,6 +286,7 @@ pub fn decode_fft(buf: &[u8]) -> Result<FftFrame, DecodeError> {
         pwr,
         max_hold,
         wf_peak,
+        wf_row,
         peaks,
         classification,
     })
@@ -809,6 +820,20 @@ mod tests {
         assert_eq!(c.protocol, "P25 Phase 1");
         assert_eq!(c.details, None);
         assert_eq!(f.wf_peak, vec![-10.0, -20.0]);
+    }
+
+    #[test]
+    fn decodes_v5_row_after_an_empty_peak_array() {
+        let mut b = sample_frame(true, false);
+        b.extend_from_slice(&0u32.to_le_bytes());
+        b.extend_from_slice(&4u32.to_le_bytes());
+        for v in [-101.0f32, -91.0, -81.0, -71.0] {
+            b.extend_from_slice(&v.to_le_bytes());
+        }
+        let f = decode_fft(&b).unwrap();
+        assert!(f.wf_peak.is_empty());
+        assert_eq!(f.wf_row, vec![-101.0, -91.0, -81.0, -71.0]);
+        assert!(decode_fft(&sample_frame(true, true)).unwrap().wf_row.is_empty());
     }
 
     #[test]
