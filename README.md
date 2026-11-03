@@ -428,6 +428,23 @@ from source, at the commit MARIO had), Debian's `soapyremote-server`, and the
 ssh root@172.16.0.216 systemctl status sdrplay soapyremote-server
 ```
 
+<a id="the-driver-patch"></a>**The driver patch.** SoapySDRPlay3 in CT 216 carries
+[`tools/soapysdrplay3-live-gain.patch`](tools/soapysdrplay3-live-gain.patch),
+which keeps what SDRplay's API reports through its events (the IF AGC's gain
+reduction, and power overload) and answers `readSetting` for `live_ifgr`,
+`live_lna_gr`, `overload` and `overload_count`. The daemon reads them where
+they exist and does without them where they do not. Applied 2026-11-03; the
+sources and the library from before it are in
+`/root/src/SoapySDRPlay3/usdr-backup/`. To apply it to a fresh tree:
+
+```bash
+scp tools/soapysdrplay3-live-gain.patch root@172.16.0.216:/root/src/SoapySDRPlay3/
+```
+
+```bash
+ssh root@172.16.0.216 'cd /root/src/SoapySDRPlay3 && patch -p1 < soapysdrplay3-live-gain.patch && cd build && make && make install && systemctl restart soapyremote-server usdr'
+```
+
 ```bash
 SoapySDRUtil --find="driver=remote,remote=tcp://172.16.0.216:55132,remote:driver=sdrplay"
 ```
@@ -463,8 +480,26 @@ crossing into another band rewrites the gain for the new band's table.
 Another SDRplay model, with no table here, moves only its IF stage.
 
 **IF AGC.** The "tuner AGC" switch becomes `IF AGC` on an RSP: automatic gain
-handed to the RSP's own IF loop, which holds the ADC at its -30 dBFS setpoint,
-with the LNA state left where the gain put it.
+handed to the RSP's own IF loop, which holds the ADC at its -30 dBFS setpoint.
+That loop moves only the IF stage, so the LNA follows it: once a second, an
+IF gain reduction of 50 dB or more (or an overload report) takes the LNA
+deeper by as much as the IF is over 40 dB, in one step, and an IF under
+30 dB for three seconds gives back a state. The IF settles near 40 dB, the
+same take-over level manual and clip-guarded gain use. Without this, a strong
+local station drove the IF to the end of its range with the LNA wide open,
+and the overdriven front end painted that station across the band; see
+[intermodulation](#one-strong-station-shows-up-all-over-the-fm-band).
+
+The IF AGC's own readings need a [patched driver](#the-driver-patch): the
+stock SoapySDRPlay3 drops the API's gain-change and overload events, and its
+IF gain readback is the last value set by hand. Without the patch the IF is
+shown as unknown under the IF AGC and the LNA is not stepped.
+
+**Two stages on screen.** For an RSP the Gain card draws the LNA as the steps
+the band has (each as wide as its decibels) and the IF reduction on its 20–59
+dB range, with the 30–50 dB window shaded while the LNA follows the IF AGC.
+An `OVERLOAD` chip shows while the radio reports one; past overloads since
+the radio opened are counted on the note's hover.
 
 **Bias-T, AM/FM notch, DAB notch.** In the Advanced drawer, shown only for a
 radio that has them, and read back from the driver rather than echoed. Bias-T
@@ -925,6 +960,32 @@ passthrough, but it is not proven.
 The fix was moving the RSP out of the VM into its own container; see
 [the server](#the-server-container-216-on-vault). If it is ever passed to a
 VM again, expect this.
+
+### One strong station shows up all over the FM band
+
+Seen 2026-11-03: WRKI on 95.1, the closest and strongest station, was heard
+on 102.1 and on humps across the band, and RDS on them decoded as I-95. Not
+an image (the LO is never 3.5 MHz from the receive frequency) and not an
+alias (at 6 MS/s 95.1 folds to 101.1): it was intermodulation in an
+overdriven front end. Products land at 2×A − B for strong pairs (2 × 95.1 −
+88.1 = 102.1), twice as wide as a station because the doubling doubles the
+deviation, and RDS survives it because its coding is differential.
+
+The cause was the IF AGC with the LNA wide open, plus the bias-T preamp:
+daemon start splits 76 dB of gain to LNA state 0, and the IF AGC then held
+it there. Measured across 99.85–105.55 MHz:
+
+| Gain | LNA | IF | Floor | 102.1 |
+|---|---|---|---|---|
+| manual 32 dB | 57 dB reduction | 27 dB | -83.9 dBFS | clear |
+| manual 76 dB | 0 dB | 40 dB | -33.1 dBFS, API reports overload | -24.1 dBFS, the only peak left |
+| IF AGC, LNA following | 38 dB (settled in 2 s) | 39 dB | -81.5 dBFS | clear, real stations 2–5 dB further over the floor than at 32 dB |
+
+Fixed by the LNA following the IF AGC (see
+[What changes with an RSP](#what-changes-with-an-rsp)). If it comes back,
+the Gain card shows it: the `OVERLOAD` chip, and the IF bar at its end in
+red. With the LNA already at its deepest state there, the preamp is adding
+more than the RSP can take; turn the bias-T off to check.
 
 ### On an RSP, every station sits beside its line, and calibrate reads hundreds of ppm
 

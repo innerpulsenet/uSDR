@@ -1,0 +1,83 @@
+# SoapySDRPlay3: pass on the live gain and overload state SDRplay's API reports
+# through its events (see "The RSP's IF AGC and the LNA" in README.md).
+# Apply in the SoapySDRPlay3 source tree with `patch -p1 < this-file`.
+
+--- a/SoapySDRPlay.hpp	2026-11-03 11:51:40.672800078 -0500
++++ b/SoapySDRPlay.hpp	2026-11-03 11:51:52.701242605 -0500
+@@ -320,6 +320,16 @@
+     int fs_changed;
+     // event callback reporting device is unavailable
+     bool device_unavailable;
++    // uSDR: what the API reports through its events. Under the IF AGC the
++    // API moves the IF gain reduction without writing it back to chParams,
++    // so getGain("IFGR") returns the last value set by hand; the GainChange
++    // event carries the live one. -1 until the first event.
++    std::atomic<int> live_gRdB{-1};
++    std::atomic<int> live_lnaGRdB{-1};
++    // Power overload: whether it is on now, and how many times it has been
++    // detected since the device was opened.
++    std::atomic<bool> overloaded{false};
++    std::atomic<unsigned long> overload_count{0};
+     const int updateTimeout = 500;   // 500ms timeout for updates
+ 
+ public:
+--- a/Streaming.cpp	2026-11-03 11:51:40.767801403 -0500
++++ b/Streaming.cpp	2026-11-03 11:51:52.701441441 -0500
+@@ -160,6 +160,12 @@
+ {
+     if (eventId == sdrplay_api_GainChange)
+     {
++        // uSDR: keep the live gain for readSetting("live_ifgr"/"live_lna_gr").
++        if (params->gainParams.gRdB < 200)
++        {
++            live_gRdB = static_cast<int>(params->gainParams.gRdB);
++            live_lnaGRdB = static_cast<int>(params->gainParams.lnaGRdB);
++        }
+         //Beware, lnaGRdB is really the LNA GR, NOT the LNA state !
+         //sdrplay_api_GainCbParamT gainParams = params->gainParams;
+         //unsigned int gRdB = gainParams.gRdB;
+@@ -175,11 +181,14 @@
+         sdrplay_api_PowerOverloadCbEventIdT powerOverloadChangeType = params->powerOverloadParams.powerOverloadChangeType;
+         if (powerOverloadChangeType == sdrplay_api_Overload_Detected)
+         {
++            overloaded = true;
++            overload_count++;
+             sdrplay_api_Update(device.dev, device.tuner, sdrplay_api_Update_Ctrl_OverloadMsgAck, sdrplay_api_Update_Ext1_None);
+             // OVERLOAD DETECTED
+         }
+         else if (powerOverloadChangeType == sdrplay_api_Overload_Corrected)
+         {
++            overloaded = false;
+             sdrplay_api_Update(device.dev, device.tuner, sdrplay_api_Update_Ctrl_OverloadMsgAck, sdrplay_api_Update_Ext1_None);
+             // OVERLOAD CORRECTED
+         }
+--- a/Settings.cpp	2026-11-03 11:51:40.867802797 -0500
++++ b/Settings.cpp	2026-11-03 11:51:52.701722662 -0500
+@@ -1827,6 +1827,27 @@
+ 
+ std::string SoapySDRPlay::readSetting(const std::string &key) const
+ {
++    // uSDR: the API's own reports, from its events (see ev_callback). Empty
++    // until the first event, so a reader can tell "not known" from a value.
++    if (key == "live_ifgr")
++    {
++        int v = live_gRdB;
++        return v < 0 ? std::string() : std::to_string(v);
++    }
++    if (key == "live_lna_gr")
++    {
++        int v = live_lnaGRdB;
++        return v < 0 ? std::string() : std::to_string(v);
++    }
++    if (key == "overload")
++    {
++        return overloaded ? "true" : "false";
++    }
++    if (key == "overload_count")
++    {
++        return std::to_string(overload_count.load());
++    }
++
+     std::lock_guard <std::mutex> lock(_general_state_mutex);
+ 
+ #ifdef RF_GAIN_IN_MENU

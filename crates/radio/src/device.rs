@@ -100,12 +100,36 @@ pub struct State {
     pub iq_correction: Option<bool>,
     /// The analog IF filter was set by hand rather than from the span.
     pub bandwidth_manual: bool,
+    /// SDRplay: the LNA reductions this band has, dB, one per state used
+    /// (empty where not known), and whether the LNA is stepping on its own
+    /// under the RSP's IF AGC.
+    pub lna_steps_db: Vec<f64>,
+    pub lna_auto: bool,
+    /// SDRplay: the API's power-overload report, now and how many times
+    /// since the device opened. `None` when the driver does not pass it on.
+    pub overload: Option<bool>,
+    pub overload_count: Option<u64>,
+}
+
+/// LNA state, IF gain reduction and the API's overload report, without the
+/// rest of [`State`], whose frequency readback the server acts on.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct GainReadout {
+    /// The combined gain on `Cmd::Gain`'s scale, from the live readings.
+    pub overall: Option<f64>,
+    pub rfgr: Option<f64>,
+    pub ifgr: Option<f64>,
+    pub overload: Option<bool>,
+    pub overload_count: Option<u64>,
 }
 
 #[derive(Clone, Debug)]
 pub enum Event {
     Capabilities(Capabilities),
     State(State),
+    /// An SDRplay's gain as it stands, sent each second it changes: under
+    /// the RSP's IF AGC the IF moves on its own and the LNA follows it.
+    Gain(GainReadout),
     StreamStats {
         /// Blocks the device produced that no subscriber had room for.
         dropped_blocks: u64,
@@ -736,7 +760,7 @@ pub fn open(cfg: &DeviceConfig) -> Result<Device> {
         }
     }
 
-    publish_state(&dev, &caps, tune, initial_agc, &event_tx);
+    publish_state(&dev, &caps, tune, initial_agc, false, &event_tx);
 
     let serial = cfg.serial.clone();
     let cover_hz = cfg.cover_hz;
@@ -917,6 +941,10 @@ fn run(
     // SDRPLAY_REASSERT. The instant the next write is due, and which one.
     let sdrplay = matches!(caps.gain, GainControl::Sdrplay { .. });
     let mut reassert: Option<(std::time::Instant, usize)> = None;
+    // Under the RSP's IF AGC: the LNA's own stepping, and the gain last
+    // reported, so a readout is sent only when it moves.
+    let mut lna_takeover = LnaTakeover::default();
+    let mut last_readout = GainReadout::default();
 
     loop {
         let mut last_tune = None;
@@ -1131,7 +1159,7 @@ fn run(
                 }
             };
             if changed {
-                publish_state(&dev, &caps, tune, agc_enabled, &event_tx);
+                publish_state(&dev, &caps, tune, agc_enabled, agc_enabled && tuner_agc && clip_guard.is_none(), &event_tx);
             }
         }
         if let Some(f) = last_tune {
@@ -1205,7 +1233,7 @@ fn run(
                             }
                         }
                     }
-                    publish_state(&dev, &caps, tune, agc_enabled, &event_tx);
+                    publish_state(&dev, &caps, tune, agc_enabled, agc_enabled && tuner_agc && clip_guard.is_none(), &event_tx);
                 } else {
                     // The driver may have stored the refused frequency all
                     // the same, and its readback is what the display labels
@@ -1298,7 +1326,7 @@ fn run(
                         let _ = log_tx.try_send(format!(
                             "gain {new_g:.1} dB (clip {clipped_fraction:.4} peak {peak:.2})"
                         ));
-                        publish_state(&dev, &caps, tune, agc_enabled, &event_tx);
+                        publish_state(&dev, &caps, tune, agc_enabled, false, &event_tx);
                     } else {
                         // Only after every retry: counted by the server
                         // as a control fault, two of which in a window
@@ -1307,6 +1335,43 @@ fn run(
                             "gain {new_g:.1} dB failed: tuner did not take the write"
                         ));
                         cg.current = cg.current.min(new_g);
+                    }
+                }
+                if sdrplay {
+                    let if_agc = agc_enabled && tuner_agc && clip_guard.is_none();
+                    let live = sdrplay_live(&dev);
+                    let rfgr = dev.gain_element(Rx, 0, "RFGR").ok();
+                    // The LNA follows the IF AGC, so the front end is not
+                    // left at full gain while the IF runs out of range.
+                    if if_agc
+                        && let (Some(sg), Some(ifgr), Some(state)) = (sdrplay_gain(&caps, tune.desired), live.ifgr, rfgr)
+                        && !sg.lna_gr.is_empty()
+                    {
+                        let top = sg.lna_gr.len().min(sdrplay_lna_states(&caps, tune.desired).unwrap_or(sg.lna_gr.len())) - 1;
+                        if let Some(next) = lna_takeover.on_second(sg.lna_gr, ifgr, live.overload == Some(true), state.round().max(0.0) as usize, top)
+                            && crate::driver_log::checked(|| dev.set_gain_element(Rx, 0, "RFGR", next as f64).is_ok())
+                        {
+                            let _ = log_tx.try_send(format!(
+                                "LNA state {next} ({:.0} dB reduction): the IF AGC was at {ifgr:.0} dB{}",
+                                sg.lna_gr[next],
+                                if live.overload == Some(true) { ", overloaded" } else { "" }
+                            ));
+                        }
+                    } else {
+                        lna_takeover = LnaTakeover::default();
+                    }
+                    let rfgr = dev.gain_element(Rx, 0, "RFGR").ok();
+                    let ifgr = if if_agc { live.ifgr } else { dev.gain_element(Rx, 0, "IFGR").ok() };
+                    let readout = GainReadout {
+                        overall: sdrplay_overall(&caps, tune.desired, rfgr, ifgr),
+                        rfgr,
+                        ifgr,
+                        overload: live.overload,
+                        overload_count: live.overload_count,
+                    };
+                    if readout != last_readout {
+                        let _ = event_tx.try_send(Event::Gain(readout.clone()));
+                        last_readout = readout;
                     }
                 }
                 peak = 0.0;
@@ -1445,7 +1510,7 @@ fn read_gain(dev: &soapysdr::Device, caps: &Capabilities, freq_hz: f64) -> Optio
 
 fn hardware_agc_note(caps: &Capabilities) -> &'static str {
     if matches!(caps.gain, GainControl::Sdrplay { .. }) {
-        "IF AGC on: IF gain under the RSP's own loop, LNA state held where it was"
+        "IF AGC on: IF gain under the RSP's own loop, the LNA following it"
     } else {
         "tuner AGC on: LNA, mixer and VGA under the tuner's own control"
     }
@@ -1522,6 +1587,96 @@ impl SdrplayGain {
             Some(s) => *self.lna_gr.get(s)?,
         };
         Some(self.ifgr_max + self.lna_max() - (ifgr + lna))
+    }
+}
+
+/// What the patched SoapySDRPlay3 passes on from SDRplay's API events (see
+/// `tools/soapysdrplay3-live-gain.patch`): the IF gain reduction and LNA
+/// reduction the API last reported, and its overload state. Each is `None`
+/// from a driver without the patch, which answers unknown keys with "".
+#[derive(Clone, Copy, Debug, Default)]
+struct SdrplayLive {
+    ifgr: Option<f64>,
+    overload: Option<bool>,
+    overload_count: Option<u64>,
+}
+
+/// The combined gain an LNA state and IF reduction make at `freq_hz`;
+/// `None` when either is not known.
+fn sdrplay_overall(caps: &Capabilities, freq_hz: f64, rfgr: Option<f64>, ifgr: Option<f64>) -> Option<f64> {
+    let sg = sdrplay_gain(caps, freq_hz)?;
+    let state = if sg.lna_gr.is_empty() { None } else { Some(rfgr?.round().max(0.0) as usize) };
+    sg.gain_of(state, ifgr?)
+}
+
+fn sdrplay_live(dev: &soapysdr::Device) -> SdrplayLive {
+    let read = |k: &str| dev.read_setting(k).ok().map(|v| v.trim().to_string()).filter(|v| !v.is_empty());
+    SdrplayLive {
+        ifgr: read("live_ifgr").and_then(|v| v.parse().ok()),
+        overload: read("overload").and_then(|v| match v.as_str() {
+            "true" => Some(true),
+            "false" => Some(false),
+            _ => None,
+        }),
+        overload_count: read("overload_count").and_then(|v| v.parse().ok()),
+    }
+}
+
+/// IF gain reduction past which the LNA takes more, and under which it
+/// gives some back, while the RSP's IF AGC runs: the take-over level ±10 dB,
+/// so a 6 dB LNA step (19 dB at the top of 60–420 MHz) lands inside the
+/// window rather than across it.
+const LNA_UP_IFGR: f64 = SDRPLAY_IF_TAKEOVER_DB + 10.0;
+const LNA_DOWN_IFGR: f64 = SDRPLAY_IF_TAKEOVER_DB - 10.0;
+/// Seconds the IF must sit under [`LNA_DOWN_IFGR`] before the LNA gives
+/// gain back: slow, so a fade does not walk the front end back into
+/// overload.
+const LNA_DOWN_HOLD: u32 = 3;
+
+/// The LNA under the RSP's IF AGC. The AGC moves only the IF stage, so on
+/// a band with a strong local station it ran out of reduction (59 dB) with
+/// the LNA at full gain, and the overdriven front end painted that station
+/// across the band as intermodulation. Once a second this steps the LNA so
+/// the IF stays near the take-over level: deeper at once by as much as the
+/// IF is over it (or a state on an overload report), back a state at a time
+/// once the IF has been well under it for a while. A step is followed by a
+/// second's rest while the AGC settles.
+#[derive(Clone, Copy, Debug, Default)]
+struct LnaTakeover {
+    cold: u32,
+    rest: u32,
+}
+
+impl LnaTakeover {
+    /// The state to move to, given the band's reductions, the IF gain
+    /// reduction the AGC is at, whether the API reports overload, the state
+    /// now and the deepest the band allows.
+    fn on_second(&mut self, lna_gr: &[f64], ifgr: f64, overload: bool, state: usize, top: usize) -> Option<usize> {
+        let state = state.min(top);
+        if self.rest > 0 {
+            self.rest -= 1;
+            return None;
+        }
+        if (ifgr >= LNA_UP_IFGR || overload) && state < top {
+            self.cold = 0;
+            // The AGC gives back in IF what the LNA takes, so this lands
+            // the IF near the take-over level in one step.
+            let want = (ifgr - SDRPLAY_IF_TAKEOVER_DB).max(1.0);
+            let next = (state + 1..=top).find(|&s| lna_gr[s] - lna_gr[state] >= want).unwrap_or(top);
+            self.rest = 1;
+            return Some(next);
+        }
+        if ifgr <= LNA_DOWN_IFGR && state > 0 {
+            self.cold += 1;
+            if self.cold >= LNA_DOWN_HOLD {
+                self.cold = 0;
+                self.rest = 1;
+                return Some(state - 1);
+            }
+            return None;
+        }
+        self.cold = 0;
+        None
     }
 }
 
@@ -1714,6 +1869,7 @@ fn publish_state(
     caps: &Capabilities,
     tune: Tuning,
     auto_gain: bool,
+    if_agc: bool,
     tx: &SyncSender<Event>,
 ) {
     // Report the frequency the tuner *reached*, not the one it was asked for.
@@ -1740,7 +1896,18 @@ fn publish_state(
     };
     if let GainControl::Sdrplay { .. } = caps.gain {
         state.rfgr = dev.gain_element(Rx, 0, "RFGR").ok();
-        state.ifgr = dev.gain_element(Rx, 0, "IFGR").ok();
+        let live = sdrplay_live(dev);
+        // Under the IF AGC the driver's IFGR is the last value set by hand,
+        // not where the AGC has it: only the live report will do, and
+        // without one the IF is not known.
+        state.ifgr = if if_agc { live.ifgr } else { dev.gain_element(Rx, 0, "IFGR").ok() };
+        state.overload = live.overload;
+        state.overload_count = live.overload_count;
+        state.lna_steps_db = sdrplay_gain(caps, tune.desired).map(|sg| sg.lna_gr.to_vec()).unwrap_or_default();
+        state.lna_auto = if_agc && !state.lna_steps_db.is_empty();
+        // From the same readings, so the dial does not show a gain the IF
+        // AGC has long since moved away from.
+        state.overall_gain = sdrplay_overall(caps, tune.desired, state.rfgr, state.ifgr);
     }
     let switch = |have: bool, key: &str| {
         have.then(|| dev.read_setting(key).ok())
@@ -2078,6 +2245,41 @@ mod tests {
     fn the_model_is_read_out_of_an_sdrplay_label() {
         assert_eq!(sdrplay_model("SDRplay Dev0 RSP1A 210304DD98"), "RSP1A");
         assert_eq!(sdrplay_model("something else"), "SDRplay");
+    }
+
+    #[test]
+    fn the_lna_follows_the_if_agc() {
+        // 60–420 MHz: 0, 6, 12, 18, 20, 26, 32, 38, 57 dB.
+        let gr = rsp1a_lna_gr_db(100e6);
+        let top = gr.len() - 1;
+        let mut t = LnaTakeover::default();
+        // The IF out of reduction with the LNA wide open: deeper at once,
+        // by at least the 19 dB the IF is over the take-over level (state 4, 20 dB).
+        assert_eq!(t.on_second(gr, 59.0, false, 0, top), Some(4));
+        // A second's rest while the AGC settles, whatever it reads.
+        assert_eq!(t.on_second(gr, 59.0, false, 4, top), None);
+        // Inside the window: left alone.
+        assert_eq!(t.on_second(gr, 45.0, false, 4, top), None);
+        assert_eq!(t.on_second(gr, 35.0, false, 4, top), None);
+        // An overload report steps it even inside the window.
+        assert_eq!(t.on_second(gr, 42.0, true, 4, top), Some(5));
+        assert_eq!(t.on_second(gr, 42.0, false, 5, top), None);
+        // Well under the window: a state back, only after three seconds of it.
+        assert_eq!(t.on_second(gr, 25.0, false, 5, top), None);
+        assert_eq!(t.on_second(gr, 25.0, false, 5, top), None);
+        assert_eq!(t.on_second(gr, 25.0, false, 5, top), Some(4));
+        // A reading back in the window restarts that count.
+        let mut t = LnaTakeover::default();
+        assert_eq!(t.on_second(gr, 25.0, false, 3, top), None);
+        assert_eq!(t.on_second(gr, 40.0, false, 3, top), None);
+        assert_eq!(t.on_second(gr, 25.0, false, 3, top), None);
+        assert_eq!(t.on_second(gr, 25.0, false, 3, top), None);
+        // Never past the deepest state, never under the shallowest.
+        let mut t = LnaTakeover::default();
+        assert_eq!(t.on_second(gr, 59.0, true, top, top), None);
+        for _ in 0..5 {
+            assert_eq!(t.on_second(gr, 20.0, false, 0, top), None);
+        }
     }
 
     #[test]

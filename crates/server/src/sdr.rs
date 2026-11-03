@@ -644,11 +644,24 @@ pub struct SdrStatus {
     pub agc_setpoint_dbfs: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub iq_correction: Option<bool>,
-    /// Where the gain is: an SDRplay's LNA and IF gain reductions, dB.
+    /// Where the gain is: an SDRplay's LNA state and IF gain reduction, dB.
+    /// Under the RSP's IF AGC the IF is the AGC's own report (absent from a
+    /// driver that does not pass it on), never the last value set by hand.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rfgr_db: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ifgr_db: Option<f64>,
+    /// The band's LNA reductions, dB, one per state used.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub lna_steps_db: Vec<f64>,
+    /// The LNA is stepping on its own, following the IF AGC.
+    #[serde(default)]
+    pub lna_auto: bool,
+    /// SDRplay's power-overload report, now and since the radio opened.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub overload: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub overload_count: Option<u64>,
     /// The analog IF filter in front of the ADC, the widths the radio
     /// offers, and whether it was picked by hand rather than from the span.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -4315,6 +4328,17 @@ fn run_sdr(
                 }
                 // Only published after a tune the driver accepted, so this is
                 // where the radio really is.
+                // The RSP's gain as its IF AGC and the LNA's take-over move
+                // it, each second it changes.
+                scannerd_radio::Event::Gain(g) => {
+                    if let Ok(mut st) = status.lock() {
+                        let now = (g.overall, g.rfgr, g.ifgr, g.overload, g.overload_count);
+                        if now != (st.gain_now_db, st.rfgr_db, st.ifgr_db, st.overload, st.overload_count) {
+                            (st.gain_now_db, st.rfgr_db, st.ifgr_db, st.overload, st.overload_count) = now;
+                            let _ = events.send(SdrEvent::Status(st.clone()));
+                        }
+                    }
+                }
                 scannerd_radio::Event::State(state) => {
                     if let Ok(mut st) = status.lock() {
                         st.gain_now_db = state.overall_gain;
@@ -4329,7 +4353,9 @@ fn run_sdr(
                                 != (st.iq_correction, st.if_bandwidth_manual)
                             || state.agc_setpoint != st.agc_setpoint_dbfs
                             || state.bandwidth != st.if_bandwidth_hz
-                            || (state.rfgr, state.ifgr) != (st.rfgr_db, st.ifgr_db);
+                            || (state.rfgr, state.ifgr) != (st.rfgr_db, st.ifgr_db)
+                            || (state.lna_auto, state.overload) != (st.lna_auto, st.overload)
+                            || state.lna_steps_db != st.lna_steps_db;
                         (st.gain_min_db, st.gain_max_db) = range;
                         st.bias_t = state.bias_t;
                         st.rf_notch = state.rf_notch;
@@ -4338,6 +4364,10 @@ fn run_sdr(
                         st.iq_correction = state.iq_correction;
                         st.rfgr_db = state.rfgr;
                         st.ifgr_db = state.ifgr;
+                        st.lna_steps_db = state.lna_steps_db;
+                        st.lna_auto = state.lna_auto;
+                        st.overload = state.overload;
+                        st.overload_count = state.overload_count;
                         st.if_bandwidth_hz = state.bandwidth;
                         st.if_bandwidth_manual = state.bandwidth_manual;
                         if moved {

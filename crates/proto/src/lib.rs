@@ -327,7 +327,18 @@ pub struct Status {
     pub agc_setpoint_dbfs: Option<f64>,
     pub iq_correction: Option<bool>,
     pub rfgr_db: Option<f64>,
+    /// IF gain reduction. Under the RSP's IF AGC it is the AGC's own
+    /// report, and `None` from a driver that does not pass it on.
     pub ifgr_db: Option<f64>,
+    /// SDRplay: the LNA reductions the band has, dB, one per state used,
+    /// so `rfgr_db` (the state) can be read as decibels.
+    pub lna_steps_db: Vec<f64>,
+    /// The LNA is stepping on its own, following the RSP's IF AGC.
+    pub lna_auto: bool,
+    /// SDRplay: the API's power-overload report, now and how many times
+    /// since the radio opened; `None` where the driver does not pass it on.
+    pub overload: Option<bool>,
+    pub overload_count: Option<u64>,
     pub if_bandwidth_hz: Option<f64>,
     pub if_bandwidths_hz: Vec<f64>,
     pub if_bandwidth_manual: bool,

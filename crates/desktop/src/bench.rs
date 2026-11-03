@@ -468,6 +468,14 @@ fn shots() {
                     st.if_bandwidths_hz = vec![200e3, 300e3, 600e3, 1536e3, 5e6, 6e6];
                     st.if_bandwidth_hz = Some(1536e3);
                     st.processing = Some(Default::default());
+                    // The RSP under its IF AGC, the LNA settled where it
+                    // follows it; overloaded at full LNA gain in the WFM shot.
+                    st.gain_db = None;
+                    st.tuner_agc = true;
+                    st.lna_steps_db = vec![0.0, 6.0, 12.0, 18.0, 20.0, 26.0, 32.0, 38.0, 57.0];
+                    st.lna_auto = true;
+                    (st.rfgr_db, st.ifgr_db, st.overload, st.overload_count) =
+                        if s.wfm { (Some(0.0), Some(59.0), Some(true), Some(3)) } else { (Some(7.0), Some(39.0), Some(false), Some(1)) };
                     st.avg = Some("off".into());
                     if s.with_b {
                         st.rx2 = Some(proto::SubRx { freq_hz: 146.52e6, mode: Mode::Nfm, bandwidth_hz: 12_500.0, passband_offset_hz: 0.0, note: None });

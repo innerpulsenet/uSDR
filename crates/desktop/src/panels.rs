@@ -4,7 +4,7 @@
 
 use crate::app::App;
 use crate::net::{Fetch, Get};
-use crate::theme;
+use crate::theme::{self, alpha};
 use crate::widgets::{self, Fader, Tone};
 use egui::{RichText, Ui, vec2};
 use serde_json::{Value, json};
@@ -211,12 +211,8 @@ fn gain(app: &mut App, ui: &mut Ui) {
         app.gain_ui = v;
         app.post("/api/sdr/gain", json!({ "gain_db": v }));
     }
-    if s.rfgr_db.is_some() || s.ifgr_db.is_some() {
-        ui.label(small(format!(
-            "LNA state {} · IF reduction {} dB",
-            s.rfgr_db.map_or("—".into(), |v| format!("{v:.0}")),
-            s.ifgr_db.map_or("—".into(), |v| format!("{v:.0}"))
-        )));
+    if s.is_sdrplay() {
+        gain_staging(ui, &s);
     }
     if let Some(sp) = s.agc_setpoint_dbfs {
         let mut v = sp;
@@ -250,6 +246,99 @@ fn gain(app: &mut App, ui: &mut Ui) {
         if widgets::key(ui, "CLIP GUARD", s.clip_guard, theme::AMBER).on_hover_text("Let the guard back gain off when the ADC clips").clicked() {
             app.post("/api/sdr/frontend", json!({ "clip_guard": !s.clip_guard }));
         }
+    });
+}
+
+/// An RSP's gain as the two stages it is, each as the reduction it applies:
+/// the LNA's states for this band, every segment as wide as its decibels
+/// (so the 19 dB jump to the deepest state at VHF reads as one), and the IF
+/// stage on its 20–59 dB range, with the window the LNA keeps it in while
+/// it follows the IF AGC. Then the API's own overload report. A value the
+/// radio did not report is drawn as unknown, never as the last one set.
+fn gain_staging(ui: &mut Ui, s: &usdr_proto::Status) {
+    let steps = &s.lna_steps_db;
+    let state = s.rfgr_db.map(|v| v.round().max(0.0) as usize);
+    let lna_db = state.and_then(|i| steps.get(i).copied());
+    let (if_min, if_max) = (20.0, 59.0);
+    let label_w = 30.0;
+    let value_w = 58.0;
+    let row = |ui: &mut Ui, label: &str, value: String, value_c: egui::Color32, tip: &str, draw: &dyn Fn(&egui::Painter, egui::Rect)| {
+        let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 18.0), egui::Sense::hover());
+        let p = ui.painter();
+        p.text(egui::pos2(rect.left(), rect.center().y), egui::Align2::LEFT_CENTER, label, theme::mono(10.5), theme::text_3());
+        p.text(egui::pos2(rect.right(), rect.center().y), egui::Align2::RIGHT_CENTER, value, theme::mono_bold(11.0), value_c);
+        let track = egui::Rect::from_min_max(egui::pos2(rect.left() + label_w, rect.center().y - 5.0), egui::pos2(rect.right() - value_w, rect.center().y + 5.0));
+        theme::well(p, track, None);
+        draw(p, track.shrink2(vec2(3.0, 2.5)));
+        resp.on_hover_text(tip);
+    };
+    // The LNA: a segment per state past the first, lit to the state in use.
+    let lna_value = match (state, lna_db) {
+        (_, Some(db)) if db < 0.5 => "0 dB".into(),
+        (_, Some(db)) => format!("−{db:.0} dB"),
+        (Some(i), None) => format!("state {i}"),
+        _ => "—".into(),
+    };
+    let lna_tip = if s.lna_auto {
+        "LNA gain reduction, in the steps this band has. It follows the IF AGC: deeper when the IF runs out of reduction (or the radio reports overload), shallower once the IF has room again."
+    } else {
+        "LNA gain reduction, in the steps this band has. Set by RF GAIN: the first 20 dB of reduction comes off the IF, then the LNA takes over."
+    };
+    row(ui, "LNA", lna_value, if lna_db.is_some_and(|d| d > 0.0) { theme::CYAN } else { theme::text_2() }, lna_tip, &|p, t| {
+        let Some(&top) = steps.last().filter(|t| **t > 0.0) else { return };
+        let x = |db: f64| t.left() + t.width() * (db / top) as f32;
+        for w in steps.windows(2) {
+            let seg = egui::Rect::from_min_max(egui::pos2(x(w[0]) + 0.5, t.top()), egui::pos2(x(w[1]) - 0.5, t.bottom()));
+            let lit = lna_db.is_some_and(|d| d >= w[1] - 0.01);
+            p.rect_filled(seg, egui::CornerRadius::same(1), if lit { alpha(theme::CYAN, 0.85) } else { alpha(theme::CYAN, 0.10) });
+        }
+    });
+    // The IF stage: reduction lit from the left, the take-over window
+    // shaded while the LNA follows, the end of the range in red.
+    let ifgr = s.ifgr_db;
+    let pinned = ifgr.is_some_and(|v| v >= if_max - 2.0);
+    let if_value = ifgr.map_or("—".into(), |v| format!("−{v:.0} dB"));
+    let if_tip = if ifgr.is_none() {
+        "IF gain reduction. The radio is not reporting where its IF AGC has it (the driver needs the live-gain patch), so it is not shown."
+    } else if s.lna_auto {
+        "IF gain reduction, under the RSP's IF AGC. The shaded window is where the LNA keeps it; at the right-hand end the IF has nothing left and the front end is overdriven."
+    } else {
+        "IF gain reduction, 20 to 59 dB."
+    };
+    row(ui, "IF", if_value, if pinned { theme::ERR } else { theme::AMBER }, if_tip, &|p, t| {
+        let x = |db: f64| t.left() + t.width() * ((db - if_min) / (if_max - if_min)).clamp(0.0, 1.0) as f32;
+        if s.lna_auto {
+            let band = egui::Rect::from_min_max(egui::pos2(x(30.0), t.top() - 1.0), egui::pos2(x(50.0), t.bottom() + 1.0));
+            p.rect_filled(band, egui::CornerRadius::same(1), alpha(theme::CYAN, 0.14));
+        }
+        if let Some(v) = ifgr {
+            let c = if pinned { theme::ERR } else { theme::AMBER };
+            p.rect_filled(egui::Rect::from_min_max(t.min, egui::pos2(x(v), t.bottom())), egui::CornerRadius::same(1), alpha(c, 0.55));
+            p.line_segment([egui::pos2(x(v), t.top() - 2.0), egui::pos2(x(v), t.bottom() + 2.0)], egui::Stroke::new(2.0, c));
+        }
+    });
+    // What it is doing, and the radio's own overload report.
+    let note = if s.lna_auto { "LNA follows the IF AGC" } else { "LNA and IF set by RF GAIN" };
+    let past = match (s.overload, s.overload_count) {
+        (Some(false), Some(n)) if n > 0 => Some(format!("{n} overload{} since open", if n == 1 { "" } else { "s" })),
+        _ => None,
+    };
+    ui.horizontal(|ui| {
+        // The count goes beside the note only where both fit with room
+        // between them; otherwise it is the note's hover.
+        let width = |t: &str| ui.painter().layout_no_wrap(t.to_owned(), theme::mono(10.5), theme::text_3()).size().x;
+        let fits = past.as_ref().is_some_and(|p| width(note) + width(p) + 16.0 <= ui.available_width());
+        let r = ui.label(small(note));
+        if let Some(p) = past.as_ref().filter(|_| !fits) {
+            r.on_hover_text(p.as_str());
+        }
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if s.overload == Some(true) {
+                widgets::chip(ui, Tone::Err, "OVERLOAD").on_hover_text("The radio reports its front end overloaded: strong signals are being mixed into false ones across the band.");
+            } else if let Some(p) = past.filter(|_| fits) {
+                ui.label(small(p));
+            }
+        });
     });
 }
 
