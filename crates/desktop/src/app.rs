@@ -194,7 +194,9 @@ pub struct App {
     pub replay_note: Option<String>,
     pub recorder_busy: Option<String>,
     pub memory_armed: bool,
-    pub audio_devices: Vec<String>,
+    /// Output devices for the settings list, looked for the first time it
+    /// is shown (it takes ALSA tens of milliseconds) and on request after.
+    pub audio_devices: Option<Vec<String>>,
     pub fullscreen: bool,
     /// The window is wide enough for the memories to ride on the toolbar.
     pub memories_on_toolbar: bool,
@@ -304,7 +306,7 @@ impl App {
             replay_note: None,
             recorder_busy: None,
             memory_armed: false,
-            audio_devices: Player::devices(),
+            audio_devices: None,
             fullscreen: false,
             memories_on_toolbar: false,
             title: String::new(),

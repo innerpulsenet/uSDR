@@ -174,7 +174,7 @@ pub fn settings_window(app: &mut App, ctx: &egui::Context) {
                             app.player_b.open(None);
                             ui.close();
                         }
-                        for d in app.audio_devices.clone() {
+                        for d in app.audio_devices.get_or_insert_with(crate::audio::Player::devices).clone() {
                             if ui.selectable_label(app.prefs.audio_device.as_deref() == Some(&d), &d).clicked() {
                                 app.player.open(Some(&d));
                                 app.player_b.open(Some(&d));
@@ -184,7 +184,7 @@ pub fn settings_window(app: &mut App, ctx: &egui::Context) {
                         }
                     });
                     if crate::app::icon_button(ui, "↻", "Look for audio devices again").clicked() {
-                        app.audio_devices = crate::audio::Player::devices();
+                        app.audio_devices = Some(crate::audio::Player::devices());
                     }
                 });
                 ui.label(RichText::new(format!("playing on {}", app.player.device_name.lock().unwrap())).font(theme::mono(11.0)).color(theme::text_3()));

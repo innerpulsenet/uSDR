@@ -406,3 +406,13 @@ fn bench_pieces() {
     }
     tally.report();
 }
+
+#[test]
+#[ignore]
+fn bench_startup_devices() {
+    for _ in 0..3 {
+        let t0 = Instant::now();
+        let d = Player::devices();
+        println!("BENCH audio device list: {} devices in {:.1} ms", d.len(), t0.elapsed().as_secs_f64() * 1e3);
+    }
+}

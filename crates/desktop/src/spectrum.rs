@@ -194,9 +194,14 @@ struct ArchRow {
 /// top of the display is, and the picture of that stretch.
 pub struct Hold {
     pub(crate) back: usize,
-    shown: Option<(usize, usize, (f32, f32, Colormap), u64)>,
+    shown: Option<HeldKey>,
     tex: Option<egui::TextureHandle>,
 }
+
+/// What a held picture shows: its top row (counted from the first row ever
+/// archived, so it does not change as rows arrive), its height, the levels
+/// and palette, and the frequency axis.
+type HeldKey = (u64, usize, (f32, f32, Colormap), u64);
 const WF_MAX_COLS: usize = 4096;
 /// The waterfall history is kept as hundredths of a dB above −200 dBFS, so
 /// one table lookup colors a cell; 0 is the "nothing yet" of an empty row.
@@ -243,6 +248,11 @@ pub struct Panafall {
     wf_cols: usize,
     wf_q: Vec<u16>,
     wf_time: Vec<f64>,
+    /// How far the span has moved since the history began, in columns, and
+    /// where it was when each row arrived: a retune moves the rows already
+    /// drawn by the difference rather than shifting and recoloring them.
+    wf_pan: f64,
+    wf_row_pan: Vec<f64>,
     wf_head: usize,
     wf_count: usize,
     wf_tex: Option<egui::TextureHandle>,
@@ -281,7 +291,8 @@ pub struct Panafall {
     /// The second receiver, when one is listening.
     pub rx_b: Option<RxB>,
     archive: VecDeque<ArchRow>,
-    /// Rows archived so far, to tell when the held picture is stale.
+    /// Rows archived so far: the held picture's rows are counted from the
+    /// first, so its key holds still while new rows arrive.
     archived: u64,
     pub hold: Option<Hold>,
     /// Where each receiver's flag was drawn last frame (A, B), for clicks.
@@ -335,6 +346,8 @@ impl Default for Panafall {
             wf_cols: 0,
             wf_q: Vec::new(),
             wf_time: Vec::new(),
+            wf_pan: 0.0,
+            wf_row_pan: Vec::new(),
             wf_head: 0,
             wf_count: 0,
             wf_tex: None,
@@ -457,7 +470,7 @@ impl Panafall {
             shift_vec(&mut self.smooth, shift, -200.0);
             shift_vec(&mut self.peak, shift, -200.0);
             shift_vec(&mut self.after, shift, -200.0);
-            self.shift_waterfall(shift as f64 / (n - 1) as f64);
+            self.wf_pan += (f.center_hz - self.center_hz) / f.rate_hz * self.wf_cols as f64;
         }
         self.center_hz = f.center_hz;
         self.span_hz = f.rate_hz;
@@ -518,6 +531,8 @@ impl Panafall {
             self.wf_cols = cols;
             self.wf_q = vec![0; cols * WF_ROWS];
             self.wf_time = vec![0.0; WF_ROWS];
+            self.wf_pan = 0.0;
+            self.wf_row_pan = vec![0.0; WF_ROWS];
             self.wf_stale = vec![true; WF_ROWS];
             self.wf_count = 0;
             self.wf_tex = None;
@@ -538,6 +553,7 @@ impl Panafall {
             }
         }
         self.wf_time[self.wf_head] = now;
+        self.wf_row_pan[self.wf_head] = self.wf_pan;
         self.wf_stale[self.wf_head] = true;
         if let Some(f) = &mut self.fade {
             f.fresh.push(self.wf_head);
@@ -563,6 +579,11 @@ impl Panafall {
         });
         self.archive.truncate(ARCH_ROWS);
         self.archived += 1;
+        // Held, the picture stays on the rows it shows while new ones arrive
+        // above it: it is a row further back from the newest each time.
+        if let Some(h) = &mut self.hold {
+            h.back += 1;
+        }
         self.wf_count = (self.wf_count + 1).min(WF_ROWS);
         if self.last_row_at > 0.0 {
             let dt = (now - self.last_row_at).clamp(0.005, 0.5);
@@ -600,7 +621,12 @@ impl Panafall {
         let max_back = self.archive.len().saturating_sub(rows_vis.min(self.archive.len()));
         let Some(h) = self.hold.as_mut() else { return };
         h.back = h.back.min(max_back);
-        let key = (h.back, rows_vis, (black, top, view.palette), (lo as u64) ^ (span as u64).rotate_left(32));
+        let key: HeldKey = (
+            self.archived - h.back as u64,
+            rows_vis,
+            (black, top, view.palette),
+            (lo as u64) ^ (span as u64).rotate_left(32),
+        );
         if h.shown != Some(key) || h.tex.is_none() {
             let scale = 1023.0 / (top - black).max(1.0);
             let ink = theme::ink();
@@ -663,27 +689,6 @@ impl Panafall {
                 theme::text_2(),
             );
         }
-    }
-
-    fn shift_waterfall(&mut self, frac: f64) {
-        let cols = self.wf_cols;
-        if cols == 0 {
-            return;
-        }
-        let shift = (frac * cols as f64).round() as isize;
-        if shift == 0 {
-            return;
-        }
-        if shift.unsigned_abs() >= cols {
-            self.wf_q.fill(0);
-        } else {
-            for row in self.wf_q.chunks_exact_mut(cols) {
-                shift_vec(row, shift, 0);
-            }
-        }
-        self.wf_stale.fill(true);
-        // The old palette's picture no longer lines up; finish the fade now.
-        self.fade = None;
     }
 
     /// Black and white points of the waterfall, dB.
@@ -977,31 +982,42 @@ impl Panafall {
             let painter_wf = ui.painter_at(wf);
             let x0 = self.drag_offset_px;
             let top = wf.top() - (1.0 - frac) * row_px;
-            // Rows head, head+1, … wrap at WF_ROWS. Draw in at most two runs;
-            // mid-fade, the old palette's picture over the new one.
+            // Rows head, head+1, … wrap at WF_ROWS. Drawn in runs of rows
+            // that arrived on the same span, each moved by how far the span
+            // has panned since; mid-fade, the old palette's picture over the
+            // new one.
             let fade = self.fade.as_ref().map(|f| {
                 let t = ((now - f.start) / 0.25).clamp(0.0, 1.0) as f32;
                 (f.tex.id(), 1.0 - (1.0 - t).powi(3))
             });
+            let col_px = wf.width() as f64 / self.wf_cols.max(1) as f64;
+            let shown = (rows_vis + 1).min(WF_ROWS);
             for (id, tint) in std::iter::once((tex.id(), Color32::WHITE))
                 .chain(fade.map(|(id, e)| (id, Color32::from_white_alpha(((1.0 - e) * 255.0) as u8))))
             {
-                let mut drawn = 0usize;
-                let mut start = self.wf_head;
-                while drawn < rows_vis + 1 {
-                    let run = (WF_ROWS - start).min(rows_vis + 1 - drawn);
-                    let y0 = top + drawn as f32 * row_px;
-                    let rect = Rect::from_min_max(
-                        pos2(wf.left() + x0, y0),
-                        pos2(wf.right() + x0, y0 + run as f32 * row_px),
-                    );
-                    let uv = Rect::from_min_max(
-                        pos2(0.0, start as f32 / WF_ROWS as f32),
-                        pos2(1.0, (start + run) as f32 / WF_ROWS as f32),
-                    );
-                    painter_wf.image(id, rect, uv, tint);
-                    drawn += run;
-                    start = (start + run) % WF_ROWS;
+                let mut i = 0;
+                while i < shown {
+                    let start = (self.wf_head + i) % WF_ROWS;
+                    let pan_at = self.wf_row_pan[start];
+                    let mut run = 1;
+                    while i + run < shown && start + run < WF_ROWS && self.wf_row_pan[start + run] == pan_at {
+                        run += 1;
+                    }
+                    let moved = self.wf_pan - pan_at;
+                    if moved.abs() < self.wf_cols as f64 {
+                        let dx = x0 - (moved * col_px) as f32;
+                        let y0 = top + i as f32 * row_px;
+                        let rect = Rect::from_min_max(
+                            pos2(wf.left() + dx, y0),
+                            pos2(wf.right() + dx, y0 + run as f32 * row_px),
+                        );
+                        let uv = Rect::from_min_max(
+                            pos2(0.0, start as f32 / WF_ROWS as f32),
+                            pos2(1.0, (start + run) as f32 / WF_ROWS as f32),
+                        );
+                        painter_wf.image(id, rect, uv, tint);
+                    }
+                    i += run;
                 }
             }
             if !reduce_motion && frac < 1.0 {
@@ -2094,6 +2110,29 @@ mod tests {
     }
 
     #[test]
+    fn a_held_waterfall_stays_on_its_rows_as_new_ones_arrive() {
+        let mut h = harness();
+        for i in 0..400 {
+            let f = h.state().frame.clone();
+            h.state_mut().pan.push(&f, &View::default(), i as f64 * 0.04);
+        }
+        h.state_mut().pan.toggle_hold();
+        h.run_steps(2);
+        let shown = h.state().pan.hold.as_ref().and_then(|x| x.shown);
+        assert!(shown.is_some());
+        // Two seconds more of spectrum: the hold is fifty rows further back
+        // from the newest, showing the same rows, so nothing is redrawn.
+        for i in 0..50 {
+            let f = h.state().frame.clone();
+            h.state_mut().pan.push(&f, &View::default(), 16.0 + i as f64 * 0.04);
+        }
+        h.run_steps(2);
+        let held = h.state().pan.hold.as_ref().unwrap();
+        assert_eq!(held.back, 50);
+        assert_eq!(held.shown, shown, "the held picture did not move");
+    }
+
+    #[test]
     fn the_quantized_waterfall_colors_as_the_levels_say() {
         let pan = Panafall::default();
         let (black, top) = (-105.0, -40.0);
@@ -2149,14 +2188,18 @@ mod tests {
         pwr[512] = -30.0;
         let f = FftFrame { center_hz: 100e6, rate_hz: 1e6, pwr: pwr.clone(), ..Default::default() };
         pan.push(&f, &view, 0.0);
-        // The span moves up a quarter: the carrier's old row slides left by
-        // a quarter of the columns instead of the history being blanked.
+        // The span moves up a quarter: the carrier's old row is drawn a
+        // quarter of the columns to the left instead of being blanked, and
+        // the row that arrives on the new span is drawn where it lies.
         let g = FftFrame { center_hz: 100.25e6, ..f };
         pan.push(&g, &view, 0.04);
         let cols = pan.wf_cols;
         let older = (pan.wf_head + 1) % WF_ROWS;
         let row = &pan.wf_q[older * cols..(older + 1) * cols];
-        let hot = row.iter().enumerate().max_by_key(|a| *a.1).unwrap().0;
-        assert!((hot as i64 - 256).abs() <= 2, "carrier now at column {hot}");
+        let hot = row.iter().enumerate().max_by_key(|a| *a.1).unwrap().0 as f64;
+        let drawn_at = hot - (pan.wf_pan - pan.wf_row_pan[older]);
+        assert!((drawn_at - 256.0).abs() <= 2.0, "carrier now at column {drawn_at}");
+        assert_eq!(pan.wf_pan, pan.wf_row_pan[pan.wf_head]);
     }
+
 }

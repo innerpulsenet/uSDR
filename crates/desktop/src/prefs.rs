@@ -157,11 +157,18 @@ impl Prefs {
     }
 
     pub fn record_dir(&self) -> PathBuf {
+        // The default is found once: on Linux it means reading and parsing
+        // user-dirs.dirs, and the recorder asks every frame.
+        static DEFAULT: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
         self.record_dir.clone().unwrap_or_else(|| {
-            directories::UserDirs::new()
-                .and_then(|u| u.audio_dir().map(|a| a.to_path_buf()).or_else(|| Some(u.home_dir().join("Music"))))
-                .unwrap_or_else(|| PathBuf::from("."))
-                .join("uSDR")
+            DEFAULT
+                .get_or_init(|| {
+                    directories::UserDirs::new()
+                        .and_then(|u| u.audio_dir().map(|a| a.to_path_buf()).or_else(|| Some(u.home_dir().join("Music"))))
+                        .unwrap_or_else(|| PathBuf::from("."))
+                        .join("uSDR")
+                })
+                .clone()
         })
     }
 
