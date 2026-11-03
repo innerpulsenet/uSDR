@@ -364,9 +364,11 @@ usdr-desktop 172.16.0.216:8073         # or the page at http://172.16.0.216:8073
   `/var/lib/usdr/.config/usdr/` (`usdr.toml`, `devices.toml`). The first deploy
   seeds them from this host's `~/.config/usdr`, dropping `remotes`; later
   deploys leave them alone.
-- **Access.** It binds `0.0.0.0:8073` with no authentication. The container's
-  nftables `clients` set is the access control, as it is for SoapyRemote; to
-  let another machine in (the Windows PC, say), add its address there.
+- **Access.** It binds `0.0.0.0:8073` with no authentication, so the
+  container's nftables policy is the access control. SCRIBE is in the
+  `clients` set (every port). The Windows 11 PC (`172.16.0.52`) is in the
+  `viewers` set, which reaches port 8073 and nothing else. A machine that only
+  runs the desktop app or the page goes in `viewers`.
 - **Logs.** `ssh root@172.16.0.216 journalctl -u usdr -f`.
 
 The SDRplay API lets one process have the radio at a time. To run a server
@@ -417,8 +419,9 @@ from source, at the commit MARIO had), Debian's `soapyremote-server`, and the
   `172.16.0.216:55132`, and the container's nftables policy
   (`/etc/nftables.conf`) drops all input except loopback, replies, ping and
   SCRIBE (`172.16.0.50`). The stream uses ephemeral ports, so the rule admits
-  the address rather than a port. To add a client, add its address to the
-  `clients` set. Other LAN hosts, vault included, cannot reach the server or
+  the address rather than a port. To add a SoapyRemote client, add its address
+  to the `clients` set. The `viewers` set admits port 8073 (the uSDR daemon)
+  alone. Other LAN hosts, vault included, cannot reach the server or
   SSH. `pct enter 216` on vault still gets a shell.
 
 ```bash

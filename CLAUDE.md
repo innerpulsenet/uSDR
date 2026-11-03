@@ -34,6 +34,10 @@ Only one process can hold the RSP. Stop the daemon first
 `~/.config/usdr/usdr.toml`), and start the daemon again afterwards.
 
 ## Access
-The server has no authentication. The container's nftables `clients` set
-(`/etc/nftables.conf` in CT 216) is the only access control, and it admits
-SCRIBE (`172.16.0.50`). Add a machine's address there before it can connect.
+The server has no authentication. The container's nftables policy
+(`/etc/nftables.conf` in CT 216) is the only access control. The `clients` set
+(SCRIBE, `172.16.0.50`) gets every port, including SSH and SoapyRemote. The
+`viewers` set (the Windows 11 PC, `172.16.0.52`) gets port 8073 only. A new
+machine that just runs the app or the page goes in `viewers`. Patrick has
+asked Claude to make these firewall edits itself; check the file with `nft -c`
+before loading it.
