@@ -17,6 +17,15 @@
 //! - **A floor.** No bin is cut below the level's floor, so the residual hiss
 //!   is quieter but still natural, and weak speech is never gated away.
 //!
+//! - **Makeup gain.** The demodulator's AGC set the level from speech *and*
+//!   noise; take the noise away and the voice is left quieter than it
+//!   played before. While speech is present, the frame's power before and
+//!   after cleaning is averaged, and the difference is given back (up to
+//!   18 dB), so turning noise reduction up never turns the voice down.
+//!   Between overs the makeup holds for a moment, then eases back to unity
+//!   so the residual hiss stays where the floor put it. A soft limiter keeps
+//!   the restored peaks under full scale.
+//!
 //! Latency is one frame plus one hop, about 16 ms at 48 kHz. `Off` passes the
 //! audio straight through with no latency at all.
 
@@ -59,6 +68,32 @@ const DD_ALPHA: f32 = 0.97;
 /// Power smoothing before the minimum is taken.
 const SMOOTH: f32 = 0.85;
 
+/// The voice band that speech presence and makeup are measured over, Hz.
+const VOICE_LO_HZ: f32 = 250.0;
+const VOICE_HI_HZ: f32 = 3_000.0;
+/// A frame holds speech when its power in the voice band stands this far
+/// over the noise estimate there (3.4 dB). The estimate sits a little under
+/// the true mean, so hiss alone reads about 1.5; voice 0 dB over the hiss
+/// reads near 3.
+const SPEECH_OVER: f32 = 2.2;
+/// Consecutive frames over the line before they count as speech (16 ms).
+const SPEECH_RUN: u32 = 3;
+/// Most makeup ever given back, dB.
+const MAKEUP_MAX_DB: f32 = 18.0;
+/// Speech frames' power before and after cleaning is averaged over about
+/// this long, so the makeup follows the talker, not the syllable.
+const MAKEUP_AVG_S: f32 = 0.25;
+/// Makeup climbs toward its target at this rate and falls at the second;
+/// after `MAKEUP_HANG_S` without speech it eases back to unity at the third.
+const MAKEUP_RISE_DB_PER_S: f32 = 30.0;
+const MAKEUP_FALL_DB_PER_S: f32 = 120.0;
+const MAKEUP_HANG_S: f32 = 0.8;
+const MAKEUP_RELEASE_DB_PER_S: f32 = 4.0;
+/// The soft limiter is linear to here and bends smoothly toward
+/// `LIMIT_CEILING` above it.
+const LIMIT_KNEE: f32 = 0.8;
+const LIMIT_CEILING: f32 = 0.98;
+
 pub struct Denoise {
     level: NrLevel,
     n: usize,
@@ -84,6 +119,23 @@ pub struct Denoise {
     noise: Vec<f32>,
     prev_clean: Vec<f32>,
     gain: Vec<f32>,
+    /// Bins covering `VOICE_LO_HZ..VOICE_HI_HZ`.
+    voice: std::ops::Range<usize>,
+    /// Speech frames' averaged power in and out, the makeup applied (dB),
+    /// and the frames left before it starts easing back.
+    speech_in: f32,
+    speech_out: f32,
+    makeup_db: f32,
+    hang: u32,
+    /// Consecutive frames over the speech line.
+    run: u32,
+    /// Per-frame steps: the averaging weight, rise, fall and release (dB),
+    /// and the hang length in frames.
+    avg_k: f32,
+    rise_db: f32,
+    fall_db: f32,
+    release_db: f32,
+    hang_frames: u32,
 }
 
 impl Denoise {
@@ -93,6 +145,9 @@ impl Denoise {
         let n = ((fs * 0.0107).round() as usize).next_power_of_two().clamp(64, 2048);
         let hop = n / 2;
         let bins = n / 2 + 1;
+        let hop_s = hop as f32 / fs as f32;
+        let bin_hz = fs as f32 / n as f32;
+        let voice = ((VOICE_LO_HZ / bin_hz).round() as usize).max(1)..((VOICE_HI_HZ / bin_hz).round() as usize + 1).min(bins);
         let mut planner = FftPlanner::new();
         // Periodic sqrt-Hann on analysis and synthesis: the product is a Hann,
         // and Hann windows at 50% overlap sum to exactly one.
@@ -120,7 +175,23 @@ impl Denoise {
             noise: vec![0.0; bins],
             prev_clean: vec![0.0; bins],
             gain: vec![1.0; bins],
+            voice,
+            speech_in: 0.0,
+            speech_out: 0.0,
+            makeup_db: 0.0,
+            hang: 0,
+            run: 0,
+            avg_k: (hop_s / MAKEUP_AVG_S).min(1.0),
+            rise_db: MAKEUP_RISE_DB_PER_S * hop_s,
+            fall_db: MAKEUP_FALL_DB_PER_S * hop_s,
+            release_db: MAKEUP_RELEASE_DB_PER_S * hop_s,
+            hang_frames: (MAKEUP_HANG_S / hop_s).round() as u32,
         }
+    }
+
+    /// The makeup gain being given back, dB.
+    pub fn makeup_db(&self) -> f32 {
+        self.makeup_db
     }
 
     pub fn level(&self) -> NrLevel {
@@ -152,6 +223,11 @@ impl Denoise {
         self.noise.fill(0.0);
         self.prev_clean.fill(0.0);
         self.gain.fill(1.0);
+        self.speech_in = 0.0;
+        self.speech_out = 0.0;
+        self.makeup_db = 0.0;
+        self.hang = 0;
+        self.run = 0;
     }
 
     /// Clean `audio` in place.
@@ -169,7 +245,7 @@ impl Denoise {
                 self.frame();
                 self.input.copy_within(self.hop.., 0);
             }
-            *x = self.out.pop_front().unwrap_or(0.0);
+            *x = soft_limit(self.out.pop_front().unwrap_or(0.0));
         }
     }
 
@@ -226,8 +302,10 @@ impl Denoise {
             self.gain[k] = 0.25 * last + 0.5 * cur + 0.25 * self.gain[k + 1];
             last = cur;
         }
+        self.track_makeup();
+        let makeup = 10f32.powf(self.makeup_db / 20.0);
         for k in 0..bins {
-            let g = self.gain[k];
+            let g = self.gain[k] * makeup;
             self.spec[k] *= g;
             if k > 0 && k < n / 2 {
                 self.spec[n - k] *= g;
@@ -244,6 +322,57 @@ impl Denoise {
         self.acc[tail..].fill(0.0);
         self.frames = self.frames.saturating_add(1);
     }
+
+    /// Decide whether this frame holds speech, and move the makeup gain:
+    /// toward what restores the speech frames' power while there is speech,
+    /// held for the hang after it, then easing back to unity.
+    fn track_makeup(&mut self) {
+        let (mut p_in, mut p_out, mut noise) = (0.0f32, 0.0f32, 0.0f32);
+        for k in self.voice.clone() {
+            let p = self.spec[k].norm_sqr();
+            p_in += p;
+            p_out += self.gain[k] * self.gain[k] * p;
+            noise += self.noise[k];
+        }
+        // Until the minimum spans its full window the noise estimate runs
+        // low; nothing counts as speech before then.
+        let settled = self.frames >= SUB_FRAMES * SUBWINDOWS as u32;
+        // Hiss alone crosses the line on a frame in twenty or so; speech
+        // stays over it for syllables. Only a run of frames counts.
+        if settled && p_in > SPEECH_OVER * noise && p_out > 0.0 {
+            self.run = self.run.saturating_add(1);
+        } else {
+            self.run = 0;
+        }
+        let speech = self.run >= SPEECH_RUN;
+        if speech {
+            self.speech_in += (p_in - self.speech_in) * self.avg_k;
+            self.speech_out += (p_out - self.speech_out) * self.avg_k;
+            self.hang = self.hang_frames;
+            let want = if self.speech_out > 0.0 {
+                (10.0 * (self.speech_in / self.speech_out).log10()).clamp(0.0, MAKEUP_MAX_DB)
+            } else {
+                0.0
+            };
+            self.makeup_db += (want - self.makeup_db).clamp(-self.fall_db, self.rise_db);
+        } else if self.hang > 0 {
+            self.hang -= 1;
+        } else {
+            self.makeup_db = (self.makeup_db - self.release_db).max(0.0);
+        }
+    }
+}
+
+/// Linear below `LIMIT_KNEE`, bending smoothly toward `LIMIT_CEILING` above
+/// it: restored peaks are rounded off instead of clipped.
+#[inline]
+fn soft_limit(x: f32) -> f32 {
+    let a = x.abs();
+    if a <= LIMIT_KNEE {
+        return x;
+    }
+    let room = LIMIT_CEILING - LIMIT_KNEE;
+    (LIMIT_KNEE + room * ((a - LIMIT_KNEE) / room).tanh()).copysign(x)
 }
 
 #[cfg(test)]
@@ -315,5 +444,95 @@ mod tests {
         let level = rms(seg) / (0.4 / 2f32.sqrt());
         let db = 20.0 * level.log10();
         assert!(db.abs() < 1.5, "tone moved {db:.1} dB");
+    }
+
+    /// Power of the sinusoid at `f` in `x` (Goertzel), as amplitude².
+    fn tone_power(x: &[f32], f: f32, fs: f32) -> f32 {
+        let c = 2.0 * (std::f32::consts::TAU * f / fs).cos();
+        let (mut s1, mut s2) = (0.0f64, 0.0f64);
+        for &v in x {
+            let s0 = v as f64 + c as f64 * s1 - s2;
+            s2 = s1;
+            s1 = s0;
+        }
+        let p = s1 * s1 + s2 * s2 - c as f64 * s1 * s2;
+        (4.0 * p.max(0.0) / (x.len() as f64 * x.len() as f64)) as f32
+    }
+
+    /// Pure hiss is never mistaken for speech, at any level: no makeup, so
+    /// noise reduction still takes the hiss down by its floor.
+    #[test]
+    fn hiss_alone_gets_no_makeup() {
+        for level in [NrLevel::Low, NrLevel::Medium, NrLevel::High] {
+            let mut nr = Denoise::new(48_000.0);
+            nr.set_level(level);
+            let mut x = noise(48_000 * 6, 0.2);
+            let mut most = 0.0f32;
+            for chunk in x.chunks_mut(960) {
+                nr.process(chunk);
+                most = most.max(nr.makeup_db());
+            }
+            eprintln!("{level:?}: most makeup on hiss {most:.1} dB");
+            assert!(most < 2.0, "{level:?}: hiss earned {most:.1} dB of makeup");
+        }
+    }
+
+    /// Weak voice in heavy hiss: a 150 Hz buzz with harmonics across the
+    /// voice band, keyed like speech, 2 dB over the hiss in that band. The
+    /// Wiener gain alone leaves it some 10 dB quieter than it went in; the
+    /// makeup gives that back, so it plays near the level the AGC set.
+    #[test]
+    fn weak_voice_is_given_its_level_back() {
+        let fs = 48_000.0f32;
+        let harmonics: Vec<f32> = (2..=18).map(|k| 150.0 * k as f32).collect();
+        let a = 0.028f32;
+        let hiss = noise(48_000 * 6, 0.3);
+        let key = 24_000;
+        let voice: Vec<f32> = (0..hiss.len())
+            .map(|i| {
+                if i % key < key * 3 / 5 {
+                    harmonics.iter().map(|f| a * (std::f32::consts::TAU * f * i as f32 / fs).sin()).sum()
+                } else {
+                    0.0
+                }
+            })
+            .collect();
+        for level in [NrLevel::Low, NrLevel::Medium, NrLevel::High] {
+            let mut nr = Denoise::new(fs as f64);
+            nr.set_level(level);
+            let mut x: Vec<f32> = voice.iter().zip(&hiss).map(|(v, h)| v + h).collect();
+            let mut makeup = 0.0;
+            let start = 11 * key + 2_000;
+            for (i, chunk) in x.chunks_mut(960).enumerate() {
+                nr.process(chunk);
+                if i * 960 == start / 960 * 960 {
+                    makeup = nr.makeup_db();
+                }
+            }
+            // The last keyed-on stretch, clear of its edges and the latency.
+            let seg = &x[start..start + key * 3 / 5 - 4_000];
+            let clean = &voice[start..start + key * 3 / 5 - 4_000];
+            let gain_db = 10.0
+                * (harmonics.iter().map(|&f| tone_power(seg, f, fs)).sum::<f32>()
+                    / harmonics.iter().map(|&f| tone_power(clean, f, fs)).sum::<f32>())
+                .log10();
+            let peak = x.iter().fold(0.0f32, |m, v| m.max(v.abs()));
+            eprintln!(
+                "{level:?}: voice {gain_db:+.1} dB with {makeup:.1} dB of makeup ({:+.1} dB without), peak {peak:.2}",
+                gain_db - makeup
+            );
+            assert!(makeup > 3.0, "{level:?}: only {makeup:.1} dB of makeup");
+            assert!(gain_db > -3.0, "{level:?}: voice came out {gain_db:.1} dB down");
+            assert!(gain_db < 3.0, "{level:?}: voice lifted {gain_db:.1} dB");
+            assert!(peak <= LIMIT_CEILING, "{level:?}: peaked at {peak:.3}");
+        }
+    }
+
+    #[test]
+    fn the_limiter_is_linear_below_its_knee_and_bounded_above() {
+        assert_eq!(soft_limit(0.5), 0.5);
+        assert_eq!(soft_limit(-0.8), -0.8);
+        assert!(soft_limit(0.9) < 0.9 && soft_limit(0.9) > 0.85);
+        assert!(soft_limit(10.0) <= LIMIT_CEILING && soft_limit(-10.0) >= -LIMIT_CEILING);
     }
 }

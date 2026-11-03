@@ -534,17 +534,19 @@ fn audio(app: &mut App, ui: &mut Ui, width_px: f32) {
         ui.set_max_width(width_px);
         let (vol, muted) = if is_b { (app.prefs.volume_b, app.prefs.muted_b) } else { (app.prefs.volume, app.prefs.muted) };
         let mut v = vol as f64 * 100.0;
+        // 100 is unity, at the middle mark; past it is up to +12 dB of boost
+        // for weak signals, with the player's limiter keeping it clean.
         let (ch, _) = Fader {
             value: &mut v,
             min: 0.0,
-            max: 100.0,
+            max: 200.0,
             step: 2.0,
             fine: 1.0,
             label: "AF GAIN",
             text: |v| if muted { "muted".into() } else { format!("{v:.0}") },
             color: if is_b { theme::VIOLET } else { theme::AMBER },
             enabled: !muted,
-            ticks: vec![],
+            ticks: vec![(0.5, String::new())],
         }
         .show_compact(ui);
         if ch {

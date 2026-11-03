@@ -16,6 +16,12 @@
 //! back plays on without a seam. Balance scales the two channels; with the
 //! A/B split on, each receiver folds to mono so its whole program is in its
 //! own ear.
+//!
+//! AF gain runs past unity, to +12 dB, for the weak signal the server's AGC
+//! cannot lift further. A look-ahead limiter on the card's output keeps
+//! that headroom from ever clipping: it sees each peak 2 ms before it plays
+//! and has the gain down by the time it arrives, then lets it back up over
+//! a fifth of a second.
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use std::collections::VecDeque;
@@ -27,6 +33,11 @@ use std::sync::{Arc, Mutex};
 const TARGET_S: f64 = 0.12;
 /// Past this the queue is cut back to the target.
 const CEILING_S: f64 = 0.5;
+/// The limiter's look-ahead, release time constant, and the level nothing
+/// it passes ever exceeds.
+const LIMIT_LOOK_S: f64 = 0.002;
+const LIMIT_RELEASE_S: f64 = 0.200;
+const LIMIT_CEILING: f32 = 0.97;
 
 #[derive(Default)]
 struct Shared {
@@ -59,6 +70,8 @@ struct Shared {
     /// The interpolator for `in_rate` to `out_rate`, built off the audio
     /// thread when either changes.
     sinc: Option<Sinc>,
+    /// The output limiter, built for `out_rate`.
+    limiter: Option<Limiter>,
 }
 
 struct Clip {
@@ -150,6 +163,67 @@ impl Sinc {
     }
 }
 
+/// Look-ahead peak limiter on L, R pairs at the card's rate. The output is
+/// the input delayed by the look-ahead; the gain is steered by the smallest
+/// gain any sample inside that window needs, so it is already down when a
+/// peak plays. A hard clamp at the ceiling is the backstop for the last
+/// percent the attack curve leaves.
+struct Limiter {
+    rate: u64,
+    look: usize,
+    delay: VecDeque<[f32; 2]>,
+    /// Sliding minimum of the gain each sample in the window needs:
+    /// (sample number, gain), gains increasing front to back.
+    need: VecDeque<(u64, f32)>,
+    n: u64,
+    gain: f32,
+    attack: f32,
+    release: f32,
+}
+
+impl Limiter {
+    fn new(out_rate: f64) -> Self {
+        let look = ((LIMIT_LOOK_S * out_rate).round() as usize).max(1);
+        Limiter {
+            rate: out_rate.round() as u64,
+            look,
+            delay: VecDeque::with_capacity(look + 1),
+            need: VecDeque::with_capacity(look + 1),
+            n: 0,
+            gain: 1.0,
+            // Most of the way (98%) to the needed gain within the look-ahead.
+            attack: 1.0 - (-4.0 / look as f32).exp(),
+            release: 1.0 - (-1.0 / (LIMIT_RELEASE_S * out_rate) as f32).exp(),
+        }
+    }
+
+    fn fits(&self, out_rate: f64) -> bool {
+        self.rate == out_rate.round() as u64
+    }
+
+    fn process(&mut self, l: f32, r: f32) -> (f32, f32) {
+        let peak = l.abs().max(r.abs());
+        let want = if peak > LIMIT_CEILING { LIMIT_CEILING / peak } else { 1.0 };
+        while self.need.back().is_some_and(|&(_, g)| g >= want) {
+            self.need.pop_back();
+        }
+        self.need.push_back((self.n, want));
+        while self.need.front().is_some_and(|&(i, _)| i + (self.look as u64) < self.n) {
+            self.need.pop_front();
+        }
+        self.n += 1;
+        let target = self.need.front().map_or(1.0, |&(_, g)| g);
+        let k = if target < self.gain { self.attack } else { self.release };
+        self.gain += (target - self.gain) * k;
+        self.delay.push_back([l, r]);
+        if self.delay.len() <= self.look {
+            return (0.0, 0.0);
+        }
+        let [l, r] = self.delay.pop_front().expect("longer than the look-ahead");
+        let g = self.gain;
+        ((l * g).clamp(-LIMIT_CEILING, LIMIT_CEILING), (r * g).clamp(-LIMIT_CEILING, LIMIT_CEILING))
+    }
+}
 
 pub struct Player {
     shared: Arc<Mutex<Shared>>,
@@ -462,6 +536,10 @@ fn fill(shared: &Mutex<Shared>, out: &mut [f32], channels: usize) {
     let step = s.in_rate / s.out_rate.max(1.0) * (1.0 + correction);
     let mut peak = 0f32;
     let mut sum = 0f32;
+    if !s.limiter.as_ref().is_some_and(|k| k.fits(s.out_rate)) {
+        s.limiter = Some(Limiter::new(s.out_rate));
+    }
+    let mut limiter = s.limiter.take().expect("built above");
     if let Some(mut clip) = s.clip.take() {
         let step = clip.rate / s.out_rate.max(1.0);
         for f in 0..frames {
@@ -479,8 +557,9 @@ fn fill(shared: &Mutex<Shared>, out: &mut [f32], channels: usize) {
             peak = peak.max(v.abs());
             sum += v * v;
             let base = f * channels;
+            let (l, r) = if channels >= 2 { limiter.process(v * gl, v * gr) } else { limiter.process(v * gain, v * gain) };
             for c in 0..channels {
-                out[base + c] = v * if c == 0 { gl } else if c == 1 { gr } else { 0.0 };
+                out[base + c] = if c == 0 { l } else if c == 1 { r } else { 0.0 };
             }
         }
         if (clip.pos as usize) + 1 < clip.samples.len() {
@@ -492,6 +571,7 @@ fn fill(shared: &Mutex<Shared>, out: &mut [f32], channels: usize) {
         }
         s.level_peak = peak.max(s.level_peak * 0.92);
         s.level_rms = (sum / frames.max(1) as f32).sqrt();
+        s.limiter = Some(limiter);
         return;
     }
     // Built in `push` and `open`; here only if neither has run yet.
@@ -528,16 +608,16 @@ fn fill(shared: &Mutex<Shared>, out: &mut [f32], channels: usize) {
         sum += (l * l + r * r) * 0.5;
         let base = f * channels;
         if channels >= 2 {
-            out[base] = l * gl;
-            out[base + 1] = r * gr;
+            (out[base], out[base + 1]) = limiter.process(l * gl, r * gr);
             for c in 2..channels {
                 out[base + c] = 0.0;
             }
         } else if channels == 1 {
-            out[base] = l * gain;
+            out[base] = limiter.process(l * gain, l * gain).0;
         }
     }
     s.sinc = Some(sinc);
+    s.limiter = Some(limiter);
     let rms = (sum / frames.max(1) as f32).sqrt();
     s.level_peak = peak.max(s.level_peak * 0.92);
     s.level_rms = rms;
@@ -698,6 +778,29 @@ mod tests {
         let (l, r) = play_stereo(true, 1.0);
         assert!(rms(&l) < 1e-6, "A in the right ear only");
         assert!(rms(&r) > 0.1, "and it carries the left channel's tone: {}", rms(&r));
+    }
+
+    /// Full volume and past it: a near-full-scale tone at +12 dB comes out
+    /// at the ceiling and no further, and at unity the limiter is a plain
+    /// delay that changes nothing.
+    #[test]
+    fn gain_past_unity_is_limited_not_clipped() {
+        let mut lim = Limiter::new(48_000.0);
+        let tone = |n: usize| (std::f64::consts::TAU * 1_000.0 * n as f64 / 48_000.0).sin() as f32 * 0.85;
+        let out: Vec<f32> = (0..48_000).map(|n| lim.process(tone(n) * 4.0, tone(n) * 4.0).0).collect();
+        let peak = out.iter().fold(0f32, |m, v| m.max(v.abs()));
+        let settled = rms(&out[24_000..]);
+        assert!(peak <= LIMIT_CEILING, "peaked at {peak}");
+        // A sine held at the ceiling, not squared off: its RMS stays near
+        // the sine's 0.707 of peak rather than climbing toward a square's 1.
+        assert!((settled / LIMIT_CEILING - std::f32::consts::FRAC_1_SQRT_2).abs() < 0.03, "rms {settled}");
+
+        let mut lim = Limiter::new(48_000.0);
+        let look = lim.look;
+        let out: Vec<f32> = (0..4_800).map(|n| lim.process(tone(n), tone(n)).0).collect();
+        for n in look..4_800 {
+            assert_eq!(out[n], tone(n - look));
+        }
     }
 
     #[test]

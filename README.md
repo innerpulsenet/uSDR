@@ -767,13 +767,25 @@ what the decoders see:
   USB and LSB: a short-time Wiener filter whose noise estimate comes from
   each bin's minimum over the last 1.5 s, so it tracks a changing band
   without needing a pause, with a floor so weak speech is never gated away.
-  It adds about 16 ms of latency at 48 kHz, and none when off.
+  Taking the noise out would leave the voice quieter than the AGC set it
+  (measured on weak voice 2 dB over the hiss: 6 dB down at low, 13 at
+  medium, 20 at high), so while speech is present the lost level is given
+  back, up to 18 dB, and eased off again after the over; a soft limiter
+  rounds the restored peaks. It adds about 16 ms of latency at 48 kHz, and
+  none when off.
 - **Auto-notch** (on by default) hunts heterodynes in the same voice modes;
   NFM always had it, and AM and sideband now do too.
 - **Impulse blanker** (0 off to 3 aggressive; off by default) in the front
   end, ahead of the spectrum.
 - **AGC speed** (fast, medium, slow) for AM and sideband audio. Medium is the
-  behavior from before the setting existed.
+  behavior from before the setting existed. Sideband's AGC always has 60 dB
+  of gain to give; past that it follows the band's noise floor, up to 90 dB,
+  stopping where the hiss between overs would come within 20 dB of the
+  speech. A weak signal on a quiet band plays at full level; a noisy band
+  keeps the 60.
+- **AF gain** in the desktop app runs to 200: 100 is unity (the middle mark),
+  and past it is up to +12 dB more, behind a 2 ms look-ahead limiter so the
+  boost never clips.
 
 ### Automatic gain and the clip guard
 

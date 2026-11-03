@@ -28,7 +28,10 @@
 //! There is no carrier to level against, so the AGC tracks the speech
 //! envelope's peaks instead: fast attack, a hang that holds the gain across
 //! the gaps between words, then a slow decay. A gain ceiling keeps the hiss
-//! between overs from being pulled up to full scale.
+//! between overs from being pulled up to full scale. The ceiling follows the
+//! band's own noise floor: a quiet band lets a weak, clean signal have all
+//! the gain it needs, while a noisy one is held where its hiss sits well
+//! under the speech.
 
 use crate::biquad::{Biquad, Cascade};
 use num_complex::Complex32;
@@ -41,13 +44,30 @@ pub const SSB_LOW_HZ: f32 = 300.0;
 /// High edge of the SSB voice passband, in audio Hz.
 pub const SSB_HIGH_HZ: f32 = 2_800.0;
 
-/// AGC gain ceiling. Whatever arrives below `TARGET_PEAK / 10^(60/20)`
-/// (a passband envelope of 6e-4, about −64 dBFS) is held at this gain rather
-/// than being lifted to full scale. A −80 dBFS passband noise floor between
-/// overs therefore plays at about −20 dBFS peaks, some 16 dB under a voiced
-/// signal; noise louder than −64 dBFS is treated like any other signal —
-/// muting that is the squelch's job, not the AGC's.
+/// AGC gain the band's noise can never take away. Whatever arrives below
+/// `TARGET_PEAK / 10^(60/20)` (a passband envelope of 6e-4, about −64 dBFS)
+/// gets at least this much; noise louder than −64 dBFS is treated like any
+/// other signal — muting that is the squelch's job, not the AGC's.
 pub const SSB_MAX_GAIN_DB: f32 = 60.0;
+
+/// Gain the AGC may go on to when the band is quiet enough to take it, and
+/// never more: a weak signal on a clean band plays at full level, and
+/// digital silence (a floor of nothing) cannot ask for unbounded gain.
+pub const SSB_QUIET_BAND_GAIN_DB: f32 = 90.0;
+
+/// Between overs, the band's noise floor plays this far under the level
+/// speech peaks are steered to. Past [`SSB_MAX_GAIN_DB`] the gain stops
+/// where the floor reaches it, so the extra gain is only ever spent on a band
+/// quiet enough to afford it.
+const HISS_UNDER_DB: f32 = 20.0;
+
+/// The noise floor is the envelope, smoothed over this long, at its quietest:
+/// it falls to the envelope within [`FLOOR_FALL_S`] and climbs back at
+/// [`FLOOR_RISE_DB_PER_S`]. The gaps between words pull it down to the hiss;
+/// a second of unbroken speech lifts it only a few dB.
+const FLOOR_SMOOTH_S: f32 = 0.020;
+const FLOOR_FALL_S: f32 = 0.050;
+const FLOOR_RISE_DB_PER_S: f32 = 3.0;
 
 /// Chebyshev order and ripple. Order 8 at 0.5 dB puts the nearest
 /// opposite-sideband frequency (−300 Hz, i.e. 1850 Hz after the shift, 1.48×
@@ -100,7 +120,17 @@ pub struct SsbDemod {
     lp_im: Cascade,
     /// AGC: tracked envelope peak and the hang countdown, in samples.
     peak: f32,
+    /// The tracked peak never falls below the ceiling, which lies between
+    /// these two: `peak_floor` at 60 dB of gain, `peak_quiet` at 90.
     peak_floor: f32,
+    peak_quiet: f32,
+    /// The envelope smoothed for the floor tracker, the floor itself, and
+    /// the tracker's per-sample coefficients.
+    env_avg: f32,
+    noise: f32,
+    avg_k: f32,
+    fall_k: f32,
+    rise: f32,
     hang: u32,
     hang_len: u32,
     attack: f32,
@@ -129,6 +159,8 @@ impl SsbDemod {
         let fs32 = fs as f32;
         let lookahead = ((LOOKAHEAD_S * fs32).round() as usize).max(1);
         let peak_floor = TARGET_PEAK / 10f32.powf(SSB_MAX_GAIN_DB / 20.0);
+        let peak_quiet = TARGET_PEAK / 10f32.powf(SSB_QUIET_BAND_GAIN_DB / 20.0);
+        let coef = |s: f32| 1.0 - (-1.0 / (s * fs32).max(1.0)).exp();
         Self {
             sideband,
             dc_re: OnePole::new(DC_TAU_S * fs32),
@@ -140,6 +172,14 @@ impl SsbDemod {
             lp_im: chebyshev_lowpass(half_band, fs, LP_ORDER, LP_RIPPLE_DB),
             peak: peak_floor,
             peak_floor,
+            peak_quiet,
+            // Starting at the floor that gives exactly the fixed ceiling,
+            // the first moments behave as they always have.
+            env_avg: peak_floor / hiss_ratio(),
+            noise: peak_floor / hiss_ratio(),
+            avg_k: coef(FLOOR_SMOOTH_S),
+            fall_k: coef(FLOOR_FALL_S),
+            rise: 10f32.powf(FLOOR_RISE_DB_PER_S / 20.0 / fs32),
             hang: 0,
             hang_len: (crate::agc::AgcSpeed::Medium.ssb_hang_s() * fs32) as u32,
             attack: 1.0 - (-1.0 / (ATTACK_S * fs32).max(1.0)).exp(),
@@ -217,16 +257,35 @@ impl SsbDemod {
         self.decay = 10f32.powf(-speed.ssb_decay_db_per_s() / 20.0 / fs);
     }
 
+    /// The gain ceiling, as the lowest the tracked peak may fall: the
+    /// noise floor raised by [`HISS_UNDER_DB`], held between the 60 dB the
+    /// band can never take away and the 90 dB a quiet band may have.
+    #[inline]
+    fn ceiling(&self) -> f32 {
+        (self.noise * hiss_ratio()).clamp(self.peak_quiet, self.peak_floor)
+    }
+
+    /// The gain the AGC would give a signal too weak to move it, in dB.
+    pub fn max_gain_db(&self) -> f32 {
+        20.0 * (TARGET_PEAK / self.ceiling()).log10()
+    }
+
     /// Peak-tracking hang AGC with lookahead.
     #[inline]
     fn agc(&mut self, audio: f32, env: f32) -> f32 {
+        self.env_avg += (env - self.env_avg) * self.avg_k;
+        if self.env_avg < self.noise {
+            self.noise += (self.env_avg - self.noise) * self.fall_k;
+        } else {
+            self.noise *= self.rise;
+        }
         if env > self.peak {
             self.peak += (env - self.peak) * self.attack;
             self.hang = self.hang_len;
         } else if self.hang > 0 {
             self.hang -= 1;
         } else {
-            self.peak = (self.peak * self.decay).max(self.peak_floor);
+            self.peak = (self.peak * self.decay).max(self.ceiling());
         }
         let delayed = std::mem::replace(&mut self.delay[self.delay_pos], audio);
         self.delay_pos += 1;
@@ -244,6 +303,8 @@ impl SsbDemod {
         self.lp_re.reset();
         self.lp_im.reset();
         self.peak = self.peak_floor;
+        self.env_avg = self.peak_floor / hiss_ratio();
+        self.noise = self.env_avg;
         self.hang = 0;
         self.delay.fill(0.0);
         self.delay_pos = 0;
@@ -258,6 +319,11 @@ impl SsbDemod {
             out.push(self.weaver(x).0);
         }
     }
+}
+
+/// [`HISS_UNDER_DB`] as an amplitude ratio.
+fn hiss_ratio() -> f32 {
+    10f32.powf(HISS_UNDER_DB / 20.0)
 }
 
 /// Chebyshev type I low-pass of even `order`, as a cascade of RBJ low-pass
@@ -594,6 +660,53 @@ mod tests {
         let voice = rms(tail(&out, fs, 0.5));
         eprintln!("hiss {:.1} dB under a −40 dBFS tone", db(voice) - db(hiss));
         assert!(db(voice) - db(hiss) > 12.0);
+    }
+
+    /// A weak signal on a quiet band: a −90 dBFS tone some 20 dB over the
+    /// hiss needs about 86 dB of gain, far past the fixed 60. The floor
+    /// tracker sees how quiet the band is and allows it, while the hiss
+    /// between overs still plays well under the speech. The tone is keyed
+    /// like speech, so the gaps keep the floor honest.
+    #[test]
+    fn a_weak_signal_on_a_quiet_band_is_lifted_past_60_db() {
+        let fs = 48_077.0;
+        let sigma = 5e-6;
+        let mut d = SsbDemod::new(fs, Sideband::Upper);
+        let mut out = Vec::new();
+        d.process(&noise(fs, sigma, 3.0, 11), &mut out);
+        let hiss = rms(tail(&out, fs, 1.0));
+        let gain_db = d.max_gain_db();
+        let hush = noise(fs, sigma, 2.5, 12);
+        let key = (0.5 * fs) as usize;
+        let input: Vec<Complex32> = tone(fs, 1000.0, 3e-5, 2.5)
+            .iter()
+            .zip(&hush)
+            .enumerate()
+            .map(|(i, (t, n))| if i % key < key * 3 / 5 { t + n } else { *n })
+            .collect();
+        d.process(&input, &mut out);
+        // The last keyed-on stretch, past its onset.
+        let on = &out[4 * key + key / 5..4 * key + key * 3 / 5];
+        let amp = goertzel_amp(on, 1000.0, fs);
+        let voice = rms(on);
+        eprintln!(
+            "quiet band: ceiling {gain_db:.1} dB, tone at {amp:.3}, hiss {:.1} dB under it",
+            db(voice) - db(hiss)
+        );
+        assert!(gain_db > 80.0, "ceiling only {gain_db:.1} dB on a quiet band");
+        assert!((0.45..0.75).contains(&amp), "weak tone played at {amp:.3}");
+        assert!(db(voice) - db(hiss) > 12.0);
+    }
+
+    /// A noisy band keeps the fixed ceiling: its hiss is above −64 dBFS, so
+    /// the floor tracker never lifts the gain past 60 dB.
+    #[test]
+    fn a_noisy_band_keeps_the_fixed_ceiling() {
+        let fs = 48_077.0;
+        let mut d = SsbDemod::new(fs, Sideband::Upper);
+        let mut out = Vec::new();
+        d.process(&noise(fs, 1e-3, 3.0, 13), &mut out);
+        assert!((d.max_gain_db() - SSB_MAX_GAIN_DB).abs() < 0.01, "ceiling {:.1} dB", d.max_gain_db());
     }
 
     #[test]
