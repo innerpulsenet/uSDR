@@ -39,21 +39,44 @@ fn icon() -> Option<egui::IconData> {
 
 fn probe(server: &str) -> anyhow::Result<()> {
     use std::sync::Arc;
-    /// Samples heard from receivers A and B, and the last second of each.
-    struct Count([std::sync::atomic::AtomicU64; 2], std::sync::Mutex<[Vec<i16>; 2]>);
+    /// Samples heard from receivers A and B (as mono), the last second of
+    /// each, and receiver A's last second of stereo with the decoder's
+    /// readings over the run.
+    #[derive(Default)]
+    struct Count {
+        heard: [std::sync::atomic::AtomicU64; 2],
+        keep: std::sync::Mutex<[Vec<i16>; 2]>,
+        stereo: std::sync::Mutex<(Vec<i16>, Vec<usdr_proto::StereoReading>)>,
+    }
     impl net::AudioSink for Count {
-        fn push(&self, rx: u8, _rate: u32, s: &[i16]) {
-            let i = usize::from(rx.min(1));
-            self.0[i].fetch_add(s.len() as u64, std::sync::atomic::Ordering::Relaxed);
-            let mut keep = self.1.lock().unwrap();
-            keep[i].extend_from_slice(s);
+        fn push(&self, f: &usdr_proto::AudioFrame) {
+            let i = usize::from(f.rx.min(1));
+            let mono: Vec<i16> = if f.channels() == 2 {
+                f.samples.chunks_exact(2).map(|p| ((p[0] as i32 + p[1] as i32) / 2) as i16).collect()
+            } else {
+                f.samples.clone()
+            };
+            self.heard[i].fetch_add(mono.len() as u64, std::sync::atomic::Ordering::Relaxed);
+            let mut keep = self.keep.lock().unwrap();
+            keep[i].extend_from_slice(&mono);
             let n = keep[i].len();
             if n > 48_000 {
                 keep[i].drain(..n - 48_000);
             }
+            if let Some(r) = f.stereo {
+                let mut st = self.stereo.lock().unwrap();
+                st.1.push(r);
+                if f.channels() == 2 {
+                    st.0.extend_from_slice(&f.samples);
+                    let n = st.0.len();
+                    if n > 2 * 48_000 {
+                        st.0.drain(..n - 2 * 48_000);
+                    }
+                }
+            }
         }
     }
-    let audio = Arc::new(Count(Default::default(), Default::default()));
+    let audio = Arc::new(Count::default());
     let link = net::Link::open(server, egui::Context::default(), audio.clone());
     let until = std::time::Instant::now() + std::time::Duration::from_secs(4);
     let (mut frames, mut status, mut decodes, mut presence) = (0, 0, 0, None);
@@ -86,10 +109,10 @@ fn probe(server: &str) -> anyhow::Result<()> {
     let Some(s) = hello else { anyhow::bail!("no hello from {}", link.base) };
     println!("radio     {} · {} · mode {}", s.serial, s.radio_label(), s.mode.label());
     println!("tuning    center {:.6} MHz · receive {:.6} MHz · span {}", s.freq_hz / 1e6, s.inspect_hz / 1e6, tuning::fmt_hz(s.rate_hz));
-    let heard = |i: usize| audio.0[i].load(std::sync::atomic::Ordering::Relaxed);
+    let heard = |i: usize| audio.heard[i].load(std::sync::atomic::Ordering::Relaxed);
     println!("stream    {frames} FFT frames in 4 s · {status} status · {decodes} decodes · audio A {} samples, B {}", heard(0), heard(1));
     {
-        let keep = audio.1.lock().unwrap();
+        let keep = audio.keep.lock().unwrap();
         let rms = |v: &[i16]| (v.iter().map(|&x| (x as f64 / 32768.0).powi(2)).sum::<f64>() / v.len().max(1) as f64).sqrt();
         let db = |r: f64| 20.0 * r.max(1e-9).log10();
         let (a, b) = (&keep[0], &keep[1]);
@@ -99,6 +122,48 @@ fn probe(server: &str) -> anyhow::Result<()> {
             let dot: f64 = a.iter().zip(b).map(|(&x, &y)| x as f64 * y as f64).sum();
             let corr = dot / ((a.iter().map(|&x| (x as f64).powi(2)).sum::<f64>() * b.iter().map(|&y| (y as f64).powi(2)).sum::<f64>()).sqrt()).max(1.0);
             println!("audio     A {:.1} dBFS rms · B {:.1} dBFS rms · A–B correlation {corr:+.2}", db(rms(a)), db(rms(b)));
+        }
+    }
+    {
+        // The stereo decoder, as the frames reported it, and what the last
+        // second of L and R holds: the difference against the sum says how
+        // much stereo the program carries.
+        let st = audio.stereo.lock().unwrap();
+        if let Some(last) = st.1.last() {
+            let n = st.1.len().max(1) as f32;
+            let lit = st.1.iter().filter(|r| r.pilot).count() as f32 / n;
+            let (lo, hi) = st.1.iter().fold((f32::MAX, f32::MIN), |(a, b), r| (a.min(r.blend), b.max(r.blend)));
+            println!(
+                "stereo    {} · pilot in {:.0}% of frames{} · blend now {:.0}% (range {:.0}–{:.0}%){}",
+                if last.channels == 2 { "2 channels" } else { "mono" },
+                lit * 100.0,
+                last.pilot_dev_hz.map(|h| format!(" at {:.2} kHz deviation", h / 1000.0)).unwrap_or_default(),
+                last.blend * 100.0,
+                lo * 100.0,
+                hi * 100.0,
+                last.snr_db.map(|d| format!(" · stereo S/N {d:.0} dB")).unwrap_or_default()
+            );
+            if st.0.len() >= 2 {
+                let (mut m, mut d, mut lr) = (0f64, 0f64, 0f64);
+                let (mut ll, mut rr) = (0f64, 0f64);
+                for p in st.0.chunks_exact(2) {
+                    let (l, r) = (p[0] as f64, p[1] as f64);
+                    m += ((l + r) / 2.0).powi(2);
+                    d += ((l - r) / 2.0).powi(2);
+                    lr += l * r;
+                    ll += l * l;
+                    rr += r * r;
+                }
+                println!(
+                    "l/r       L−R {:.1} dB against L+R · L–R correlation {:+.2} · L {:.1} dBFS, R {:.1} dBFS rms",
+                    10.0 * (d.max(1e-9) / m.max(1e-9)).log10(),
+                    lr / (ll * rr).sqrt().max(1.0),
+                    10.0 * (ll / (st.0.len() / 2) as f64 / 32768f64.powi(2)).max(1e-12).log10(),
+                    10.0 * (rr / (st.0.len() / 2) as f64 / 32768f64.powi(2)).max(1e-12).log10()
+                );
+            }
+        } else if s.mode == usdr_proto::Mode::Wfm {
+            println!("stereo    no reading in the audio (a server without stereo)");
         }
     }
     if let Some(b) = &s.rx2 {

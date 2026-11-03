@@ -34,13 +34,13 @@
 //! from feeding anything through.
 
 use crate::classifier::DecodeEvent;
+use crate::pilot::PilotPll;
 use serde::Serialize;
 use std::collections::BTreeMap;
 use std::f64::consts::TAU;
 
 /// The data rate: 57 kHz / 48.
 pub const BIT_RATE: f64 = 1187.5;
-const PILOT_HZ: f64 = 19_000.0;
 const CARRIER_HZ: f64 = 57_000.0;
 
 /// Offset words added to each block's checkword, in block order A, B, C, D,
@@ -122,7 +122,7 @@ fn burst_table() -> Vec<u32> {
 /// A biquad in f64: the RDS low-pass runs at about 1% of the sample rate,
 /// where single precision starts to cost accuracy.
 #[derive(Clone, Copy, Debug, Default)]
-struct Bq {
+pub(crate) struct Bq {
     b0: f64,
     b1: f64,
     b2: f64,
@@ -149,7 +149,7 @@ impl Bq {
         }
     }
 
-    fn process(&mut self, x: f64) -> f64 {
+    pub(crate) fn process(&mut self, x: f64) -> f64 {
         let y = self.b0 * x + self.z1;
         self.z1 = self.b1 * x - self.a1 * y + self.z2;
         self.z2 = self.b2 * x - self.a2 * y;
@@ -158,123 +158,11 @@ impl Bq {
 }
 
 /// Fourth-order Butterworth low-pass as two sections.
-fn butter4(fc: f64, fs: f64) -> [Bq; 2] {
+pub(crate) fn butter4(fc: f64, fs: f64) -> [Bq; 2] {
     [Bq::lowpass(fc, fs, 0.541_196_1), Bq::lowpass(fc, fs, 1.306_563)]
 }
 
 // ---------- the demodulator: MPX in, data bits out ----------
-
-/// A 19 kHz PLL updated once per short block, with a lock detector.
-#[derive(Clone, Debug)]
-struct PilotPll {
-    /// Current phasor (cos, sin) and its per-sample step.
-    c: f64,
-    s: f64,
-    step_c: f64,
-    step_s: f64,
-    /// Radians per sample.
-    freq: f64,
-    center: f64,
-    fs: f64,
-    /// Correlation accumulated over the current block.
-    acc_i: f64,
-    acc_q: f64,
-    n: usize,
-    block: usize,
-    kp: f64,
-    ki: f64,
-    /// Smoothed cos(phase error): 1 locked, ~0 on noise.
-    lock: f64,
-    locked: bool,
-}
-
-impl PilotPll {
-    fn new(fs: f64) -> Self {
-        // A 250 µs block: four and three-quarter pilot cycles, nine and a half
-        // of the 38 kHz product, which the sum all but cancels.
-        let block = (fs / 4_000.0).round().max(4.0) as usize;
-        let t = block as f64 / fs;
-        let wn = TAU * 8.0 * t;
-        let center = TAU * PILOT_HZ / fs;
-        let mut p = Self {
-            c: 1.0,
-            s: 0.0,
-            step_c: 1.0,
-            step_s: 0.0,
-            freq: center,
-            center,
-            fs,
-            acc_i: 0.0,
-            acc_q: 0.0,
-            n: 0,
-            block,
-            kp: 2.0 * 0.707 * wn,
-            ki: wn * wn,
-            lock: 0.0,
-            locked: false,
-        };
-        p.set_step();
-        p
-    }
-
-    fn set_step(&mut self) {
-        let (s, c) = self.freq.sin_cos();
-        self.step_c = c;
-        self.step_s = s;
-    }
-
-    /// Advance one sample with input `x`; returns the pilot phasor in use for
-    /// this sample.
-    #[inline]
-    fn step(&mut self, x: f64) -> (f64, f64) {
-        let (c, s) = (self.c, self.s);
-        self.acc_i += x * c;
-        self.acc_q -= x * s;
-        let nc = c * self.step_c - s * self.step_s;
-        let ns = s * self.step_c + c * self.step_s;
-        self.c = nc;
-        self.s = ns;
-        self.n += 1;
-        if self.n >= self.block {
-            self.update();
-        }
-        (c, s)
-    }
-
-    fn update(&mut self) {
-        let mag = self.acc_i.hypot(self.acc_q);
-        if mag > 0.0 {
-            let err = self.acc_q.atan2(self.acc_i);
-            // The loop's own integrator, held near 19 kHz so that following
-            // noise cannot walk it somewhere a real pilot would not be.
-            let max = TAU * 20.0 / self.fs;
-            let k = self.block as f64;
-            self.freq = (self.freq + self.ki * err / k).clamp(self.center - max, self.center + max);
-            // Phase correction applied by rotating the phasor.
-            let (ps, pc) = (self.kp * err).sin_cos();
-            let (c, s) = (self.c, self.s);
-            self.c = c * pc - s * ps;
-            self.s = s * pc + c * ps;
-            // Smoothed over about a quarter second.
-            self.lock += (self.acc_i / mag - self.lock) * 0.004;
-            if self.locked && self.lock < 0.5 {
-                self.locked = false;
-            } else if !self.locked && self.lock > 0.8 {
-                self.locked = true;
-            }
-        }
-        // Keep the phasor on the unit circle.
-        let r = self.c.hypot(self.s);
-        if r > 0.0 {
-            self.c /= r;
-            self.s /= r;
-        }
-        self.set_step();
-        self.acc_i = 0.0;
-        self.acc_q = 0.0;
-        self.n = 0;
-    }
-}
 
 /// From the MPX signal to differentially decoded data bits.
 #[derive(Clone, Debug)]
@@ -1458,6 +1346,7 @@ fn mjd_to_date(mjd: u32) -> (i32, u32, u32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::pilot::PILOT_HZ;
 
     #[test]
     fn checkwords_match_the_offsets() {

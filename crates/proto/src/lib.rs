@@ -19,6 +19,25 @@ pub const AUDIO_FRAME_MAGIC: u8 = 0x01;
 /// Leading byte of a tagged audio frame from another receiver:
 /// `[0x04][u8 receiver][u32 rate][i16 samples…]` (API 2, `rx2`).
 pub const TAGGED_AUDIO_MAGIC: u8 = 0x04;
+/// Leading byte of a broadcast FM audio frame with the stereo decoder's
+/// reading, sent only to a client that connected with `audio=stereo` (and
+/// only while the receiver is in WFM; every other mode, and every other
+/// client, gets the mono frames above):
+///
+/// ```text
+/// [0x05][u8 receiver][u8 channels][u8 flags][u8 blend][u8 snr_db]
+///       [u16 pilot_dev_hz][u32 rate][i16 samples…]
+/// ```
+///
+/// All little-endian. `channels` is 1 (mono) or 2, the samples then
+/// interleaved L, R. `flags` bit 0: a pilot is locked at a pilot's level.
+/// `blend` is how much of the stereo difference is in the samples, 0 (mono)
+/// to 255 (full separation). `snr_db` is the S/N the decoder estimates the
+/// stereo channels have, 255 when it has no estimate (no pilot).
+/// `pilot_dev_hz` is the pilot's injection as deviation, 0 when there is no
+/// pilot. Readers older than this skip it as an unknown frame, which is why
+/// the server sends it only to clients that ask (API feature `stereo`).
+pub const STEREO_AUDIO_MAGIC: u8 = 0x05;
 
 // ---------- binary frames ----------
 
@@ -99,7 +118,50 @@ pub struct AudioFrame {
     /// Which receiver: 0 the main one, 1 the second.
     pub rx: u8,
     pub rate_hz: u32,
+    /// Mono, or interleaved L, R when `stereo` says two channels.
     pub samples: Vec<i16>,
+    /// The stereo decoder's reading, on broadcast FM frames (0x05) only.
+    pub stereo: Option<StereoReading>,
+}
+
+impl AudioFrame {
+    pub fn channels(&self) -> usize {
+        self.stereo.map_or(1, |s| s.channels.max(1) as usize)
+    }
+}
+
+/// What the server's stereo decoder measured, carried with the audio it
+/// shaped.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct StereoReading {
+    /// 1 or 2.
+    pub channels: u8,
+    /// A pilot is locked at a pilot's level.
+    pub pilot: bool,
+    /// Separation in use, 0 (mono) to 1.
+    pub blend: f32,
+    /// Estimated stereo S/N, dB, while a pilot is locked.
+    pub snr_db: Option<f32>,
+    /// The pilot's deviation, Hz, while one is locked.
+    pub pilot_dev_hz: Option<f32>,
+}
+
+/// Write a 0x05 frame. The server writes the same bytes (its `ws_client`);
+/// this is the reference, used by the tests on both sides.
+pub fn encode_stereo_audio(rx: u8, rate_hz: u32, st: &StereoReading, samples: &[i16]) -> Vec<u8> {
+    let mut b = Vec::with_capacity(12 + samples.len() * 2);
+    b.push(STEREO_AUDIO_MAGIC);
+    b.push(rx);
+    b.push(st.channels);
+    b.push(st.pilot as u8);
+    b.push((st.blend.clamp(0.0, 1.0) * 255.0).round() as u8);
+    b.push(st.snr_db.map_or(255, |d| d.round().clamp(0.0, 254.0) as u8));
+    b.extend_from_slice(&st.pilot_dev_hz.map_or(0, |h| h.round().clamp(1.0, 65_535.0) as u16).to_le_bytes());
+    b.extend_from_slice(&rate_hz.to_le_bytes());
+    for s in samples {
+        b.extend_from_slice(&s.to_le_bytes());
+    }
+    b
 }
 
 /// What a binary websocket message turned out to be.
@@ -182,6 +244,7 @@ pub fn decode_binary(buf: &[u8]) -> Result<Binary, DecodeError> {
             a.rx = buf[1];
             Ok(Binary::Audio(a))
         }
+        Some(&STEREO_AUDIO_MAGIC) => decode_stereo_audio(buf).map(Binary::Audio),
         Some(_) => Err(DecodeError("unknown frame type")),
         None => Err(DecodeError("empty frame")),
     }
@@ -195,7 +258,38 @@ pub fn decode_audio(buf: &[u8]) -> Result<AudioFrame, DecodeError> {
         .chunks_exact(2)
         .map(|c| i16::from_le_bytes([c[0], c[1]]))
         .collect();
-    Ok(AudioFrame { rx: 0, rate_hz, samples })
+    Ok(AudioFrame { rx: 0, rate_hz, samples, stereo: None })
+}
+
+pub fn decode_stereo_audio(buf: &[u8]) -> Result<AudioFrame, DecodeError> {
+    let mut r = Reader { buf, at: 1 };
+    let rx = r.u8()?;
+    let channels = r.u8()?;
+    if !(1..=2).contains(&channels) {
+        return Err(DecodeError("unsupported channel count"));
+    }
+    let flags = r.u8()?;
+    let blend = r.u8()? as f32 / 255.0;
+    let snr = r.u8()?;
+    let pilot_hz = r.u16()?;
+    let rate_hz = r.u32()?;
+    let body = &buf[r.at..];
+    if body.len() % (2 * channels as usize) != 0 {
+        return Err(DecodeError("samples do not fill the channels"));
+    }
+    let samples = body.chunks_exact(2).map(|c| i16::from_le_bytes([c[0], c[1]])).collect();
+    Ok(AudioFrame {
+        rx,
+        rate_hz,
+        samples,
+        stereo: Some(StereoReading {
+            channels,
+            pilot: flags & 1 != 0,
+            blend,
+            snr_db: (snr != 255).then_some(snr as f32),
+            pilot_dev_hz: (pilot_hz != 0).then_some(pilot_hz as f32),
+        }),
+    })
 }
 
 pub fn decode_fft(buf: &[u8]) -> Result<FftFrame, DecodeError> {
@@ -388,6 +482,19 @@ pub struct Status {
     /// RDS from the broadcast station on receiver A, once its PI is
     /// confirmed (WFM only).
     pub rds: Option<Rds>,
+    /// The stereo decoder on receiver A (WFM only).
+    pub stereo: Option<Stereo>,
+}
+
+/// The stereo decoder's reading as the status carries it; the audio frames
+/// carry the same, live, to a client that asked for stereo.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Stereo {
+    pub pilot: bool,
+    pub blend: f32,
+    pub snr_db: Option<f32>,
+    pub pilot_dev_hz: Option<f32>,
 }
 
 /// What a broadcast FM station is sending over RDS. Every text here passed
@@ -922,6 +1029,28 @@ mod tests {
         t.extend_from_slice(&b[1..]);
         let Binary::Audio(a) = decode_binary(&t).unwrap() else { panic!() };
         assert_eq!((a.rx, a.rate_hz, a.samples.clone()), (1, 48_000, vec![-5, 7]));
+    }
+
+    #[test]
+    fn stereo_audio_round_trips() {
+        let st = StereoReading { channels: 2, pilot: true, blend: 0.6, snr_db: Some(41.4), pilot_dev_hz: Some(7_480.0) };
+        let pcm = vec![i16::MIN, i16::MAX, -1, 1, 12_345, -12_345];
+        let b = encode_stereo_audio(0, 51_200, &st, &pcm);
+        let Binary::Audio(a) = decode_binary(&b).unwrap() else { panic!() };
+        assert_eq!((a.rx, a.rate_hz, a.channels()), (0, 51_200, 2));
+        assert_eq!(a.samples, pcm, "16-bit samples come back bit for bit");
+        let got = a.stereo.unwrap();
+        assert!(got.pilot && (got.blend - 0.6).abs() < 0.5 / 255.0 + 1e-6);
+        assert_eq!((got.snr_db, got.pilot_dev_hz), (Some(41.0), Some(7_480.0)));
+        // Mono, no pilot: nothing claimed that was not measured.
+        let mono = StereoReading { channels: 1, ..Default::default() };
+        let Binary::Audio(a) = decode_binary(&encode_stereo_audio(1, 51_200, &mono, &[3, 4, 5])).unwrap() else { panic!() };
+        let got = a.stereo.unwrap();
+        assert_eq!((a.rx, a.channels(), a.samples.len()), (1, 1, 3));
+        assert!(!got.pilot && got.snr_db.is_none() && got.pilot_dev_hz.is_none());
+        // An odd number of samples cannot be two channels.
+        assert!(decode_binary(&encode_stereo_audio(0, 51_200, &st, &[1, 2, 3])).is_err());
+        assert!(decode_binary(&b[..9]).is_err());
     }
 
     #[test]

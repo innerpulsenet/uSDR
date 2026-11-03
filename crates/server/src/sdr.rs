@@ -12,13 +12,13 @@ use scannerd_engine::p25::C4FM_BANDWIDTH_HZ;
 use scannerd_engine::p25::conventional::{P25ChannelReceiver, P25Spec};
 use scannerd_engine::pocsag::PocsagDecoder;
 use scannerd_engine::rds::RdsDecoder;
+use scannerd_engine::stereo::{StereoStatus, WfmAudio};
 use scannerd_engine::{CallEvent, ToneCode};
 use scannerd_engine::leveler::Leveler;
 use scannerd_engine::noisegate::NoiseGate;
 use scannerd_engine::autonotch::AutoNotch;
 use scannerd_engine::agc::AgcSpeed;
 use scannerd_engine::denoise::{Denoise, NrLevel};
-use scannerd_engine::biquad::{Biquad, Cascade};
 use scannerd_engine::ssb::{SSB_HIGH_HZ, SSB_LOW_HZ, Sideband, SsbDemod};
 use scannerd_engine::nbfm::{Demodulated, NbfmDemod};
 use scannerd_engine::nxdn::{NXDN_BANDWIDTH_HZ, NxdnChannelReceiver, NxdnSpec};
@@ -111,12 +111,8 @@ impl Default for Processing {
     }
 }
 
-/// The broadcast audio band: a 12th-order Butterworth at 15 kHz and a notch
-/// on the 19 kHz stereo pilot, run at the discriminator's rate.
-pub(crate) fn wfm_audio_filter(fs: f64) -> Cascade {
-    let fs = fs as f32;
-    Cascade::butterworth_lowpass(15_000.0, fs, 6).then(Biquad::notch(19_000.0, fs, 4.0))
-}
+/// The broadcast audio band, shared with receiver B's mono WFM.
+pub(crate) use scannerd_engine::stereo::wfm_audio_filter;
 /// Pager FSK needs more acquisition width than voice: FLEX's outer level is
 /// about ±4.8 kHz and the AFC can inherit ±6.5 kHz of RTL crystal error. A
 /// 15 kHz filter clipped that signal before the AFC or decoder could measure
@@ -543,7 +539,58 @@ pub struct AudioFrame {
     /// Which receiver: 0 the main one, 1 the second.
     pub rx: u8,
     pub rate_hz: u32,
+    /// Mono: what every client gets unless it asked for stereo.
     pub samples: Vec<i16>,
+    /// Broadcast FM on receiver A: the stereo decoder's reading, and the
+    /// interleaved L, R when it delivered stereo.
+    pub stereo: Option<StereoAudio>,
+}
+
+/// An audio frame as it goes on the websocket. Binary because a JSON float
+/// array costs about ten times the bytes for something that arrives forty
+/// times a second. Receiver A's mono is `[0x01][u32 rate][i16…]`, receiver
+/// B's `[0x04][u8 rx][u32 rate][i16…]`, which pages that know nothing of it
+/// skip. A client that asked for stereo gets broadcast FM as
+/// `[0x05][u8 rx][u8 channels][u8 flags][u8 blend][u8 snr_db][u16 pilot_dev_hz][u32 rate][i16…]`,
+/// laid out in full beside `usdr_proto::STEREO_AUDIO_MAGIC`.
+pub fn encode_audio_frame(f: &AudioFrame, stereo_ok: bool) -> Vec<u8> {
+    if stereo_ok && let Some(st) = &f.stereo {
+        let two = !st.samples.is_empty();
+        let pcm = if two { &st.samples } else { &f.samples };
+        let s = &st.status;
+        let mut buf = Vec::with_capacity(12 + pcm.len() * 2);
+        buf.push(0x05u8);
+        buf.push(f.rx);
+        buf.push(if two { 2 } else { 1 });
+        buf.push(s.pilot as u8);
+        buf.push((s.blend.clamp(0.0, 1.0) * 255.0).round() as u8);
+        buf.push(s.snr_db.map_or(255, |d| d.round().clamp(0.0, 254.0) as u8));
+        buf.extend_from_slice(&s.pilot_dev_hz.map_or(0, |h| h.round().clamp(1.0, 65_535.0) as u16).to_le_bytes());
+        buf.extend_from_slice(&f.rate_hz.to_le_bytes());
+        for v in pcm {
+            buf.extend_from_slice(&v.to_le_bytes());
+        }
+        return buf;
+    }
+    let mut buf = Vec::with_capacity(6 + f.samples.len() * 2);
+    if f.rx == 0 {
+        buf.push(0x01u8);
+    } else {
+        buf.push(0x04u8);
+        buf.push(f.rx);
+    }
+    buf.extend_from_slice(&f.rate_hz.to_le_bytes());
+    for v in &f.samples {
+        buf.extend_from_slice(&v.to_le_bytes());
+    }
+    buf
+}
+
+#[derive(Clone, Debug)]
+pub struct StereoAudio {
+    /// Interleaved L, R, twice the length of the mono; empty while mono.
+    pub samples: Vec<i16>,
+    pub status: StereoStatus,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -778,6 +825,10 @@ pub struct SdrStatus {
     /// its PI has been confirmed (WFM only).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rds: Option<scannerd_engine::rds::RdsStation>,
+    /// The stereo decoder on receiver A (WFM only): pilot, blend, and the
+    /// S/N it is blending on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stereo: Option<StereoStatus>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -1890,16 +1941,16 @@ enum Demod {
     Wfm {
         fm: NbfmDemod,
         disc: Vec<f32>,
-        deemph: scannerd_dsp::OnePole,
-        /// Broadcast audio stops at 15 kHz. Above it sit the 19 kHz stereo
-        /// pilot and the 23–53 kHz stereo difference signal, which a plain
-        /// average down to ~52 kHz folds back into the audio as whistle and
-        /// hiss; this low-pass and pilot notch take them out first.
-        lp: Cascade,
-        /// Integer decimation from the IF down to something a sound card is
-        /// happy with, the phase carried between blocks.
-        decim: usize,
-        phase: usize,
+        /// De-emphasis, the 15 kHz audio band and decimation to ~51 kHz for
+        /// the mono sum, and the stereo difference from the 38 kHz
+        /// subcarrier when a pilot is locked, blended by the measured S/N.
+        audio: Box<WfmAudio>,
+        /// This block's interleaved L, R, when the decoder delivered stereo;
+        /// cleared with `audio_buf` at the top of every block.
+        stereo: Vec<f32>,
+        /// Whether the last status pushed had a pilot, so a lock or a loss
+        /// goes out at once.
+        pilot_seen: bool,
         /// RDS from the 57 kHz subcarrier, which the discriminator's full
         /// multiplex still carries.
         rds: Box<RdsDecoder>,
@@ -2049,12 +2100,9 @@ impl Demod {
                 Demod::Wfm {
                     fm: NbfmDemod::with_deviation(fs_out, WFM_DEVIATION_HZ),
                     disc: Vec::new(),
-                    // One-pole de-emphasis, its time constant expressed in
-                    // samples at the rate the discriminator runs.
-                    deemph: scannerd_dsp::OnePole::new(WFM_DEEMPHASIS_TAU * fs_out as f32),
-                    lp: wfm_audio_filter(fs_out),
-                    decim,
-                    phase: 0,
+                    audio: Box::new(WfmAudio::new(fs_out, decim, WFM_DEVIATION_HZ, WFM_DEEMPHASIS_TAU)),
+                    stereo: Vec::new(),
+                    pilot_seen: false,
                     rds: Box::new(RdsDecoder::new(fs_out)),
                     // Never a generation the decoder has, so the first block
                     // on a new channel pushes a status without the old
@@ -2088,23 +2136,21 @@ impl Demod {
     /// lost-delivery gap or an acquisition epoch boundary). Framing state
     /// must not stitch samples across a hole that never existed on the air;
     /// the decoders restart their lock from the new run instead.
-    fn reset_timeline(&mut self, fs_out: f64) {
+    fn reset_timeline(&mut self, _fs_out: f64) {
         match self {
             Demod::Nfm | Demod::Scan => {}
             Demod::Wfm {
                 fm,
                 disc,
-                deemph,
-                lp,
-                phase,
+                audio,
+                stereo,
                 rds,
                 ..
             } => {
                 fm.reset();
                 disc.clear();
-                *deemph = scannerd_dsp::OnePole::new(WFM_DEEMPHASIS_TAU * fs_out as f32);
-                lp.reset();
-                *phase = 0;
+                audio.reset();
+                stereo.clear();
                 // Same station, new run of samples: keep what it has sent.
                 rds.reset_sync();
             }
@@ -2152,7 +2198,7 @@ impl Demod {
     /// Audio rate this demodulator delivers, given the chain rate feeding it.
     fn audio_rate(&self, fs_out: f64) -> f64 {
         match self {
-            Demod::Wfm { decim, .. } => fs_out / *decim as f64,
+            Demod::Wfm { audio, .. } => fs_out / audio.decim() as f64,
             Demod::P25 { rx } => rx.audio_rate(),
             Demod::Dmr { rx } => rx.audio_rate(),
             Demod::Nxdn { rx } => rx.audio_rate(),
@@ -4578,7 +4624,7 @@ fn run_sdr(
             let lo_off = lo_offset_for(current_rate, lo_offset, current_mode);
             let note_before = sub.note.clone();
             if let Some((rate, samples)) = sub.process(&clean, current_rate, current_freq, lo_off) {
-                let _ = audio_tx.send(AudioFrame { rx: 1, rate_hz: rate, samples });
+                let _ = audio_tx.send(AudioFrame { rx: 1, rate_hz: rate, samples, stereo: None });
             }
             if sub.note != note_before {
                 let mut s = status.lock().unwrap();
@@ -4674,6 +4720,9 @@ fn run_sdr(
         }
 
         audio_buf.clear();
+        if let Demod::Wfm { stereo, .. } = &mut demod {
+            stereo.clear();
+        }
 
         // The classifier is the demodulator for every narrowband mode: it
         // already produces the voice and discriminator the decoders need, so
@@ -5750,25 +5799,24 @@ fn run_sdr(
                 if let Demod::Wfm {
                     fm,
                     disc,
-                    deemph,
-                    lp,
-                    decim,
-                    phase,
+                    audio,
+                    stereo,
+                    pilot_seen,
                     rds,
                     rds_seen,
                     rds_pushed,
                 } = &mut demod
                 {
-                    // Instantaneous frequency in Hz, scaled by the deviation
-                    // so full deflection is full scale, de-emphasised,
-                    // band-limited to the broadcast audio, then decimated.
+                    // Instantaneous frequency in Hz, then the broadcast audio:
+                    // mono always, stereo too while a pilot is locked.
                     fm.discriminator_hz(&inspect_iq, disc);
-                    for &hz in disc.iter() {
-                        let v = lp.process(deemph.process(hz / WFM_DEVIATION_HZ));
-                        *phase += 1;
-                        if *phase >= *decim {
-                            audio_buf.push(v.clamp(-1.0, 1.0));
-                            *phase = 0;
+                    audio.process(disc, &mut audio_buf, stereo);
+                    let st = audio.status();
+                    if st.pilot != *pilot_seen {
+                        *pilot_seen = st.pilot;
+                        if let Ok(mut s) = status.lock() {
+                            s.stereo = Some(st);
+                            let _ = events.send(SdrEvent::Status(s.clone()));
                         }
                     }
                     // Deliberately not captured. The rolling buffer holds
@@ -6091,13 +6139,21 @@ fn run_sdr(
             demod.audio_rate(fs_chain)
         };
         if !audio_buf.is_empty() && audio_rate > 0.0 {
+            let pcm = |x: &f32| (x.clamp(-1.0, 1.0) * 28_000.0) as i16;
+            // WFM carries what the stereo decoder measured with every frame,
+            // and the L, R pair when it delivered one for this whole block.
+            let stereo = match &demod {
+                Demod::Wfm { audio, stereo, .. } if current_mode == SdrMode::Wfm => Some(StereoAudio {
+                    samples: if stereo.len() == 2 * audio_buf.len() { stereo.iter().map(pcm).collect() } else { Vec::new() },
+                    status: audio.status(),
+                }),
+                _ => None,
+            };
             let _ = audio_tx.send(AudioFrame {
                 rx: 0,
                 rate_hz: audio_rate.round() as u32,
-                samples: audio_buf
-                    .iter()
-                    .map(|&x| (x.clamp(-1.0, 1.0) * 28_000.0) as i16)
-                    .collect(),
+                samples: audio_buf.iter().map(pcm).collect(),
+                stereo,
             });
         }
         // Box-average down to SCOPE_RATE_HZ rather than picking every Nth
@@ -6155,14 +6211,18 @@ fn run_sdr(
                     None
                 };
                 match &demod {
-                    Demod::Wfm { rds, .. } => {
+                    Demod::Wfm { rds, audio, .. } => {
                         s.rds = rds.station().map(|mut st| {
                             st.updated_ms = s.rds.as_ref().map_or(0, |o| o.updated_ms);
                             st
                         });
+                        s.stereo = Some(audio.status());
                     }
-                    // Out of WFM: the station's RDS goes, and clients hear so.
-                    _ if s.rds.take().is_some() => {
+                    // Out of WFM: the station's RDS and stereo go, and
+                    // clients hear so.
+                    _ if s.rds.is_some() || s.stereo.is_some() => {
+                        s.rds = None;
+                        s.stereo = None;
                         let _ = events.send(SdrEvent::Status(s.clone()));
                     }
                     _ => {}
@@ -6572,6 +6632,47 @@ fn run_sdr(
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn audio_frames_read_back_through_the_client_decoder() {
+        use usdr_proto::{Binary, decode_binary};
+        let read = |b: Vec<u8>| match decode_binary(&b) {
+            Ok(Binary::Audio(a)) => a,
+            other => panic!("{other:?}"),
+        };
+        let lr = vec![i16::MIN, i16::MAX, -7, 7, 28_000, -28_000];
+        let status = StereoStatus { pilot: true, blend: 1.0, snr_db: Some(52.4), pilot_dev_hz: Some(7_502.0) };
+        let f = AudioFrame {
+            rx: 0,
+            rate_hz: 51_200,
+            samples: vec![-32_768, 32_767, 0],
+            stereo: Some(StereoAudio { samples: lr.clone(), status }),
+        };
+        // A client that asked for stereo: both channels, bit for bit.
+        let a = read(encode_audio_frame(&f, true));
+        assert_eq!((a.rx, a.rate_hz, a.channels(), &a.samples), (0, 51_200, 2, &lr));
+        let st = a.stereo.unwrap();
+        assert!(st.pilot && st.blend == 1.0);
+        assert_eq!((st.snr_db, st.pilot_dev_hz), (Some(52.0), Some(7_502.0)));
+        // One that did not, and the page: the mono frame they always had.
+        let a = read(encode_audio_frame(&f, false));
+        assert_eq!((a.channels(), a.samples.as_slice(), a.stereo), (1, &[-32_768i16, 32_767, 0][..], None));
+        assert_eq!(encode_audio_frame(&f, false)[0], 0x01);
+        // WFM without a pilot, to a stereo client: one channel, the reading
+        // says so, and nothing unmeasured is claimed.
+        let mono = AudioFrame {
+            stereo: Some(StereoAudio { samples: Vec::new(), status: StereoStatus::default() }),
+            ..f.clone()
+        };
+        let a = read(encode_audio_frame(&mono, true));
+        let st = a.stereo.unwrap();
+        assert_eq!((a.channels(), a.samples.len()), (1, 3));
+        assert!(!st.pilot && st.snr_db.is_none() && st.pilot_dev_hz.is_none());
+        // Receiver B keeps its tagged mono frame.
+        let b = AudioFrame { rx: 1, rate_hz: 16_000, samples: vec![1, 2], stereo: None };
+        let a = read(encode_audio_frame(&b, true));
+        assert_eq!((a.rx, a.samples.as_slice(), a.stereo), (1, &[1i16, 2][..], None));
+    }
 
     #[test]
     fn filters_follow_the_mode_rules_and_never_move_the_lo() {
