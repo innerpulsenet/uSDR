@@ -2,10 +2,11 @@
 
 A single-radio spectrum inspector for RTL-SDR hardware, and for an SDRplay
 receiver on another machine (see [Remote SDRplay](#remote-sdrplay-soapyremote)):
-one radio, one web page. It is the SDR mode of [`scannerd`](#provenance) lifted out on its own —
-a live FFT and waterfall over the tuned span, plus a narrowband inspect chain
-that runs the same digital classifiers and protocol decoders the full scanner
-uses.
+one radio, served to a web page and to a native desktop console
+([Desktop app](#desktop-app)). It began as the SDR mode of
+[`scannerd`](#provenance) lifted out on its own — a live FFT and waterfall over
+the tuned span, plus a narrowband inspect chain that runs the same digital
+classifiers and protocol decoders the full scanner uses.
 
 There is no call database and no trunking follow — this exists to point a
 receiver at a signal and find out what it is, to decode what it finds, and,
@@ -26,13 +27,15 @@ SWR: this is RX-only.
   strongest segment instead, so pager, data and TDMA bursts show at full
   level. Waterfall rows keep the strongest bin per pixel when the FFT is
   wider than the screen, and the FFT size follows the screen's width.
-- **Spectrum and waterfall** over spans from 200 kHz to 3.2 MHz, using the
-  `HAM` black → navy → blue → cyan → white waterfall ramp, with peak hold,
-  trace fill, and auto or manual dB range.
+- **Spectrum and waterfall** over spans from 200 kHz to 3.2 MHz on an
+  RTL-SDR and 250 kHz to 10 MHz on an SDRplay, with peak hold, trace fill,
+  auto or manual dB range, and a choice of twelve waterfall palettes on the
+  page (`SPECTRUM` by default; `HAM` is the black → navy → blue → cyan →
+  white ramp).
 - **Tuning.** The big readout is the frequency being *received*, the way a
-  radio's is — not the centre of the span. Everything sets it: clicking
+  radio's is — not the center of the span. Everything sets it: clicking
   anywhere on the spectrum or waterfall, double-clicking the spectrum (tunes RX
-  and inspects that frequency, same as a click, recentred), scrolling a digit, the arrow keys,
+  and inspects that frequency, same as a click, recentered), scrolling a digit, the arrow keys,
   double-clicking the readout to type, scrolling the display, or clicking
   a peak marker or a logged decode.
 
@@ -75,12 +78,12 @@ SWR: this is RX-only.
   2.4 MHz span slides it 94 pixels — measured against a marker painted into the
   history — and only a span change or a jump bigger than the screen clears it.
 - **A packet list for decoded frames.** The decode log reads like a protocol
-  analyser: one summary line per frame, and any frame expands to its detail —
+  analyzer: one summary line per frame, and any frame expands to its detail —
   a `Frame` section with the protocol, kind and whether the checksum passed, a
   `Fields` section with every value the decoder recovered, and the raw data.
 
   Below the list is a **frame bytes pane** that follows the selected frame, the
-  way a packet analyser's third pane does. Byte payloads appear as an
+  way a packet analyzer's third pane does. Byte payloads appear as an
   offset/hex/ASCII dump; POCSAG and FLEX codewords appear as *words* rather
   than bytes, because they are 20 and 21 bits wide and packing them into a byte
   dump would misalign every one after the first. The pane says plainly when a
@@ -101,7 +104,7 @@ SWR: this is RX-only.
   it was — `encrypted · ALG 0x84 — muted`, `no audio decoded`, or a play
   button — instead of leaving silence looking like a fault.
 
-- **Zoom** on the spectrum and waterfall, 1× to 32×, centred on the frequency
+- **Zoom** on the spectrum and waterfall, 1× to 32×, centered on the frequency
   being received. This is not the same picture stretched: the receiver narrows
   the displayed window *and* raises the FFT size with it, so the detail is
   real. Measured at 2.4 MS/s, 1× gives 2,344 Hz per bin and 8× gives **36.6 Hz**
@@ -135,7 +138,7 @@ SWR: this is RX-only.
   | `NFM` | Narrowband FM with the full digital classifier |
   | `AM` | Envelope-detected AM with AGC — HF airband and broadcast |
   | `USB` / `LSB` | Single sideband voice for HF: the 300–2800 Hz above (USB) or below (LSB) the suppressed carrier, the opposite side 50 dB down, with a speech AGC (fast attack, 400 ms hang, 15 dB/s release). Tunes on a 100 Hz raster; the passband is drawn beside the carrier |
-  | `WFM` | 200 kHz broadcast FM, 75 µs de-emphasis, for listening |
+  | `WFM` | 200 kHz broadcast FM, 75 µs de-emphasis, for listening; the audio is low-passed at 15 kHz and the 19 kHz pilot notched out before it is decimated, so neither the pilot nor the stereo subcarrier folds into it |
   | `P25` | P25 Phase 1 C4FM decoded to voice through the IMBE vocoder |
   | `DMR` | DMR Tier II decoded to voice through the AMBE vocoder |
   | `NXDN` | NXDN48/NXDN96 conventional voice through the AMBE+2 vocoder; Type-C/D call assignments surface as trunking events |
@@ -145,9 +148,9 @@ SWR: this is RX-only.
   | `AUTO` | Every decoder above at once, on whatever is in the passband |
   | `SCAN` | Automatic voice scan across a configured range and mode set |
 
-  `P25`, `DMR` and `NXDN` extract and equalise their own channel out of the
+  `P25`, `DMR` and `NXDN` extract and equalize their own channel out of the
   span and decode it to audio in real time; call starts and ends,
-  NAC/colour-code/RAN and duration land in the decode log. `PACKET` runs
+  NAC/color-code/RAN and duration land in the decode log. `PACKET` runs
   every packet and paging decoder over the passband at the same time, so
   whatever is there decodes without being told in advance what it is.
   `GET /api/sdr/modes` serves this table — labels, audio/decode capability,
@@ -176,12 +179,14 @@ SWR: this is RX-only.
     no difference above the floor: a −62 dBFS station's mirror read the noise
     floor (−88 dBFS) with it on or off, because uSDR corrects the image in
     software as well.
-  - **Mode**: `DEMOD` keys (`NFM` `AM` `WFM` `P25` `DMR` `NXDN`) pick the
-    detector; `DECODE · SCAN` keys (`PACKET` `PAGER` `FLEX` `AUTO` `SCAN`)
-    pick what the receiver does with it.
-  - **Memory**: eight channels (frequency and mode), kept in the browser.
-    Click to recall; `STORE` and then a slot, or Shift-click a slot, saves the
-    receive frequency and mode into it.
+  - **Mode**: `DEMOD` keys (`NFM` `AM` `USB` `LSB` `WFM` `P25` `DMR` `NXDN`)
+    pick the detector; `DECODE · SCAN` keys (`PACKET` `PAGER` `FLEX` `AUTO`
+    `SCAN`) pick what the receiver does with it.
+  - **Memory**: eight channels (frequency and mode). Click to recall; `STORE`
+    and then a slot, or Shift-click a slot, saves the receive frequency and
+    mode into it. The bank is kept by the server and shared with every client,
+    the desktop app included; the browser keeps a copy for when the server has
+    none.
   - **Faders** are straight precision sliders: one step per arrow key or wheel
     notch (1 dB of gain, one span, a quarter-octave of zoom), labeled with the
     scale they set. Gain commits at most every 150 ms while dragging, and a
@@ -256,7 +261,7 @@ SWR: this is RX-only.
 
 ### Decoders and classifiers included
 
-Everything in `crates/engine` came across intact, so the inspector recognises
+Everything in `crates/engine` came across intact, so the inspector recognizes
 P25 (Phase 1 and 2, conventional and trunked control), DMR Tier II/III
 including Connect Plus, Capacity Plus and Hytera XPT control telemetry, NXDN
 Type-C and Type-D/IDAS, Motorola SmartNet/SmartZone, LTR, Passport, POCSAG
@@ -271,11 +276,26 @@ believing a label.
 
 ## Requirements
 
-Fedora 44 package names; adjust for other distributions:
+Fedora 44:
 
 ```bash
-sudo dnf install rust cargo SoapySDR-devel soapy-rtlsdr rtl-sdr-devel gcc
+sudo dnf install rust cargo SoapySDR-devel soapy-rtlsdr rtl-sdr-devel gcc alsa-lib-devel
 ```
+
+Ubuntu 26.04 (`soapysdr0.8-module-remote` is the SoapyRemote client, needed
+only for `--remote`):
+
+```bash
+sudo apt install rustup build-essential pkg-config libsoapysdr-dev soapysdr-tools soapysdr-module-rtlsdr soapysdr0.8-module-remote libasound2-dev
+```
+
+```bash
+rustup default stable
+```
+
+The ALSA headers (`alsa-lib-devel`, `libasound2-dev`) are for the desktop
+app's audio; `cargo build --release -p usdr-server` builds the server alone
+without them.
 
 Confirm the driver sees the dongle before starting the server:
 
@@ -306,6 +326,8 @@ Then open <http://127.0.0.1:8073>.
 | `--config` | Settings file, default `~/.config/usdr/usdr.toml` |
 | `--devices` | List visible radios, local and remote, and exit |
 | `--web` | What the browser page may do: `shared` (default), `yield` (view-only while the desktop app is connected) or `off` (not served); saved to the settings file |
+| `--voice-keys` | A private file of P25 voice keys; see [Authorized P25 voice keys](#authorized-p25-voice-keys) |
+| `--p25-phase2` | A P25 Phase 2 traffic frequency and its system identifiers; repeatable, same section |
 
 Tuning, span, gain and device changes made in the browser are written back to
 the settings file, so a restart comes back up where you left off. Measured
@@ -413,8 +435,12 @@ is on for the RSP1A. A radio with no entry opens with it off.
 **Spans** come from the radio: 250 kHz, 500 kHz, 1 MHz (the rates the RSP
 decimates to in hardware) and 2–10 MHz. Measured from the container, every
 span ran with no dropped, lagged or lost samples. The worker thread, which
-carries the spectrum and every channel chain, used about 20% of a core at
-6 MS/s and 40% at 10 MS/s. The analog filter for a whole span is the RSP's
+carries the spectrum and every channel chain, uses about 22% of a core at
+6 MS/s in NFM; at 10 MS/s it measured 40% before the channel chain was made
+cheaper. The channel decimator computes only the samples it keeps when the
+decimation is deep (every 48 kHz mode), which took NFM's chain from 124 to
+40 ms per second of signal at 6 MS/s and WFM's from 107 to 54;
+`cargo run --release -p scannerd-dsp --example bench_chain` times the stages. The analog filter for a whole span is the RSP's
 widest that fits under it (1.536 MHz at 2.048 MS/s, 6 MHz at 6 MS/s). Tuning reaches down to the
 RSP's 1 kHz floor, below the 1 MHz bound kept for other radios.
 
@@ -436,16 +462,20 @@ no longer one of the three read errors that reopen the device.
 | `POST /api/sdr/inspect` | `{"freq_hz": …}` — move the narrowband inspect chain |
 | `POST /api/sdr/rate` | `{"rate_hz": …}` |
 | `POST /api/sdr/gain` | `{"gain_db": …}` or `null` for AGC |
-| `POST /api/sdr/mode` | `{"mode": "nfm" \| "am" \| "wfm" \| "p25" \| "dmr" \| "nxdn" \| "packet" \| "pager" \| "flex" \| "auto" \| "scan"}` |
+| `POST /api/sdr/mode` | `{"mode": "nfm" \| "am" \| "usb" \| "lsb" \| "wfm" \| "p25" \| "dmr" \| "nxdn" \| "packet" \| "pager" \| "flex" \| "auto" \| "scan"}` |
 | `POST /api/sdr/scan/config` | `{"start_hz": …, "stop_hz": …, "modes": ["am","nfm","p25","dmr"], "threshold_db": …, "resume_delay_s": …}` — voice-scan configuration |
-| `POST /api/sdr/scan/control` | `{"action": "pause" \| "resume" \| "skip" \| "forget"}` |
+| `POST /api/sdr/scan/control` | `{"action": "pause" \| "resume" \| "skip" \| "forget"}`, or `{"action": "unskip", "freq_hz": …}` to re-test one learned skip |
 | `POST /api/sdr/frontend` | `{"lo_offset": bool, "clip_guard": bool, "tuner_agc": bool}`, and on an SDRplay `"bias_t"`, `"rf_notch"`, `"dab_notch"`, `"iq_correction"` (bool), `"agc_setpoint"` (−60..0 dBFS, the IF AGC target) and `"if_bandwidth"` (Hz from the radio's list; 0 returns the analog IF filter to following the span) |
+| `POST /api/sdr/processing` | Any of `{"nr": "off" \| "low" \| "medium" \| "high", "auto_notch": bool, "blanker": 0..3, "agc": "fast" \| "medium" \| "slow"}`; fields left out keep their setting, and the answer is the whole set in force. Saved, and carried in the status as `processing`. See [Noise and AGC](#noise-and-agc) |
+| `POST /api/sdr/avg` | `{"mode": "off" \| "slow" \| "deep"}` — extra spectrum averaging (about 0.5 s or 2 s) |
 | `POST /api/sdr/zoom` | `{"zoom": 1..32}` — display magnification |
 | `POST /api/sdr/display` | `{"bins": n}` — the spectrum's width in device pixels; the FFT follows it (a power of two, 1024–4096 at 1×: a wide screen can raise it, a narrow one never lowers it for other viewers) |
 | `POST /api/sdr/ppm` | `{"ppm": …}` — crystal correction |
 | `POST /api/sdr/calibrate` | Derive ppm from the tuned reference carrier |
-| `POST /api/sdr/spurs` | `{"offsets_hz": [...]}` — offsets from centre to notch |
+| `POST /api/sdr/spurs` | `{"offsets_hz": [...]}` — offsets from center to notch |
 | `POST /api/sdr/device` | `{"serial": "…"}` |
+| `GET /api/sdr/p25/key?frequency_hz=` | Whether a P25 channel key is configured there, with its algorithm and key ID — never the key |
+| `POST /api/sdr/p25/key` | `{"frequency_hz": …, "action": "save", "entry": {"algorithm", "key_id", "key"}}` or `"action": "remove"`; accepted only from the server's own page |
 | `GET /api/sdr/calls` | Recent voice calls, newest first (P25, DMR, and scanner-caught AM/NFM) |
 | `GET /api/sdr/calls/{id}/audio.wav` | That call's audio |
 | `GET /api/sdr/calls/{id}/raw.iq` | That call's channelized raw I/Q (`CS16LE`, interleaved I/Q; frequency, rate, and format are returned as `x-usdr-*` headers) |
@@ -495,9 +525,10 @@ The window is laid out by what each control acts on:
   averaging, holds, spots, the band plan, range, style and the waterfall (folded into one
   DISPLAY menu when the window is narrow). HOLD is on the
   waterfall itself; held, a timeline beside it drags back through the last five minutes.
-- **The right column** is one column: RF gain, front end, the recorder (with the channel's
-  level over the last 20 s, so a burst can be seen before it is saved), the P25 key in P25,
-  the radio, and the memory bank (folded; open it to store, rename or clear).
+- **The right column** is one column: RF gain, front end, noise and AGC (when the server
+  offers it), the recorder (with the channel's level over the last 20 s, so a burst can
+  be seen before it is saved), the P25 key in P25, the radio, and the memory bank (folded;
+  open it to store, rename or clear).
 - **The dock** keeps the logs on the left and the scope always in view on the right, with
   the views the mode offers (passband, audio, MPX, discriminator) as keys over it. A playing
   call or replay shows its progress and a stop key where it was started.
@@ -508,11 +539,18 @@ What it has that the page does not:
   heat follows level, peak hold and the server's max hold, decode spots as
   labels that stack instead of overlapping, and a slice flag at the carrier
   with the frequency, mode, filter, a meter and what the classifier hears.
-  The waterfall keeps its history in dB, so a palette, black level or
-  contrast change recolors all of it, and it scrolls on the frame clock with
-  a sub-row offset. Its time marks are measured from the rows. Drag the
-  display to pan, drag the dB scale to set the range, drag the bar under the
-  spectrum to resize the two.
+  Five styles (Ember, Midnight, Classic, Glacier, Phosphor) each bring their
+  waterfall palette. The waterfall keeps its history in dB, so a palette,
+  black level or contrast change recolors all of it (a palette crossfades),
+  a retune slides it under the frequencies it was recorded at, and it
+  scrolls on the frame clock with a sub-row offset. Its time marks are
+  measured from the rows. Drag the display to pan, drag the dB scale to set
+  the range, drag the bar under the spectrum to resize the two.
+- **A second receiver.** Receiver B listens anywhere inside the span (NFM,
+  AM, USB, LSB or WFM) with its own flag, passband and meter; middle-click
+  or the context menu puts it there. The page skips B's audio.
+- **Noise and AGC.** The [receive processing](#noise-and-agc) has its card
+  here; the page has no controls for it.
 - **The readout.** Every digit is a dial (wheel, or click its upper or lower
   half); typing starts entry and reads `146.52`, `146520`, `146520000`,
   `146.520.000`, `7.2m` and `540k`.
@@ -529,7 +567,8 @@ What it has that the page does not:
 The page and the app stay in step through the server: every change either
 makes comes back to both as a `status` event, and the memory bank is the
 server's, not each browser's. Display preferences (palette, range, holds)
-stay with each client, as each SmartSDR client keeps its own panadapter.
+stay with each client, so two operators can look at the same receiver
+differently.
 The app's Settings set the web policy: **Shared**, **View-only** (the page
 follows along under a veil and the server refuses its changes with 409 while
 an app is connected) or **Off** (the page is not served).
@@ -541,10 +580,20 @@ the mark, focus and recording. Motion follows the desktop's animation setting
 (KDE's, today) and can be reduced in Settings. The plan it was built to is
 `docs/desktop-app.md`.
 
+The client's per-frame cost has a benchmark of its own: it drives the
+panafall and the whole window headless and reports CPU time, tessellation,
+vertices and texture bytes per frame for each case (live, idle, palette
+change and crossfade, retune, held and scrubbed waterfall, a full decode log).
+Measured here, a frame of the whole window costs about 1 ms of CPU.
+
+```bash
+cargo test -p usdr-desktop --release bench -- --ignored --nocapture --test-threads=1
+```
+
 ## Architecture
 
 ```text
-RTL-SDR (SoapySDR)
+RTL-SDR, or SDRplay over SoapyRemote (SoapySDR)
         │
         ▼
 crates/radio    device ownership, tuning, calibrated ppm, bounded IQ fan-out
@@ -553,11 +602,17 @@ crates/radio    device ownership, tuning, calibrated ppm, bounded IQ fan-out
         ▼               ▼
 crates/dsp         crates/engine
 filters, NCO,      demodulators, FEC, protocol parsers,
-spectrum, AGC      classifier
+spectrum, AGC      classifier, noise reduction
         │               │
         └───────┬───────┘
                 ▼
 crates/server   one SDR worker thread, REST/WebSocket API, embedded web client
+                │
+                ▼  HTTP + WebSocket
+crates/proto    the wire formats, for clients other than the page
+                │
+                ▼
+crates/desktop  usdr-desktop, the native console
 ```
 
 DSP runs on a standard thread; Tokio handles network I/O only. The IQ
@@ -569,16 +624,17 @@ rather than back-pressuring the radio thread; `dropped_blocks` and
 
 Every block is passed through `dsp::FrontEnd` before the spectrum measures it
 or the inspect chain mixes out of it: DC offset and LO leakage removal, and IQ
-image correction. The impulse blanker is deliberately left off — it keys on
+image correction. The impulse blanker is off by default — it keys on
 wideband magnitude, so it eats the leading edge of exactly the strong
-narrowband bursts PACKET exists to decode.
+narrowband bursts PACKET exists to decode — and can be turned on for
+ignition or power-line noise (see [Noise and AGC](#noise-and-agc)).
 
-Measured on a quiet band at 2.048 MS/s, this flattens the centre of the span to
+Measured on a quiet band at 2.048 MS/s, this flattens the center of the span to
 **0.04–1.7 dB** above the noise floor. The DC spur is, in practice, gone.
 
 ### Spur masking
 
-The peak list ignores the tuner's own artefacts — DC/LO leakage and the
+The peak list ignores the tuner's own artifacts — DC/LO leakage and the
 RTL2832's ±fs/4 images — within half a channel either side.
 
 This is not theoretical. Surveying the VHF/UHF/700/800 bands here without it
@@ -605,21 +661,40 @@ from the receive frequency, is notched out of the display like a spur. The
 software DC tracker also starts from the first block's mean after a retune
 instead of from zero.
 
-**RTL-SDR.** Parking the tuner off-centre so its DC spur falls outside the
+**RTL-SDR.** Parking the tuner off-center so its DC spur falls outside the
 displayed window is the textbook next step, and here it is mostly not worth
 it.
 
-Offsetting by the obvious quarter-span lands the display centre straight on the
+Offsetting by the obvious quarter-span lands the display center straight on the
 RTL2832's own **±fs/4 spur**, which measured **11 dB** above the floor —
 five times worse than the ~2 dB of DC residue it was meant to remove. The
 offset is therefore placed midway between DC and that spur, with a window
-narrow enough to keep both outside it. That works — centre excess drops to
+narrow enough to keep both outside it. That works — center excess drops to
 0.7 dB and the worst spur in the window to 2.8 dB — but it costs **80% of the
 span** (2.048 MHz becomes 410 kHz).
 
-Since the DC blocker already flattens the centre to about 2 dB, the full span
+Since the DC blocker already flattens the center to about 2 dB, the full span
 is the better default. Turn the offset on when a weak signal sits close enough
-to the centre that even that residue is in the way.
+to the center that even that residue is in the way.
+
+### Noise and AGC
+
+Optional processing, saved with the settings and reported in the status, set
+through `POST /api/sdr/processing` or the desktop app's **Noise and AGC**
+card. Noise reduction and the auto-notch work on the audio you hear, never on
+what the decoders see:
+
+- **Noise reduction** (off, low, medium, high; off by default) for NFM, AM,
+  USB and LSB: a short-time Wiener filter whose noise estimate comes from
+  each bin's minimum over the last 1.5 s, so it tracks a changing band
+  without needing a pause, with a floor so weak speech is never gated away.
+  It adds about 16 ms of latency at 48 kHz, and none when off.
+- **Auto-notch** (on by default) hunts heterodynes in the same voice modes;
+  NFM always had it, and AM and sideband now do too.
+- **Impulse blanker** (0 off to 3 aggressive; off by default) in the front
+  end, ahead of the spectrum.
+- **AGC speed** (fast, medium, slow) for AM and sideband audio. Medium is the
+  behavior from before the setting existed.
 
 ### Automatic gain and the clip guard
 
@@ -662,7 +737,7 @@ With a pre-amplifier ahead of the dongle the right manual gain is low but
 not zero. Measured on 151–155 MHz here: at 0 dB the ADC peak was 0.1 of
 full scale and the strongest carriers read 10 dB over the floor; at 8 dB the
 peak was 0.5 and the same band read 22 dB, because at 0 dB the converter's
-own quantisation was setting the floor; at 16 dB it clipped. The guarded loop
+own quantization was setting the floor; at 16 dB it clipped. The guarded loop
 finds that point on its own — it walks down out of clipping and only climbs
 while the peak is under half of full scale — and settles at 8.7 dB there.
 
@@ -721,18 +796,18 @@ channels. The scanner instead spends its hardware retunes on **span moves**
 and finds carriers the cheap way:
 
 - The wideband FFT computed for the display every frame covers the whole span
-  — up to 3.2 MHz — at once. Peak detection over that spectrum (the same
+  — up to 3.2 MHz on an RTL-SDR, 10 MHz on an SDRplay — at once. Peak detection over that spectrum (the same
   local-maximum search the display uses, against its own noise floor and with
   the tuner's spurs masked) produces the candidate carriers inside the
   configured range.
 - The narrowband inspect chain can re-mix onto any channel inside the current
-  span **without touching the tuner**. Each candidate is centred by spectral
+  span **without touching the tuner**. Each candidate is centered by spectral
   centroid, then test-decoded for about 1.2 s with the receivers for the
   selected modes, all at once — the same arbitration `AUTO` uses.
 - Candidates are not tested one at a time. Up to **four parallel channels**
   (configurable, 1–8) each carry their own receivers, and every sweep frame
   the idle ones take the strongest carriers in the window. A birdie's test
-  dwell no longer serialises in front of the short call two channels away,
+  dwell no longer serializes in front of the short call two channels away,
   which matters most on bands like airband, where a transmission can be over
   in a few seconds. When channels prove calls — in the same block or while
   another call is already held — each holds its own: every held call records
@@ -774,7 +849,7 @@ reason, time left — with a per-entry re-test button, because a memory that
 cannot be inspected cannot be trusted. Carriers that keep failing the test are
 treated as what they usually are, birdies and persistent hash: after a few
 strikes (configurable) they park for a long stretch and stop costing the sweep
-its dwell time, and they stay in the list — plainly labelled — until re-tested. Configuration — range, modes, threshold, resume
+its dwell time, and they stay in the list — plainly labeled — until re-tested. Configuration — range, modes, threshold, resume
 delay — persists in `usdr.toml`, and a restart with `scan` as the saved mode
 comes straight back up scanning. Learned skips survive reconfiguration and
 the sweep wrapping around; only a server restart forgets them.
@@ -806,6 +881,21 @@ passthrough, but it is not proven.
 The fix was moving the RSP out of the VM into its own container; see
 [the server](#the-server-container-216-on-vault). If it is ever passed to a
 VM again, expect this.
+
+### On an RSP, every station sits beside its line, and calibrate reads hundreds of ppm
+
+Fixed. SoapySDRPlay3 stores a new frequency before asking SDRplay's API to
+apply it. When the API refuses (another update in flight) or times out, the
+driver only logs a warning on the radio's host and returns as if it had
+worked; its readback is the stored value, and a repeat request for the same
+Hz is skipped. Over SoapyRemote the warning never arrives. On the RSP1A this
+left the hardware about 47 kHz below what the display labeled, so every
+station sat off its VFO line and a calibration read −236 ppm.
+
+After every SDRplay tune or ppm change, the radio layer now writes the
+frequency again 1 Hz up at 300 ms and back at 1.5 s, so each write is a
+change the driver acts on. If calibrate still refuses, it names the measured
+offset and says to tune away and back.
 
 ### `i2c wr failed=-9`, and tuning that does not take
 
@@ -915,7 +1005,7 @@ S-units in the dBm sense. Do not read absolute field strength off it.
 The reading rises with channel bandwidth, because a wider channel collects more
 energy: on one broadcast carrier the same signal reads −31 dBFS through a
 12.5 kHz P25 channel and −17 dBFS through a 200 kHz WFM one. That is correct
-behaviour, not drift.
+behavior, not drift.
 
 ### The frequency reads low, and worse the higher you tune
 
@@ -924,7 +1014,7 @@ frequency — so a receiver a few tens of ppm out is unnoticeable on an FM
 broadcast channel and badly wrong at 1 GHz. This build ships with no
 correction applied until one is measured.
 
-The status carries a live `freq_error_hz`: the power-weighted centre of the
+The status carries a live `freq_error_hz`: the power-weighted center of the
 tuned channel against where the receiver put it. Tune to a carrier whose exact
 frequency you know — a P25 control channel, a commercial repeater, a broadcast
 station — let the reading settle, and press **calibrate**. The correction is
@@ -935,7 +1025,7 @@ rather than the machine. It can also be typed in directly.
 Two things worth knowing about the measurement:
 
 - **A wide channel is a poor reference.** The centroid of a 200 kHz broadcast
-  channel is pulled about by programme content and by neighbours bleeding in —
+  channel is pulled about by program content and by neighbors bleeding in —
   measured here it disagreed by 88 ppm between two adjacent stations. A
   narrowband carrier gives a far steadier figure.
 - **The discriminator's DC is worse still.** It looks like the obvious
@@ -989,7 +1079,7 @@ it flags what is prominent enough to be mistaken for a signal and ignores the
 
 They get much worse with gain. At 44 dB into populated bands a survey returned
 48 strong "signals" whose top entries were all spurs; the same survey at AGC on
-quiet centres found nothing above 2 dB. If the screen is full of stationary
+quiet centers found nothing above 2 dB. If the screen is full of stationary
 signals, **turn the gain down first** — a wide-open front end on an RTL dongle
 makes its own images out of whatever strong transmitter is nearby. The LO
 offset also moves the display window off the worst of them, at the cost of
@@ -998,14 +1088,14 @@ span.
 ### The passband is offset from the click when the LO offset is on
 
 Fixed. The driver reports where the *local oscillator* is, and with the LO
-parked off-centre that is not the middle of the window on screen — it is the
+parked off-center that is not the middle of the window on screen — it is the
 offset above it. Taking one for the other shifted the whole frequency axis by
 the offset, so a click landed a few hundred kHz from the passband it produced,
 and only when the LO offset was enabled.
 
-The confirmed oscillator frequency and the confirmed display centre are now
+The confirmed oscillator frequency and the confirmed display center are now
 kept apart: the axis, peak positions and channel level follow the display
-centre, while the channel extractors — which work on the raw span — follow the
+center, while the channel extractors — which work on the raw span — follow the
 oscillator. Measured at 154 MHz with a 300 kHz offset, clicks at 25%, 50% and
 75% across now land within **0 kHz** of the frequency clicked, with the offset
 on and off.
@@ -1014,7 +1104,7 @@ on and off.
 
 Fixed. The click handler measured the bordered wrapper around the canvas while
 the marker was drawn in canvas coordinates *inside* that border, and the
-backing store was sized from the wrapper too. The error was zero at the centre
+backing store was sized from the wrapper too. The error was zero at the center
 of the span and grew toward the edges — about ±1.6 kHz at a 2.048 MHz span,
 which is why it looked slightly off most of the time but fine in the middle.
 Hit testing now measures the canvas itself, and backing stores are sized from
@@ -1042,7 +1132,7 @@ channel. This build matches that — it names the opcode and surfaces the
 payload, and says the interpretation is unconfirmed rather than asserting one.
 
 For any opcode still unnamed, the frame's payload is shown along with the two
-24-bit fields most Tier III CSBKs place at the front of it, labelled
+24-bit fields most Tier III CSBKs place at the front of it, labeled
 `candidateTargetId` and `candidateSourceId`. They are candidates because that
 layout is a convention of the opcodes we can identify, not a guarantee for one
 we cannot — if they match real IDs on the system, the layout is confirmed.
@@ -1063,25 +1153,29 @@ ADC on a strong nearby signal.
 
 ## Provenance
 
-`crates/dsp` and `crates/engine` are unmodified copies from
-the `scannerd` project (commit
-`5dda1c4`). `crates/radio` is the same copy plus one addition: a
-`Cmd::ClipGuard(bool)` so the automatic gain guard can be switched off, which
-upstream has no way to do. `crates/server/src/sdr.rs` is that project's SDR worker with two
-changes: its per-device calibration lookup now reads a local `devices` module
-instead of the `scannerd-store` crate, which dropped the SQLite and Opus
-dependencies along with it; and it coalesces tuner writes, waits for a busy
-radio at startup, and reopens the dongle after a USB fault rather than sitting
-on a dead waterfall (see [Troubleshooting](#troubleshooting)).
+`crates/dsp`, `crates/engine` and `crates/radio` started as copies from the
+`scannerd` project (commit `5dda1c4`) and have been developed here since:
+hot-path CPU passes and a cheaper channel decimator, FLEX and POCSAG
+weak-signal fixes, USB and LSB, adjustable filters, P25 keyed decryption,
+noise reduction and audio AGC speeds in the engine; and in the radio, a
+`Cmd::ClipGuard(bool)` so the automatic gain guard can be switched off, gain
+writes that are retried and snapped to the tuner's table, the tuner's own
+AGC as an option, SDRplay receivers over SoapyRemote, and re-asserted SDRplay
+tunes. `crates/server/src/sdr.rs` grew from that project's SDR worker: its
+per-device calibration lookup reads a local `devices` module instead of the
+`scannerd-store` crate, which dropped the SQLite and Opus dependencies along
+with it, and it coalesces tuner writes, waits for a busy radio at startup,
+and reopens the dongle after a USB fault rather than sitting on a dead
+waterfall (see [Troubleshooting](#troubleshooting)).
 
 `crates/server/src/main.rs` is new — a single-mode server in place of the
-multi-mode original.
+multi-mode original — as are `crates/proto` and `crates/desktop`.
 
 The web client keeps the original's classifier, decode-log, and I/Q replay
-JavaScript verbatim, and is otherwise new: the transceiver-style layout, the
+JavaScript, and is otherwise new: the transceiver-style layout, the
 digit-tuning readout, the spectrum/waterfall renderers, the audio scope, and a
-trimmed WebSocket client that handles only `hello`, `fft`, `decode`, and
-`status`. The frequency preset buttons the original carried are gone; the
+WebSocket client that handles `hello`, `fft`, `decode`, `status`, `presence`
+and `memories`. The frequency preset buttons the original carried are gone; the
 readout replaced them.
 
 Upstream `scannerd` was not modified. Changes made here have not been sent
