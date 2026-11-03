@@ -7,7 +7,7 @@
 //! are worth sending, so queued posts to the same control collapse to the
 //! newest before they leave.
 
-use crossbeam_channel::{Receiver, Sender, TryRecvError, unbounded};
+use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, TryRecvError, channel as unbounded};
 use serde_json::Value;
 use std::io::Read;
 use std::path::PathBuf;
@@ -407,7 +407,7 @@ fn rest_loop(
     loop {
         let first = match rx.recv_timeout(Duration::from_millis(250)) {
             Ok(r) => r,
-            Err(crossbeam_channel::RecvTimeoutError::Timeout) => {
+            Err(RecvTimeoutError::Timeout) => {
                 if stop.load(Ordering::Relaxed) {
                     return;
                 }

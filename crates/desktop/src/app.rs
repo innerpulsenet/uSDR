@@ -162,7 +162,7 @@ pub struct App {
     /// A memory slot being renamed, and the name so far.
     pub renaming: Option<(usize, String)>,
     /// Files picked in a dialog, arriving from its thread.
-    pub picked: (crossbeam_channel::Sender<Picked>, crossbeam_channel::Receiver<Picked>),
+    pub picked: (std::sync::mpsc::Sender<Picked>, std::sync::mpsc::Receiver<Picked>),
     pub selected_decode: Option<usize>,
     pub scan_form: proto::ScanCfg,
     pub scan_touched: bool,
@@ -222,7 +222,6 @@ impl App {
         theme::install(ctx, prefs.ground);
         ctx.set_zoom_factor(prefs.ui_scale.clamp(0.6, 2.0));
         crate::anim::set_max_fps(prefs.max_fps);
-        egui_extras::install_image_loaders(ctx);
         player_b.set_volume(prefs.volume_b);
         player_b.set_muted(prefs.muted_b);
         player_b.set_pan(prefs.pan_b);
@@ -277,7 +276,7 @@ impl App {
             activity: VecDeque::new(),
             activity_hz: 0.0,
             renaming: None,
-            picked: crossbeam_channel::unbounded(),
+            picked: std::sync::mpsc::channel(),
             selected_decode: None,
             scan_form: proto::ScanCfg::default(),
             scan_touched: false,

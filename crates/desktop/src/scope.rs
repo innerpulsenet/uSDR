@@ -14,7 +14,6 @@
 
 use crate::theme::{self, alpha};
 use egui::{Align2, Color32, CornerRadius, Pos2, Rect, Sense, Shape, Stroke, Ui, pos2, vec2};
-use num_complex::Complex32;
 use std::collections::VecDeque;
 use usdr_proto::{FftFrame, Mode, ScopeKind};
 
@@ -29,7 +28,7 @@ pub enum Sub {
 
 pub struct Scope {
     pub sub: std::collections::HashMap<Mode, Sub>,
-    fft: Option<std::sync::Arc<dyn rustfft::Fft<f32>>>,
+    fft: Option<Fft>,
     spectrum: Vec<f32>,
     mini_wf: VecDeque<Vec<f32>>,
     mini_tex: Option<egui::TextureHandle>,
@@ -93,6 +92,56 @@ impl Default for Scope {
 }
 
 const N_FFT: usize = 512;
+
+/// An in-place radix-2 FFT of one power-of-two size. The audio spectrum
+/// is 512 points about ten times a second, which needs nothing faster.
+struct Fft {
+    /// e^(−2πik/n) for k below n/2.
+    twiddle: Vec<(f32, f32)>,
+    /// Each index with its bits reversed, the order the butterflies want.
+    rev: Vec<usize>,
+}
+
+impl Fft {
+    fn new(n: usize) -> Fft {
+        assert!(n >= 2 && n.is_power_of_two());
+        let twiddle = (0..n / 2)
+            .map(|k| {
+                let a = -std::f64::consts::TAU * k as f64 / n as f64;
+                (a.cos() as f32, a.sin() as f32)
+            })
+            .collect();
+        let rev = (0..n).map(|i| i.reverse_bits() >> (usize::BITS - n.trailing_zeros())).collect();
+        Fft { twiddle, rev }
+    }
+
+    fn process(&self, re: &mut [f32], im: &mut [f32]) {
+        let n = self.rev.len();
+        for (i, &j) in self.rev.iter().enumerate() {
+            if i < j {
+                re.swap(i, j);
+                im.swap(i, j);
+            }
+        }
+        let mut half = 1;
+        while half < n {
+            let step = n / (2 * half);
+            for start in (0..n).step_by(2 * half) {
+                for k in 0..half {
+                    let (wr, wi) = self.twiddle[k * step];
+                    let (a, b) = (start + k, start + k + half);
+                    let tr = re[b] * wr - im[b] * wi;
+                    let ti = re[b] * wi + im[b] * wr;
+                    re[b] = re[a] - tr;
+                    im[b] = im[a] - ti;
+                    re[a] += tr;
+                    im[a] += ti;
+                }
+            }
+            half *= 2;
+        }
+    }
+}
 const MINI_W: usize = 160;
 const MINI_H: usize = 48;
 
@@ -163,27 +212,26 @@ impl Scope {
         if s.len() < 64 {
             return;
         }
-        let fft = self
-            .fft
-            .get_or_insert_with(|| rustfft::FftPlanner::new().plan_fft_forward(N_FFT))
-            .clone();
+        let fft = self.fft.get_or_insert_with(|| Fft::new(N_FFT));
         let take = s.len().min(N_FFT);
         let start = s.len() - take;
-        let mut buf: Vec<Complex32> = (0..N_FFT)
+        let mut re: Vec<f32> = (0..N_FFT)
             .map(|i| {
                 if i < take {
                     let w = 0.5 - 0.5 * (std::f32::consts::TAU * i as f32 / (take - 1) as f32).cos();
-                    Complex32::new(s[start + i] as f32 / 32000.0 * w, 0.0)
+                    s[start + i] as f32 / 32000.0 * w
                 } else {
-                    Complex32::new(0.0, 0.0)
+                    0.0
                 }
             })
             .collect();
-        fft.process(&mut buf);
+        let mut im = vec![0.0; N_FFT];
+        fft.process(&mut re, &mut im);
         let norm = take as f32 / 4.0;
-        let out: Vec<f32> = buf[..N_FFT / 2]
+        let out: Vec<f32> = re[..N_FFT / 2]
             .iter()
-            .map(|c| 20.0 * (c.norm() / norm).max(1e-6).log10())
+            .zip(&im)
+            .map(|(r, i)| 20.0 * (r.hypot(*i) / norm).max(1e-6).log10())
             .collect();
         if self.spectrum.len() == out.len() {
             for (a, b) in self.spectrum.iter_mut().zip(&out) {
@@ -615,5 +663,40 @@ fn grid(painter: &egui::Painter, r: Rect, cols: usize, rows: usize) {
     for i in 1..rows {
         let y = r.top() + r.height() * i as f32 / rows as f32;
         painter.line_segment([pos2(r.left(), y), pos2(r.right(), y)], Stroke::new(1.0, theme::line()));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Fft;
+
+    #[test]
+    fn the_fft_agrees_with_a_plain_dft() {
+        for n in [2, 8, 512] {
+            let x: Vec<(f32, f32)> = (0..n).map(|i| (((i * 7919) % 101) as f32 / 50.0 - 1.0, ((i * 104_729) % 37) as f32 / 18.0 - 1.0)).collect();
+            let (mut re, mut im): (Vec<f32>, Vec<f32>) = x.iter().copied().unzip();
+            Fft::new(n).process(&mut re, &mut im);
+            for k in 0..n {
+                let (mut sr, mut si) = (0.0f64, 0.0f64);
+                for (t, &(xr, xi)) in x.iter().enumerate() {
+                    let a = -std::f64::consts::TAU * (k * t % n) as f64 / n as f64;
+                    sr += xr as f64 * a.cos() - xi as f64 * a.sin();
+                    si += xr as f64 * a.sin() + xi as f64 * a.cos();
+                }
+                let err = ((re[k] as f64 - sr).powi(2) + (im[k] as f64 - si).powi(2)).sqrt();
+                assert!(err < 1e-3 * (n as f64).sqrt(), "n {n} bin {k}: got ({}, {}), want ({sr}, {si})", re[k], im[k]);
+            }
+        }
+    }
+
+    #[test]
+    fn a_tone_lands_in_its_bin() {
+        let n = 512;
+        let (mut re, mut im): (Vec<f32>, Vec<f32>) = (0..n).map(|i| ((std::f32::consts::TAU * 37.0 * i as f32 / n as f32).cos(), 0.0)).unzip();
+        Fft::new(n).process(&mut re, &mut im);
+        let mag: Vec<f32> = re.iter().zip(&im).map(|(r, i)| r.hypot(*i)).collect();
+        let top = (0..n / 2).max_by(|&a, &b| mag[a].total_cmp(&mag[b])).unwrap();
+        assert_eq!(top, 37);
+        assert!((mag[37] - n as f32 / 2.0).abs() < 0.01 * n as f32);
     }
 }

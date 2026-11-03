@@ -16,16 +16,12 @@ serde_json = "1.0.151"
 toml.workspace = true
 eframe = { version = "0.35", default-features = false, features = ["accesskit", "default_fonts", "wgpu", "wayland", "x11", "persistence"] }
 egui = "0.35"
-egui_extras = { version = "0.35", features = ["svg", "image"] }
 image = { version = "0.25", default-features = false, features = ["png"] }
 tungstenite = "0.29"
 ureq = { version = "3", default-features = false, features = ["json"] }
 cpal = "0.18"
-crossbeam-channel = "0.5"
 rfd = "0.17"
 directories = "6"
-rustfft.workspace = true
-num-complex.workspace = true
 
 [dev-dependencies]
 egui_kittest = "0.35"
