@@ -806,6 +806,12 @@ impl App {
 
     /// What the receiver is hearing: the live classification, or the last
     /// real one while it is held.
+    /// RDS from the station receiver A is on, when the server has a
+    /// confirmed PI for it.
+    pub fn rds(&self) -> Option<&usdr_proto::Rds> {
+        self.status.rds.as_ref().filter(|_| self.status.mode == Mode::Wfm)
+    }
+
     pub fn shown_class(&self) -> (Option<Classification>, &'static str) {
         let live = self.frame.as_ref().and_then(|f| f.classification.clone());
         if let Some(c) = &live
@@ -1340,7 +1346,12 @@ impl App {
             meter: self.meter.rf.map(crate::meter::frac).unwrap_or(0.0),
             s_label: crate::meter::s_label(self.meter.rf),
             snr_db: self.meter.snr,
-            protocol: self.shown_class().0.filter(|c| c.active).map(|c| c.protocol),
+            // A broadcast station's own name, once RDS has confirmed it; for
+            // one that scrolls words through its PS, the title it tags.
+            protocol: self
+                .rds()
+                .and_then(|r| if r.ps_dynamic { r.title.clone().or_else(|| r.ps.clone()) } else { r.ps.clone() })
+                .or_else(|| self.shown_class().0.filter(|c| c.active).map(|c| c.protocol)),
             recording: rec,
         };
         let step = self.step_hz();

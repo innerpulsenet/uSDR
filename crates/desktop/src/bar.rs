@@ -721,8 +721,11 @@ fn meter(app: &mut App, ui: &mut Ui, min_w: f32, max_w: f32) {
                     // fits; the whole of it and the modulation are a hover
                     // away.
                     let short = |p: &str| p.split(" (").next().unwrap_or(p).to_string();
-                    let (txt, tip, col) = match &c {
-                        Some(c) if word != "IDLE" => (short(&c.protocol), Some(format!("{} · {}", c.protocol, c.modulation)), widgets::protocol_color(&c.protocol)),
+                    let rds = app.rds().and_then(|r| rds_line(r).map(|t| (t, r)));
+                    let (txt, tip, col) = match (&c, rds) {
+                        // A broadcast station's name and what it says is on.
+                        (_, Some((t, r))) => (t, Some(rds_tip(r)), if r.locked { widgets::protocol_color("RDS") } else { theme::text_3() }),
+                        (Some(c), None) if word != "IDLE" => (short(&c.protocol), Some(format!("{} · {}", c.protocol, c.modulation)), widgets::protocol_color(&c.protocol)),
                         _ => (crate::app::mode_idle_text(app.status.mode).to_string(), None, theme::text_3()),
                     };
                     let r = ui.add(egui::Label::new(RichText::new(txt).font(theme::sans(12.0)).color(col)).truncate());
@@ -736,6 +739,69 @@ fn meter(app: &mut App, ui: &mut Ui, min_w: f32, max_w: f32) {
     if calibrate && let Some(l) = &app.link {
         l.post_get("/api/sdr/calibrate", json!({}), Get::Calibrate);
     }
+}
+
+/// The SIGNAL bay's one line of RDS: the station's name, then the tagged
+/// title and artist, or else its RadioText. Nothing until the name is in.
+/// A station that scrolls words through its PS has no name to lead with,
+/// so its line is what is playing alone.
+fn rds_line(r: &usdr_proto::Rds) -> Option<String> {
+    let ps = r.ps.as_deref()?;
+    let now = match (&r.title, &r.artist) {
+        (Some(t), Some(a)) => Some(format!("{t} — {a}")),
+        (Some(t), None) => Some(t.clone()),
+        _ => r.rt.clone(),
+    };
+    Some(match now {
+        Some(n) if r.ps_dynamic => n,
+        Some(n) => format!("{ps} · {n}"),
+        None => ps.to_string(),
+    })
+}
+
+/// Everything RDS has confirmed, for a hover.
+pub fn rds_tip(r: &usdr_proto::Rds) -> String {
+    let mut lines = Vec::new();
+    if let Some(ps) = &r.ps {
+        lines.push(if r.ps_dynamic { format!("{ps}  (the PS scrolls)") } else { ps.clone() });
+    }
+    if let Some(rt) = &r.rt {
+        lines.push(rt.clone());
+    }
+    if let Some(t) = &r.title {
+        lines.push(format!("title  {t}"));
+    }
+    if let Some(a) = &r.artist {
+        lines.push(format!("artist  {a}"));
+    }
+    let mut id = format!("PI {}", r.pi);
+    if let Some(c) = &r.pi_call {
+        id.push_str(&format!(" → {c} by the RBDS call mapping"));
+    }
+    lines.push(id);
+    if let Some(p) = &r.pty_name {
+        lines.push(format!("program type  {p}"));
+    }
+    if let Some(c) = rds_clock(r) {
+        lines.push(format!("station clock  {c}"));
+    }
+    lines.push(if r.locked {
+        format!("RDS locked · {:.0}% of blocks unreadable", r.bler * 100.0)
+    } else {
+        "RDS lock lost · last heard values".to_string()
+    });
+    lines.join("\n")
+}
+
+/// The station's clock in its own local time, with the offset it sent.
+pub fn rds_clock(r: &usdr_proto::Rds) -> Option<String> {
+    let utc = r.clock_utc.as_deref()?;
+    let off = r.clock_offset_min?;
+    let hm = utc.split('T').nth(1)?.trim_end_matches('Z');
+    let (h, m) = hm.split_once(':')?;
+    let mins = (h.parse::<i32>().ok()? * 60 + m.parse::<i32>().ok()? + off).rem_euclid(24 * 60);
+    let sign = if off < 0 { '−' } else { '+' };
+    Some(format!("{:02}:{:02} (UTC{sign}{}:{:02}) · {}", mins / 60, mins % 60, off.abs() / 60, off.abs() % 60, utc.split('T').next()?))
 }
 
 /// `text` in a box as wide as `widest` would be, so what follows holds still.

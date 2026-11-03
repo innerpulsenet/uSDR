@@ -59,6 +59,7 @@ fn probe(server: &str) -> anyhow::Result<()> {
     let (mut frames, mut status, mut decodes, mut presence) = (0, 0, 0, None);
     let mut last: Option<Box<usdr_proto::FftFrame>> = None;
     let mut hello = None;
+    let mut latest: Option<Box<usdr_proto::Status>> = None;
     while std::time::Instant::now() < until {
         match link.events.recv_timeout(std::time::Duration::from_millis(100)) {
             Ok(net::NetEvent::Connected(s, info)) => {
@@ -72,7 +73,10 @@ fn probe(server: &str) -> anyhow::Result<()> {
                 frames += 1;
                 last = Some(f);
             }
-            Ok(net::NetEvent::Status(_)) => status += 1,
+            Ok(net::NetEvent::Status(s)) => {
+                status += 1;
+                latest = Some(s);
+            }
             Ok(net::NetEvent::Decode { .. }) => decodes += 1,
             Ok(net::NetEvent::Presence(p)) => presence = Some(p),
             Ok(net::NetEvent::Disconnected(r)) => println!("disconnected: {r}"),
@@ -99,6 +103,33 @@ fn probe(server: &str) -> anyhow::Result<()> {
     }
     if let Some(b) = &s.rx2 {
         println!("rx B      {:.6} MHz · {} · {} wide{}", b.freq_hz / 1e6, b.mode.label(), tuning::fmt_hz(b.bandwidth_hz), b.note.as_ref().map(|n| format!(" · {n}")).unwrap_or_default());
+    }
+    // RDS, from the newest status the stream carried.
+    let rds = latest.as_ref().map_or(s.rds.as_ref(), |l| l.rds.as_ref()).filter(|_| s.mode == usdr_proto::Mode::Wfm);
+    match rds {
+        Some(r) => {
+            println!(
+                "rds       PI {}{} · PS {} · {}{} · {:.0}% blocks unreadable{}",
+                r.pi,
+                r.pi_call.as_ref().map(|c| format!(" ({c} from PI)")).unwrap_or_default(),
+                r.ps.as_deref().map(|p| format!("\"{p}\"")).unwrap_or_else(|| "not yet confirmed".into()),
+                r.pty_name.as_deref().unwrap_or("no PTY"),
+                if r.locked { " · locked" } else { " · lock lost" },
+                r.bler * 100.0,
+                if r.pilot { " · pilot carrier" } else { "" }
+            );
+            if let Some(rt) = &r.rt {
+                println!("radiotext \"{rt}\"");
+            }
+            if r.title.is_some() || r.artist.is_some() {
+                println!("rt+       title {} · artist {}", r.title.as_deref().unwrap_or("—"), r.artist.as_deref().unwrap_or("—"));
+            }
+            if let (Some(c), Some(o)) = (&r.clock_utc, r.clock_offset_min) {
+                println!("clock     {c} (offset {o:+} min, as the station sent it)");
+            }
+        }
+        None if s.mode == usdr_proto::Mode::Wfm => println!("rds       none confirmed on this station"),
+        None => {}
     }
     if s.filter_high_hz > s.filter_low_hz {
         println!("filter    {:+.0} … {:+.0} Hz{}", s.filter_low_hz, s.filter_high_hz, if s.filter_custom { " (set by the operator)" } else { " (the mode's own)" });

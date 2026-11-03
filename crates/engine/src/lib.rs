@@ -30,6 +30,7 @@ pub mod pager_parser;
 pub mod passport;
 pub mod pager_bank;
 pub mod pocsag;
+pub mod rds;
 pub mod rs;
 pub mod same;
 pub mod smartnet;

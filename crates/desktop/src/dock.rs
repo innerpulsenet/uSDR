@@ -106,7 +106,7 @@ fn decodes(app: &mut App, ui: &mut Ui) {
         ui.add(egui::TextEdit::singleline(&mut app.decode_filter).hint_text("filter decodes").desired_width(150.0))
             .on_hover_text("Protocol, kind or any text in the summary");
         ui.spacing_mut().item_spacing.x = 3.0;
-        for chip in ["ALL", "FLEX", "POCSAG", "APRS", "P25", "DMR", "NXDN"] {
+        for chip in ["ALL", "FLEX", "POCSAG", "APRS", "P25", "DMR", "NXDN", "RDS"] {
             let on = if chip == "ALL" { app.decode_filter.is_empty() } else { app.decode_filter.eq_ignore_ascii_case(chip) };
             let tally = if chip == "ALL" { theme::AMBER } else { widgets::protocol_color(chip) };
             if widgets::chip_key(ui, chip, on, tally).clicked() {
