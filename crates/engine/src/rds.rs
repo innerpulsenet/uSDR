@@ -695,6 +695,25 @@ impl Text {
         Some(out)
     }
 
+    /// The first `n` pairs, or up to a carriage return within them, once
+    /// all of those are confirmed and heard in this epoch: a text the
+    /// station ends by starting over rather than with a carriage return.
+    fn complete_upto(&self, n: usize) -> Option<Vec<u8>> {
+        let mut out = Vec::with_capacity(2 * n);
+        for p in self.pairs.iter().take(n) {
+            if !self.current(p) {
+                return None;
+            }
+            for c in p.conf? {
+                if c == 0x0D {
+                    return Some(out);
+                }
+                out.push(c);
+            }
+        }
+        Some(out)
+    }
+
     /// A complete text has been published: later changes start afresh.
     fn settle(&mut self) {
         self.moving = false;
@@ -955,6 +974,9 @@ struct Heard {
     rt_b: Option<bool>,
     rt_out: Option<String>,
     rt_raw: Option<Vec<u8>>,
+    /// The segment address of the last RadioText group whose block B was
+    /// exact, to see a pass end by starting over.
+    rt_prev_seg: Option<usize>,
     /// The text being received, while it is incomplete.
     rt_partial: Option<(String, f32)>,
     /// The group type RT+ is carried in, from group 3A.
@@ -998,6 +1020,7 @@ impl Heard {
             rt_b: None,
             rt_out: None,
             rt_raw: None,
+            rt_prev_seg: None,
             rt_partial: None,
             rtplus_group: None,
             rtplus_cand: None,
@@ -1309,6 +1332,27 @@ impl RdsDecoder {
             }
             (2, vb) => {
                 let ab = b & 0x10 != 0;
+                let seg = (b & 0xF) as usize;
+                // A pass that ends by starting over: segment 0 straight
+                // after segment N-1. Many stations send fewer segments than
+                // the text's 64 characters and no carriage return (WRCH
+                // sends 24, "Matthew Wilder - Break M"); a text that waits
+                // for the rest never completes. When every pair of the pass
+                // has been heard since the text changed, the pass is the
+                // text. Judged only at the wrap, before this group's flag
+                // can mark the text stale, so a longer new text is never
+                // cut at an older one's length.
+                let prev = std::mem::replace(&mut self.h.rt_prev_seg, b_exact.then_some(seg));
+                if b_exact
+                    && seg == 0
+                    && let Some(last) = prev.filter(|l| *l > 0)
+                    && self.h.rt.complete().is_none()
+                {
+                    let pairs = if self.h.rt_b == Some(true) { last + 1 } else { 2 * (last + 1) };
+                    if let Some(bytes) = self.h.rt.complete_upto(pairs) {
+                        self.publish_rt_text(bytes);
+                    }
+                }
                 if self.h.rt_ab.is_some_and(|x| x != ab) || self.h.rt_b.is_some_and(|x| x != vb) {
                     // The A/B flag says the text may be new. Many stations
                     // flip it on every pass of the same text, so nothing is
@@ -1330,7 +1374,6 @@ impl RdsDecoder {
                 }
                 self.h.rt_ab = Some(ab);
                 self.h.rt_b = Some(vb);
-                let seg = (b & 0xF) as usize;
                 let mut changed = false;
                 if vb {
                     if let Some(d) = d {
@@ -1463,20 +1506,29 @@ impl RdsDecoder {
             self.bump();
         }
         if let Some(bytes) = self.h.rt.complete() {
-            let s = to_string(&bytes);
-            self.h.rt.settle();
-            if !s.is_empty() && self.h.rt_out.as_deref() != Some(&s) {
-                self.h.rt_out = Some(s);
-                self.h.rt_raw = Some(bytes);
-                self.bump();
-                self.changes.push(RdsChange::Rt);
-                self.apply_tags();
-            } else if !s.is_empty() {
-                self.h.rt_raw = Some(bytes);
-            }
+            self.publish_rt_text(bytes);
         } else if !self.h.rt.any() && self.h.rt_out.is_some() {
             self.h.rt_out = None;
             self.h.rt_raw = None;
+            self.bump();
+        }
+    }
+
+    /// A whole RadioText, ended by a carriage return, by its last pair, or
+    /// by the station starting its pass over.
+    fn publish_rt_text(&mut self, bytes: Vec<u8>) {
+        let s = to_string(&bytes);
+        self.h.rt.settle();
+        if !s.is_empty() && self.h.rt_out.as_deref() != Some(&s) {
+            self.h.rt_out = Some(s);
+            self.h.rt_raw = Some(bytes);
+            self.bump();
+            self.changes.push(RdsChange::Rt);
+            self.apply_tags();
+        } else if !s.is_empty() {
+            self.h.rt_raw = Some(bytes);
+        }
+        if self.h.rt_partial.take().is_some() {
             self.bump();
         }
     }
@@ -1952,6 +2004,52 @@ mod tests {
         }
         assert!(seen_partial);
         assert_eq!(dec.station().unwrap().rt.as_deref(), Some("Red Sky at Night by Others"));
+    }
+
+    /// RadioText the way WRCH sends it: `segs` segments of 2A, no carriage
+    /// return, the A/B flag flipped on every pass.
+    fn wrch_passes(dec: &mut RdsDecoder, text: &str, segs: usize, passes: usize, flag: &mut bool) {
+        let mut t = text.as_bytes().to_vec();
+        t.resize(4 * segs, b' ');
+        for _ in 0..passes {
+            *flag = !*flag;
+            for seg in 0..segs {
+                let b = b_word(2, false, seg as u16) | if *flag { 0x10 } else { 0 };
+                let c = u16::from_be_bytes([t[4 * seg], t[4 * seg + 1]]);
+                let d = u16::from_be_bytes([t[4 * seg + 2], t[4 * seg + 3]]);
+                let blk = |data: u16| Some(Block { data, ok: BlockOk::Exact, c_prime: false });
+                dec.group([blk(PI), blk(b), blk(c), blk(d)]);
+            }
+        }
+    }
+
+    #[test]
+    fn a_text_the_station_cuts_short_completes_at_its_pass() {
+        let mut dec = RdsDecoder::new(256_000.0);
+        let mut flag = false;
+        // The PI first.
+        for _ in 0..2 {
+            ps_group(&mut dec, b"Lite    ", 1, true);
+        }
+        // 24 characters a pass, and no carriage return: complete when the
+        // pass starts over, and stays so with every flip after.
+        wrch_passes(&mut dec, "Matthew Wilder - Break M", 6, 1, &mut flag);
+        wrch_passes(&mut dec, "Matthew Wilder - Break M", 6, 1, &mut flag);
+        assert_eq!(dec.station().unwrap().rt.as_deref(), Some("Matthew Wilder - Break M"));
+        for _ in 0..4 {
+            wrch_passes(&mut dec, "Matthew Wilder - Break M", 6, 1, &mut flag);
+            let st = dec.station().unwrap();
+            assert_eq!(st.rt.as_deref(), Some("Matthew Wilder - Break M"));
+            assert_eq!(st.rt_partial, None);
+        }
+        // The next text is longer: it is not cut at the old pass's length
+        // (the first six segments of it are not a text), and is whole once
+        // its own pass starts over.
+        let next = "Des'ree - You Gotta Be (live at Wembley)";
+        wrch_passes(&mut dec, next, 10, 1, &mut flag);
+        assert_eq!(dec.station().unwrap().rt.as_deref(), Some("Matthew Wilder - Break M"));
+        wrch_passes(&mut dec, next, 10, 1, &mut flag);
+        assert_eq!(dec.station().unwrap().rt.as_deref(), Some(next));
     }
 
     /// PS frames from groups 0A with exact blocks, address `k`.
