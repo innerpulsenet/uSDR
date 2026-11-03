@@ -1173,7 +1173,9 @@ async fn post_sdr_calibrate(
     let ppm = ppm_now - (err_hz / inspect_hz) * 1e6;
     if !(-200.0..=200.0).contains(&ppm) {
         return Err(ApiError::BadRequest(format!(
-            "measured correction {ppm:.1} ppm is outside the plausible range (-200..+200 ppm) — is the reference frequency right?"
+            "measured correction {ppm:.1} ppm is outside the plausible range (-200..+200 ppm): the carrier sits {:+.1} kHz from {:.4} MHz. Tune exactly onto the station's published frequency; if the dial was already on it, tune away and back so the radio really moves, then calibrate again",
+            err_hz / 1e3,
+            inspect_hz / 1e6
         )));
     }
     sdr.set_ppm(ppm)?;

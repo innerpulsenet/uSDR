@@ -893,6 +893,10 @@ fn run(
     let mut gain_target = read_gain(&dev, &caps, tune.desired);
     let mut usb_fails = 0u32;
     let mut tune_fails = 0u32;
+    // An SDRplay tune is written again shortly after it lands; see
+    // SDRPLAY_REASSERT. The instant the next write is due, and which one.
+    let sdrplay = matches!(caps.gain, GainControl::Sdrplay { .. });
+    let mut reassert: Option<(std::time::Instant, usize)> = None;
 
     loop {
         let mut last_tune = None;
@@ -1063,6 +1067,9 @@ fn run(
                         // move. Stale queued blocks must not frame with it.
                         epoch += 1;
                         sample_pos = 0;
+                        if sdrplay {
+                            reassert = Some((std::time::Instant::now() + SDRPLAY_REASSERT[0], 0));
+                        }
                     }
                     ok
                 }
@@ -1125,6 +1132,9 @@ fn run(
                     // different RF windows — a new epoch, position restarts.
                     epoch += 1;
                     sample_pos = 0;
+                    if sdrplay {
+                        reassert = Some((std::time::Instant::now() + SDRPLAY_REASSERT[0], 0));
+                    }
                     // The same LNA state is a different reduction in the new
                     // band: write the chosen gain again for it, or the dial
                     // reads one gain while the receiver runs another. Not
@@ -1151,6 +1161,12 @@ fn run(
                     }
                     publish_state(&dev, &caps, tune, agc_enabled, &event_tx);
                 } else {
+                    // The driver may have stored the refused frequency all
+                    // the same, and its readback is what the display labels
+                    // by: write the last accepted one again so the two agree.
+                    if sdrplay {
+                        reassert = Some((std::time::Instant::now() + SDRPLAY_REASSERT[0], 0));
+                    }
                     tune_fails = tune_fails.saturating_add(1);
                     let _ = log_tx.try_send(format!(
                         "tune failed: {:.4} MHz not accepted after {TUNE_ATTEMPTS} attempts ({tune_fails}/3)",
@@ -1161,6 +1177,24 @@ fn run(
                     }
                 }
             }
+        }
+
+        if let Some((due, stage)) = reassert
+            && std::time::Instant::now() >= due
+        {
+            // No new epoch: when the earlier write did land this moves the LO
+            // by one hertz, and a decoder that has just locked should keep
+            // its lock. When it did not, the samples before were already off
+            // frequency and nothing downstream was told otherwise.
+            if !set_frequency_retrying(&dev, reassert_hz(corrected(tune.desired, tune.ppm), stage)) {
+                let _ = log_tx.try_send(format!(
+                    "tune re-assert at {:.4} MHz not accepted",
+                    tune.desired / 1e6
+                ));
+            }
+            reassert = SDRPLAY_REASSERT
+                .get(stage + 1)
+                .map(|gap| (std::time::Instant::now() + *gap, stage + 1));
         }
 
         // Gather one delivery's worth (see BLOCK_SECONDS). An error part-way
@@ -1536,6 +1570,28 @@ fn set_gain_checked(dev: &soapysdr::Device, caps: &Capabilities, freq_hz: f64, g
 const TUNE_ATTEMPTS: u32 = 4;
 const TUNE_RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(8);
 const GAIN_ATTEMPTS: u32 = 4;
+
+/// After an SDRplay tune lands, write it again this long after, then again
+/// this much later.
+///
+/// SoapySDRPlay3 stores the new frequency before asking the API to apply it,
+/// and when the API refuses (an earlier update, often a gain write from the
+/// clip guard, still in flight) or times out, it logs a warning on the
+/// machine the radio is on and returns as if it had worked. Its readback is
+/// the stored value, and asking again for the same frequency is skipped as
+/// unchanged, so the hardware stays where it was — 50 kHz off after one
+/// dropped hop on a 2026-11-02 RSP1A, which a calibration then read as
+/// -236 ppm. Over SoapyRemote the warning never reaches this process, so
+/// there is nothing to check; writing again is what makes the tune stick.
+const SDRPLAY_REASSERT: [std::time::Duration; 2] =
+    [std::time::Duration::from_millis(300), std::time::Duration::from_millis(1_200)];
+
+/// The frequency a re-assert writes: one hertz above the last write, then
+/// back on it, so the driver sees a change each time and really updates the
+/// tuner. A hertz is 0.01 ppm at 100 MHz.
+fn reassert_hz(corrected_hz: f64, stage: usize) -> f64 {
+    if stage % 2 == 0 { corrected_hz + 1.0 } else { corrected_hz }
+}
 const GAIN_RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(8);
 
 /// Set the tuner frequency, retrying a stalled I2C write.
@@ -1683,6 +1739,23 @@ fn set_bandwidth(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// SoapySDRPlay3 skips a write whose `(uint32_t)` Hz matches what it
+    /// stored; every re-assert must differ from the write before it, or it
+    /// is the same no-op that left the RSP1A 50 kHz off.
+    #[test]
+    fn every_sdrplay_reassert_is_a_change_the_driver_acts_on() {
+        for want in [104_552_917.6, 162_550_000.0, 1_000_000.4] {
+            let stored = |hz: f64| hz as u32;
+            let mut last = stored(want);
+            for stage in 0..SDRPLAY_REASSERT.len() {
+                let next = stored(reassert_hz(want, stage));
+                assert_ne!(next, last, "stage {stage} at {want} would be skipped");
+                assert!((reassert_hz(want, stage) - want).abs() <= 1.0);
+                last = next;
+            }
+        }
+    }
 
     /// Widths an R820T reports through the rtlsdr Soapy module.
     const R820T: [f64; 6] = [
