@@ -937,6 +937,30 @@ frequency again 1 Hz up at 300 ms and back at 1.5 s, so each write is a
 change the driver acts on. If calibrate still refuses, it names the measured
 offset and says to tune away and back.
 
+The refusal that kept recurring, found on 2026-11-03 once the driver ran
+inside the daemon and its warnings reached the journal, was
+`sdrplay_api_Update(Tuner_FrF) Error: sdrplay_api_OutOfRange` on every tune
+across 60 MHz. The API rejects a tune into a band that lacks the LNA state
+in use. The RSP1A has 10 states from 60 MHz to 1 GHz, 7 below 60 MHz and 9
+above 1 GHz, and the gain split uses state 8 at FM gains. So any hop from FM
+to an HF memory (7.241, 14.298) stranded the tuner, and a calibration taken
+afterwards saved −148 ppm against a true +25. Measured: at LNA state 8 the
+60.5 → 59.5 MHz hop was refused every time; at state 3 it took every time.
+Four changes close it:
+
+- Before an SDRplay tune, the LNA state comes down to the deepest the new band
+  has. Under IF AGC the band change then puts back the state the chosen gain
+  makes there, so returning to FM restores state 8.
+- If a tune is still refused (a model with no known state count), it is
+  retried at LNA state 0, which every band has.
+- The stderr watcher now counts SoapySDRPlay3's refusals as faults. A refused
+  tune is retried a hertz further on, because the driver has already stored
+  the refused frequency and would otherwise skip a repeat as unchanged. A
+  tune that never lands shows "tuner did not accept" and puts the display
+  back where the radio is.
+- CALIBRATE refuses while that error shows, and refuses a step of more than
+  50 ppm from a correction already in use. From 0 the full ±200 ppm is open.
+
 ### `i2c wr failed=-9`, and tuning that does not take
 
 ```text

@@ -1142,7 +1142,23 @@ fn run(
                 // a few milliseconds and usually lands, which is the
                 // difference between a click that tunes and a click that is
                 // silently dropped.
-                let ok = set_frequency_retrying(&dev, corrected(f, tune.ppm));
+                // An LNA state the new band does not have makes SDRplay's
+                // API refuse the whole tune (state 8 is legal at 100 MHz, not
+                // at 7 MHz), so it comes down to the band's deepest first.
+                if sdrplay {
+                    fit_lna_to_band(&dev, &caps, f, &log_tx);
+                }
+                let mut ok = set_frequency_retrying(&dev, corrected(f, tune.ppm));
+                if !ok && sdrplay {
+                    // A model or band this crate has no state count for:
+                    // state 0 exists everywhere. The band change below then
+                    // writes the chosen gain again for the new band.
+                    let _ = crate::driver_log::checked(|| dev.set_gain_element(Rx, 0, "RFGR", 0.0).is_ok());
+                    ok = set_frequency_retrying(&dev, corrected(f, tune.ppm));
+                    if ok {
+                        let _ = log_tx.try_send(format!("tune to {:.4} MHz took only at LNA state 0", f / 1e6));
+                    }
+                }
                 if ok {
                     tune_fails = 0;
                     let before = tune.desired;
@@ -1160,6 +1176,16 @@ fn run(
                     // reads one gain while the receiver runs another. Not
                     // under the RSP's own IF AGC, which owns the IF stage.
                     let hardware_agc_running = agc_enabled && tuner_agc && clip_guard.is_none();
+                    if sdrplay_band_changed(&caps, before, f)
+                        && hardware_agc_running
+                        && let (Some(sg), Some(g)) = (sdrplay_gain(&caps, f), gain_target)
+                        && let (Some(state), _) = sg.split(g)
+                    {
+                        // The IF stays the AGC's; the LNA state goes back to
+                        // what the chosen gain makes in this band, since the
+                        // tune may have had to lower it (fit_lna_to_band).
+                        let _ = crate::driver_log::checked(|| dev.set_gain_element(Rx, 0, "RFGR", state as f64).is_ok());
+                    }
                     if sdrplay_band_changed(&caps, before, f) && !hardware_agc_running {
                         let (min, max) = gain_range(&caps, f);
                         if let Some(cg) = clip_guard.as_mut() {
@@ -1540,6 +1566,33 @@ fn sdrplay_gain(caps: &Capabilities, freq_hz: f64) -> Option<SdrplayGain> {
     Some(SdrplayGain { lna_gr, ifgr_min, ifgr_max })
 }
 
+/// How many LNA states SDRplay's API allows at `freq_hz`, for the models
+/// whose counts are known (`sdrplay_api_rsp1a.h`): fewer below 60 MHz and
+/// above 1 GHz than in between.
+fn sdrplay_lna_states(caps: &Capabilities, freq_hz: f64) -> Option<usize> {
+    if !caps.hardware.eq_ignore_ascii_case("RSP1A") {
+        return None;
+    }
+    Some(if freq_hz < 60e6 {
+        7
+    } else if freq_hz < 1000e6 {
+        10
+    } else {
+        9
+    })
+}
+
+/// Bring the LNA state within what the band at `freq_hz` has, before tuning
+/// there. Nothing is written when it already fits.
+fn fit_lna_to_band(dev: &soapysdr::Device, caps: &Capabilities, freq_hz: f64, log_tx: &SyncSender<String>) {
+    let Some(states) = sdrplay_lna_states(caps, freq_hz) else { return };
+    let Ok(now) = dev.gain_element(Rx, 0, "RFGR") else { return };
+    let top = (states - 1) as f64;
+    if now.round() > top && !crate::driver_log::checked(|| dev.set_gain_element(Rx, 0, "RFGR", top).is_ok()) {
+        let _ = log_tx.try_send(format!("LNA state {top} for {:.4} MHz not taken", freq_hz / 1e6));
+    }
+}
+
 /// Whether a tune from `a` to `b` crossed an SDRplay LNA band edge.
 fn sdrplay_band_changed(caps: &Capabilities, a: f64, b: f64) -> bool {
     sdrplay_gain(caps, a) != sdrplay_gain(caps, b)
@@ -1624,6 +1677,11 @@ fn set_frequency_retrying(dev: &soapysdr::Device, hz: f64) -> bool {
     for attempt in 0..TUNE_ATTEMPTS {
         // A partial write (the mux registers taken, the PLL not) leaves the
         // tuner deaf at both frequencies; only a clean full write counts.
+        // Each retry is a hertz further on: SoapySDRPlay3 has already stored
+        // the refused frequency and skips a request for the same one as
+        // unchanged, so a plain repeat would "succeed" without a write. A
+        // few hertz is a few hundredths of a ppm at VHF.
+        let hz = hz + f64::from(attempt);
         if crate::driver_log::checked(|| dev.set_frequency(Rx, 0, hz, ()).is_ok()) {
             return true;
         }
@@ -2020,6 +2078,25 @@ mod tests {
     fn the_model_is_read_out_of_an_sdrplay_label() {
         assert_eq!(sdrplay_model("SDRplay Dev0 RSP1A 210304DD98"), "RSP1A");
         assert_eq!(sdrplay_model("something else"), "SDRplay");
+    }
+
+    #[test]
+    fn the_gain_split_never_picks_an_lna_state_the_band_lacks() {
+        // SDRplay's API refuses a tune into a band without the LNA state in
+        // use, so every state the gain table can choose must exist there.
+        let caps = rsp1a();
+        for hz in [1e6, 7.241e6, 14.298e6, 59.9e6, 60e6, 101.3e6, 419e6, 420e6, 999e6, 1000e6, 1090e6, 1999e6] {
+            let sg = sdrplay_gain(&caps, hz).unwrap();
+            let states = sdrplay_lna_states(&caps, hz).unwrap();
+            for g in 0..=sg.max_gain() as i32 {
+                if let (Some(s), _) = sg.split(g as f64) {
+                    assert!(s < states, "{g} dB picks LNA state {s} at {hz} Hz, which has {states}");
+                }
+            }
+        }
+        // Where the 60 MHz edge bit: state 8 is legal at FM, not at 40 m.
+        assert!(8 < sdrplay_lna_states(&caps, 101.3e6).unwrap());
+        assert!(8 >= sdrplay_lna_states(&caps, 7.241e6).unwrap());
     }
 
     fn rsp1a() -> Capabilities {

@@ -1183,6 +1183,9 @@ async fn post_sdr_processing(
 /// the correction is that difference as a fraction of the frequency. Anything
 /// with a known, accurate carrier will do — a broadcast station, a P25 control
 /// channel, a commercial repeater.
+/// Largest change one calibration may make to a correction already in use.
+const CALIBRATE_MAX_STEP_PPM: f64 = 50.0;
+
 async fn post_sdr_calibrate(
     State(st): State<Arc<AppState>>,
     body: Option<Json<SdrCalibrateReq>>,
@@ -1191,10 +1194,16 @@ async fn post_sdr_calibrate(
     let sdr = guard
         .as_ref()
         .ok_or_else(|| ApiError::BadRequest("the receiver is not running".into()))?;
-    let (err_hz, mut inspect_hz, ppm_now) = {
+    let (err_hz, mut inspect_hz, ppm_now, stranded) = {
         let s = sdr.status.lock().expect("sdr status");
-        (s.freq_error_hz, s.inspect_hz, s.ppm)
+        (s.freq_error_hz, s.inspect_hz, s.ppm, s.error.clone().filter(|e| e.contains("did not accept")))
     };
+    // A carrier measured while the tuner sits somewhere other than where it
+    // was asked to be would be folded into the correction and carried into
+    // every tune after; that is how a refused tune became a saved -148 ppm.
+    if let Some(e) = stranded {
+        return Err(ApiError::BadRequest(format!("{e}: tune again, then calibrate")));
+    }
     if let Some(Json(req)) = body {
         if let Some(ref_hz) = req.reference_hz {
             if ref_hz > 0.0 {
@@ -1213,6 +1222,17 @@ async fn post_sdr_calibrate(
     // A measured error of `err` at `f` means the receiver's idea of frequency
     // is off by err/f; fold that into whatever correction is already applied.
     let ppm = ppm_now - (err_hz / inspect_hz) * 1e6;
+    // A radio already corrected drifts by a few ppm, so a step far larger is
+    // a measurement of something else: a stranded tune, or a station not on
+    // its published frequency. From 0 the full range is open.
+    if ppm_now != 0.0 && (ppm - ppm_now).abs() > CALIBRATE_MAX_STEP_PPM {
+        return Err(ApiError::BadRequest(format!(
+            "measured correction {ppm:.1} ppm is {:+.1} ppm from the {ppm_now:.1} in use, more than a calibrated radio drifts: the carrier sits {:+.1} kHz from {:.4} MHz. Check the station is on its published frequency and tune away and back; to calibrate from scratch, set PPM to 0 first",
+            ppm - ppm_now,
+            err_hz / 1e3,
+            inspect_hz / 1e6
+        )));
+    }
     if !(-200.0..=200.0).contains(&ppm) {
         return Err(ApiError::BadRequest(format!(
             "measured correction {ppm:.1} ppm is outside the plausible range (-200..+200 ppm): the carrier sits {:+.1} kHz from {:.4} MHz. Tune exactly onto the station's published frequency; if the dial was already on it, tune away and back so the radio really moves, then calibrate again",

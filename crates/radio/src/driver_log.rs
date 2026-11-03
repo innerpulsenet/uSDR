@@ -9,6 +9,11 @@
 //! the readback followed the request; once the stall starts it persists
 //! until the device is reopened.
 //!
+//! SoapySDRPlay3 does the same with a refused update: it logs a warning,
+//! returns as if the write had worked, and reads back the value it was
+//! asked for. That line reaches this process only where the driver runs in
+//! it, not across SoapyRemote.
+//!
 //! This installs a pipe over the process's stderr, forwards every line to
 //! the original stderr unchanged, and counts the driver's fault lines so the
 //! radio thread can tell a write that took from one that did not.
@@ -21,13 +26,19 @@ use std::sync::OnceLock;
 static FAULTS: AtomicU64 = AtomicU64::new(0);
 static INSTALLED: OnceLock<bool> = OnceLock::new();
 
-/// Lines librtlsdr prints when a control or I2C transfer fails.
+/// Lines librtlsdr prints when a control or I2C transfer fails, and the ones
+/// SoapySDRPlay3 prints when SDRplay's API refuses or never confirms a tune
+/// or gain change.
 fn is_driver_fault(line: &str) -> bool {
     line.contains("i2c wr failed")
         || line.contains("i2c rd failed")
         || line.contains("rtlsdr_demod_write_reg failed")
         || line.contains("r82xx_set_freq: failed")
         || line.contains("rtlsdr_demod_read_reg failed")
+        || line.contains("sdrplay_api_Update(Tuner_FrF) Error")
+        || line.contains("sdrplay_api_Update(Tuner_Gr) Error")
+        || line.contains("RF center frequency update timeout")
+        || line.contains("RF center frequency out of range")
 }
 
 /// Route the process's stderr through a watcher. Idempotent; safe to call
@@ -98,5 +109,13 @@ mod tests {
         assert!(is_driver_fault("r82xx_set_freq: failed=-9"));
         assert!(!is_driver_fault("SDR 00000003: tune failed: 154.5000 MHz not accepted"));
         assert!(!is_driver_fault("[R82XX] PLL not locked!"));
+    }
+
+    #[test]
+    fn recognises_sdrplay_refusals() {
+        assert!(is_driver_fault("[WARNING] sdrplay_api_Update(Tuner_FrF) Error: sdrplay_api_OutOfRange"));
+        assert!(is_driver_fault("[WARNING] RF center frequency update timeout."));
+        assert!(is_driver_fault("[WARNING] sdrplay_api_Update(Tuner_Gr) Error: sdrplay_api_OutOfRange"));
+        assert!(!is_driver_fault("[INFO] Using format CF32."));
     }
 }
