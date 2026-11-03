@@ -741,21 +741,72 @@ fn meter(app: &mut App, ui: &mut Ui, min_w: f32, max_w: f32) {
     }
 }
 
-/// The SIGNAL bay's one line of RDS: the station's name, then the tagged
-/// title and artist, or else its RadioText. Nothing until the name is in.
-/// A station that scrolls words through its PS has no name to lead with,
-/// so its line is what is playing alone.
-fn rds_line(r: &usdr_proto::Rds) -> Option<String> {
-    let ps = r.ps.as_deref()?;
-    let now = match (&r.title, &r.artist) {
-        (Some(t), Some(a)) => Some(format!("{t} — {a}")),
-        (Some(t), None) => Some(t.clone()),
-        _ => r.rt.clone(),
+/// A RadioText character not yet received, as the server marks it.
+pub const RT_GAP: char = '\u{2591}';
+
+/// Who the station is: its PS once it has held steady (the server's ten
+/// seconds without a change, never for one that scrolls), else the call
+/// letters its PI maps to, else the PI. The PI is confirmed long before any
+/// text, so this is the first thing to show, and a scrolling station's
+/// first word is never taken for its name.
+pub fn rds_station(r: &usdr_proto::Rds) -> String {
+    match (&r.ps, &r.pi_call) {
+        (Some(ps), _) if r.ps_steady && !r.ps_dynamic => ps.clone(),
+        (_, Some(call)) => call.clone(),
+        _ => format!("PI {}", r.pi),
+    }
+}
+
+/// What is on, and how much of it is in while it is still arriving: a
+/// RadioText being received (gaps as [`RT_GAP`]) before anything older,
+/// since it is what the station is sending now; then the tagged title and
+/// artist, the RadioText, or a scrolling PS's word, which is that station's
+/// way of saying what is playing.
+pub fn rds_now(r: &usdr_proto::Rds) -> Option<(String, Option<f32>)> {
+    if let Some(p) = r.rt_partial.as_ref().filter(|p| !p.is_empty()) {
+        return Some((p.clone(), Some(r.rt_progress)));
+    }
+    match (&r.title, &r.artist, &r.rt) {
+        (Some(t), Some(a), _) => Some((format!("{t} — {a}"), None)),
+        (Some(t), None, _) => Some((t.clone(), None)),
+        (None, _, Some(rt)) => Some((rt.clone(), None)),
+        _ if r.ps_dynamic => r.ps.clone().map(|p| (p, None)),
+        _ => None,
+    }
+}
+
+/// `text` laid out with what was received in `color` and each [`RT_GAP`] a
+/// faint underscore, one per missing character, as a radio's display shows
+/// a text still coming in.
+pub fn gapped(text: &str, font: egui::FontId, color: egui::Color32) -> egui::text::LayoutJob {
+    let mut job = egui::text::LayoutJob::default();
+    let (mut run, mut gap) = (String::new(), false);
+    let flush = |job: &mut egui::text::LayoutJob, run: &mut String, gap: bool| {
+        if !run.is_empty() {
+            let c = if gap { theme::alpha(theme::text_3(), 0.7) } else { color };
+            job.append(run, 0.0, egui::TextFormat { font_id: font.clone(), color: c, ..Default::default() });
+            run.clear();
+        }
     };
-    Some(match now {
-        Some(n) if r.ps_dynamic => n,
-        Some(n) => format!("{ps} · {n}"),
-        None => ps.to_string(),
+    for ch in text.chars() {
+        let is_gap = ch == RT_GAP;
+        if is_gap != gap {
+            flush(&mut job, &mut run, gap);
+            gap = is_gap;
+        }
+        run.push(if is_gap { '_' } else { ch });
+    }
+    flush(&mut job, &mut run, gap);
+    job
+}
+
+/// The SIGNAL bay's one line of RDS: who, then what is on, the gaps of a
+/// text still arriving shown as underscores.
+fn rds_line(r: &usdr_proto::Rds) -> Option<String> {
+    let who = rds_station(r);
+    Some(match rds_now(r) {
+        Some((n, _)) => format!("{who} · {}", n.replace(RT_GAP, "_")),
+        None => who,
     })
 }
 

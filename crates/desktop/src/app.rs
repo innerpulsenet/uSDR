@@ -1348,10 +1348,13 @@ impl App {
             snr_db: self.meter.snr,
             // A broadcast station's own name, once RDS has confirmed it; for
             // one that scrolls words through its PS, the title it tags.
-            protocol: self
-                .rds()
-                .and_then(|r| if r.ps_dynamic { r.title.clone().or_else(|| r.ps.clone()) } else { r.ps.clone() })
-                .or_else(|| self.shown_class().0.filter(|c| c.active).map(|c| c.protocol)),
+            protocol: self.shown_class().0.filter(|c| c.active).map(|c| c.protocol),
+            rds: self.rds().map(|r| crate::spectrum::FlagRds {
+                station: crate::bar::rds_station(r),
+                kind: r.pty_name.clone().filter(|_| r.pty != Some(0)),
+                now: crate::bar::rds_now(r),
+                locked: r.locked,
+            }),
             recording: rec,
         };
         let step = self.step_hz();

@@ -404,11 +404,17 @@ pub struct Rds {
     /// The station scrolls words through its PS: `ps` is one word of a
     /// longer message, not the station's name.
     pub ps_dynamic: bool,
+    /// The PS has held ten seconds and does not scroll: the station's name.
+    pub ps_steady: bool,
     pub pty: Option<u8>,
     pub pty_name: Option<String>,
     pub tp: bool,
     pub ta: bool,
     pub rt: Option<String>,
+    /// A RadioText still coming in, as far as it is confirmed, with U+2591
+    /// (`░`) for each character not yet received; and how much is in, 0..1.
+    pub rt_partial: Option<String>,
+    pub rt_progress: f32,
     /// RT+ tags, while the station marks an item as running.
     pub title: Option<String>,
     pub artist: Option<String>,

@@ -62,9 +62,12 @@ fn station(app: &App, ui: &mut Ui) {
     let dim = !r.locked;
     let fade = |c: egui::Color32| if dim { theme::text_3() } else { c };
     ui.horizontal(|ui| {
-        // Until the name is confirmed, the PI is all there is to call it.
-        let name = r.ps.clone().unwrap_or_else(|| format!("PI {}", r.pi));
-        ui.label(RichText::new(name).font(theme::mono_bold(17.0)).color(fade(if r.ps.is_some() { theme::text() } else { theme::text_3() })));
+        // The name; for a station that scrolls its PS, the call letters its
+        // PI maps to, with the word showing now under them. Until either is
+        // in, the PI is all there is to call it.
+        let name = crate::bar::rds_station(r);
+        let known = (r.ps_steady && !r.ps_dynamic) || r.pi_call.is_some();
+        ui.label(RichText::new(name).font(theme::mono_bold(17.0)).color(fade(if known { theme::text() } else { theme::text_3() })));
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             if let Some(p) = &r.pty_name
                 && r.pty != Some(0)
@@ -94,13 +97,31 @@ fn station(app: &App, ui: &mut Ui) {
             });
         }
     }
+    // The PS itself, while it is not the name above: a scrolling station's
+    // word of the moment, or a name not yet steady.
+    if let Some(ps) = r.ps.as_ref().filter(|_| r.ps_dynamic || !r.ps_steady) {
+        let tip = if r.ps_dynamic {
+            "The word the station's PS shows now; it scrolls a message a word at a time"
+        } else {
+            "The station's PS, taken for its name once it has held for ten seconds"
+        };
+        ui.label(RichText::new(format!("PS  {ps}")).font(theme::mono(12.0)).color(fade(theme::text_2()))).on_hover_text(tip);
+    }
     // The whole RadioText, wrapped: it is at most 64 characters and never
-    // scrolls.
-    match &r.rt {
-        Some(rt) => {
+    // scrolls. One still coming in shows what is in, its gaps as dots, and
+    // how much has arrived.
+    match (&r.rt_partial, &r.rt) {
+        (Some(p), _) if !p.is_empty() => {
+            ui.add(egui::Label::new(crate::bar::gapped(p, theme::sans(12.0), fade(theme::text_2()))).wrap());
+            let (bar, _) = ui.allocate_exact_size(vec2(ui.available_width(), 3.0), egui::Sense::hover());
+            let c = widgets::protocol_color("RDS");
+            ui.painter().rect_filled(bar, egui::CornerRadius::same(1), alpha(c, 0.15));
+            ui.painter().rect_filled(egui::Rect::from_min_size(bar.min, vec2(bar.width() * r.rt_progress.clamp(0.0, 1.0), 3.0)), egui::CornerRadius::same(1), alpha(c, 0.8));
+        }
+        (_, Some(rt)) => {
             ui.add(egui::Label::new(RichText::new(rt).font(theme::sans(12.0)).color(fade(theme::text_2()))).wrap());
         }
-        None => {
+        _ => {
             ui.label(small("no RadioText confirmed yet"));
         }
     }

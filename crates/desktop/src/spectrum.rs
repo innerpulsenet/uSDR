@@ -1851,10 +1851,28 @@ pub struct SliceFlag {
     pub snr_db: Option<f32>,
     pub protocol: Option<String>,
     pub recording: bool,
+    /// A broadcast station's RDS, once its PI is confirmed.
+    pub rds: Option<FlagRds>,
+}
+
+/// What the flag says of a broadcast station from its RDS.
+#[derive(Default, Clone)]
+pub struct FlagRds {
+    /// Its name, or its call letters when its PS scrolls.
+    pub station: String,
+    /// Its program type, when sent.
+    pub kind: Option<String>,
+    /// What is on; a text still arriving carries `RT_GAP`s and its share in.
+    pub now: Option<(String, Option<f32>)>,
+    /// Block sync held: text from a station whose lock has gone is dimmed.
+    pub locked: bool,
 }
 
 impl SliceFlag {
     fn paint(&self, painter: &egui::Painter, pan: Rect, x: f32, trace_y: f32, active: bool) -> Rect {
+        if let Some(rds) = &self.rds {
+            return self.paint_rds(painter, pan, x, trace_y, active, rds);
+        }
         let bottom = match (&self.protocol, self.snr_db) {
             (Some(p), Some(s)) => format!("{p} · SNR {s:.1} dB"),
             (Some(p), None) => p.clone(),
@@ -1902,6 +1920,86 @@ impl SliceFlag {
         }
         r
     }
+}
+
+impl SliceFlag {
+    /// The flag for a broadcast station with RDS: a line for who it is and
+    /// its program type with the SNR beside them, and a line for what is on,
+    /// a text still arriving shown with its gaps and a bar of how much is in.
+    fn paint_rds(&self, painter: &egui::Painter, pan: Rect, x: f32, trace_y: f32, active: bool, rds: &FlagRds) -> Rect {
+        let rec_w = if self.recording { 16.0 } else { 0.0 };
+        let fade = |c: Color32| if rds.locked { c } else { theme::text_3() };
+        let who_font = theme::sans_semibold(12.5);
+        let kind = rds.kind.as_deref().map(|k| format!(" · {k}")).unwrap_or_default();
+        let snr = self.snr_db.map(|s| format!("SNR {s:.1}"));
+        // Sized by what it says, within bounds, and by the widest SNR so it
+        // does not breathe as the figure changes.
+        let who_w = painter.layout_no_wrap(format!("{}{kind}", rds.station), who_font.clone(), Color32::PLACEHOLDER).size().x
+            + snr.as_ref().map_or(0.0, |_| painter.layout_no_wrap("SNR 99.9".into(), theme::mono(10.0), Color32::PLACEHOLDER).size().x + 12.0);
+        let now_w = rds.now.as_ref().map_or(0.0, |(n, _)| painter.layout_no_wrap(n.clone(), theme::sans(11.5), Color32::PLACEHOLDER).size().x);
+        let w = (who_w.max(now_w) + 16.0 + rec_w).clamp(200.0, 300.0);
+        // A line for what is on only once there is something to say.
+        let h = if rds.now.is_some() { 84.0 } else { 64.0 };
+        let right_side = x + 10.0 + w < pan.right() - 4.0;
+        let left = if right_side { x + 10.0 } else { x - 10.0 - w };
+        let top = (pan.top() + 8.0).max((trace_y - h - 14.0).min(pan.top() + 8.0));
+        let r = Rect::from_min_size(pos2(left, top), vec2(w, h));
+        painter.rect(r, CornerRadius::same(4), alpha(theme::surface_2(), 0.93), Stroke::new(1.0, alpha(theme::AMBER, 0.45)), egui::StrokeKind::Inside);
+        theme::glass(painter, r);
+        if active {
+            painter.rect_filled(Rect::from_min_size(r.left_top(), vec2(16.0, 2.0)), CornerRadius::ZERO, theme::EMBER);
+        }
+        receiver_tab(painter, r, "A", theme::AMBER, active);
+        let anchor_x = if right_side { r.left() } else { r.right() };
+        painter.line_segment([pos2(x, r.top() + 14.0), pos2(anchor_x, r.top() + 14.0)], Stroke::new(1.0, alpha(theme::AMBER, 0.5)));
+        painter.text(r.left_top() + vec2(27.0, 7.0), Align2::LEFT_TOP, crate::tuning::fmt_mhz(self.freq_hz, 4), theme::mono_bold(14.0), theme::text());
+        let chip = format!("{} · {}", self.mode.label(), crate::tuning::fmt_short_hz(self.bandwidth_hz));
+        painter.text(r.right_top() + vec2(-8.0, 9.0), Align2::RIGHT_TOP, chip, theme::mono(10.0), theme::AMBER);
+        let bar = Rect::from_min_size(r.left_top() + vec2(8.0, 30.0), vec2(w - 64.0, 6.0));
+        mini_meter(painter, bar, self.meter, theme::OK);
+        painter.text(pos2(r.right() - 8.0, bar.center().y), Align2::RIGHT_CENTER, &self.s_label, theme::mono_bold(11.0), theme::text());
+        // Who: the name, the program type after it, the SNR at the right.
+        let y_who = r.top() + 50.0;
+        let mut right = r.right() - 8.0;
+        if let Some(s) = &snr {
+            let g = painter.layout_no_wrap(s.clone(), theme::mono(10.0), theme::text_2());
+            painter.galley(pos2(right - g.size().x, y_who - g.size().y / 2.0), g.clone(), theme::text_2());
+            right -= g.size().x + 10.0;
+        }
+        let room = right - (r.left() + 8.0);
+        let name = crate::widgets::ellipsize(painter, &rds.station, who_font.clone(), room);
+        let g = painter.layout_no_wrap(name, who_font, fade(theme::text()));
+        let name_w = g.size().x;
+        painter.galley(pos2(r.left() + 8.0, y_who - g.size().y / 2.0), g, fade(theme::text()));
+        if !kind.is_empty() && name_w + 20.0 < room {
+            let k = crate::widgets::ellipsize(painter, &kind, theme::sans(11.0), room - name_w);
+            let g = painter.layout_no_wrap(k, theme::sans(11.0), fade(widgets_rds_color()));
+            painter.galley(pos2(r.left() + 8.0 + name_w, y_who - g.size().y / 2.0), g, fade(widgets_rds_color()));
+        }
+        // What is on, cut to the card; a text arriving keeps its gaps.
+        if let Some((now, progress)) = &rds.now {
+            let y_now = r.top() + 67.0;
+            let room = w - 16.0 - rec_w;
+            let shown = crate::widgets::ellipsize(painter, now, theme::sans(11.5), room);
+            let job = crate::bar::gapped(&shown, theme::sans(11.5), fade(theme::text_2()));
+            let g = painter.layout_job(job);
+            painter.galley(pos2(r.left() + 8.0, y_now - g.size().y / 2.0), g, theme::text_2());
+            if let Some(p) = progress {
+                let track = Rect::from_min_size(pos2(r.left() + 8.0, r.bottom() - 5.0), vec2(room, 2.0));
+                painter.rect_filled(track, CornerRadius::same(1), alpha(widgets_rds_color(), 0.15));
+                painter.rect_filled(Rect::from_min_size(track.min, vec2(room * p.clamp(0.0, 1.0), 2.0)), CornerRadius::same(1), alpha(widgets_rds_color(), 0.8));
+            }
+        }
+        if self.recording {
+            painter.circle_filled(pos2(r.right() - 12.0, r.bottom() - 12.0), 4.0, theme::EMBER);
+        }
+        r
+    }
+}
+
+/// The color the app gives RDS everywhere it shows.
+fn widgets_rds_color() -> Color32 {
+    crate::widgets::protocol_color("RDS")
 }
 
 /// A flag's S-meter: segments in the receiver's color up to S9 and amber

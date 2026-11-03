@@ -11,6 +11,14 @@ use egui::{CornerRadius, Rect, Sense, Stroke, Ui, pos2, vec2};
 
 pub const S9_DBFS: f32 = -60.0;
 
+/// The SNR's averaging per frame: about a second at the server's 25 frames
+/// a second.
+const SNR_EASE: f32 = 0.04;
+/// Frames between refreshes of the shown SNR: twice a second.
+const SNR_EVERY: u32 = 12;
+/// A jump this large is a new signal, not noise on the old one.
+const SNR_SNAP_DB: f32 = 10.0;
+
 pub fn frac(dbfs: f32) -> f32 {
     ((dbfs + 108.0) / 108.0).clamp(0.0, 1.0)
 }
@@ -31,7 +39,12 @@ pub struct Meter {
     /// Exponentially smoothed channel and floor, dBFS.
     pub rf: Option<f32>,
     pub floor: Option<f32>,
+    /// SNR as shown, dB: averaged over about a second and refreshed twice a
+    /// second, so its tenths can be read. Frame to frame it wanders a decibel
+    /// either way, which at 25 updates a second is a blur.
     pub snr: Option<f32>,
+    snr_avg: Option<f32>,
+    snr_frames: u32,
     pos: f32,
     peak: f32,
     peak_at: f64,
@@ -49,9 +62,27 @@ impl Meter {
         if noise_dbfs.is_finite() {
             let fl = self.floor.get_or_insert(noise_dbfs);
             *fl += (noise_dbfs - *fl) * 0.25;
-            self.snr = Some(channel_dbfs - noise_dbfs);
+            self.feed_snr(channel_dbfs - noise_dbfs);
         }
         self.clipping = peak_iq > 0.98;
+    }
+
+    /// One frame's SNR into the shown figure. A change of more than 10 dB
+    /// (a retune, a carrier keying up) is taken at once rather than eased in.
+    fn feed_snr(&mut self, raw: f32) {
+        let avg = match self.snr_avg {
+            Some(a) if (raw - a).abs() <= SNR_SNAP_DB => a + (raw - a) * SNR_EASE,
+            _ => {
+                self.snr_frames = SNR_EVERY;
+                raw
+            }
+        };
+        self.snr_avg = Some(avg);
+        self.snr_frames += 1;
+        if self.snr_frames >= SNR_EVERY {
+            self.snr_frames = 0;
+            self.snr = Some(avg);
+        }
     }
 
     /// Advance the needle; returns its 0..1 position.
@@ -157,6 +188,26 @@ impl Meter {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_snr_holds_still_long_enough_to_read() {
+        let mut m = Meter::default();
+        // ±1 dB of frame-to-frame scatter around 22 dB.
+        let mut shown = Vec::new();
+        for i in 0..250 {
+            let jitter = if i % 2 == 0 { 1.0 } else { -1.0 } * ((i * 7 % 10) as f32 / 10.0);
+            m.feed(-40.0 + jitter, -62.0, 0.1);
+            shown.push(m.snr.unwrap());
+        }
+        // It changes at most twice a second (25 frames a second)...
+        let changes = shown.windows(2).filter(|w| w[0] != w[1]).count();
+        assert!(changes <= 21, "{changes} changes in 10 s");
+        // ...and sits close to the mean once settled.
+        assert!(shown[100..].iter().all(|s| (s - 22.0).abs() < 0.4), "{:?}", &shown[100..110]);
+        // A retune to a much stronger signal shows at the next refresh.
+        m.feed(-20.0, -62.0, 0.1);
+        assert!((m.snr.unwrap() - 42.0).abs() < 0.01);
+    }
 
     #[test]
     fn s_units() {

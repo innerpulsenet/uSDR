@@ -22,10 +22,14 @@
 //!    names and PI call letters).
 //!
 //! Nothing is reported that has not passed the checkword, and text is held
-//! to more than that: a block that needed correcting is right only most of
-//! the time, so every two characters of PS and RadioText must arrive twice
-//! alike before they count, and a name is published only once all of it has
-//! been confirmed since its last change. A group counts only once its PI has
+//! to more than that. Two characters of PS or RadioText read from blocks
+//! that all passed with no correction count at once: for that to be wrong,
+//! two corrupted blocks would each have to meet their 10-bit check by
+//! chance. A block that needed correcting is right only most of the time,
+//! so characters read from one must arrive twice alike. A name is published
+//! only once all of it has been confirmed since its last change; RadioText
+//! being received is published as far as it goes (`rt_partial`), its gaps
+//! marked, so it can be shown filling in rather than all at once. A group counts only once its PI has
 //! been confirmed and it carries that PI, which keeps a false sync on noise
 //! from feeding anything through.
 
@@ -57,6 +61,13 @@ const AID_RTPLUS: u16 = 0x4BD7;
 /// fade keeps what was heard (marked unlocked); a long one means the text
 /// may be out of date, so it goes.
 const FORGET_AFTER_S: f64 = 15.0;
+
+/// Seconds a PS must hold unchanged before it is taken for the station's
+/// name. A station that scrolls words through its PS changes it every few
+/// seconds, and until three words have gone by its first word looks like a
+/// name ("kstreet" for WEBE's "Backstreet Boys"); the call letters from the
+/// PI stand in until then.
+const PS_STEADY_S: f64 = 10.0;
 
 // ---------- the checkword ----------
 
@@ -691,7 +702,7 @@ impl Text {
             p.fresh = true;
             return false;
         }
-        if p.cand.contains(&Some(v)) {
+        if exact || p.cand.contains(&Some(v)) {
             let changed = p.conf.is_some();
             p.conf = Some(v);
             p.cand = [None; 3];
@@ -729,11 +740,46 @@ impl Text {
         Some(out)
     }
 
+    /// The text as far as it is confirmed since it last changed, the first
+    /// `len` pairs or up to a carriage return, with [`RT_GAP`] for each
+    /// character not yet in; gaps after the last confirmed pair are left off.
+    /// And the share of those pairs that are in. `None` until one is.
+    fn partial(&self, len: usize) -> Option<(String, f32)> {
+        let mut out = String::new();
+        let (mut known, mut total, mut kept) = (0usize, 0usize, 0usize);
+        'pairs: for p in self.pairs.iter().take(len) {
+            total += 1;
+            match (p.fresh, p.conf) {
+                (true, Some(v)) => {
+                    known += 1;
+                    for c in v {
+                        if c == 0x0D {
+                            kept = out.chars().count();
+                            break 'pairs;
+                        }
+                        out.push(rds_char(c));
+                    }
+                    kept = out.chars().count();
+                }
+                _ => out.extend([RT_GAP, RT_GAP]),
+            }
+        }
+        if known == 0 {
+            return None;
+        }
+        let shown: String = out.chars().take(kept).collect();
+        Some((shown.trim_end().to_string(), known as f32 / total.max(1) as f32))
+    }
+
     /// True once any pair has been confirmed.
     fn any(&self) -> bool {
         self.pairs.iter().any(|p| p.conf.is_some())
     }
 }
+
+/// A character of RadioText not yet received, in `rt_partial`. Not in the
+/// RDS character table, so it can never be a received character.
+pub const RT_GAP: char = '\u{2591}';
 
 /// One RDS character (the basic RDS table, as US stations use it).
 /// Characters outside it come out as U+FFFD rather than as a guess.
@@ -824,6 +870,9 @@ pub struct RdsStation {
     /// The station scrolls words through its PS, so `ps` is a word of a
     /// longer message rather than its name.
     pub ps_dynamic: bool,
+    /// The PS has held for [`PS_STEADY_S`] and does not scroll: it is the
+    /// station's name.
+    pub ps_steady: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pty: Option<u8>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -832,6 +881,12 @@ pub struct RdsStation {
     pub ta: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rt: Option<String>,
+    /// A RadioText still coming in, as far as it is confirmed, [`RT_GAP`]
+    /// where characters are missing; and how much of it is in, 0..1.
+    /// Present only while the text being sent is not yet complete.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rt_partial: Option<String>,
+    pub rt_progress: f32,
     /// From RT+ tags, while the station marks an item as running.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
@@ -883,6 +938,10 @@ struct Heard {
     /// scrolls words through its PS sends a new one every few seconds.
     ps_seen: Vec<(u64, String)>,
     ps_dynamic: bool,
+    /// Sample time the PS last changed, and whether it has held since for
+    /// [`PS_STEADY_S`].
+    ps_since: u64,
+    ps_steady: bool,
     rt: Text,
     rt_ab: Option<bool>,
     /// 2B (32 characters) rather than 2A (64).
@@ -891,6 +950,8 @@ struct Heard {
     rt_flip: Option<(bool, bool)>,
     rt_out: Option<String>,
     rt_raw: Option<Vec<u8>>,
+    /// The text being received, while it is incomplete.
+    rt_partial: Option<(String, f32)>,
     /// The group type RT+ is carried in, from group 3A.
     rtplus_group: Option<(u8, bool)>,
     rtplus_cand: Option<(u16, u16, u16)>,
@@ -922,12 +983,15 @@ impl Heard {
             ps_out: None,
             ps_seen: Vec::new(),
             ps_dynamic: false,
+            ps_since: 0,
+            ps_steady: false,
             rt: Text::new(32),
             rt_ab: None,
             rt_b: None,
             rt_flip: None,
             rt_out: None,
             rt_raw: None,
+            rt_partial: None,
             rtplus_group: None,
             rtplus_cand: None,
             rtplus_toggle: None,
@@ -994,6 +1058,14 @@ impl RdsDecoder {
         }
         self.quiet += mpx.len() as u64;
         self.samples += mpx.len() as u64;
+        if !self.h.ps_steady
+            && !self.h.ps_dynamic
+            && self.h.ps_out.is_some()
+            && (self.samples - self.h.ps_since) as f64 >= PS_STEADY_S * self.fs
+        {
+            self.h.ps_steady = true;
+            self.bump();
+        }
         if self.h.pi.is_some() && self.quiet as f64 > FORGET_AFTER_S * self.fs {
             self.forget_station();
         }
@@ -1017,11 +1089,14 @@ impl RdsDecoder {
             pi_call: pi_call(pi),
             ps: self.h.ps_out.clone(),
             ps_dynamic: self.h.ps_dynamic,
+            ps_steady: self.h.ps_steady,
             pty: self.h.pty,
             pty_name: self.h.pty.map(pty_name),
             tp: self.h.tp,
             ta: self.h.ta,
             rt: self.h.rt_out.clone(),
+            rt_partial: self.h.rt_partial.as_ref().map(|p| p.0.clone()),
+            rt_progress: self.h.rt_partial.as_ref().map_or(0.0, |p| p.1),
             title: self.h.title.clone(),
             artist: self.h.artist.clone(),
             clock_utc: self.h.clock.as_ref().map(|c| c.0.clone()),
@@ -1251,6 +1326,8 @@ impl RdsDecoder {
                     self.h.ps_dynamic = true;
                 }
                 self.h.ps_out = Some(s);
+                self.h.ps_since = now;
+                self.h.ps_steady = false;
                 self.bump();
                 if !self.h.ps_dynamic {
                     self.changes.push(RdsChange::Ps);
@@ -1260,6 +1337,15 @@ impl RdsDecoder {
     }
 
     fn publish_rt(&mut self) {
+        // What is in of a text not yet complete, published as it grows.
+        let partial = match self.h.rt.complete() {
+            Some(_) => None,
+            None => self.h.rt.partial(if self.h.rt_b == Some(true) { 16 } else { 32 }),
+        };
+        if partial.as_ref().map(|p| &p.0) != self.h.rt_partial.as_ref().map(|p| &p.0) {
+            self.h.rt_partial = partial;
+            self.bump();
+        }
         if let Some(bytes) = self.h.rt.complete() {
             let s = to_string(&bytes);
             if !s.is_empty() && self.h.rt_out.as_deref() != Some(&s) {
@@ -1602,6 +1688,19 @@ mod tests {
     }
 
     #[test]
+    fn a_name_is_taken_once_it_has_held() {
+        let tx = Tx { fs: 256_000.0, pilot: true, rds_amp: 0.04, noise: 0.05, carrier_err_hz: 0.0 };
+        // Five passes, about 8 s: the PS is in, but not yet steady.
+        let (dec, _) = run(&tx, &air(5, 0));
+        let st = dec.station().expect("a station");
+        assert_eq!(st.ps.as_deref(), Some("KXYZ FM"));
+        assert!(!st.ps_steady);
+        // Eight passes, about 13 s: held for more than ten seconds.
+        let (dec, _) = run(&tx, &air(8, 0));
+        assert!(dec.station().expect("a station").ps_steady);
+    }
+
+    #[test]
     fn decodes_a_mono_station_without_a_pilot() {
         let tx = Tx { fs: 250_000.0, pilot: false, rds_amp: 0.04, noise: 0.05, carrier_err_hz: 4.0 };
         let (dec, _) = run(&tx, &air(5, 0));
@@ -1650,6 +1749,7 @@ mod tests {
         let (dec, events) = run(&tx, &bits);
         let st = dec.station().expect("a station");
         assert!(st.ps_dynamic);
+        assert!(!st.ps_steady, "a scrolling PS is never the name");
         assert_eq!(st.ps.as_deref(), Some("HORIZON"));
         let ps_lines = events.iter().filter(|e| e.kind == "Program service").count();
         assert!(ps_lines <= 2, "{ps_lines} PS lines");
@@ -1718,12 +1818,8 @@ mod tests {
     }
 
     #[test]
-    fn a_text_counts_only_once_heard_twice() {
+    fn exact_pairs_count_at_once_and_corrected_ones_twice() {
         let mut t = Text::new(4);
-        for k in 0..4 {
-            t.put(k, *b"AB", true);
-        }
-        assert!(t.complete().is_none());
         for k in 0..4 {
             t.put(k, *b"AB", true);
         }
@@ -1731,12 +1827,41 @@ mod tests {
         // One pair changes: nothing is published until the rest is heard
         // again, so a half-old, half-new name never shows.
         t.put(1, *b"XY", true);
-        t.put(1, *b"XY", true);
         assert!(t.complete().is_none());
         for k in [0, 2, 3] {
             t.put(k, *b"AB", true);
         }
         assert_eq!(t.complete().as_deref(), Some(&b"ABXYABAB"[..]));
+        // Read from corrected blocks, a pair needs a second reading alike.
+        let mut t = Text::new(2);
+        t.put(0, *b"AB", false);
+        t.put(1, *b"CD", false);
+        assert!(t.complete().is_none());
+        t.put(0, *b"AB", false);
+        t.put(1, *b"XX", false);
+        assert!(t.complete().is_none());
+        t.put(1, *b"CD", false);
+        assert_eq!(t.complete().as_deref(), Some(&b"ABCD"[..]));
+    }
+
+    #[test]
+    fn a_text_coming_in_shows_its_gaps() {
+        let mut t = Text::new(32);
+        assert!(t.partial(32).is_none());
+        t.put(0, *b"Ha", true);
+        t.put(1, *b"te", true);
+        t.put(3, *b"ha", true);
+        t.put(5, *b"Ma", true);
+        let (text, done) = t.partial(32).unwrap();
+        let g = RT_GAP;
+        assert_eq!(text, format!("Hate{g}{g}ha{g}{g}Ma"));
+        assert!((done - 4.0 / 32.0).abs() < 1e-6);
+        // A carriage return ends the text, and with it the count.
+        t.put(2, *b" T", true);
+        t.put(4, *b"t\r", true);
+        let (text, done) = t.partial(32).unwrap();
+        assert_eq!(text, "Hate That");
+        assert!((done - 1.0).abs() < 1e-6);
     }
 
     #[test]
