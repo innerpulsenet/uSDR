@@ -1194,10 +1194,17 @@ async fn post_sdr_calibrate(
     let sdr = guard
         .as_ref()
         .ok_or_else(|| ApiError::BadRequest("the receiver is not running".into()))?;
-    let (err_hz, mut inspect_hz, ppm_now, stranded) = {
+    let (err_hz, mut inspect_hz, ppm_now, stranded, mode) = {
         let s = sdr.status.lock().expect("sdr status");
-        (s.freq_error_hz, s.inspect_hz, s.ppm, s.error.clone().filter(|e| e.contains("did not accept")))
+        (s.freq_error_hz, s.inspect_hz, s.ppm, s.error.clone().filter(|e| e.contains("did not accept")), s.mode)
     };
+    // A sideband signal has no carrier to measure against; whatever the
+    // receiver would report is the voice passband's centroid, not an error.
+    if matches!(mode, sdr::SdrMode::Usb | sdr::SdrMode::Lsb) {
+        return Err(ApiError::BadRequest(
+            "sideband has no carrier to calibrate from: tune an AM or FM station with a known carrier (WWV, CHU, a broadcast station) and calibrate there".into(),
+        ));
+    }
     // A carrier measured while the tuner sits somewhere other than where it
     // was asked to be would be folded into the correction and carried into
     // every tune after; that is how a refused tune became a saved -148 ppm.

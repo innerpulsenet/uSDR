@@ -773,6 +773,8 @@ fn radio(app: &mut App, ui: &mut Ui) {
             l.get("/api/devices", Get::Devices);
         }
     });
+    // Sideband has no carrier, so there is nothing to calibrate from.
+    let sideband = matches!(s.mode, Mode::Usb | Mode::Lsb);
     ui.horizontal(|ui| {
         ui.label(small("PPM"));
         let mut ppm = s.ppm;
@@ -781,13 +783,21 @@ fn radio(app: &mut App, ui: &mut Ui) {
             app.post("/api/sdr/ppm", json!({ "ppm": ppm }));
             app.status.ppm = ppm;
         }
-        if widgets::action(ui, "CALIBRATE").on_hover_text("Measure the crystal error from the carrier you are tuned to").clicked()
-            && let Some(l) = &app.link
-        {
+        let r = ui.add_enabled_ui(!sideband, |ui| widgets::action(ui, "CALIBRATE")).inner;
+        let r = if sideband {
+            r.on_disabled_hover_text("Sideband has no carrier: calibrate on an AM or FM station with a known carrier")
+        } else {
+            r.on_hover_text("Measure the crystal error from the carrier you are tuned to")
+        };
+        if r.clicked() && let Some(l) = &app.link {
             l.post_get("/api/sdr/calibrate", json!({}), Get::Calibrate);
         }
     });
-    let err = s.freq_error_hz.map_or("no carrier measured".into(), |e| format!("carrier error {e:+.0} Hz"));
+    let err = match s.freq_error_hz {
+        Some(e) => format!("carrier error {e:+.0} Hz"),
+        None if sideband => "no carrier in sideband".to_string(),
+        None => "no carrier measured".to_string(),
+    };
     ui.label(small(format!("{err} · tune {}–{}", crate::tuning::fmt_hz(s.tune_min_hz), crate::tuning::fmt_hz(s.tune_max_hz))));
 }
 

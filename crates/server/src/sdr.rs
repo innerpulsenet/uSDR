@@ -6405,8 +6405,16 @@ fn run_sdr(
                 _ => None,
             };
 
+            // Sideband has no carrier: the voice energy sits wholly to one
+            // side of the dial, and a centroid of it (or of whatever peak
+            // is nearest) is a number that looks like a crystal error and
+            // is not. One such reading, calibrated from, left a 25 ppm
+            // correction on an RSP1A whose TCXO is good to 0.5. So nothing
+            // is measured in USB/LSB; the dial is checked in AM or FM.
+            let sideband = matches!(current_mode, SdrMode::Usb | SdrMode::Lsb);
+
             // 2. Direct in-channel spectral centroid if channel energy stands over the noise floor
-            let in_channel_offset = if channel_dbfs - noise_dbfs > 3.0 {
+            let in_channel_offset = if !sideband && channel_dbfs - noise_dbfs > 3.0 {
                 carrier_offset_hz(
                     shown,
                     shown_rate,
@@ -6420,7 +6428,7 @@ fn run_sdr(
 
             // 3. Nearby carrier peak search: detects carriers when crystal error has shifted
             // the signal outside the narrow channel filter (up to ±60 kHz of inspect_hz).
-            let nearby_peak_offset = if in_channel_offset.is_none() && decoder_err.is_none() {
+            let nearby_peak_offset = if !sideband && in_channel_offset.is_none() && decoder_err.is_none() {
                 let max_search_hz = (inspect_hz * 120e-6).clamp(30_000.0, 60_000.0);
                 peaks
                     .iter()
