@@ -672,19 +672,22 @@ pub fn mix_decim(iq: &[Complex32], fs: f32, hz: f32, decim: usize) -> Vec<Comple
 /// blocks, which is what keeps the output identical however the caller
 /// happens to chunk its input.
 pub struct Nco {
-    /// Current phasor, and the per-sample rotation.
-    cur: Complex32,
+    /// Four phasors, one per sample position mod 4, each stepping four
+    /// samples at a time. One phasor stepping one sample makes every
+    /// multiply wait on the last; four independent ones keep the multiplier
+    /// busy, which halved the mixer's cost at 6 MS/s.
+    lanes: [Complex32; 4],
+    /// Which lane the next sample takes.
+    pos: usize,
     inc: Complex32,
+    inc4: Complex32,
     since_norm: u32,
 }
 
 impl Nco {
     pub fn new() -> Self {
-        Self {
-            cur: Complex32::new(1.0, 0.0),
-            inc: Complex32::new(1.0, 0.0),
-            since_norm: 0,
-        }
+        let one = Complex32::new(1.0, 0.0);
+        Self { lanes: [one; 4], pos: 0, inc: one, inc4: one, since_norm: 0 }
     }
 
     /// Change the rotation rate, keeping the phase where it is — a retune
@@ -693,28 +696,71 @@ impl Nco {
         let step = -2.0 * std::f64::consts::PI * hz / fs;
         let (sin, cos) = step.sin_cos();
         self.inc = Complex32::new(cos as f32, sin as f32);
+        let (sin4, cos4) = (4.0 * step).sin_cos();
+        self.inc4 = Complex32::new(cos4 as f32, sin4 as f32);
+        self.respread(self.lanes[self.pos]);
     }
 
     /// Restart the phase at DC while keeping the rotation rate — for a break
     /// in the sample timeline, where continuing the old phase is meaningless.
     pub fn reset_phase(&mut self) {
-        self.cur = Complex32::new(1.0, 0.0);
+        self.pos = 0;
+        self.respread(Complex32::new(1.0, 0.0));
         self.since_norm = 0;
+    }
+
+    /// Lay the lanes out from the phase of the next sample.
+    fn respread(&mut self, next: Complex32) {
+        let mut p = next;
+        for k in 0..4 {
+            self.lanes[(self.pos + k) % 4] = p;
+            p *= self.inc;
+        }
+    }
+
+    fn renormalise(&mut self) {
+        // Newton step toward |cur| = 1, cheaper than a square root.
+        for l in &mut self.lanes {
+            *l *= 1.5 - 0.5 * l.norm_sqr();
+        }
+    }
+
+    fn one(&mut self, x: Complex32) -> Complex32 {
+        let y = x * self.lanes[self.pos];
+        self.lanes[self.pos] *= self.inc4;
+        self.pos = (self.pos + 1) % 4;
+        self.since_norm += 1;
+        if self.since_norm >= 1024 {
+            self.since_norm = 0;
+            self.renormalise();
+        }
+        y
     }
 
     pub fn mix(&mut self, input: &[Complex32], out: &mut Vec<Complex32>) {
         out.clear();
-        out.reserve(input.len());
-        for &s in input {
-            out.push(s * self.cur);
-            self.cur *= self.inc;
-            self.since_norm += 1;
+        out.resize(input.len(), Complex32::new(0.0, 0.0));
+        let head = ((4 - self.pos) % 4).min(input.len());
+        for i in 0..head {
+            out[i] = self.one(input[i]);
+        }
+        let body = (input.len() - head) / 4 * 4;
+        // Lane-aligned from here, and the renormalising count moves with the
+        // lanes (both start at zero), so it lands on a chunk boundary: the
+        // output is the same however the caller chunks its input.
+        for (x, y) in input[head..head + body].chunks_exact(4).zip(out[head..head + body].chunks_exact_mut(4)) {
+            for l in 0..4 {
+                y[l] = x[l] * self.lanes[l];
+                self.lanes[l] *= self.inc4;
+            }
+            self.since_norm += 4;
             if self.since_norm >= 1024 {
                 self.since_norm = 0;
-                // Newton step toward |cur| = 1, cheaper than a square root.
-                let k = 1.5 - 0.5 * self.cur.norm_sqr();
-                self.cur *= k;
+                self.renormalise();
             }
+        }
+        for i in head + body..input.len() {
+            out[i] = self.one(input[i]);
         }
     }
 }
@@ -722,6 +768,10 @@ impl Nco {
 /// Windowed-sinc FIR lowpass that only evaluates the samples it keeps.
 pub struct DecimFir {
     taps: Vec<f32>,
+    /// The taps for the direct path, each written twice (once for I, once
+    /// for Q) and zero-padded to a whole number of 8-lane chunks, so the
+    /// inner product runs over the interleaved samples as plain f32 lanes.
+    taps2: Vec<f32>,
     buf: Vec<Complex32>,
     decim: usize,
     fft: Option<Arc<dyn Fft<f32>>>,
@@ -746,6 +796,7 @@ impl DecimFir {
         let ntaps = ntaps | 1; // force odd so there is a center tap
         let mut this = Self {
             taps: lowpass_taps(cutoff_hz, fs, ntaps),
+            taps2: Vec::new(),
             buf: Vec::with_capacity(ntaps * 4),
             decim,
             fft: None,
@@ -800,16 +851,27 @@ impl DecimFir {
         }
         out.clear();
         self.buf.extend_from_slice(input);
-        let n = self.taps.len();
+        // The window covers the padded tap count; the pad taps are zero, so
+        // the extra samples it reads contribute nothing.
+        let span = self.taps2.len() / 2;
+        // SAFETY: `Complex<f32>` is `#[repr(C)]` { re, im }, so a slice of
+        // them is the same memory as twice as many f32s.
+        let flat: &[f32] = unsafe {
+            std::slice::from_raw_parts(self.buf.as_ptr().cast::<f32>(), self.buf.len() * 2)
+        };
         let mut i = 0usize;
-        while i + n <= self.buf.len() {
-            let mut re = 0.0f64;
-            let mut im = 0.0f64;
-            for k in 0..n {
-                re += self.buf[i + k].re as f64 * self.taps[k] as f64;
-                im += self.buf[i + k].im as f64 * self.taps[k] as f64;
+        while i + span <= self.buf.len() {
+            let win = &flat[2 * i..2 * (i + span)];
+            let mut acc = [0.0f32; 8];
+            for (x, h) in win.chunks_exact(8).zip(self.taps2.chunks_exact(8)) {
+                for l in 0..8 {
+                    acc[l] += x[l] * h[l];
+                }
             }
-            out.push(Complex32::new(re as f32, im as f32));
+            out.push(Complex32::new(
+                acc[0] + acc[2] + acc[4] + acc[6],
+                acc[1] + acc[3] + acc[5] + acc[7],
+            ));
             i += self.decim;
         }
         if i > 0 {
@@ -818,14 +880,29 @@ impl DecimFir {
     }
 
     fn rebuild_fft(&mut self) {
-        if self.taps.len() < 64 {
+        // Direct or overlap-save, by which costs less per input sample. The
+        // direct path computes only the outputs it keeps, `taps / decim`
+        // complex multiply-adds per input sample; overlap-save pays two
+        // transforms per hop whatever is kept. Measured at 6 MS/s, a
+        // 2047-tap stage decimating by 125 costs a quarter as much direct;
+        // decimating by 23 (WFM) the transform still wins.
+        if self.taps.len() < 64 || self.taps.len() <= DIRECT_TAPS_PER_OUTPUT * self.decim {
             self.fft = None;
+            self.ifft = None;
+            let n = self.taps.len();
+            let padded = n.div_ceil(4) * 4;
+            self.taps2 = vec![0.0; padded * 2];
+            for (k, &t) in self.taps.iter().enumerate() {
+                self.taps2[2 * k] = t;
+                self.taps2[2 * k + 1] = t;
+            }
             return;
         }
-        self.fft_len = self.taps.len().next_power_of_two();
-        if self.fft_len - (self.taps.len() - 1) < 512 {
-            self.fft_len *= 2;
-        }
+        // A hop of about three filter lengths: two transforms per hop is
+        // what overlap-save costs, so a longer hop spreads them over more
+        // samples. At 2047 taps an 8192-point transform costs about 30% less
+        // per sample than the 4096 one, for 1 ms more latency at 6 MS/s.
+        self.fft_len = (self.taps.len() * 4).next_power_of_two();
         let mut planner = FftPlanner::new();
         let fft = planner.plan_fft_forward(self.fft_len);
         let ifft = planner.plan_fft_inverse(self.fft_len);
@@ -981,11 +1058,14 @@ fn lowpass_taps(cutoff_hz: f32, fs: f32, ntaps: usize) -> Vec<f32> {
     taps
 }
 
-/// Radio-rate taps. Overlap-save makes the cost per input sample nearly
-/// independent of this — measured, a second of 2.08 MS/s costs 15 ms whether
-/// the filter is 573 taps or 2047, because the transform dominates — so the
-/// length is chosen for response rather than for speed.
+/// Radio-rate taps, chosen for response rather than speed. Overlap-save's
+/// cost barely depends on the length (the transform dominates), and where the
+/// decimation is deep enough for the direct path, 2047 taps is still only
+/// about 16 multiply-adds per input sample at 48 kHz out of 6 MS/s.
 const RADIO_TAPS: usize = 2047;
+/// Up to this many taps per kept output, the direct path is cheaper than
+/// overlap-save (measured with `examples/bench_chain.rs`).
+const DIRECT_TAPS_PER_OUTPUT: usize = 32;
 const AUDIO_TAPS_MIN: usize = 129;
 const AUDIO_TAPS_MAX: usize = 4095;
 
@@ -1225,6 +1305,53 @@ mod tests {
             .map(|(a, b)| (*a - *b).norm())
             .fold(0.0f32, f32::max);
         assert!(err < 1e-3, "overlap-save differs by {err}");
+    }
+
+    #[test]
+    fn nco_output_does_not_depend_on_chunking() {
+        let input: Vec<_> = (0..10_000).map(|i| Complex32::new((i as f32 * 0.01).sin(), 0.5)).collect();
+        let run = |sizes: &[usize]| {
+            let mut nco = Nco::new();
+            nco.set_freq(12_345.0, 1.0e6);
+            let (mut all, mut part, mut at, mut k) = (Vec::new(), Vec::new(), 0, 0);
+            while at < input.len() {
+                let n = sizes[k % sizes.len()].min(input.len() - at);
+                nco.mix(&input[at..at + n], &mut part);
+                all.extend_from_slice(&part);
+                at += n;
+                k += 1;
+            }
+            all
+        };
+        let whole = run(&[10_000]);
+        assert_eq!(whole, run(&[1, 7, 333, 1024, 5]));
+        // and it is the rotation asked for
+        let want = input[9_999] * Complex32::from_polar(1.0, (-2.0 * std::f64::consts::PI * 12_345.0 * 9_999.0 / 1.0e6) as f32);
+        assert!((whole[9_999] - want).norm() < 1e-3, "{:?} vs {want:?}", whole[9_999]);
+    }
+
+    #[test]
+    fn direct_path_matches_the_convolution() {
+        // 2047 taps decimating by 125: the radio stage of every 48 kHz mode.
+        let input: Vec<_> = (0..60_000)
+            .map(|i| Complex32::new((i as f32 * 0.013).sin(), (i as f32 * 0.021).cos()))
+            .collect();
+        let mut fir = DecimFir::new(24_000.0, 6.0e6, 125, 2047);
+        assert!(fir.fft.is_none(), "a deep decimation should take the direct path");
+        let taps = fir.taps.clone();
+        let mut got = Vec::new();
+        for block in input.chunks(7_001) {
+            let mut part = Vec::new();
+            fir.process(block, &mut part);
+            got.extend(part);
+        }
+        let want: Vec<Complex32> = (0..=input.len() - taps.len())
+            .step_by(125)
+            .map(|i| input[i..i + taps.len()].iter().zip(&taps).map(|(x, h)| *x * *h).sum())
+            .collect();
+        assert!(got.len() + 1 >= want.len() && got.len() <= want.len(), "{} outputs for {}", got.len(), want.len());
+        let err = got.iter().zip(&want).map(|(a, b)| (*a - *b).norm()).fold(0.0f32, f32::max);
+        assert!(err < 1e-4, "direct path differs by {err}");
     }
 
     /// Gain of the whole chain at `hz` off centre, relative to DC, in dB.
@@ -1614,6 +1741,11 @@ impl FrontEnd {
             100.0
         };
         (self.dc.norm(), rej.min(100.0))
+    }
+
+    /// 0 = off, 1 = gentle, 2 = normal, 3 = aggressive.
+    pub fn set_blanker(&mut self, level: u8) {
+        self.blanker.set_level(level);
     }
 
     pub fn cycle_blanker(&mut self) -> &'static str {

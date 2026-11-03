@@ -13,5 +13,6 @@ num-complex.workspace = true
 rmbe.workspace = true
 blip25-vocoder.workspace = true
 scannerd-dsp.workspace = true
+rustfft.workspace = true
 serde.workspace = true
 zeroize.workspace = true

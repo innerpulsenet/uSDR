@@ -2,6 +2,7 @@
 
 pub mod adsb;
 pub mod afc;
+pub mod agc;
 pub mod am;
 pub mod afsk;
 pub mod aprs;
@@ -12,6 +13,7 @@ pub mod cqpsk;
 pub mod crypto;
 pub mod ctcss;
 pub mod dcs;
+pub mod denoise;
 pub mod detect;
 pub mod dmr;
 pub mod flex;

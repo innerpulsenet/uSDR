@@ -15,6 +15,9 @@ use scannerd_engine::{CallEvent, ToneCode};
 use scannerd_engine::leveler::Leveler;
 use scannerd_engine::noisegate::NoiseGate;
 use scannerd_engine::autonotch::AutoNotch;
+use scannerd_engine::agc::AgcSpeed;
+use scannerd_engine::denoise::{Denoise, NrLevel};
+use scannerd_engine::biquad::{Biquad, Cascade};
 use scannerd_engine::ssb::{SSB_HIGH_HZ, SSB_LOW_HZ, Sideband, SsbDemod};
 use scannerd_engine::nbfm::{Demodulated, NbfmDemod};
 use scannerd_engine::nxdn::{NXDN_BANDWIDTH_HZ, NxdnChannelReceiver, NxdnSpec};
@@ -83,6 +86,36 @@ pub const WFM_DEVIATION_HZ: f32 = 75_000.0;
 /// Broadcast FM in the Americas and Korea is 75 µs de-emphasis; 50 µs
 /// elsewhere. Fixed at 75 µs here rather than pretending to detect it.
 pub const WFM_DEEMPHASIS_TAU: f32 = 75e-6;
+
+/// Optional receive processing, chosen by the operator and saved.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Processing {
+    /// Spectral noise reduction on monitored voice: NFM, AM, USB and LSB.
+    pub nr: NrLevel,
+    /// The heterodyne-hunting auto-notch on the same voice modes. NFM has
+    /// always had it; it is on by default.
+    pub auto_notch: bool,
+    /// The wideband impulse blanker, 0 (off) to 3 (aggressive). It clips the
+    /// leading edge of strong narrowband bursts, so it stays off unless the
+    /// operator is fighting ignition or power-line noise.
+    pub blanker: u8,
+    /// AM and sideband AGC speed.
+    pub agc: AgcSpeed,
+}
+
+impl Default for Processing {
+    fn default() -> Self {
+        Self { nr: NrLevel::Off, auto_notch: true, blanker: 0, agc: AgcSpeed::Medium }
+    }
+}
+
+/// The broadcast audio band: a 12th-order Butterworth at 15 kHz and a notch
+/// on the 19 kHz stereo pilot, run at the discriminator's rate.
+fn wfm_audio_filter(fs: f64) -> Cascade {
+    let fs = fs as f32;
+    Cascade::butterworth_lowpass(15_000.0, fs, 6).then(Biquad::notch(19_000.0, fs, 4.0))
+}
 /// Pager FSK needs more acquisition width than voice: FLEX's outer level is
 /// about ±4.8 kHz and the AFC can inherit ±6.5 kHz of RTL crystal error. A
 /// 15 kHz filter clipped that signal before the AFC or decoder could measure
@@ -543,6 +576,8 @@ pub struct SdrCfg {
     pub rf_notch: Option<bool>,
     #[serde(default)]
     pub dab_notch: Option<bool>,
+    #[serde(default)]
+    pub processing: Processing,
 }
 
 impl Default for SdrCfg {
@@ -562,6 +597,7 @@ impl Default for SdrCfg {
             remotes: Vec::new(),
             rf_notch: None,
             dab_notch: None,
+            processing: Processing::default(),
         }
     }
 }
@@ -672,6 +708,9 @@ pub struct SdrStatus {
     /// Automatic gain uses the tuner's own AGC instead of the guarded loop.
     #[serde(default)]
     pub tuner_agc: bool,
+    /// The optional receive processing in force.
+    #[serde(default)]
+    pub processing: Processing,
     /// Display magnification. 1.0 shows the whole usable span.
     #[serde(default)]
     pub zoom: f64,
@@ -1183,6 +1222,7 @@ enum SdrCmd {
     /// generated inside the receiver.
     Spurs(Vec<f64>),
     Ppm(f64),
+    Processing(Processing),
     Zoom(f64),
     /// About how many bins the browser's spectrum is wide at 1x zoom, so the
     /// FFT resolves what the screen can show and no more.
@@ -1357,6 +1397,12 @@ impl SdrRuntime {
         self.cmd_tx
             .send(SdrCmd::RfNotch(on))
             .map_err(|e| anyhow::anyhow!("send RF notch: {e}"))
+    }
+
+    pub fn set_processing(&self, p: Processing) -> Result<()> {
+        self.cmd_tx
+            .send(SdrCmd::Processing(p))
+            .map_err(|e| anyhow::anyhow!("send processing: {e}"))
     }
 
     pub fn set_dab_notch(&self, on: bool) -> Result<()> {
@@ -1811,11 +1857,15 @@ enum Demod {
         fm: NbfmDemod,
         disc: Vec<f32>,
         deemph: scannerd_dsp::OnePole,
-        /// Integer decimation from the 256 kHz IF down to something a sound
-        /// card is happy with, with the accumulator carried between blocks.
+        /// Broadcast audio stops at 15 kHz. Above it sit the 19 kHz stereo
+        /// pilot and the 23–53 kHz stereo difference signal, which a plain
+        /// average down to ~52 kHz folds back into the audio as whistle and
+        /// hiss; this low-pass and pilot notch take them out first.
+        lp: Cascade,
+        /// Integer decimation from the IF down to something a sound card is
+        /// happy with, the phase carried between blocks.
         decim: usize,
         phase: usize,
-        acc: f32,
     },
     Packet {
         aprs: AprsDecoder,
@@ -1955,9 +2005,9 @@ impl Demod {
                     // One-pole de-emphasis, its time constant expressed in
                     // samples at the rate the discriminator runs.
                     deemph: scannerd_dsp::OnePole::new(WFM_DEEMPHASIS_TAU * fs_out as f32),
+                    lp: wfm_audio_filter(fs_out),
                     decim,
                     phase: 0,
-                    acc: 0.0,
                 }
             }
             SdrMode::Packet => Demod::Packet {
@@ -1992,15 +2042,15 @@ impl Demod {
                 fm,
                 disc,
                 deemph,
+                lp,
                 phase,
-                acc,
                 ..
             } => {
                 fm.reset();
                 disc.clear();
                 *deemph = scannerd_dsp::OnePole::new(WFM_DEEMPHASIS_TAU * fs_out as f32);
+                lp.reset();
                 *phase = 0;
-                *acc = 0.0;
             }
             Demod::Packet {
                 aprs,
@@ -3143,6 +3193,7 @@ fn run_sdr(
     let mut lo_offset = cfg.lo_offset.unwrap_or(false);
     let mut clip_guard_on = cfg.clip_guard;
     let mut tuner_agc_on = cfg.tuner_agc;
+    let mut processing = cfg.processing;
     let mut inspect_hz = current_freq;
     let remotes = cfg.remotes.clone();
     let mut notches = Notches {
@@ -3222,6 +3273,7 @@ fn run_sdr(
             lo_offset_hz: lo_offset_for(current_rate, lo_offset, current_mode),
             clip_guard: clip_guard_on,
             tuner_agc: tuner_agc_on,
+            processing,
             zoom: current_zoom,
             bandwidth_hz: f64::from(current_mode.bandwidth_hz()),
             passband_offset_hz: f64::from(current_mode.passband_offset_hz()),
@@ -3368,7 +3420,7 @@ fn run_sdr(
     // measures or demodulates it. The impulse blanker is deliberately off:
     // it keys on wideband magnitude, so it eats the leading edge of exactly
     // the strong narrowband bursts PACKET is here to decode.
-    let mut front = FrontEnd::without_blanker(current_rate);
+    let mut front = FrontEnd::with_blanker(current_rate, processing.blanker);
     let mut clean: Vec<num_complex::Complex32> = Vec::new();
     let mut demod = Demod::new(current_mode, inspect_chain.fs_out(), inspect_hz);
     {
@@ -3401,6 +3453,8 @@ fn run_sdr(
     let mut mon_gate = NoiseGate::new(inspect_chain.fs_out());
     let mut mon_leveler = Leveler::new(inspect_chain.fs_out());
     let mut mon_notch = AutoNotch::new(inspect_chain.fs_out());
+    let mut mon_denoise = Denoise::new(inspect_chain.fs_out());
+    mon_denoise.set_level(processing.nr);
     let mut mon_rate_cache = inspect_chain.fs_out();
     let mut scope_disc: Vec<f32> = Vec::new();
     // Whatever this frame's scope trace is, normalised to ±1.
@@ -3845,6 +3899,14 @@ fn run_sdr(
                     }
                     let mut s = status.lock().unwrap();
                     s.clip_guard = on;
+                    let _ = events.send(SdrEvent::Status(s.clone()));
+                }
+                SdrCmd::Processing(p) => {
+                    processing = p;
+                    front.set_blanker(p.blanker);
+                    mon_denoise.set_level(p.nr);
+                    let mut s = status.lock().unwrap();
+                    s.processing = p;
                     let _ = events.send(SdrEvent::Status(s.clone()));
                 }
                 SdrCmd::TunerAgc(on) => {
@@ -4359,6 +4421,8 @@ fn run_sdr(
             mon_gate = NoiseGate::new(fs_now);
             mon_leveler = Leveler::new(fs_now);
             mon_notch = AutoNotch::new(fs_now);
+            mon_denoise = Denoise::new(fs_now);
+            mon_denoise.set_level(processing.nr);
             for slot in scan_slots.iter_mut().flatten() {
                 slot.chain.reset();
                 if let Some(rx) = slot.p25.as_mut() {
@@ -4457,6 +4521,8 @@ fn run_sdr(
             mon_gate = NoiseGate::new(fs_chain);
             mon_leveler = Leveler::new(fs_chain);
             mon_notch = AutoNotch::new(fs_chain);
+            mon_denoise = Denoise::new(fs_chain);
+            mon_denoise.set_level(processing.nr);
             mon_rate_cache = fs_chain;
         }
 
@@ -4589,7 +4655,12 @@ fn run_sdr(
                     audio,
                 } = &mut demod
                 {
+                    am.set_agc(processing.agc);
                     am.process(&inspect_iq, audio);
+                    if processing.auto_notch {
+                        mon_notch.process(audio);
+                    }
+                    mon_denoise.process(audio);
                     audio_buf.extend_from_slice(audio);
                     scope_src.clear();
                     scope_src.extend_from_slice(audio);
@@ -4612,7 +4683,12 @@ fn run_sdr(
                 // and runs its own speech AGC; the audio leaves at the
                 // channel rate, so the rolling capture keeps it as voice.
                 if let Demod::Ssb { demod: ssb, audio } = &mut demod {
+                    ssb.set_agc(processing.agc);
                     ssb.process(&inspect_iq, audio);
+                    if processing.auto_notch {
+                        mon_notch.process(audio);
+                    }
+                    mon_denoise.process(audio);
                     audio_buf.extend_from_slice(audio);
                     scope_src.clear();
                     scope_src.extend_from_slice(audio);
@@ -4671,7 +4747,10 @@ fn run_sdr(
                     let tail = audio_buf.len();
                     audio_buf.extend_from_slice(classifier.monitor_voice());
                     let voice = &mut audio_buf[tail..];
-                    mon_notch.process(voice);
+                    if processing.auto_notch {
+                        mon_notch.process(voice);
+                    }
+                    mon_denoise.process(voice);
                     mon_gate.process(voice, classifier.monitor_noise());
                     mon_leveler.process(voice);
                 }
@@ -5304,7 +5383,12 @@ fn run_sdr(
                         let tail = audio_buf.len();
                         audio_buf.extend_from_slice(classifier.monitor_voice());
                         let voice = &mut audio_buf[tail..];
-                        mon_notch.process(voice);
+                        // No noise reduction here: the audio switches to
+                        // decoded voice mid-stream, and the reducer's frame of
+                        // analog audio would play out over the start of it.
+                        if processing.auto_notch {
+                            mon_notch.process(voice);
+                        }
                         mon_gate.process(voice, classifier.monitor_noise());
                         mon_leveler.process(voice);
                     }
@@ -5594,22 +5678,20 @@ fn run_sdr(
                     fm,
                     disc,
                     deemph,
+                    lp,
                     decim,
                     phase,
-                    acc,
                 } = &mut demod
                 {
                     // Instantaneous frequency in Hz, scaled by the deviation
-                    // so full deflection is full scale, then de-emphasised and
-                    // box-averaged down to the audio rate.
+                    // so full deflection is full scale, de-emphasised,
+                    // band-limited to the broadcast audio, then decimated.
                     fm.discriminator_hz(&inspect_iq, disc);
                     for &hz in disc.iter() {
-                        let v = deemph.process(hz / WFM_DEVIATION_HZ);
-                        *acc += v;
+                        let v = lp.process(deemph.process(hz / WFM_DEVIATION_HZ));
                         *phase += 1;
                         if *phase >= *decim {
-                            audio_buf.push((*acc / *decim as f32).clamp(-1.0, 1.0));
-                            *acc = 0.0;
+                            audio_buf.push(v.clamp(-1.0, 1.0));
                             *phase = 0;
                         }
                     }
@@ -5801,7 +5883,7 @@ fn run_sdr(
                     // Pre-de-emphasis, so the pilot and subcarriers survive.
                     scope_src
                         .extend(disc.iter().map(|&hz| (hz / WFM_DEVIATION_HZ).clamp(-1.0, 1.0)));
-                    scope_src_rate = WFM_IF_RATE;
+                    scope_src_rate = inspect_chain.fs_out(); // the real rate, not the nominal 256 kHz
                     scope_dev_scale = WFM_DEVIATION_HZ;
                 }
             }

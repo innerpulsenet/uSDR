@@ -73,10 +73,8 @@ const ATTACK_S: f32 = 0.002;
 /// has already come down (by ~92%, 2.5 attack constants) when the onset of
 /// an over reaches the output. Without it every first syllable would clip.
 const LOOKAHEAD_S: f32 = 0.005;
-/// Gain is held this long after the last peak, across the gaps in speech.
-const HANG_S: f32 = 0.400;
-/// After the hang, the gain recovers at this rate.
-const DECAY_DB_PER_S: f32 = 15.0;
+// The hang (gain held across the gaps in speech) and the recovery rate after
+// it come from `AgcSpeed`; medium is 400 ms and 15 dB/s.
 /// Output clamp, the backstop for anything the attack misses.
 const CLAMP: f32 = 1.5;
 
@@ -143,10 +141,10 @@ impl SsbDemod {
             peak: peak_floor,
             peak_floor,
             hang: 0,
-            hang_len: (HANG_S * fs32) as u32,
+            hang_len: (crate::agc::AgcSpeed::Medium.ssb_hang_s() * fs32) as u32,
             attack: 1.0 - (-1.0 / (ATTACK_S * fs32).max(1.0)).exp(),
-            // Per-sample multiplier on the tracked peak: −15 dB/s.
-            decay: 10f32.powf(-DECAY_DB_PER_S / 20.0 / fs32),
+            // Per-sample multiplier on the tracked peak.
+            decay: 10f32.powf(-crate::agc::AgcSpeed::Medium.ssb_decay_db_per_s() / 20.0 / fs32),
             delay: vec![0.0; lookahead],
             delay_pos: 0,
             fs,
@@ -211,6 +209,12 @@ impl SsbDemod {
             self.phasor /= self.phasor.norm();
         }
         (audio, env)
+    }
+
+    pub fn set_agc(&mut self, speed: crate::agc::AgcSpeed) {
+        let fs = self.fs as f32;
+        self.hang_len = (speed.ssb_hang_s() * fs) as u32;
+        self.decay = 10f32.powf(-speed.ssb_decay_db_per_s() / 20.0 / fs);
     }
 
     /// Peak-tracking hang AGC with lookahead.

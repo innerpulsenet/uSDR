@@ -25,6 +25,7 @@ pub struct AmDemod {
     agc: f32,
     /// AGC time constant in samples.
     agc_tau: f32,
+    fs: f32,
     voice_lp: Cascade,
     hp: OnePole,
 }
@@ -37,7 +38,8 @@ impl AmDemod {
             // ~50 ms: fast enough to track fading on HF, slow enough that
             // 100% modulated speech does not pump the gain at syllable rate.
             agc: 1.0,
-            agc_tau: 0.05 * fs32,
+            agc_tau: crate::agc::AgcSpeed::Medium.am_tau_s() * fs32,
+            fs: fs32,
             voice_lp: Cascade::lowpass(AM_VOICE_LOWPASS_HZ, fs32, 2),
             // Removes the detected carrier (DC) without touching the
             // modulation sidebands above it.
@@ -69,6 +71,10 @@ impl AmDemod {
             let dc_free = audio - self.hp.process(audio);
             out.push(self.voice_lp.process(dc_free).clamp(-1.5, 1.5));
         }
+    }
+
+    pub fn set_agc(&mut self, speed: crate::agc::AgcSpeed) {
+        self.agc_tau = speed.am_tau_s() * self.fs;
     }
 
     pub fn reset(&mut self) {

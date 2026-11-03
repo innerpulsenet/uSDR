@@ -283,6 +283,19 @@ pub fn decode_fft(buf: &[u8]) -> Result<FftFrame, DecodeError> {
 
 // ---------- JSON events ----------
 
+/// The optional receive processing (`POST /api/sdr/processing`).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Processing {
+    /// "off", "low", "medium" or "high".
+    pub nr: String,
+    pub auto_notch: bool,
+    /// 0 (off) to 3 (aggressive).
+    pub blanker: u8,
+    /// "fast", "medium" or "slow".
+    pub agc: String,
+}
+
 /// The receiver's state, as `GET /api/sdr/status` and the `status` event
 /// carry it. Field names are the server's (snake_case).
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -329,6 +342,9 @@ pub struct Status {
     pub lo_offset_hz: f64,
     pub clip_guard: bool,
     pub tuner_agc: bool,
+    /// Noise reduction, auto-notch, blanker and AGC speed; absent from older
+    /// servers.
+    pub processing: Option<Processing>,
     pub zoom: f64,
     pub bandwidth_hz: f64,
     pub passband_offset_hz: f64,

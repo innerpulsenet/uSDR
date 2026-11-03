@@ -168,6 +168,9 @@ struct Settings {
     rf_notch: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     dab_notch: Option<bool>,
+    /// Noise reduction, auto-notch, blanker and AGC speed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    processing: Option<sdr::Processing>,
     /// Voice-scan configuration (range, modes, threshold), applied when the
     /// mode is `scan`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -361,6 +364,7 @@ async fn main() -> Result<()> {
         remotes: settings.remotes.clone(),
         rf_notch: settings.rf_notch,
         dab_notch: settings.dab_notch,
+        processing: settings.processing.unwrap_or_default(),
     };
 
     // The FFT frames are the bulk of this stream at 25 fps and can reach
@@ -421,6 +425,7 @@ async fn main() -> Result<()> {
         .route("/api/sdr/frontend", post(post_sdr_frontend))
         .route("/api/sdr/spurs", post(post_sdr_spurs))
         .route("/api/sdr/ppm", post(post_sdr_ppm))
+        .route("/api/sdr/processing", post(post_sdr_processing))
         .route("/api/sdr/zoom", post(post_sdr_zoom))
         .route("/api/sdr/display", post(post_sdr_display))
         .route("/api/sdr/avg", post(post_sdr_avg))
@@ -1132,6 +1137,43 @@ async fn post_sdr_ppm(
 #[serde(default)]
 struct SdrCalibrateReq {
     reference_hz: Option<f64>,
+}
+
+#[derive(Deserialize)]
+struct SdrProcessingReq {
+    nr: Option<scannerd_engine::denoise::NrLevel>,
+    auto_notch: Option<bool>,
+    blanker: Option<u8>,
+    agc: Option<scannerd_engine::agc::AgcSpeed>,
+}
+
+/// Change any of the optional receive processing; fields left out keep their
+/// setting. Answers with the whole set now in force.
+async fn post_sdr_processing(
+    State(st): State<Arc<AppState>>,
+    Json(req): Json<SdrProcessingReq>,
+) -> Result<Json<sdr::Processing>, ApiError> {
+    if req.blanker.is_some_and(|b| b > 3) {
+        return Err(ApiError::BadRequest("blanker is 0 (off) to 3 (aggressive)".into()));
+    }
+    let mut p = st.settings.lock().expect("settings").processing.unwrap_or_default();
+    if let Some(v) = req.nr {
+        p.nr = v;
+    }
+    if let Some(v) = req.auto_notch {
+        p.auto_notch = v;
+    }
+    if let Some(v) = req.blanker {
+        p.blanker = v;
+    }
+    if let Some(v) = req.agc {
+        p.agc = v;
+    }
+    st.update_settings(|s| s.processing = Some(p));
+    if let Some(sdr) = st.sdr.lock().expect("sdr").as_ref() {
+        sdr.set_processing(p)?;
+    }
+    Ok(Json(p))
 }
 
 /// Work out the crystal error from a signal whose true frequency is known.

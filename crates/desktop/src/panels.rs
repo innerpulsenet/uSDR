@@ -19,6 +19,9 @@ pub fn side(app: &mut App, ui: &mut Ui) {
     egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
         widgets::applet(ui, "gain", "Gain", |_| {}, |ui| gain(app, ui));
         widgets::applet(ui, "frontend", "Front end", |_| {}, |ui| front_end(app, ui));
+        if app.status.processing.is_some() {
+            widgets::applet(ui, "processing", "Noise and AGC", |_| {}, |ui| processing(app, ui));
+        }
         widgets::applet(ui, "recorder", "Recorder · last 20 s", |_| {}, |ui| recorder(app, ui));
         if app.status.mode == Mode::P25 {
             widgets::applet(ui, "p25", "P25 channel key", |_| {}, |ui| p25(app, ui));
@@ -305,6 +308,59 @@ fn front_end(app: &mut App, ui: &mut Ui) {
     }
     let n = [s.rf_notch, s.dab_notch, s.iq_correction, s.bias_t].iter().filter(|v| **v == Some(true)).count() + usize::from(s.lo_offset);
     ui.label(small(format!("{} · {}", s.tuner.trim_start_matches("Rafael Micro "), if n == 0 { "all off".into() } else { format!("{n} on") })));
+}
+
+fn processing(app: &mut App, ui: &mut Ui) {
+    let Some(p) = app.status.processing.clone() else { return };
+    let mode = app.status.mode;
+    let voice = matches!(mode, Mode::Nfm | Mode::Am | Mode::Usb | Mode::Lsb);
+    let row = |ui: &mut Ui, label: &str, hint: &str, add: &mut dyn FnMut(&mut Ui)| {
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 3.0;
+            let r = ui.label(small(label)).on_hover_text(hint);
+            ui.add_space((78.0 - r.rect.width()).max(0.0));
+            add(ui);
+        });
+    };
+    let mut post = None;
+    row(ui, "NOISE RED.", "Spectral noise reduction on voice: NFM, AM, USB and LSB. Higher cuts more hiss and adds about 16 ms of delay.", &mut |ui| {
+        for (v, l) in [("off", "OFF"), ("low", "LOW"), ("medium", "MED"), ("high", "HIGH")] {
+            if widgets::chip_key(ui, l, p.nr == v, theme::CYAN).clicked() {
+                post = Some(json!({ "nr": v }));
+            }
+        }
+    });
+    row(ui, "BLANKER", "Wideband impulse blanker, for ignition and power-line clicks. It also clips the start of strong packet bursts, so leave it off for APRS.", &mut |ui| {
+        for (v, l) in [(0u8, "OFF"), (1, "LOW"), (2, "MED"), (3, "HIGH")] {
+            if widgets::chip_key(ui, l, p.blanker == v, theme::VIOLET).clicked() {
+                post = Some(json!({ "blanker": v }));
+            }
+        }
+    });
+    row(ui, "AGC", "AM and sideband AGC speed: fast follows flutter, slow rides through pauses and fades.", &mut |ui| {
+        for (v, l) in [("fast", "FAST"), ("medium", "MED"), ("slow", "SLOW")] {
+            if widgets::chip_key(ui, l, p.agc == v, theme::AMBER).clicked() {
+                post = Some(json!({ "agc": v }));
+            }
+        }
+    });
+    if widgets::key(ui, "AUTO NOTCH", p.auto_notch, theme::CYAN)
+        .on_hover_text("Find and null steady tones (heterodynes, carriers) in voice audio")
+        .clicked()
+    {
+        post = Some(json!({ "auto_notch": !p.auto_notch }));
+    }
+    if let Some(body) = post {
+        app.post("/api/sdr/processing", body);
+    }
+    let note = if voice {
+        "applies to this mode's audio"
+    } else if mode == Mode::Wfm {
+        "WFM: broadcast audio is left as it is"
+    } else {
+        "noise reduction and AGC act on NFM, AM, USB and LSB"
+    };
+    ui.label(small(note));
 }
 
 fn recorder(app: &mut App, ui: &mut Ui) {

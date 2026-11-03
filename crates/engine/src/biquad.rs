@@ -30,6 +30,12 @@ impl Biquad {
         Self::normalised(b0, 1.0 - cs, b0, -2.0 * cs, 1.0 - alpha, a0_inv)
     }
 
+    /// RBJ cookbook notch: unity gain away from `fc`, a null at it.
+    pub fn notch(fc: f32, fs: f32, q: f32) -> Self {
+        let (cs, alpha, a0_inv, _) = common(fc, fs, q);
+        Self::normalised(1.0, -2.0 * cs, 1.0, -2.0 * cs, 1.0 - alpha, a0_inv)
+    }
+
     /// RBJ cookbook high-pass.
     pub fn highpass(fc: f32, fs: f32, q: f32) -> Self {
         let (cs, alpha, a0_inv, _) = common(fc, fs, q);
@@ -95,6 +101,27 @@ impl Cascade {
         Self::new((0..n).map(|_| Biquad::lowpass(fc, fs, 0.707)).collect())
     }
 
+    /// A true Butterworth low-pass of order `2n`: flat to `fc`, −3 dB there,
+    /// then 12n dB/octave. Identical 0.707 sections droop by 3 dB each at
+    /// the corner; these take the pole pairs' own Qs instead.
+    pub fn butterworth_lowpass(fc: f32, fs: f32, n: usize) -> Self {
+        let order = 2 * n;
+        Self::new(
+            (1..=n)
+                .map(|k| {
+                    let theta = (2 * k - 1) as f32 * std::f32::consts::PI / (2 * order) as f32;
+                    Biquad::lowpass(fc, fs, 1.0 / (2.0 * theta.cos()))
+                })
+                .collect(),
+        )
+    }
+
+    /// Add a section after the others.
+    pub fn then(mut self, section: Biquad) -> Self {
+        self.sections.push(section);
+        self
+    }
+
     pub fn process(&mut self, x: f32) -> f32 {
         self.sections.iter_mut().fold(x, |acc, s| s.process(acc))
     }
@@ -123,6 +150,21 @@ mod tests {
             }
         }
         20.0 * (peak + 1e-12).log10()
+    }
+
+    #[test]
+    fn broadcast_audio_keeps_15k_and_drops_the_pilot() {
+        let fs = 260_870.0;
+        let lp = || Cascade::butterworth_lowpass(15_000.0, fs, 6).then(Biquad::notch(19_000.0, fs, 4.0));
+        let flat = response_db(lp(), 1_000.0, fs);
+        let edge = response_db(lp(), 12_000.0, fs);
+        let pilot = response_db(lp(), 19_000.0, fs);
+        let stereo = response_db(lp(), 38_000.0, fs);
+        assert!(flat.abs() < 0.5, "1 kHz {flat:.1} dB");
+        assert!(edge > -2.0, "12 kHz {edge:.1} dB");
+        assert!(pilot < -50.0, "19 kHz pilot {pilot:.1} dB");
+        // De-emphasis ahead of this takes another ~25 dB off at 38 kHz.
+        assert!(stereo < -50.0, "38 kHz subcarrier {stereo:.1} dB");
     }
 
     #[test]
