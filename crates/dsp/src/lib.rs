@@ -1058,6 +1058,269 @@ fn lowpass_taps(cutoff_hz: f32, fs: f32, ntaps: usize) -> Vec<f32> {
     taps
 }
 
+/// Decimate-by-two halfband FIR.
+///
+/// A windowed sinc cut at a quarter of the input rate has every even tap at
+/// zero except the center one, which is exactly one half. So of its `4m - 1`
+/// taps only `m + 1` are distinct: the center, and the `m` odd taps on one
+/// side, which the other side mirrors.
+///
+/// Run polyphase, that structure falls out as two plain streams: with the
+/// input split into its even and odd samples, every kept output is a
+/// symmetric `2m`-tap FIR over the even stream plus half of one delayed odd
+/// sample. Both are contiguous, so the filter is `2m` vectorizable passes of
+/// a scalar times a run of floats — rather than `4m - 1` strided complex
+/// multiply-adds per output — which is what makes a cascade of these
+/// affordable at the radio rate, where a single long filter decimating by
+/// 32 is not.
+///
+/// The transition band is symmetric about a quarter of the input rate: a
+/// band of half-width `b` is passed flat and kept clear of aliases when the
+/// filter has moved from passband to stopband between `b` and `fs/2 - b`,
+/// so the taps a stage needs depend only on how much of the output band it
+/// has to protect — see [`halfband_taps`].
+pub struct Halfband {
+    /// The odd taps on one side of the center, nearest first.
+    wing: Vec<f32>,
+    /// The `2m` taps applied to the even stream: the wing mirrored, farthest
+    /// first, then nearest-first.
+    sym: Vec<f32>,
+    /// Filter length, `4m - 1`.
+    len: usize,
+    /// Even-phase samples as interleaved re, im: `2m - 1` of history, then
+    /// this call's.
+    even: Vec<f32>,
+    /// Odd-phase samples the same way: `m` of history, then this call's.
+    odd: Vec<f32>,
+    /// An input sample waiting for its pair when a block ends on an odd
+    /// count, so the phase split is the same however the input is chunked.
+    pending: Option<Complex32>,
+    acc: Vec<f32>,
+}
+
+/// Shortest halfband length (of the form `4m - 1`) whose transition fits
+/// between `band_hz` and `fs_in / 2 - band_hz`: the lowest frequency that
+/// would fold onto the band when the rate halves.
+///
+/// Sized on the window's whole main lobe, `8 / N` of the rate, rather than
+/// the `5.5 / N` the decode chains use: that figure reaches the stopband's
+/// -50 dB point, and a display must not show a ghost of a strong neighbor
+/// at the edge of the window, so here the edge lands on the window's floor.
+pub fn halfband_taps(fs_in: f32, band_hz: f32) -> usize {
+    const MAIN_LOBE_K: f32 = 8.0;
+    // Fraction of the input rate between the edge of the protected band and
+    // the start of what aliases onto it.
+    let tr = (0.5 - 2.0 * band_hz / fs_in).clamp(0.02, 0.5);
+    let n = (MAIN_LOBE_K / tr).ceil() as usize;
+    // Round up to 4m - 1, at least 7.
+    let m = (n + 1).div_ceil(4).max(2);
+    4 * m - 1
+}
+
+/// Outputs computed per pass over the taps, so the accumulator stays in
+/// the first-level cache.
+const HALFBAND_TILE: usize = 2048;
+
+impl Halfband {
+    /// A halfband filter of `ntaps` taps, rounded up to the next `4m - 1`.
+    pub fn new(ntaps: usize) -> Self {
+        // 4m - 1 is left as it is; anything else rounds up to the next.
+        let m = (ntaps + 1).div_ceil(4).max(2);
+        let len = 4 * m - 1;
+        let c = (len - 1) / 2;
+        let mut wing = Vec::with_capacity(m);
+        for j in 0..m {
+            let k = (2 * j + 1) as f32;
+            // sinc at a quarter of the rate, where the even taps vanish.
+            let sinc = (PI * k / 2.0).sin() / (PI * k);
+            let i = (c + 2 * j + 1) as f32;
+            let xw = 2.0 * PI * i / (len - 1) as f32;
+            let w = 0.358_75 - 0.488_29 * xw.cos() + 0.141_28 * (2.0 * xw).cos()
+                - 0.011_68 * (3.0 * xw).cos();
+            wing.push(sinc * w);
+        }
+        // Unity gain at DC with the center held at exactly one half, so the
+        // filter stays a true halfband after normalisation.
+        let s: f32 = wing.iter().sum();
+        if s.abs() > 1e-12 {
+            let k = 0.25 / s;
+            wing.iter_mut().for_each(|t| *t *= k);
+        }
+        let mut sym: Vec<f32> = wing.iter().rev().copied().collect();
+        sym.extend(wing.iter());
+        let mut this = Self {
+            wing,
+            sym,
+            len,
+            even: Vec::new(),
+            odd: Vec::new(),
+            pending: None,
+            acc: Vec::with_capacity(HALFBAND_TILE * 2),
+        };
+        this.reset();
+        this
+    }
+
+    /// Filter length, `4m - 1`.
+    pub fn taps(&self) -> usize {
+        self.len
+    }
+
+    /// Drop the sample history after a break in the timeline.
+    pub fn reset(&mut self) {
+        let m = self.wing.len();
+        self.even.clear();
+        self.even.resize((2 * m - 1) * 2, 0.0);
+        self.odd.clear();
+        self.odd.resize(m * 2, 0.0);
+        self.pending = None;
+    }
+
+    /// Filter and keep every second sample. Output continuity across calls
+    /// is exact: the history and the phase split carry over, so the output
+    /// is the same however the input is chunked.
+    pub fn process(&mut self, input: &[Complex32], out: &mut Vec<Complex32>) {
+        out.clear();
+        // Split into phases, pairing a sample the last call left over first.
+        let mut rest = input;
+        if let Some(p) = self.pending.take() {
+            match rest.split_first() {
+                Some((&x, tail)) => {
+                    self.even.extend_from_slice(&[p.re, p.im]);
+                    self.odd.extend_from_slice(&[x.re, x.im]);
+                    rest = tail;
+                }
+                None => {
+                    self.pending = Some(p);
+                    return;
+                }
+            }
+        }
+        let pairs = rest.len() / 2;
+        let (e0, o0) = (self.even.len(), self.odd.len());
+        self.even.resize(e0 + pairs * 2, 0.0);
+        self.odd.resize(o0 + pairs * 2, 0.0);
+        for ((pr, e), o) in rest[..pairs * 2]
+            .chunks_exact(2)
+            .zip(self.even[e0..].chunks_exact_mut(2))
+            .zip(self.odd[o0..].chunks_exact_mut(2))
+        {
+            e[0] = pr[0].re;
+            e[1] = pr[0].im;
+            o[0] = pr[1].re;
+            o[1] = pr[1].im;
+        }
+        if rest.len() % 2 == 1 {
+            self.pending = Some(rest[rest.len() - 1]);
+        }
+        let m = self.wing.len();
+        // One output per new pair: the odd stream holds `m` of history.
+        let n = self.odd.len() / 2 - m;
+        out.reserve(n);
+        let mut n0 = 0usize;
+        while n0 < n {
+            let cnt = (n - n0).min(HALFBAND_TILE);
+            // y[n] = x_odd[n - m] / 2 + Σ_t sym[t] · x_even[n - 2m + 1 + t],
+            // in buffer coordinates where the histories sit before index 0.
+            self.acc.clear();
+            self.acc.extend_from_slice(&self.odd[2 * n0..2 * (n0 + cnt)]);
+            for a in &mut self.acc {
+                *a *= 0.5;
+            }
+            // The taps are symmetric, so each pass folds the two samples
+            // that share a tap before the one multiply.
+            let m2 = self.sym.len();
+            for t in 0..m {
+                let g = self.sym[t];
+                let near = &self.even[2 * (n0 + t)..2 * (n0 + t + cnt)];
+                let far = &self.even[2 * (n0 + m2 - 1 - t)..2 * (n0 + m2 - 1 - t + cnt)];
+                for ((a, &x), &y) in self.acc.iter_mut().zip(near).zip(far) {
+                    *a += g * (x + y);
+                }
+            }
+            out.extend(self.acc.chunks_exact(2).map(|c| Complex32::new(c[0], c[1])));
+            n0 += cnt;
+        }
+        if n > 0 {
+            self.even.drain(..2 * n);
+            self.odd.drain(..2 * n);
+        }
+    }
+}
+
+/// A cascade of [`Halfband`] stages: decimation by a power of two, each
+/// stage sized for the band the final output has to keep clean, so the
+/// stages at the high rates are short and only the last one is long.
+pub struct HalfbandChain {
+    stages: Vec<Halfband>,
+    fs_in: f64,
+    fs_out: f64,
+    a: Vec<Complex32>,
+    b: Vec<Complex32>,
+}
+
+impl HalfbandChain {
+    /// `stages` decimate-by-two stages from `fs_in`, every one of them
+    /// passing `±band_hz` flat and alias-free.
+    pub fn new(fs_in: f64, band_hz: f64, stages: u32) -> Self {
+        let mut fs = fs_in;
+        let mut v = Vec::with_capacity(stages as usize);
+        for _ in 0..stages {
+            v.push(Halfband::new(halfband_taps(fs as f32, band_hz as f32)));
+            fs /= 2.0;
+        }
+        Self { stages: v, fs_in, fs_out: fs, a: Vec::new(), b: Vec::new() }
+    }
+
+    pub fn fs_in(&self) -> f64 {
+        self.fs_in
+    }
+
+    pub fn fs_out(&self) -> f64 {
+        self.fs_out
+    }
+
+    pub fn decimation(&self) -> usize {
+        1 << self.stages.len()
+    }
+
+    /// Tap count of each stage, first stage first.
+    pub fn taps(&self) -> Vec<usize> {
+        self.stages.iter().map(Halfband::taps).collect()
+    }
+
+    pub fn reset(&mut self) {
+        for s in &mut self.stages {
+            s.reset();
+        }
+        self.a.clear();
+        self.b.clear();
+    }
+
+    /// With no stages the input is copied through unchanged.
+    pub fn process(&mut self, input: &[Complex32], out: &mut Vec<Complex32>) {
+        match self.stages.len() {
+            0 => {
+                out.clear();
+                out.extend_from_slice(input);
+            }
+            1 => self.stages[0].process(input, out),
+            n => {
+                let mut cur = std::mem::take(&mut self.a);
+                let mut nxt = std::mem::take(&mut self.b);
+                self.stages[0].process(input, &mut cur);
+                for st in &mut self.stages[1..n - 1] {
+                    st.process(&cur, &mut nxt);
+                    std::mem::swap(&mut cur, &mut nxt);
+                }
+                self.stages[n - 1].process(&cur, out);
+                self.a = cur;
+                self.b = nxt;
+            }
+        }
+    }
+}
+
 /// Radio-rate taps, chosen for response rather than speed. Overlap-save's
 /// cost barely depends on the length (the transform dominates), and where the
 /// decimation is deep enough for the direct path, 2047 taps is still only
@@ -1207,6 +1470,62 @@ impl OnePole {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A halfband keeps its band flat, stops what would fold onto it, and
+    /// gives the same output however its input is chunked.
+    #[test]
+    fn halfband_passes_the_band_and_stops_its_alias() {
+        let fs = 1.0e6f64;
+        let band = 125_000.0f64;
+        let taps = halfband_taps(fs as f32, band as f32);
+        assert_eq!(taps % 4, 3, "4m - 1 taps: {taps}");
+        let tone = |hz: f64, n: usize| -> Vec<Complex32> {
+            (0..n)
+                .map(|i| {
+                    let ph = 2.0 * std::f64::consts::PI * hz * i as f64 / fs;
+                    Complex32::new(ph.cos() as f32, ph.sin() as f32)
+                })
+                .collect()
+        };
+        let rms = |v: &[Complex32]| (v.iter().map(|c| c.norm_sqr()).sum::<f32>() / v.len() as f32).sqrt();
+        let run = |hz: f64| {
+            let mut hb = Halfband::new(taps);
+            let mut out = Vec::new();
+            hb.process(&tone(hz, 20_000), &mut out);
+            rms(&out[taps..])
+        };
+        for hz in [0.0, 60_000.0, band] {
+            let g = 20.0 * run(hz).log10();
+            assert!(g.abs() < 0.1, "{hz} Hz passes at {g:.3} dB");
+        }
+        for hz in [fs / 2.0 - band, fs / 2.0 - 60_000.0, fs / 2.0] {
+            let g = 20.0 * run(hz).log10();
+            assert!(g < -75.0, "{hz} Hz folds onto the band at {g:.1} dB");
+        }
+        // Chunk invariance: one call or many, the same samples come out.
+        let x = tone(30_000.0, 9_001);
+        let mut whole = Halfband::new(taps);
+        let mut a = Vec::new();
+        whole.process(&x, &mut a);
+        let mut pieces = Halfband::new(taps);
+        let mut b = Vec::new();
+        let mut part = Vec::new();
+        for chunk in x.chunks(7) {
+            pieces.process(chunk, &mut part);
+            b.extend_from_slice(&part);
+        }
+        assert_eq!(a.len(), b.len());
+        assert!(a.iter().zip(&b).all(|(p, q)| (p - q).norm() < 1e-6));
+
+        // The cascade sizes its stages for the band at each rate: short at
+        // the top, longest at the bottom.
+        let chain = HalfbandChain::new(8.0e6, band, 4);
+        assert_eq!(chain.fs_out(), 500_000.0);
+        assert_eq!(chain.decimation(), 16);
+        let t = chain.taps();
+        assert!(t.windows(2).all(|w| w[0] <= w[1]), "{t:?}");
+        assert!(t[0] <= 19 && t[3] >= 27, "{t:?}");
+    }
 
     #[test]
     fn smooth_bins_keeps_a_peak_and_calms_the_floor() {
