@@ -26,11 +26,19 @@ pub enum Colormap {
     Midnight,
     /// A green CRT phosphor.
     Green,
+    /// Black through plum, magenta and orange to a cream white: the heat
+    /// map, perceptually ordered and the most colorful of the quiet ones.
+    Inferno,
+    /// The whole rainbow, violet to red, over a black floor: every level
+    /// its own hue, for picking signals apart by strength at a glance.
+    Prism,
 }
 
 impl Colormap {
-    pub const ALL: [Colormap; 8] = [
+    pub const ALL: [Colormap; 10] = [
         Colormap::Ember,
+        Colormap::Inferno,
+        Colormap::Prism,
         Colormap::Midnight,
         Colormap::Classic,
         Colormap::Ham,
@@ -50,7 +58,15 @@ impl Colormap {
             Colormap::Classic => "Classic",
             Colormap::Midnight => "Midnight",
             Colormap::Green => "Green",
+            Colormap::Inferno => "Inferno",
+            Colormap::Prism => "Prism",
         }
+    }
+
+    /// The color a trace or a readout takes to stand for this palette: its
+    /// hot end, short of white.
+    pub fn accent(self) -> Color32 {
+        self.sample(0.84)
     }
 
     fn stops(self) -> &'static [(f32, [u8; 3])] {
@@ -131,6 +147,38 @@ impl Colormap {
                 (0.75, [0x5e, 0xc9, 0x62]),
                 (1.00, [0xfd, 0xe7, 0x25]),
             ],
+            // The floor stays near black for the first fifth, so the noise
+            // is a dark plum grain; signals climb through magenta into
+            // orange and gold, and only the strongest go cream.
+            Colormap::Inferno => &[
+                (0.00, [0x00, 0x00, 0x04]),
+                (0.20, [0x0d, 0x05, 0x23]),
+                (0.34, [0x2f, 0x0a, 0x5a]),
+                (0.46, [0x5c, 0x12, 0x6e]),
+                (0.56, [0x87, 0x21, 0x6b]),
+                (0.66, [0xb2, 0x32, 0x5a]),
+                (0.75, [0xd9, 0x45, 0x3c]),
+                (0.84, [0xf2, 0x6b, 0x1d]),
+                (0.91, [0xfb, 0x9d, 0x0a]),
+                (0.96, [0xf8, 0xd3, 0x3b]),
+                (1.00, [0xfc, 0xff, 0xa4]),
+            ],
+            // Black, then the spectrum in order: violet for the weakest,
+            // blue and cyan for the modest, green and yellow for the
+            // strong, red for the loud, white for what pins the scale.
+            Colormap::Prism => &[
+                (0.00, [0x00, 0x00, 0x00]),
+                (0.18, [0x06, 0x02, 0x1a]),
+                (0.30, [0x2a, 0x0a, 0x6e]),
+                (0.40, [0x18, 0x30, 0xd0]),
+                (0.50, [0x0a, 0x8c, 0xff]),
+                (0.58, [0x10, 0xe0, 0xf0]),
+                (0.66, [0x38, 0xf0, 0x7a]),
+                (0.75, [0xe8, 0xf0, 0x20]),
+                (0.84, [0xff, 0x9a, 0x10]),
+                (0.92, [0xff, 0x2a, 0x2a]),
+                (1.00, [0xff, 0xff, 0xff]),
+            ],
         }
     }
 
@@ -162,5 +210,45 @@ impl Colormap {
 
     pub fn sample(self, t: f32) -> Color32 {
         self.lut()[(t.clamp(0.0, 1.0) * 255.0) as usize]
+    }
+
+    /// The ramp across `r`, black at the left, as one mesh with a hairline
+    /// round it: the swatch every palette and style menu shows.
+    pub fn paint_ramp(self, painter: &egui::Painter, r: egui::Rect) {
+        let steps = 32;
+        let mut mesh = egui::Mesh::default();
+        for k in 0..=steps {
+            let f = k as f32 / steps as f32;
+            let c = self.sample(f);
+            let x = r.left() + f * r.width();
+            mesh.colored_vertex(egui::pos2(x, r.top()), c);
+            mesh.colored_vertex(egui::pos2(x, r.bottom()), c);
+            if k > 0 {
+                let i = mesh.vertices.len() as u32;
+                mesh.add_triangle(i - 4, i - 3, i - 2);
+                mesh.add_triangle(i - 3, i - 1, i - 2);
+            }
+        }
+        painter.add(egui::Shape::mesh(mesh));
+        painter.rect_stroke(r, egui::CornerRadius::same(2), egui::Stroke::new(1.0, crate::theme::line_2()), egui::StrokeKind::Outside);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_palette_runs_dark_to_bright() {
+        for m in Colormap::ALL {
+            let lum = |c: Color32| 0.299 * c.r() as f32 + 0.587 * c.g() as f32 + 0.114 * c.b() as f32;
+            let (lo, hi) = (lum(m.sample(0.0)), lum(m.sample(1.0)));
+            assert!(lo < 90.0, "{} starts at luminance {lo}", m.label());
+            // Classic ends on a red, so the top need not be white: only
+            // far brighter than the floor.
+            assert!(hi > lo + 60.0, "{} ends at luminance {hi}", m.label());
+            // The floor stays quiet: the first tenth is nearly black.
+            assert!(lum(m.sample(0.08)) < 110.0, "{} floor", m.label());
+        }
     }
 }

@@ -443,7 +443,9 @@ pub enum Tone {
     Live,
 }
 
-/// An outlined status chip: a glyph and words, never a bare dot.
+/// An outlined status chip: a glyph and words, never a bare dot. The live
+/// chip (recording) breathes: its lamp swells and dims over two seconds,
+/// so a recording in progress is seen to be in progress.
 pub fn chip(ui: &mut Ui, tone: Tone, text: &str) -> Response {
     let (c, glyph) = match tone {
         Tone::Ok => (theme::OK, "●"),
@@ -454,8 +456,46 @@ pub fn chip(ui: &mut Ui, tone: Tone, text: &str) -> Response {
     };
     let g = ui.painter().layout_no_wrap(format!("{glyph} {text}"), theme::mono(10.5), c);
     let (rect, resp) = ui.allocate_exact_size(g.size() + vec2(12.0, 6.0), Sense::hover());
-    ui.painter().rect(rect, CornerRadius::same(3), alpha(c, 0.08), Stroke::new(1.0, alpha(c, 0.5)), egui::StrokeKind::Inside);
-    ui.painter().galley(rect.min + vec2(6.0, 3.0), g, c);
+    let p = ui.painter();
+    p.rect(rect, CornerRadius::same(3), alpha(c, 0.08), Stroke::new(1.0, alpha(c, 0.5)), egui::StrokeKind::Inside);
+    if tone == Tone::Live && !reduced(ui) {
+        let t = ui.input(|i| i.time);
+        let breath = 0.5 + 0.5 * (t * std::f64::consts::TAU / 2.0).sin() as f32;
+        let lamp = pos2(rect.left() + 9.5, rect.center().y);
+        p.circle_filled(lamp, 5.0 + 2.0 * breath, alpha(c, 0.10 + 0.14 * breath));
+        crate::anim::more(ui.ctx());
+    }
+    p.galley(rect.min + vec2(6.0, 3.0), g, c);
+    resp
+}
+
+/// A menu entry for a waterfall palette or a display style: a ramp of the
+/// palette, the color its trace takes when it has one, and the name, lit
+/// when it is the one in use. Clicked chooses it.
+pub fn swatch_item(ui: &mut Ui, label: &str, palette: crate::colormap::Colormap, trace: Option<Color32>, on: bool) -> Response {
+    let font = theme::sans(12.5);
+    let g = ui.painter().layout_no_wrap(label.to_owned(), font, Color32::PLACEHOLDER);
+    let dot_w = if trace.is_some() { 14.0 } else { 0.0 };
+    let w = ui.available_width().max(dot_w + 56.0 + 8.0 + g.size().x + 16.0);
+    let (rect, resp) = ui.allocate_exact_size(vec2(w, 24.0), Sense::click());
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::RadioButton, true, on, label));
+    let hover = ui.ctx().animate_bool_with_time(resp.id.with("hv"), resp.hovered(), 0.12);
+    let p = ui.painter();
+    if on || hover > 0.0 {
+        p.rect_filled(rect, CornerRadius::same(3), if on { alpha(theme::AMBER, 0.14 + 0.06 * hover) } else { alpha(theme::surface_4(), 0.8 * hover) });
+    }
+    let mut x = rect.left() + 6.0;
+    if let Some(c) = trace {
+        p.circle_filled(pos2(x + 4.0, rect.center().y), 4.0, c);
+        p.circle_stroke(pos2(x + 4.0, rect.center().y), 4.0, Stroke::new(1.0, theme::ink()));
+        x += dot_w;
+    }
+    palette.paint_ramp(p, Rect::from_min_size(pos2(x, rect.center().y - 6.0), vec2(56.0, 12.0)));
+    x += 56.0 + 10.0;
+    p.galley(pos2(x, rect.center().y - g.size().y / 2.0), g, if on { theme::text() } else { theme::lerp(theme::text_2(), theme::text(), hover) });
+    if resp.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
     resp
 }
 

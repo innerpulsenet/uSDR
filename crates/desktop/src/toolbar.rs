@@ -113,12 +113,16 @@ pub fn toolbar(app: &mut App, ui: &mut Ui) {
     });
 }
 
+/// The styles, each shown as its waterfall ramp and the color of its
+/// trace, so a look is chosen by eye rather than by name.
 fn style(app: &mut App, ui: &mut Ui) {
+    ui.set_min_width(210.0);
     let v = &mut app.prefs.view;
     for st in Style::ALL {
-        if ui.selectable_label(v.style == st, st.label()).clicked() {
+        let look = st.look();
+        if widgets::swatch_item(ui, st.label(), look.palette, Some(look.fill), v.style == st).clicked() {
             v.style = st;
-            v.palette = st.look().palette;
+            v.palette = look.palette;
         }
     }
 }
@@ -176,18 +180,11 @@ fn waterfall(app: &mut App, ui: &mut Ui) {
     let v = &mut app.prefs.view;
     ui.horizontal(|ui| {
         ui.label(small("palette"));
-        widgets::selector(ui, "palette", v.palette.label(), theme::text(), 130.0, |ui| {
+        widgets::selector(ui, "palette", v.palette.label(), v.palette.accent(), 130.0, |ui| {
             for m in crate::colormap::Colormap::ALL {
-                ui.horizontal(|ui| {
-                    let (r, _) = ui.allocate_exact_size(vec2(60.0, 12.0), egui::Sense::hover());
-                    for i in 0..30 {
-                        let c = m.sample(i as f32 / 29.0);
-                        ui.painter().rect_filled(egui::Rect::from_min_size(egui::pos2(r.left() + i as f32 * 2.0, r.top()), vec2(2.0, 12.0)), egui::CornerRadius::ZERO, c);
-                    }
-                    if ui.selectable_label(v.palette == m, m.label()).clicked() {
-                        v.palette = m;
-                    }
-                });
+                if widgets::swatch_item(ui, m.label(), m, None, v.palette == m).clicked() {
+                    v.palette = m;
+                }
             }
         });
     });

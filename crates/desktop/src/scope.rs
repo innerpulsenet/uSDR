@@ -248,8 +248,9 @@ impl Scope {
         f: Option<&FftFrame>,
         mode: Mode,
         pass: Option<(&[f32], (f32, f32))>,
-        palette: crate::colormap::Colormap,
+        look: &crate::spectrum::Look,
     ) {
+        let palette = look.palette;
         let rect = ui.available_rect_before_wrap();
         ui.allocate_rect(rect, Sense::hover());
         let painter = ui.painter_at(rect);
@@ -347,9 +348,11 @@ impl Scope {
                 .enumerate()
                 .map(|(i, t)| pos2(spec.left() + i as f32 / (trace.len() - 1) as f32 * spec.width(), spec.bottom() - t * spec.height()))
                 .collect();
-            crate::spectrum::fill_under(&painter, &pts, spec.bottom(), theme::AMBER, 0.4);
-            painter.add(Shape::line(pts.clone(), Stroke::new(2.6, alpha(theme::AMBER, 0.25))));
-            painter.add(Shape::line(pts, Stroke::new(1.1, Color32::from_rgb(0xff, 0xe4, 0xbd))));
+            // In the display's own style, so the scope and the panadapter
+            // read as one instrument.
+            crate::spectrum::fill_under(&painter, &pts, spec.bottom(), look.fill, 0.4);
+            painter.add(Shape::line(pts.clone(), Stroke::new(2.6, alpha(look.glow, 0.25))));
+            painter.add(Shape::line(pts, Stroke::new(1.1, look.core)));
             // Resampled to a fixed width so rows of any length stack. One row
             // per update, so the little waterfall runs at the scope's rate.
             let row: Vec<f32> = if !fresh { Vec::new() } else { (0..MINI_W)

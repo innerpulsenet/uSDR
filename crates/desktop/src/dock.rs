@@ -190,6 +190,8 @@ fn decodes(app: &mut App, ui: &mut Ui) {
             }
             app.decodes_added = 0;
             let mut toggle: Option<usize> = None;
+            let rm = app.reduce_motion();
+            let now = ui.input(|i| i.time);
             let out = area.show(ui, |ui| {
                 if let Some(text) = empty {
                     empty_state(ui, text);
@@ -203,6 +205,7 @@ fn decodes(app: &mut App, ui: &mut Ui) {
                         ui.allocate_space(vec2(ui.available_width(), h));
                         continue;
                     }
+                    let born = if rm { f64::NEG_INFINITY } else { *app.decodes[i].born.get_or_insert(now) };
                     let d = &app.decodes[i];
                     let sel = app.selected_decode == Some(i);
                     let resp = ui
@@ -224,6 +227,15 @@ fn decodes(app: &mut App, ui: &mut Ui) {
                     let resp = resp.interact(egui::Sense::click());
                     if sel {
                         ui.painter().rect_filled(resp.rect, egui::CornerRadius::same(3), alpha(theme::AMBER, 0.08));
+                    }
+                    // A frame new to the log is tinted in its protocol's
+                    // color for a moment and fades to the row it is, so an
+                    // arrival is seen without anything moving.
+                    let t = ((now - born) / 1.4).clamp(0.0, 1.0) as f32;
+                    if t < 1.0 {
+                        let c = widgets::protocol_color(&d.ev.protocol);
+                        ui.painter().rect_filled(resp.rect, egui::CornerRadius::same(3), alpha(c, 0.16 * (1.0 - t).powi(2)));
+                        crate::anim::more(ui.ctx());
                     }
                     if resp.clicked() {
                         app.selected_decode = if sel { None } else { Some(i) };
@@ -389,7 +401,7 @@ fn scope(app: &mut App, ui: &mut Ui) {
     let pass = crate::panels::passband_slice(app);
     let rect = ui.available_rect_before_wrap();
     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect));
-    app.scope.ui(&mut child, app.frame.as_deref(), mode, pass.as_ref().map(|(v, r)| (v.as_slice(), *r)), app.prefs.view.palette);
+    app.scope.ui(&mut child, app.frame.as_deref(), mode, pass.as_ref().map(|(v, r)| (v.as_slice(), *r)), &app.prefs.view.style.look());
     ui.advance_cursor_after_rect(rect);
 }
 

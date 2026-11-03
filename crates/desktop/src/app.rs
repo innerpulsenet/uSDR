@@ -36,12 +36,14 @@ pub struct DecodeRow {
     pub key: String,
     /// Its height in the log when last laid out; 0 until it has been.
     pub height: f32,
+    /// When the log first showed it, for its arrival flash.
+    pub born: Option<f64>,
 }
 
 impl DecodeRow {
     pub fn new(at: SystemTime, freq_hz: f64, ev: proto::DecodeEvent) -> Self {
         let key = format!("{} {} {}", ev.protocol, ev.kind, ev.summary).to_lowercase();
-        Self { at, freq_hz, ev, open: false, key, height: 0.0 }
+        Self { at, freq_hz, ev, open: false, key, height: 0.0, born: None }
     }
 }
 
@@ -1831,7 +1833,7 @@ mod tests {
     }
 
     #[test]
-    fn tuning_inside_the_span_leaves_the_centre_alone() {
+    fn tuning_inside_the_span_leaves_the_center_alone() {
         let mut h = harness();
         h.state_mut().app.tune(146.3e6, false);
         let posts = drain(&h);

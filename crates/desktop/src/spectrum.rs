@@ -70,6 +70,12 @@ pub enum Style {
     Glacier,
     /// A green CRT phosphor.
     Phosphor,
+    /// An orange trace with a gold core over a plum pan, and the inferno
+    /// waterfall: the heat-map look.
+    Inferno,
+    /// A violet trace over an indigo pan, and the prism waterfall: the
+    /// rainbow look.
+    Prism,
 }
 
 pub struct Look {
@@ -84,7 +90,7 @@ pub struct Look {
 }
 
 impl Style {
-    pub const ALL: [Style; 5] = [Style::Ember, Style::Midnight, Style::Classic, Style::Glacier, Style::Phosphor];
+    pub const ALL: [Style; 7] = [Style::Ember, Style::Inferno, Style::Prism, Style::Midnight, Style::Classic, Style::Glacier, Style::Phosphor];
 
     pub fn label(self) -> &'static str {
         match self {
@@ -93,6 +99,8 @@ impl Style {
             Style::Midnight => "Midnight",
             Style::Glacier => "Glacier",
             Style::Phosphor => "Phosphor",
+            Style::Inferno => "Inferno",
+            Style::Prism => "Prism",
         }
     }
 
@@ -127,6 +135,24 @@ impl Style {
                 peak: rgb(0xffe14a),
                 max_hold: rgb(0x52e3ff),
                 palette: Colormap::Green,
+            },
+            Style::Inferno => Look {
+                bg: Some((rgb(0x1c0a26), rgb(0x06020a))),
+                fill: rgb(0xf26b1d),
+                glow: rgb(0xffa040),
+                core: rgb(0xfff1cc),
+                peak: rgb(0xf2a0ff),
+                max_hold: rgb(0x8a6cff),
+                palette: Colormap::Inferno,
+            },
+            Style::Prism => Look {
+                bg: Some((rgb(0x0c0b2a), rgb(0x020208))),
+                fill: rgb(0x8a5cff),
+                glow: rgb(0xc39cff),
+                core: rgb(0xfbf7ff),
+                peak: rgb(0x7dffb0),
+                max_hold: rgb(0xffb347),
+                palette: Colormap::Prism,
             },
         }
     }
@@ -261,6 +287,10 @@ pub struct Panafall {
     after: Vec<f32>,
     /// Where the carrier is drawn: it glides to the receive frequency.
     marker_hz: f64,
+    /// Where it was last asked to go, and when: a new frequency pulses the
+    /// passband as the marker lands there.
+    marker_target: f64,
+    tuned_at: f64,
     fade: Option<Fade>,
     pub center_hz: f64,
     pub span_hz: f64,
@@ -365,6 +395,8 @@ impl Default for Panafall {
             max_hold: Vec::new(),
             after: Vec::new(),
             marker_hz: 0.0,
+            marker_target: 0.0,
+            tuned_at: f64::NEG_INFINITY,
             fade: None,
             center_hz: 0.0,
             span_hz: 0.0,
@@ -1226,13 +1258,15 @@ impl Panafall {
             }
             let pan_painter = ui.painter_at(pan);
             if view.fill {
-                // Heat: the fill brightens with level, so strong signals glow
-                // and the floor stays a quiet wash.
+                // Heat: the fill brightens with level and warms toward the
+                // trace's core, so strong signals glow white-hot at their
+                // crest and the floor stays a quiet wash.
+                let hot = theme::lerp(look.fill, look.core, 0.45);
                 let mut mesh = Mesh::default();
                 for p in &line {
                     let i = mesh.vertices.len() as u32;
                     let h = ((pan.bottom() - p.y) / pan.height()).clamp(0.0, 1.0);
-                    let top_c = theme::lerp(theme::alpha(look.fill, 0.10), theme::alpha(look.fill, 0.55), h);
+                    let top_c = theme::lerp(theme::alpha(look.fill, 0.08), theme::alpha(hot, 0.60), h.powf(1.35));
                     mesh.colored_vertex(*p, top_c);
                     mesh.colored_vertex(pos2(p.x, pan.bottom()), alpha(look.fill, 0.0));
                     if i >= 2 {
@@ -1288,6 +1322,21 @@ impl Panafall {
 
         // ---- passband and carrier
         let inspect = frame.map(|f| f.inspect_hz).filter(|h| *h > 0.0).unwrap_or(status.inspect_hz);
+        // A new frequency: the passband and carrier flare as the marker
+        // lands and settle over 0.4 s, so a tune is seen to take.
+        if (inspect - self.marker_target).abs() > 1.0 {
+            if self.marker_target > 0.0 && !reduce_motion {
+                self.tuned_at = now;
+            }
+            self.marker_target = inspect;
+        }
+        let pulse = {
+            let t = ((now - self.tuned_at) / 0.4).clamp(0.0, 1.0) as f32;
+            if t < 1.0 {
+                crate::anim::more(&ctx);
+            }
+            (1.0 - t).powi(2)
+        };
         // The carrier, passband and flag glide to a new frequency over
         // about 140 ms (the waterfall is panning under them); a jump past
         // most of the span, or reduced motion, snaps.
@@ -1312,16 +1361,20 @@ impl Panafall {
         let on_screen = ix >= pan.left() - 2.0 && ix <= pan.right() + 2.0;
         if on_screen {
             let band = Rect::from_min_max(pos2(px0.max(pan.left()), pan.top()), pos2(px1.min(pan.right()), pan.bottom()));
-            painter.rect_filled(band, CornerRadius::ZERO, alpha(theme::AMBER, if wide { 0.05 } else { 0.10 }));
+            let band_a = if wide { 0.05 + 0.10 * pulse } else { 0.10 + 0.22 * pulse };
+            painter.rect_filled(band, CornerRadius::ZERO, alpha(theme::AMBER, band_a));
             let wf_band = Rect::from_min_max(pos2(px0.max(wf.left()), wf.top()), pos2(px1.min(wf.right()), wf.bottom()));
-            painter.rect_filled(wf_band, CornerRadius::ZERO, alpha(theme::AMBER, 0.035));
+            painter.rect_filled(wf_band, CornerRadius::ZERO, alpha(theme::AMBER, 0.035 + 0.08 * pulse));
             if px1 - px0 > 6.0 {
                 for x in [px0, px1] {
-                    painter.line_segment([pos2(x, pan.top()), pos2(x, pan.bottom())], Stroke::new(1.0, alpha(theme::AMBER, 0.45)));
+                    painter.line_segment([pos2(x, pan.top()), pos2(x, pan.bottom())], Stroke::new(1.0, alpha(theme::AMBER, 0.45 + 0.4 * pulse)));
                     dashed_v(&painter, x, wf.top(), wf.bottom(), alpha(theme::AMBER, 0.22));
                 }
             }
-            painter.line_segment([pos2(ix, pan.top()), pos2(ix, pan.bottom())], Stroke::new(1.4, theme::AMBER));
+            // The carrier: a soft glow under a crisp line, both swelling
+            // for the moment of a tune.
+            painter.line_segment([pos2(ix, pan.top()), pos2(ix, pan.bottom())], Stroke::new(5.0 + 6.0 * pulse, alpha(theme::AMBER, 0.14 + 0.18 * pulse)));
+            painter.line_segment([pos2(ix, pan.top()), pos2(ix, pan.bottom())], Stroke::new(1.4 + 0.8 * pulse, theme::AMBER));
             painter.add(Shape::convex_polygon(
                 vec![pos2(ix - 6.0, labels_top), pos2(ix + 6.0, labels_top), pos2(ix, labels_top + 7.0)],
                 theme::AMBER,
@@ -1776,17 +1829,20 @@ impl Panafall {
                 view.sql_mark = mark.then_some(self.floor_est + 10.0);
             }
             ui.menu_button("Style", |ui| {
+                ui.set_min_width(200.0);
                 for st in Style::ALL {
-                    if ui.selectable_label(view.style == st, st.label()).clicked() {
+                    let look = st.look();
+                    if crate::widgets::swatch_item(ui, st.label(), look.palette, Some(look.fill), view.style == st).clicked() {
                         view.style = st;
-                        view.palette = st.look().palette;
+                        view.palette = look.palette;
                         ui.close();
                     }
                 }
             });
             ui.menu_button("Palette", |ui| {
+                ui.set_min_width(200.0);
                 for m in Colormap::ALL {
-                    if ui.selectable_label(view.palette == m, m.label()).clicked() {
+                    if crate::widgets::swatch_item(ui, m.label(), m, None, view.palette == m).clicked() {
                         view.palette = m;
                         ui.close();
                     }
@@ -2189,7 +2245,7 @@ mod tests {
     }
 
     #[test]
-    fn wheel_tunes_by_the_step_and_recentres() {
+    fn wheel_tunes_by_the_step_and_recenters() {
         let mut h = harness();
         let r = pan_rect(&h);
         wheel(&mut h, r.center(), 2.0, Modifiers::NONE);
@@ -2249,7 +2305,7 @@ mod tests {
         h.drop_at(a + egui::vec2(r.width() * 0.1, 0.0));
         h.run_steps(2);
         let Some(Act::Center(c)) = h.state().acts.last().cloned() else { panic!("{:?}", h.state().acts) };
-        assert!((c - (146e6 - 0.2e6)).abs() < 5_000.0, "centre {c}");
+        assert!((c - (146e6 - 0.2e6)).abs() < 5_000.0, "center {c}");
     }
 
     #[test]
