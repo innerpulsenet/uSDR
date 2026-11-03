@@ -22,14 +22,26 @@
 //!    names and PI call letters).
 //!
 //! Nothing is reported that has not passed the checkword, and text is held
-//! to more than that. Two characters of PS or RadioText read from blocks
-//! that all passed with no correction count at once: for that to be wrong,
-//! two corrupted blocks would each have to meet their 10-bit check by
-//! chance. A block that needed correcting is right only most of the time,
-//! so characters read from one must arrive twice alike. A name is published
-//! only once all of it has been confirmed since its last change; RadioText
-//! being received is published as far as it goes (`rt_partial`), its gaps
-//! marked, so it can be shown filling in rather than all at once. A group counts only once its PI has
+//! to more than that.
+//!
+//! - **PS** is taken a whole frame at a time, from one unbroken run of its
+//!   segments 0 to 3, and only once the same frame comes in two runs within
+//!   8 s. Many stations slide words through their PS, and one that moves on
+//!   partway through a pass sends a run that is half of each frame (WPLR's
+//!   " Leppard" over "WPLR Def" made " Leppaef"); that run never recurs.
+//!   On a signal too weak for whole runs, a PS gathered pair by pair counts
+//!   once every pair is in and none has changed for 6 s, which a sliding PS
+//!   never does.
+//! - **RadioText** two characters at a time: at once from blocks that all
+//!   passed with no correction (for that to be wrong, two corrupted blocks
+//!   would each have to meet their 10-bit check by chance), else once heard
+//!   twice alike. A text is published only once every part of it has been
+//!   heard since it last changed (see `Text`'s epochs); while it arrives it
+//!   is published as far as it goes (`rt_partial`), gaps marked. A flip of
+//!   the A/B flag makes everything be heard again but clears nothing: many
+//!   stations flip it on every pass of the same text (WRCH does), and
+//!   clearing on it, as the standard suggests, meant a text that never
+//!   completed. A group counts only once its PI has
 //! been confirmed and it carries that PI, which keeps a false sync on noise
 //! from feeding anything through.
 
@@ -68,6 +80,18 @@ const FORGET_AFTER_S: f64 = 15.0;
 /// name ("kstreet" for WEBE's "Backstreet Boys"); the call letters from the
 /// PI stand in until then.
 const PS_STEADY_S: f64 = 10.0;
+
+/// How far back a PS frame is looked for to confirm it. A scrolling PS
+/// holds each frame two to four seconds, sent several times; a run split
+/// across two frames would have to recur at the same point of the scroll,
+/// whose cycle is longer than this.
+const PS_MATCH_S: f64 = 8.0;
+
+/// On a signal too weak to give two whole runs, a PS gathered pair by pair
+/// counts once every pair is in and none has changed for this long. A
+/// scrolling PS changes every few seconds, so it never does, and a frame
+/// split across two of its words cannot come out this way either.
+const PS_HELD_S: f64 = 6.0;
 
 // ---------- the checkword ----------
 
@@ -258,11 +282,31 @@ impl Demod {
             let (pc, ps) = self.pilot.step(x);
             // The carrier: three times the pilot's phase when it is locked,
             // the free-running oscillator when it is not.
-            let (cc, cs) = if self.pilot.locked {
-                (4.0 * pc * pc * pc - 3.0 * pc, 3.0 * ps - 4.0 * ps * ps * ps)
-            } else {
-                (self.free_c, self.free_s)
-            };
+            let (tc, ts) = (4.0 * pc * pc * pc - 3.0 * pc, 3.0 * ps - 4.0 * ps * ps * ps);
+            let locked = self.pilot.locked;
+            if locked != self.using_pilot {
+                // The carrier's source changes here, and its phase jumps by
+                // however far apart the two were. Everything downstream is
+                // turned by the same amount: the low-pass's state and the
+                // Costas loop's phase. The baseband then runs on without a
+                // break, where restarting the loop cost the bit clock and
+                // block sync a pass of groups.
+                let (oc, os) = if self.using_pilot { (tc, ts) } else { (self.free_c, self.free_s) };
+                let (nc, ns) = if locked { (tc, ts) } else { (self.free_c, self.free_s) };
+                let jump = (ns * oc - nc * os).atan2(nc * oc + ns * os);
+                self.turn(-jump);
+                self.using_pilot = locked;
+                // The pilot's carrier is exact; the free one's error is not
+                // known. Either way the loop's frequency starts from zero.
+                self.fr = 0.0;
+            }
+            let (cc, cs) = if locked { (tc, ts) } else { (self.free_c, self.free_s) };
+            if locked {
+                // Slaved to the pilot's carrier while it is locked, so if
+                // the pilot goes the free oscillator carries on from it.
+                self.free_c = tc;
+                self.free_s = ts;
+            }
             let (fc, fsn) = (self.free_c, self.free_s);
             self.free_c = fc * self.free_step_c - fsn * self.free_step_s;
             self.free_s = fsn * self.free_step_c + fc * self.free_step_s;
@@ -284,15 +328,24 @@ impl Demod {
             self.decim_n += 1;
             if self.decim_n >= self.decim {
                 self.decim_n = 0;
-                if self.using_pilot != self.pilot.locked {
-                    // The carrier's source changed and its phase with it;
-                    // the Costas loop starts over from here.
-                    self.using_pilot = self.pilot.locked;
-                    self.fr = 0.0;
-                }
                 self.baseband(i, q);
             }
         }
+    }
+
+    /// Turn the baseband by `a` radians: the I/Q low-pass's state (the two
+    /// filters are the same, so the pair is one complex filter and turning
+    /// its state is exact) and the Costas loop's phase with it.
+    fn turn(&mut self, a: f64) {
+        let (s, c) = a.sin_cos();
+        for (fi, fq) in self.lp_i.iter_mut().zip(self.lp_q.iter_mut()) {
+            for (zi, zq) in [(&mut fi.z1, &mut fq.z1), (&mut fi.z2, &mut fq.z2)] {
+                let (i, q) = (*zi, *zq);
+                *zi = i * c - q * s;
+                *zq = i * s + q * c;
+            }
+        }
+        self.ph = (self.ph + a).rem_euclid(TAU);
     }
 
     fn baseband(&mut self, i: f64, q: f64) {
@@ -543,7 +596,8 @@ impl Sync {
 
 // ---------- confirmed text ----------
 
-/// Two characters of a text, held until they have been heard twice alike.
+/// Two characters of a text, held until they are confirmed: at once from
+/// a reading whose blocks needed no correction, else once heard twice alike.
 #[derive(Clone, Copy, Debug, Default)]
 struct Pair {
     /// The last few readings that did not match: on a weak signal a
@@ -551,70 +605,83 @@ struct Pair {
     /// let it push the first good one out before the second arrived.
     cand: [Option<[u8; 2]>; 3],
     conf: Option<[u8; 2]>,
-    /// Confirmed again since some other part of the text last changed.
-    fresh: bool,
+    /// The text's epoch this pair was last heard in (see [`Text`]).
+    epoch: u32,
 }
 
+/// A text arriving two characters at a time, in epochs. An epoch begins
+/// when the text is seen to change (or the station's A/B flag says it may
+/// have): a pair counts towards the text only once heard in the current
+/// epoch, so characters of an older text are never joined to a newer one.
+/// One change opens one epoch, and every pair of the new text heard after
+/// it counts, so a new text completes in a single pass; a pair changing
+/// again within the epoch (the text changed again, or a scrolling PS moved
+/// on) opens another.
 #[derive(Clone, Debug)]
 struct Text {
     pairs: Vec<Pair>,
+    epoch: u32,
+    /// A pair has changed in this epoch: the next change to an older pair
+    /// is the same new text arriving, not another.
+    moving: bool,
 }
 
 impl Text {
     fn new(n: usize) -> Self {
-        Self { pairs: vec![Pair::default(); n] }
+        Self { pairs: vec![Pair::default(); n], epoch: 1, moving: false }
     }
 
     fn clear(&mut self) {
         for p in &mut self.pairs {
             *p = Pair::default();
         }
+        self.epoch += 1;
+        self.moving = false;
+    }
+
+    fn current(&self, p: &Pair) -> bool {
+        p.epoch == self.epoch
     }
 
     /// Take two characters for pair `k`; true if a confirmed pair changed.
-    /// `exact` is a reading whose blocks needed no correction: when one of
-    /// those disagrees with what is held, the station is sending something
-    /// new, and nothing held counts as current until it is heard again. On
-    /// a PS that scrolls, that is what keeps two frames from being spliced.
+    /// `exact` is a reading whose blocks needed no correction.
     fn put(&mut self, k: usize, v: [u8; 2], exact: bool) -> bool {
         if k >= self.pairs.len() {
             return false;
         }
-        if exact && self.pairs[k].conf.is_some_and(|c| c != v) {
-            for q in &mut self.pairs {
-                q.fresh = false;
-            }
-        }
+        let epoch = self.epoch;
         let p = &mut self.pairs[k];
         if p.conf == Some(v) {
-            p.fresh = true;
+            p.epoch = epoch;
             return false;
         }
-        if exact || p.cand.contains(&Some(v)) {
-            let changed = p.conf.is_some();
-            p.conf = Some(v);
-            p.cand = [None; 3];
-            p.fresh = true;
-            if changed {
-                for (j, q) in self.pairs.iter_mut().enumerate() {
-                    if j != k {
-                        q.fresh = false;
-                    }
-                }
-            }
-            return changed;
+        if !(exact || p.cand.contains(&Some(v))) {
+            p.cand.rotate_right(1);
+            p.cand[0] = Some(v);
+            return false;
         }
-        p.cand.rotate_right(1);
-        p.cand[0] = Some(v);
-        false
+        let changed = p.conf.is_some();
+        // A change to a pair already heard in this epoch, or the first
+        // change after the text had settled, opens a new epoch.
+        let again = p.epoch == epoch;
+        p.conf = Some(v);
+        p.cand = [None; 3];
+        if changed && (again || !self.moving) {
+            self.epoch += 1;
+            self.moving = true;
+        }
+        let epoch = self.epoch;
+        self.pairs[k].epoch = epoch;
+        changed
     }
 
     /// The text, once every pair up to its end (a carriage return, or the
-    /// last pair) is confirmed and fresh.
+    /// last pair) is confirmed and heard in this epoch. Completing it
+    /// settles it.
     fn complete(&self) -> Option<Vec<u8>> {
         let mut out = Vec::with_capacity(self.pairs.len() * 2);
         for p in &self.pairs {
-            if !p.fresh {
+            if !self.current(p) {
                 return None;
             }
             let v = p.conf?;
@@ -628,16 +695,21 @@ impl Text {
         Some(out)
     }
 
-    /// The text as far as it is confirmed since it last changed, the first
-    /// `len` pairs or up to a carriage return, with [`RT_GAP`] for each
-    /// character not yet in; gaps after the last confirmed pair are left off.
-    /// And the share of those pairs that are in. `None` until one is.
+    /// A complete text has been published: later changes start afresh.
+    fn settle(&mut self) {
+        self.moving = false;
+    }
+
+    /// The text as far as it is confirmed in this epoch, the first `len`
+    /// pairs or up to a carriage return, with [`RT_GAP`] for each character
+    /// not yet in; gaps after the last confirmed pair are left off. And the
+    /// share of those pairs that are in. `None` until one is.
     fn partial(&self, len: usize) -> Option<(String, f32)> {
         let mut out = String::new();
         let (mut known, mut total, mut kept) = (0usize, 0usize, 0usize);
         'pairs: for p in self.pairs.iter().take(len) {
             total += 1;
-            match (p.fresh, p.conf) {
+            match (self.current(p), p.conf) {
                 (true, Some(v)) => {
                     known += 1;
                     for c in v {
@@ -657,6 +729,42 @@ impl Text {
         }
         let shown: String = out.chars().take(kept).collect();
         Some((shown.trim_end().to_string(), known as f32 / total.max(1) as f32))
+    }
+
+    /// What each pair holds, for the trace: the confirmed characters (in
+    /// brackets while not heard in this epoch), `??` where none is.
+    fn show(&self, len: usize) -> String {
+        self.pairs
+            .iter()
+            .take(len)
+            .map(|p| match p.conf {
+                Some(v) if self.current(p) => format!("{}{}", rds_char(v[0]), rds_char(v[1])),
+                Some(v) => format!("[{}{}]", rds_char(v[0]), rds_char(v[1])),
+                None => "??".into(),
+            })
+            .collect::<Vec<_>>()
+            .join("|")
+    }
+
+    /// The station says the text may be new: everything held must be heard
+    /// again before it counts, and what is heard from here is that text.
+    fn stale(&mut self) {
+        self.epoch += 1;
+        self.moving = true;
+    }
+
+    /// Whether every pair heard in this epoch agrees with `shown` (a
+    /// complete text, without its carriage return): if so, what is coming
+    /// in is that same text again.
+    fn agrees_with(&self, shown: &[u8]) -> bool {
+        self.pairs.iter().enumerate().all(|(k, p)| match (self.current(p), p.conf) {
+            (true, Some(v)) => v.iter().enumerate().all(|(i, &c)| match shown.get(2 * k + i) {
+                Some(&s) => s == c,
+                // Past the end of the text shown: only its end, or padding.
+                None => c == 0x0D || c == b' ',
+            }),
+            _ => true,
+        })
     }
 
     /// True once any pair has been confirmed.
@@ -820,7 +928,18 @@ struct Heard {
     tp: bool,
     ta_cand: Option<bool>,
     ta: bool,
-    ps: Text,
+    /// The PS frame being collected: the next segment address expected,
+    /// the characters so far, and whether every block they came from was
+    /// exact (for the trace). A frame is taken only from one unbroken run
+    /// of segments 0 to 3.
+    ps_run: Option<(usize, [u8; 8], bool)>,
+    /// Complete runs of the last [`PS_MATCH_S`], by sample time: a frame
+    /// counts once another run among them matches it.
+    ps_runs: Vec<(u64, [u8; 8])>,
+    /// The weak-signal way to a name: the PS gathered pair by pair across
+    /// passes, and the sample time a pair last took a new value.
+    ps_pairs: Text,
+    ps_pairs_moved: u64,
     ps_out: Option<String>,
     /// Names published in the last minute, by sample time: a station that
     /// scrolls words through its PS sends a new one every few seconds.
@@ -834,8 +953,6 @@ struct Heard {
     rt_ab: Option<bool>,
     /// 2B (32 characters) rather than 2A (64).
     rt_b: Option<bool>,
-    /// A new (A/B flag, version) heard once, waiting for a second group.
-    rt_flip: Option<(bool, bool)>,
     rt_out: Option<String>,
     rt_raw: Option<Vec<u8>>,
     /// The text being received, while it is incomplete.
@@ -867,7 +984,10 @@ impl Heard {
             tp: false,
             ta_cand: None,
             ta: false,
-            ps: Text::new(4),
+            ps_run: None,
+            ps_runs: Vec::new(),
+            ps_pairs: Text::new(4),
+            ps_pairs_moved: 0,
             ps_out: None,
             ps_seen: Vec::new(),
             ps_dynamic: false,
@@ -876,7 +996,6 @@ impl Heard {
             rt: Text::new(32),
             rt_ab: None,
             rt_b: None,
-            rt_flip: None,
             rt_out: None,
             rt_raw: None,
             rt_partial: None,
@@ -906,12 +1025,52 @@ pub struct RdsDecoder {
     samples: u64,
     generation: u64,
     changes: Vec<RdsChange>,
+    /// One line per group while tracing is on (`set_trace`), for diagnosing
+    /// a station on the air; `None` otherwise, at no cost.
+    trace: Option<Vec<String>>,
 }
 
 impl RdsDecoder {
     /// `fs` is the MPX sample rate: the FM discriminator's, at least 128 kHz.
     pub fn new(fs: f64) -> Self {
-        Self { fs, demod: Demod::new(fs), sync: Sync::new(), h: Heard::new(), quiet: 0, samples: 0, generation: 0, changes: Vec::new() }
+        Self { fs, demod: Demod::new(fs), sync: Sync::new(), h: Heard::new(), quiet: 0, samples: 0, generation: 0, changes: Vec::new(), trace: None }
+    }
+
+    /// Log every group, with its blocks' state and what PS and RadioText
+    /// hold after it, for `take_trace`.
+    pub fn set_trace(&mut self, on: bool) {
+        self.trace = on.then(Vec::new);
+    }
+
+    /// The trace lines since the last call.
+    pub fn take_trace(&mut self) -> Vec<String> {
+        self.trace.as_mut().map(std::mem::take).unwrap_or_default()
+    }
+
+    fn trace_group(&mut self, g: &[Option<Block>; 4], note: &str) {
+        let Some(t) = self.trace.as_mut() else { return };
+        let q = |b: &Option<Block>| match b {
+            Some(b) if b.ok == BlockOk::Exact => 'E',
+            Some(_) => 'c',
+            None => '-',
+        };
+        let chars = |b: &Option<Block>| b.map_or("  ".into(), |b| {
+            let [x, y] = b.data.to_be_bytes();
+            format!("{}{}", rds_char(x), rds_char(y))
+        });
+        let (gt, seg, ab) = g[1].map_or(("??".into(), 0, ' '), |b| {
+            let d = b.data;
+            (format!("{}{}", d >> 12, if d & 0x0800 != 0 { 'B' } else { 'A' }), d & 0xF, if d & 0x10 != 0 { 'B' } else { 'A' })
+        });
+        let rt_len = if self.h.rt_b == Some(true) { 16 } else { 32 };
+        t.push(format!(
+            "t={:.2} {}{}{}{} {gt:>3} seg={seg:>2} ab={ab} C='{}' D='{}' {note}| PS {} | RT {}",
+            self.samples as f64 / self.fs,
+            q(&g[0]), q(&g[1]), q(&g[2]), q(&g[3]),
+            chars(&g[2]), chars(&g[3]),
+            self.h.ps_run.map_or("--".into(), |(next, b, exact)| format!("{}{}", to_string(&b[..2 * next]), if exact { "" } else { "~" })),
+            self.h.rt.show(rt_len),
+        ));
     }
 
     /// Restart bit and block sync after a break in the samples, keeping what
@@ -1048,6 +1207,24 @@ impl RdsDecoder {
     }
 
     fn group(&mut self, g: [Option<Block>; 4]) {
+        let (pi, ps, rt) = (self.h.pi, self.h.ps_out.clone(), self.h.rt_out.clone());
+        self.group_inner(g);
+        if self.trace.is_some() {
+            let mut note = String::new();
+            if self.h.pi != pi {
+                note.push_str("PI! ");
+            }
+            if self.h.ps_out != ps {
+                note.push_str(&format!("PS='{}' ", self.h.ps_out.as_deref().unwrap_or("")));
+            }
+            if self.h.rt_out != rt {
+                note.push_str(&format!("RT='{}' ", self.h.rt_out.as_deref().unwrap_or("")));
+            }
+            self.trace_group(&g, &note);
+        }
+    }
+
+    fn group_inner(&mut self, g: [Option<Block>; 4]) {
         // PI, from block A or (in a version-B group) block C'; only exact
         // blocks count towards confirming it.
         let exact_pi = g[0]
@@ -1125,31 +1302,32 @@ impl RdsDecoder {
                     }
                     self.h.ta_cand = Some(ta);
                 }
-                if let Some(d) = d {
-                    self.h.ps.put((b & 3) as usize, d.to_be_bytes(), b_exact && d_exact);
-                    self.publish_ps();
+                match d {
+                    Some(d) => self.ps_segment((b & 3) as usize, d.to_be_bytes(), b_exact && d_exact),
+                    None => self.h.ps_run = None,
                 }
             }
             (2, vb) => {
                 let ab = b & 0x10 != 0;
                 if self.h.rt_ab.is_some_and(|x| x != ab) || self.h.rt_b.is_some_and(|x| x != vb) {
-                    // The station says to clear its text, or this block B
-                    // was misread: only exact blocks, two in a row, decide.
+                    // The A/B flag says the text may be new. Many stations
+                    // flip it on every pass of the same text, so nothing is
+                    // cleared and this group is not thrown away (taking it
+                    // to confirm the flip lost segment 0 on every pass, and
+                    // the text never completed again): everything held must
+                    // be heard again before it counts, and what is shown
+                    // stays until a whole text is. A flag from a corrected
+                    // block is not trusted to move anything.
                     if !b_exact {
                         return;
                     }
-                    if self.h.rt_flip != Some((ab, vb)) {
-                        self.h.rt_flip = Some((ab, vb));
-                        return;
-                    }
-                    self.h.rt.clear();
-                    self.clear_tags();
-                    if self.h.rt_out.take().is_some() {
-                        self.h.rt_raw = None;
-                        self.bump();
+                    if self.h.rt_b.is_some_and(|x| x != vb) {
+                        // 2A and 2B lay the text out differently.
+                        self.h.rt.clear();
+                    } else {
+                        self.h.rt.stale();
                     }
                 }
-                self.h.rt_flip = None;
                 self.h.rt_ab = Some(ab);
                 self.h.rt_b = Some(vb);
                 let seg = (b & 0xF) as usize;
@@ -1196,9 +1374,55 @@ impl RdsDecoder {
         }
     }
 
-    fn publish_ps(&mut self) {
-        if let Some(bytes) = self.h.ps.complete() {
-            let s = to_string(&bytes);
+    /// Two characters of PS at segment address `k`. A frame is gathered
+    /// from segments 0, 1, 2 and 3 in a row; anything out of order starts
+    /// it again. It counts once the same frame comes in two runs within
+    /// [`PS_MATCH_S`]: a station that moves its PS on partway through a pass
+    /// sends one run that is half of each frame, and that one does not come
+    /// again (WPLR's " Leppard" over "WPLR Def" made " Leppaef"). Clean
+    /// blocks are not enough on their own for that reason.
+    fn ps_segment(&mut self, k: usize, v: [u8; 2], exact: bool) {
+        let now = self.samples;
+        if k < 4 {
+            let before = self.h.ps_pairs.pairs[k].conf;
+            self.h.ps_pairs.put(k, v, exact);
+            if self.h.ps_pairs.pairs[k].conf != before {
+                self.h.ps_pairs_moved = now;
+            }
+            if let Some(bytes) = self.h.ps_pairs.complete()
+                && (now - self.h.ps_pairs_moved) as f64 >= PS_HELD_S * self.fs
+            {
+                self.publish_ps(&bytes);
+            }
+        }
+        let run = match (k, self.h.ps_run) {
+            (0, _) => Some((0, [0u8; 8], true)),
+            (k, Some((next, b, e))) if k == next => Some((next, b, e)),
+            _ => None,
+        };
+        let Some((_, mut bytes, all_exact)) = run else {
+            self.h.ps_run = None;
+            return;
+        };
+        bytes[2 * k..2 * k + 2].copy_from_slice(&v);
+        if k < 3 {
+            // Whether it was all clean is kept for the trace.
+            self.h.ps_run = Some((k + 1, bytes, all_exact && exact));
+            return;
+        }
+        self.h.ps_run = None;
+        let window = (PS_MATCH_S * self.fs) as u64;
+        self.h.ps_runs.retain(|(t, _)| now.saturating_sub(*t) < window);
+        let seen = self.h.ps_runs.iter().any(|(_, f)| *f == bytes);
+        self.h.ps_runs.push((now, bytes));
+        if seen {
+            self.publish_ps(&bytes);
+        }
+    }
+
+    fn publish_ps(&mut self, bytes: &[u8]) {
+        {
+            let s = to_string(bytes);
             if !s.is_empty() && self.h.ps_out.as_deref() != Some(&s) {
                 let now = self.samples;
                 let minute = (60.0 * self.fs) as u64;
@@ -1226,8 +1450,12 @@ impl RdsDecoder {
 
     fn publish_rt(&mut self) {
         // What is in of a text not yet complete, published as it grows.
+        // A pass that is the text already shown, heard again, is not a new
+        // text arriving.
+        let again = self.h.rt_raw.as_deref().is_some_and(|raw| self.h.rt.agrees_with(raw));
         let partial = match self.h.rt.complete() {
             Some(_) => None,
+            None if again => None,
             None => self.h.rt.partial(if self.h.rt_b == Some(true) { 16 } else { 32 }),
         };
         if partial.as_ref().map(|p| &p.0) != self.h.rt_partial.as_ref().map(|p| &p.0) {
@@ -1236,6 +1464,7 @@ impl RdsDecoder {
         }
         if let Some(bytes) = self.h.rt.complete() {
             let s = to_string(&bytes);
+            self.h.rt.settle();
             if !s.is_empty() && self.h.rt_out.as_deref() != Some(&s) {
                 self.h.rt_out = Some(s);
                 self.h.rt_raw = Some(bytes);
@@ -1700,10 +1929,80 @@ mod tests {
         dec.group([blk(g[0]), blk(g[1] ^ 0x10), blk(g[2]), blk(g[3])]);
         dec.group([blk(g[0]), blk(g[1]), blk(g[2]), blk(g[3])]);
         assert_eq!(dec.station().unwrap().rt.as_deref(), Some("Blue Horizon by The Examples"));
-        // The station really flipping it (two groups in a row) clears it.
-        dec.group([blk(g[0]), blk(g[1] ^ 0x10), blk(g[2]), blk(g[3])]);
-        dec.group([blk(g[0]), blk(g[1] ^ 0x10), blk(g[2]), blk(g[3])]);
-        assert_eq!(dec.station().unwrap().rt, None);
+        // The station flipping the flag on every pass of the same text, as
+        // WRCH on 100.5 does: the text stays, no partial flashes up, and it
+        // is complete again after each pass.
+        let rt_groups: Vec<[u16; 4]> = gs.iter().filter(|(g, _)| g[1] >> 12 == 2).map(|(g, _)| *g).collect();
+        for pass in 0..4 {
+            let flip = if pass % 2 == 0 { 0x10 } else { 0 };
+            for g in &rt_groups {
+                dec.group([blk(g[0]), blk(g[1] ^ flip), blk(g[2]), blk(g[3])]);
+                let st = dec.station().unwrap();
+                assert_eq!(st.rt.as_deref(), Some("Blue Horizon by The Examples"), "pass {pass}");
+                assert_eq!(st.rt_partial, None, "pass {pass}");
+            }
+        }
+        // A new text after a flip replaces it once all of it is in, shown
+        // filling in meanwhile.
+        let gs2 = program("KXYZ FM ", "Red Sky at Night by Others", (0, 7), (20, 6));
+        let mut seen_partial = false;
+        for (g, _) in gs2.iter().filter(|(g, _)| g[1] >> 12 == 2) {
+            dec.group([blk(g[0]), blk(g[1]), blk(g[2]), blk(g[3])]);
+            seen_partial |= dec.station().unwrap().rt_partial.is_some();
+        }
+        assert!(seen_partial);
+        assert_eq!(dec.station().unwrap().rt.as_deref(), Some("Red Sky at Night by Others"));
+    }
+
+    /// PS frames from groups 0A with exact blocks, address `k`.
+    fn ps_group(dec: &mut RdsDecoder, frame: &[u8; 8], k: usize, exact: bool) {
+        let ok = if exact { BlockOk::Exact } else { BlockOk::Corrected };
+        let d = u16::from_be_bytes([frame[2 * k], frame[2 * k + 1]]);
+        dec.group([
+            Some(Block { data: PI, ok: BlockOk::Exact, c_prime: false }),
+            Some(Block { data: b_word(0, false, k as u16), ok, c_prime: false }),
+            Some(Block { data: 0xE0CD, ok, c_prime: false }),
+            Some(Block { data: d, ok, c_prime: false }),
+        ]);
+    }
+
+    #[test]
+    fn a_ps_frame_comes_from_one_run_of_its_segments() {
+        let mut dec = RdsDecoder::new(256_000.0);
+        let pass = |dec: &mut RdsDecoder, frame: &[u8; 8], exact: bool| {
+            for k in 0..4 {
+                ps_group(dec, frame, k, exact);
+            }
+        };
+        // The PI first.
+        for _ in 0..2 {
+            ps_group(&mut dec, b"WPLR Def", 1, true);
+        }
+        // The same frame in two runs in a row: the name.
+        pass(&mut dec, b"WPLR Def", true);
+        assert_eq!(dec.station().unwrap().ps, None);
+        pass(&mut dec, b"WPLR Def", true);
+        assert_eq!(dec.station().unwrap().ps.as_deref(), Some("WPLR Def"));
+        // WPLR moves on to " Leppard" partway through a pass: that run is
+        // half of each frame, all in order and all clean, and " Leppaef"
+        // must not come out of it.
+        for k in 0..3 {
+            ps_group(&mut dec, b" Leppard", k, true);
+        }
+        ps_group(&mut dec, b"WPLR Def", 3, true);
+        pass(&mut dec, b" Leppard", true);
+        assert_eq!(dec.station().unwrap().ps.as_deref(), Some("WPLR Def"));
+        pass(&mut dec, b" Leppard", true);
+        assert_eq!(dec.station().unwrap().ps.as_deref(), Some("Leppard"));
+        // Out of order starts the run again.
+        for k in [0, 1, 3, 2, 0, 1, 3, 2] {
+            ps_group(&mut dec, b" Photogr", k, true);
+        }
+        assert_eq!(dec.station().unwrap().ps.as_deref(), Some("Leppard"));
+        // Read through corrected blocks, the same two runs.
+        pass(&mut dec, b" Photogr", false);
+        pass(&mut dec, b" Photogr", false);
+        assert_eq!(dec.station().unwrap().ps.as_deref(), Some("Photogr"));
     }
 
     #[test]

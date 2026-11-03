@@ -912,6 +912,8 @@ fn run(
     let mut lagged: u64 = 0;
     let mut clipped: u64 = 0;
     let mut counted: u64 = 0;
+    // Samples since the LNA's take-over last looked.
+    let mut quarter: u64 = 0;
     let mut peak: f64 = 0.0;
     // Acquisition timeline: `sample_pos` is where the next read lands on the
     // device's sample grid; `epoch` bumps on every ACCEPTED tune/rate change
@@ -1311,6 +1313,36 @@ fn run(
                 lagged += u64::from(fanout.broadcast(block));
             }
 
+            // The LNA's take-over, four times a second: from a cold start
+            // with the LNA wide open the IF is pinned at once, and there is
+            // nothing to wait for.
+            quarter += n as u64;
+            if sdrplay && quarter >= (rate / 4.0) as u64 {
+                quarter = 0;
+                let if_agc = agc_enabled && tuner_agc && clip_guard.is_none();
+                let live = sdrplay_live(&dev);
+                let rfgr = dev.gain_element(Rx, 0, "RFGR").ok();
+                // The LNA follows the IF AGC, so the front end is not
+                // left at full gain while the IF runs out of range.
+                if if_agc
+                    && let (Some(sg), Some(ifgr), Some(state)) = (sdrplay_gain(&caps, tune.desired), live.ifgr, rfgr)
+                    && !sg.lna_gr.is_empty()
+                {
+                    let top = sg.lna_gr.len().min(sdrplay_lna_states(&caps, tune.desired).unwrap_or(sg.lna_gr.len())) - 1;
+                    if let Some(next) = lna_takeover.on_tick(sg.lna_gr, ifgr, live.overload == Some(true), state.round().max(0.0) as usize, top)
+                        && crate::driver_log::checked(|| dev.set_gain_element(Rx, 0, "RFGR", next as f64).is_ok())
+                    {
+                        let _ = log_tx.try_send(format!(
+                            "LNA state {next} ({:.0} dB reduction): the IF AGC was at {ifgr:.0} dB{}",
+                            sg.lna_gr[next],
+                            if live.overload == Some(true) { ", overloaded" } else { "" }
+                        ));
+                    }
+                } else {
+                    lna_takeover = LnaTakeover::default();
+                }
+            }
+
             if counted >= rate as u64 {
                 let clipped_fraction = clipped as f64 / counted.max(1) as f64;
                 if let Some(ref mut cg) = clip_guard
@@ -1340,26 +1372,6 @@ fn run(
                 if sdrplay {
                     let if_agc = agc_enabled && tuner_agc && clip_guard.is_none();
                     let live = sdrplay_live(&dev);
-                    let rfgr = dev.gain_element(Rx, 0, "RFGR").ok();
-                    // The LNA follows the IF AGC, so the front end is not
-                    // left at full gain while the IF runs out of range.
-                    if if_agc
-                        && let (Some(sg), Some(ifgr), Some(state)) = (sdrplay_gain(&caps, tune.desired), live.ifgr, rfgr)
-                        && !sg.lna_gr.is_empty()
-                    {
-                        let top = sg.lna_gr.len().min(sdrplay_lna_states(&caps, tune.desired).unwrap_or(sg.lna_gr.len())) - 1;
-                        if let Some(next) = lna_takeover.on_second(sg.lna_gr, ifgr, live.overload == Some(true), state.round().max(0.0) as usize, top)
-                            && crate::driver_log::checked(|| dev.set_gain_element(Rx, 0, "RFGR", next as f64).is_ok())
-                        {
-                            let _ = log_tx.try_send(format!(
-                                "LNA state {next} ({:.0} dB reduction): the IF AGC was at {ifgr:.0} dB{}",
-                                sg.lna_gr[next],
-                                if live.overload == Some(true) { ", overloaded" } else { "" }
-                            ));
-                        }
-                    } else {
-                        lna_takeover = LnaTakeover::default();
-                    }
                     let rfgr = dev.gain_element(Rx, 0, "RFGR").ok();
                     let ifgr = if if_agc { live.ifgr } else { dev.gain_element(Rx, 0, "IFGR").ok() };
                     let readout = GainReadout {
@@ -1628,19 +1640,21 @@ fn sdrplay_live(dev: &soapysdr::Device) -> SdrplayLive {
 /// window rather than across it.
 const LNA_UP_IFGR: f64 = SDRPLAY_IF_TAKEOVER_DB + 10.0;
 const LNA_DOWN_IFGR: f64 = SDRPLAY_IF_TAKEOVER_DB - 10.0;
-/// Seconds the IF must sit under [`LNA_DOWN_IFGR`] before the LNA gives
-/// gain back: slow, so a fade does not walk the front end back into
-/// overload.
-const LNA_DOWN_HOLD: u32 = 3;
+/// Quarter-second ticks the IF must sit under [`LNA_DOWN_IFGR`] before the
+/// LNA gives gain back (three seconds): slow, so a fade does not walk the
+/// front end back into overload.
+const LNA_DOWN_HOLD: u32 = 12;
+/// Ticks of rest after a step, for the IF AGC to settle on it.
+const LNA_REST: u32 = 2;
 
 /// The LNA under the RSP's IF AGC. The AGC moves only the IF stage, so on
 /// a band with a strong local station it ran out of reduction (59 dB) with
 /// the LNA at full gain, and the overdriven front end painted that station
-/// across the band as intermodulation. Once a second this steps the LNA so
-/// the IF stays near the take-over level: deeper at once by as much as the
-/// IF is over it (or a state on an overload report), back a state at a time
-/// once the IF has been well under it for a while. A step is followed by a
-/// second's rest while the AGC settles.
+/// across the band as intermodulation. Four times a second this steps the
+/// LNA so the IF stays near the take-over level: deeper at once by as much
+/// as the IF is over it (or a state on an overload report), back a state at
+/// a time once the IF has been well under it for a while. A step is
+/// followed by half a second's rest while the AGC settles.
 #[derive(Clone, Copy, Debug, Default)]
 struct LnaTakeover {
     cold: u32,
@@ -1651,7 +1665,7 @@ impl LnaTakeover {
     /// The state to move to, given the band's reductions, the IF gain
     /// reduction the AGC is at, whether the API reports overload, the state
     /// now and the deepest the band allows.
-    fn on_second(&mut self, lna_gr: &[f64], ifgr: f64, overload: bool, state: usize, top: usize) -> Option<usize> {
+    fn on_tick(&mut self, lna_gr: &[f64], ifgr: f64, overload: bool, state: usize, top: usize) -> Option<usize> {
         let state = state.min(top);
         if self.rest > 0 {
             self.rest -= 1;
@@ -1663,14 +1677,14 @@ impl LnaTakeover {
             // the IF near the take-over level in one step.
             let want = (ifgr - SDRPLAY_IF_TAKEOVER_DB).max(1.0);
             let next = (state + 1..=top).find(|&s| lna_gr[s] - lna_gr[state] >= want).unwrap_or(top);
-            self.rest = 1;
+            self.rest = LNA_REST;
             return Some(next);
         }
         if ifgr <= LNA_DOWN_IFGR && state > 0 {
             self.cold += 1;
             if self.cold >= LNA_DOWN_HOLD {
                 self.cold = 0;
-                self.rest = 1;
+                self.rest = LNA_REST;
                 return Some(state - 1);
             }
             return None;
@@ -2254,31 +2268,45 @@ mod tests {
         let top = gr.len() - 1;
         let mut t = LnaTakeover::default();
         // The IF out of reduction with the LNA wide open: deeper at once,
-        // by at least the 19 dB the IF is over the take-over level (state 4, 20 dB).
-        assert_eq!(t.on_second(gr, 59.0, false, 0, top), Some(4));
-        // A second's rest while the AGC settles, whatever it reads.
-        assert_eq!(t.on_second(gr, 59.0, false, 4, top), None);
+        // by at least the 19 dB the IF is over the take-over level (state 4).
+        assert_eq!(t.on_tick(gr, 59.0, false, 0, top), Some(4));
+        // Half a second's rest while the AGC settles, whatever it reads.
+        for _ in 0..LNA_REST {
+            assert_eq!(t.on_tick(gr, 59.0, false, 4, top), None);
+        }
+        // Still pinned: deeper again straight after, so a cold start is out
+        // of overload within about a second.
+        assert_eq!(t.on_tick(gr, 57.0, false, 4, top), Some(7));
+        for _ in 0..LNA_REST {
+            t.on_tick(gr, 39.0, false, 7, top);
+        }
         // Inside the window: left alone.
-        assert_eq!(t.on_second(gr, 45.0, false, 4, top), None);
-        assert_eq!(t.on_second(gr, 35.0, false, 4, top), None);
+        assert_eq!(t.on_tick(gr, 45.0, false, 7, top), None);
+        assert_eq!(t.on_tick(gr, 35.0, false, 7, top), None);
         // An overload report steps it even inside the window.
-        assert_eq!(t.on_second(gr, 42.0, true, 4, top), Some(5));
-        assert_eq!(t.on_second(gr, 42.0, false, 5, top), None);
-        // Well under the window: a state back, only after three seconds of it.
-        assert_eq!(t.on_second(gr, 25.0, false, 5, top), None);
-        assert_eq!(t.on_second(gr, 25.0, false, 5, top), None);
-        assert_eq!(t.on_second(gr, 25.0, false, 5, top), Some(4));
+        assert_eq!(t.on_tick(gr, 42.0, true, 7, top), Some(8));
+        for _ in 0..LNA_REST {
+            t.on_tick(gr, 42.0, false, 8, top);
+        }
+        // Well under the window: a state back, only after three seconds.
+        for _ in 0..LNA_DOWN_HOLD - 1 {
+            assert_eq!(t.on_tick(gr, 25.0, false, 8, top), None);
+        }
+        assert_eq!(t.on_tick(gr, 25.0, false, 8, top), Some(7));
         // A reading back in the window restarts that count.
         let mut t = LnaTakeover::default();
-        assert_eq!(t.on_second(gr, 25.0, false, 3, top), None);
-        assert_eq!(t.on_second(gr, 40.0, false, 3, top), None);
-        assert_eq!(t.on_second(gr, 25.0, false, 3, top), None);
-        assert_eq!(t.on_second(gr, 25.0, false, 3, top), None);
+        for _ in 0..LNA_DOWN_HOLD - 1 {
+            t.on_tick(gr, 25.0, false, 3, top);
+        }
+        assert_eq!(t.on_tick(gr, 40.0, false, 3, top), None);
+        for _ in 0..LNA_DOWN_HOLD - 1 {
+            assert_eq!(t.on_tick(gr, 25.0, false, 3, top), None);
+        }
         // Never past the deepest state, never under the shallowest.
         let mut t = LnaTakeover::default();
-        assert_eq!(t.on_second(gr, 59.0, true, top, top), None);
-        for _ in 0..5 {
-            assert_eq!(t.on_second(gr, 20.0, false, 0, top), None);
+        assert_eq!(t.on_tick(gr, 59.0, true, top, top), None);
+        for _ in 0..2 * LNA_DOWN_HOLD {
+            assert_eq!(t.on_tick(gr, 20.0, false, 0, top), None);
         }
     }
 

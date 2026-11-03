@@ -1728,8 +1728,7 @@ mod tests {
 
     fn harness_sized(w: f32) -> Harness<'static, T> {
         let ctx = egui::Context::default();
-        let mut prefs = Prefs::default();
-        prefs.auto_connect = false;
+        let prefs = Prefs { auto_connect: false, ..Default::default() };
         let mut app = App::build(&ctx, prefs, Player::silent(), Player::silent(), None);
         let (link, wire) = Link::wire();
         app.link = Some(link);

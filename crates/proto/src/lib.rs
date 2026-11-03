@@ -498,7 +498,7 @@ pub struct Stereo {
 }
 
 /// What a broadcast FM station is sending over RDS. Every text here passed
-/// its checkwords and was heard twice alike.
+/// its checkwords and was confirmed (see the engine's `rds` module for how).
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Rds {

@@ -2103,7 +2103,13 @@ impl Demod {
                     audio: Box::new(WfmAudio::new(fs_out, decim, WFM_DEVIATION_HZ, WFM_DEEMPHASIS_TAU)),
                     stereo: Vec::new(),
                     pilot_seen: false,
-                    rds: Box::new(RdsDecoder::new(fs_out)),
+                    rds: Box::new({
+                        let mut d = RdsDecoder::new(fs_out);
+                        // USDR_RDS_TRACE=1 logs every group, for diagnosing
+                        // a station on the air.
+                        d.set_trace(std::env::var_os("USDR_RDS_TRACE").is_some());
+                        d
+                    }),
                     // Never a generation the decoder has, so the first block
                     // on a new channel pushes a status without the old
                     // station's RDS in it.
@@ -5830,6 +5836,9 @@ fn run_sdr(
                     // RDS reads the multiplex before de-emphasis, which is
                     // where the 57 kHz subcarrier still is.
                     rds.process(disc);
+                    for line in rds.take_trace() {
+                        eprintln!("RDS {line}");
+                    }
                     for change in rds.take_changes() {
                         if let Some(event) = rds.event(&change) {
                             decode_history.note(inspect_hz, "RDS");
