@@ -59,6 +59,9 @@ pub enum Style {
     /// The classic panadapter: a white trace over a blue fill on deep navy,
     /// and the blue-to-red waterfall.
     Classic,
+    /// A pale ice-blue trace over a night-blue pan, and the midnight
+    /// waterfall: the contest-radio look.
+    Midnight,
     /// Cyan on the ground, the glacier waterfall.
     Glacier,
     /// A green CRT phosphor.
@@ -77,12 +80,13 @@ pub struct Look {
 }
 
 impl Style {
-    pub const ALL: [Style; 4] = [Style::Ember, Style::Classic, Style::Glacier, Style::Phosphor];
+    pub const ALL: [Style; 5] = [Style::Ember, Style::Midnight, Style::Classic, Style::Glacier, Style::Phosphor];
 
     pub fn label(self) -> &'static str {
         match self {
             Style::Ember => "Ember",
             Style::Classic => "Classic",
+            Style::Midnight => "Midnight",
             Style::Glacier => "Glacier",
             Style::Phosphor => "Phosphor",
         }
@@ -100,6 +104,15 @@ impl Style {
                 peak: rgb(0xffe14a),
                 max_hold: rgb(0xff8ad8),
                 palette: Colormap::Classic,
+            },
+            Style::Midnight => Look {
+                bg: Some((rgb(0x0b1830), rgb(0x000104))),
+                fill: rgb(0x4aa0ff),
+                glow: rgb(0x9fd2ff),
+                core: rgb(0xf4faff),
+                peak: rgb(0xffe85a),
+                max_hold: rgb(0xff7a3c),
+                palette: Colormap::Midnight,
             },
             Style::Glacier => Look { bg: None, fill: theme::CYAN, glow: theme::CYAN, core: rgb(0xe6fbff), peak: theme::AMBER, max_hold: theme::VIOLET, palette: Colormap::Glacier },
             Style::Phosphor => Look {

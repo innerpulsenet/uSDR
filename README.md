@@ -479,7 +479,10 @@ cargo build --release -p usdr-desktop
 
 `crates/desktop/packaging/linux/install.sh` installs it for the current user
 with a launcher and icons (the launcher is what gives the window its icon
-under Wayland). `usdr-desktop --probe host:port` connects without a window,
+under Wayland); `install.sh --uninstall` removes them again. The icon set
+(SVG, PNGs from 16 to 1024 px, and the Windows `.ico`) is drawn by
+`crates/desktop/packaging/icon/make_icon.py`; the small sizes are laid out
+on their own pixel grid. `usdr-desktop --probe host:port` connects without a window,
 decodes four seconds of the stream and prints what it saw.
 
 The window is laid out by what each control acts on:

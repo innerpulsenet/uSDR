@@ -20,13 +20,18 @@ pub enum Colormap {
     /// The classic panadapter ramp: black through blue, cyan, green and
     /// yellow to red.
     Classic,
+    /// The contest-radio ramp: the floor held black, a sparse navy speckle
+    /// of noise, signals rising through blue and ice into yellow, orange
+    /// and a white-hot red.
+    Midnight,
     /// A green CRT phosphor.
     Green,
 }
 
 impl Colormap {
-    pub const ALL: [Colormap; 7] = [
+    pub const ALL: [Colormap; 8] = [
         Colormap::Ember,
+        Colormap::Midnight,
         Colormap::Classic,
         Colormap::Ham,
         Colormap::Phosphor,
@@ -43,6 +48,7 @@ impl Colormap {
             Colormap::Glacier => "Glacier",
             Colormap::Viridis => "Viridis",
             Colormap::Classic => "Classic",
+            Colormap::Midnight => "Midnight",
             Colormap::Green => "Green",
         }
     }
@@ -94,6 +100,21 @@ impl Colormap {
                 (0.78, [0xf0, 0xe0, 0x10]),
                 (0.90, [0xff, 0x70, 0x00]),
                 (1.00, [0xff, 0x24, 0x24]),
+            ],
+            // Black for the first third, so the noise reads as a few navy
+            // grains rather than a blue wash; blue only for the weak, and
+            // no green: past ice blue a signal turns straight to yellow.
+            Colormap::Midnight => &[
+                (0.00, [0x00, 0x00, 0x00]),
+                (0.34, [0x00, 0x03, 0x10]),
+                (0.46, [0x00, 0x18, 0x5a]),
+                (0.56, [0x0a, 0x3c, 0xc0]),
+                (0.64, [0x2a, 0x7c, 0xf0]),
+                (0.71, [0x8a, 0xc8, 0xff]),
+                (0.78, [0xff, 0xe8, 0x5a]),
+                (0.87, [0xff, 0xa0, 0x20]),
+                (0.94, [0xff, 0x3a, 0x18]),
+                (1.00, [0xff, 0xf0, 0xe6]),
             ],
             Colormap::Green => &[
                 (0.00, [0x01, 0x05, 0x02]),
