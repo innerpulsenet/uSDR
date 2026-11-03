@@ -131,6 +131,10 @@ pub struct App {
     pub meter: Meter,
     /// Receiver B's meter, measured from the spectrum over its passband.
     pub meter_b: Meter,
+    /// Until when (ui time) a narrow SIGNAL bay keeps showing the carrier
+    /// error after it last read over the warning level, so a reading that
+    /// hovers at the threshold does not blink in and out.
+    pub err_warn_until: f64,
     /// Receiver B's channel power in the newest frame, for its flag.
     level_b: Option<(f32, f32)>,
     pub scope: Scope,
@@ -256,6 +260,7 @@ impl App {
             vfo: Vfo::default(),
             meter: Meter::default(),
             meter_b: Meter::default(),
+            err_warn_until: 0.0,
             level_b: None,
             scope: Scope::default(),
             decodes: VecDeque::new(),
@@ -1230,19 +1235,22 @@ impl App {
             let small = |ui: &mut Ui, t: String, c| {
                 ui.label(egui::RichText::new(t).font(theme::mono(10.5)).color(c));
             };
+            // Each number is padded to a fixed width in the mono face, so a
+            // change in its digit count (the audio queue crosses 100 ms many
+            // times a second) moves nothing after it, its own unit included.
             if let Some(l) = &self.link {
-                small(ui, format!("{:.0} fps", self.fps), theme::text_2());
-                small(ui, format!("{:.0} KiB/s", self.kbps), theme::text_3());
-                small(ui, format!("API {:.1} ms", l.stats.rtt_us.load(Ordering::Relaxed) as f32 / 1000.0), theme::text_3());
+                small(ui, format!("{:>3.0} fps", self.fps), theme::text_2());
+                small(ui, format!("{:>5.0} KiB/s", self.kbps), theme::text_3());
+                small(ui, format!("API {:>5.1} ms", l.stats.rtt_us.load(Ordering::Relaxed) as f32 / 1000.0), theme::text_3());
             }
             let a = self.player.reading();
             if a.queue_ms > 0.0 {
-                small(ui, format!("audio {:.0} ms", a.queue_ms), theme::text_3());
+                small(ui, format!("audio {:>4.0} ms", a.queue_ms), theme::text_3());
             } else {
-                small(ui, "audio —".into(), theme::text_3());
+                small(ui, format!("audio {:>4} ms", "—"), theme::text_3());
             }
             if a.underruns > 0 {
-                small(ui, format!("{} underruns", a.underruns), theme::WARN);
+                small(ui, format!("{:>5} underruns", a.underruns), theme::WARN);
             }
             if self.have_status
                 && let Some(e) = &self.status.error

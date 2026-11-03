@@ -34,7 +34,7 @@ pub fn toolbar(app: &mut App, ui: &mut Ui) {
         if widgets::chip_key(ui, "−", false, theme::CYAN).on_hover_text("Zoom out (−)").clicked() {
             app.set_zoom(app.zoom_ui / 2.0);
         }
-        ui.label(RichText::new(format!("{:.1}×", app.zoom_ui.max(1.0))).font(theme::mono(10.5)).color(theme::text_2()));
+        ui.label(RichText::new(format!("{:>4.1}×", app.zoom_ui.max(1.0))).font(theme::mono(10.5)).color(theme::text_2()));
         if widgets::chip_key(ui, "+", false, theme::CYAN).on_hover_text("Zoom in (+)").clicked() {
             app.set_zoom(app.zoom_ui * 2.0);
         }

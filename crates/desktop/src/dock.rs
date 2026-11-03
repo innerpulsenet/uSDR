@@ -358,10 +358,11 @@ fn signal_details(app: &App, ui: &mut Ui) {
         // what it is, what was measured, and the decoder's own note.
         ui.horizontal(|ui| {
             ui.label(RichText::new(&c.protocol).font(theme::sans_semibold(13.0)).color(widgets::protocol_color(&c.protocol)));
-            ui.add(egui::Label::new(mono(format!("{} · {:.0}%", c.modulation, c.confidence * 100.0), theme::text_2())).truncate());
+            ui.add(egui::Label::new(mono(format!("{} · {:>3.0}%", c.modulation, c.confidence * 100.0), theme::text_2())).truncate());
         });
         ui.add(egui::Label::new(mono(format!(
-            "SNR {:+.1} dB · RF {:.0} dBFS · dev peak {:.1}k rms {:.1}k · DC {:+.0} Hz",
+            // Padded so each field keeps its place while the figures move.
+            "SNR {:>+5.1} dB · RF {:>4.0} dBFS · dev peak {:>4.1}k rms {:>4.1}k · DC {:>+5.0} Hz",
             c.snr_db,
             c.rf_dbfs,
             c.peak_dev_hz / 1000.0,

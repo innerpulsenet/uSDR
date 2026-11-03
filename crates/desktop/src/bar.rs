@@ -586,14 +586,22 @@ fn meter(app: &mut App, ui: &mut Ui, min_w: f32, max_w: f32) {
         ui.set_max_width(w);
         if is_b {
             app.meter_b.ui_compact(ui, rm, mark);
-            let snr = app.meter_b.snr.map_or("—".into(), |s| format!("{s:.1} dB"));
+            let snr = app.meter_b.snr.map_or(format!("{:>4} dB", "—"), |s| format!("{s:>4.1} dB"));
             ui.label(small(format!("SNR {snr} · measured from the spectrum")));
             return;
         }
         app.meter.ui_compact(ui, rm, mark);
         let s = &app.status;
-        let snr = app.meter.snr.map_or("—".into(), |d| format!("{d:.1} dB"));
+        // Fixed widths in the mono face, so the chip and the station name
+        // after them hold still while the numbers change.
+        let snr = app.meter.snr.map_or(format!("{:>4} dB", "—"), |d| format!("{d:>4.1} dB"));
         let err = s.freq_error_hz.map_or("—".into(), |e| if e.abs() >= 1_000.0 { format!("{:+.1}k", e / 1000.0) } else { format!("{e:+.0} Hz") });
+        let err = format!("{err:>7}");
+        let now = ui.input(|i| i.time);
+        if s.freq_error_hz.is_some_and(|e| e.abs() > 2000.0) {
+            app.err_warn_until = now + 5.0;
+        }
+        let err_warn = now < app.err_warn_until;
         let mut notches = Vec::new();
         if s.rf_notch == Some(true) {
             notches.push("AM/FM".to_string());
@@ -609,8 +617,8 @@ fn meter(app: &mut App, ui: &mut Ui, min_w: f32, max_w: f32) {
             ui.label(small(format!("SNR {snr}")));
             // A narrow meter keeps its room for what is heard; the carrier
             // error is in the Radio card too, with CALIBRATE.
-            let ec = if s.freq_error_hz.is_some_and(|e| e.abs() > 2000.0) { theme::WARN } else { theme::text_3() };
-            if w >= 330.0 || ec == theme::WARN {
+            let ec = if err_warn { theme::WARN } else { theme::text_3() };
+            if w >= 330.0 || err_warn {
                 let r = ui.add(egui::Label::new(RichText::new(format!("err {err}")).font(theme::mono(10.0)).color(ec)).sense(Sense::click()));
                 if r.on_hover_text("Click to calibrate the ppm from this carrier").clicked()
                     && let Some(l) = &app.link

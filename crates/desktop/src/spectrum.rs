@@ -1755,9 +1755,16 @@ impl SliceFlag {
             (None, Some(s)) => format!("SNR {s:.1} dB"),
             _ => String::new(),
         };
-        // The card grows to fit a long protocol name, up to a point.
+        // The card grows to fit a long protocol name, up to a point. It is
+        // sized by the widest SNR, not the one showing, so it does not
+        // breathe (or, left of the line, slide) as the figure changes.
         let rec_w = if self.recording { 16.0 } else { 0.0 };
-        let bottom_w = painter.layout_no_wrap(bottom.clone(), theme::sans(11.0), Color32::PLACEHOLDER).size().x;
+        let sizing = match (&self.protocol, self.snr_db) {
+            (Some(p), Some(_)) => format!("{p} · SNR 99.9 dB"),
+            (None, Some(_)) => "SNR 99.9 dB".into(),
+            _ => bottom.clone(),
+        };
+        let bottom_w = painter.layout_no_wrap(sizing, theme::sans(11.0), Color32::PLACEHOLDER).size().x;
         let w = (bottom_w + 16.0 + rec_w).clamp(168.0, 240.0);
         let h = 62.0;
         let right_side = x + 10.0 + w < pan.right() - 4.0;
