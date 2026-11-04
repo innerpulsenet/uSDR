@@ -118,7 +118,9 @@ pub const CYAN: Color32 = rgb(0x52e3ff);
 pub const VIOLET: Color32 = rgb(0xb38cff);
 
 pub const OK: Color32 = rgb(0x7dffb0);
-pub const WARN: Color32 = rgb(0xffb347);
+/// Caution: a held display, drops, a weak decode, DC on the feed. Lemon,
+/// a clear step from the amber accent, so a warning never reads as the VFO.
+pub const WARN: Color32 = rgb(0xffe45e);
 pub const ERR: Color32 = rgb(0xff9a8f);
 
 pub const RADIUS: u8 = 4;
@@ -231,6 +233,9 @@ pub fn set_ground(ctx: &egui::Context, g: Ground) {
         v.warn_fg_color = WARN;
         v.error_fg_color = ERR;
         v.slider_trailing_fill = true;
+        // Unavailable keys stay legible (about 3:1 on the panel) while still
+        // reading as off; egui's 0.5 left their labels near 2:1.
+        v.disabled_alpha = 0.65;
         v.handle_shape = egui::style::HandleShape::Rect { aspect_ratio: 0.55 };
         v.text_cursor.stroke = Stroke::new(1.5, EMBER);
 

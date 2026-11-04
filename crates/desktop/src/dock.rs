@@ -209,6 +209,7 @@ fn decodes(app: &mut App, ui: &mut Ui) {
     let avail = ui.available_size();
     let list_w = if app.selected_decode.is_some() { avail.x * 0.58 } else { avail.x };
     let mut tune_to = None;
+    let mut show_all = false;
     ui.horizontal_top(|ui| {
         // Top-down: inside the row above, a plain allocation would lay the
         // frames out side by side.
@@ -261,6 +262,16 @@ fn decodes(app: &mut App, ui: &mut Ui) {
             let out = area.show(ui, |ui| {
                 if let Some(text) = empty {
                     empty_state(ui, text);
+                }
+                // Frames in the log, every one outside this view: say so, so
+                // the tab's count and an empty list never disagree unexplained.
+                if visible.is_empty() && total > 0 {
+                    ui.add_space(4.0);
+                    ui.horizontal(|ui| {
+                        let n = if total == 1 { "1 frame in the log is".to_string() } else { format!("{total} frames in the log are") };
+                        ui.label(RichText::new(format!("{n} outside this view.")).font(theme::sans(12.0)).color(theme::text_2()));
+                        show_all = widgets::action_small(ui, "SHOW ALL").clicked();
+                    });
                 }
                 for &i in &visible {
                     // Off screen, a row is only its height: a full log costs
@@ -392,6 +403,11 @@ fn decodes(app: &mut App, ui: &mut Ui) {
     });
     if let Some(hz) = tune_to {
         app.tune(hz, false);
+    }
+    if show_all {
+        app.decode_family = None;
+        app.decode_chip = None;
+        app.decode_filter.clear();
     }
 }
 
@@ -1074,10 +1090,10 @@ fn hf_activity(app: &mut App, ui: &mut Ui, rows: &[HfRow]) {
             p.line_segment([egui::pos2(x, plot.top() + 1.0), egui::pos2(x, plot.bottom() - 1.0)], egui::Stroke::new(1.0, theme::line()));
         }
         let align = if x > plot.right() - 16.0 { egui::Align2::RIGHT_TOP } else { egui::Align2::CENTER_TOP };
-        p.text(egui::pos2(x.min(plot.right()), plot.bottom() + 1.0), align, format!("{:.1}k", hz / 1000.0), theme::mono(9.0), theme::text_3());
+        p.text(egui::pos2(x.min(plot.right()), plot.bottom() + 1.0), align, format!("{:.1}k", hz / 1000.0), theme::mono(10.0), theme::text_3());
     }
-    p.text(egui::pos2(plot.left() - 4.0, plot.top()), egui::Align2::RIGHT_TOP, "newest", theme::mono(9.0), theme::text_3());
-    p.text(egui::pos2(plot.left() - 4.0, plot.bottom()), egui::Align2::RIGHT_BOTTOM, format!("{} slots", slots.len()), theme::mono(9.0), theme::text_3());
+    p.text(egui::pos2(plot.left() - 4.0, plot.top()), egui::Align2::RIGHT_TOP, "newest", theme::mono(10.0), theme::text_3());
+    p.text(egui::pos2(plot.left() - 4.0, plot.bottom()), egui::Align2::RIGHT_BOTTOM, format!("{} slots", slots.len()), theme::mono(10.0), theme::text_3());
     // The filter's edges, where the decoder can hear.
     let (flo, fhi) = (app.status.filter_low_hz.abs().min(app.status.filter_high_hz.abs()) as f32, app.status.filter_low_hz.abs().max(app.status.filter_high_hz.abs()) as f32);
     if matches!(app.status.mode, Mode::Ft8 | Mode::Ft4) && fhi > flo {

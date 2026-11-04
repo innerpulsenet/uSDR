@@ -1798,6 +1798,21 @@ mod tests {
         }
     }
 
+    #[test]
+    fn a_view_that_hides_every_frame_says_so_and_shows_them_back() {
+        let mut h = harness();
+        h.run_steps(2);
+        let event = proto::DecodeEvent { protocol: "P25".into(), kind: "voice header".into(), summary: "group call".into(), valid: true, fields: Default::default() };
+        h.state().wire.events.send(NetEvent::Decode { inspect_hz: 146.04e6, event, at: std::time::SystemTime::now() }).unwrap();
+        h.state_mut().app.decode_family = Some(crate::decoders::Family::Broadcast);
+        h.run_steps(3);
+        h.get_by_label("1 frame in the log is outside this view.");
+        h.get_by_label("SHOW ALL").click();
+        h.run_steps(2);
+        assert_eq!(h.state().app.decode_family, None);
+        assert_eq!(h.query_all_by_label("SHOW ALL").count(), 0);
+    }
+
     fn harness_sized(w: f32) -> Harness<'static, T> {
         harness_wh(w, 1000.0)
     }

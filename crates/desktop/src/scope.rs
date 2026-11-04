@@ -501,7 +501,7 @@ impl Scope {
             painter.rect_filled(pill, CornerRadius::same(2), alpha(b.tone, 0.2));
             painter.line_segment([pos2(x0, pill.bottom()), pos2(x1, pill.bottom())], Stroke::new(1.0, alpha(b.tone, 0.7)));
             placed.push(pill);
-            let g = painter.layout_no_wrap(b.name.to_string(), theme::mono(9.0), b.tone);
+            let g = painter.layout_no_wrap(b.name.to_string(), theme::mono(10.0), b.tone);
             if g.size().x + 6.0 <= pill.width() && !tagged {
                 names.push(Rect::from_center_size(pill.center(), g.size()));
                 painter.galley(pill.center() - g.size() / 2.0, g, b.tone);
@@ -512,15 +512,15 @@ impl Scope {
                 continue;
             }
             let x = x_of(m.hz);
-            crate::spectrum::dashed_v(&painter, x, spec.top() + 1.0, spec.bottom() - 1.0, alpha(theme::WARN, 0.45));
-            let g = painter.layout_no_wrap(m.name.to_string(), theme::mono(9.0), theme::WARN);
+            crate::spectrum::dashed_v(&painter, x, spec.top() + 1.0, spec.bottom() - 1.0, alpha(theme::AMBER, 0.45));
+            let g = painter.layout_no_wrap(m.name.to_string(), theme::mono(10.0), theme::AMBER);
             let r = Rect::from_center_size(pos2(x, ruler.center().y + 0.5), g.size());
             if r.left() >= ruler.left() && r.right() <= ruler.right() && !placed.iter().any(|p| p.intersects(r.expand(2.0))) {
-                painter.galley(r.min, g, alpha(theme::WARN, 0.95));
+                painter.galley(r.min, g, alpha(theme::AMBER, 0.95));
                 placed.push(r);
                 names.push(r);
             } else {
-                painter.circle_filled(pos2(x, ruler.center().y + 0.5), 2.0, alpha(theme::WARN, 0.9));
+                painter.circle_filled(pos2(x, ruler.center().y + 0.5), 2.0, alpha(theme::AMBER, 0.9));
             }
         }
         // What was decoded in the last slot, each at its audio frequency:
@@ -533,7 +533,7 @@ impl Scope {
                 }
                 let x = x_of(*hz);
                 painter.line_segment([pos2(x, spec.top() + 1.0), pos2(x, spec.top() + 6.0)], Stroke::new(1.5, c));
-                let g = painter.layout_no_wrap(name.clone(), theme::mono(9.0), c);
+                let g = painter.layout_no_wrap(name.clone(), theme::mono(10.0), c);
                 let r = Rect::from_center_size(pos2(x, ruler.center().y + 0.5), g.size());
                 if r.left() >= ruler.left() && r.right() <= ruler.right() && !names.iter().any(|p| p.intersects(r.expand(2.0))) {
                     painter.rect_filled(r.expand2(vec2(2.0, 0.0)), CornerRadius::same(2), theme::ink());
@@ -553,11 +553,11 @@ impl Scope {
             let y = y_of(db);
             if y > spec.top() + 6.0 && y < spec.bottom() - 4.0 {
                 painter.line_segment([pos2(spec.left() + 1.0, y), pos2(spec.right() - 1.0, y)], Stroke::new(1.0, theme::line()));
-                painter.text(pos2(spec.left() - 4.0, y), Align2::RIGHT_CENTER, format!("{db:.0}"), theme::mono(9.0), theme::text_3());
+                painter.text(pos2(spec.left() - 4.0, y), Align2::RIGHT_CENTER, format!("{db:.0}"), theme::mono(10.0), theme::text_3());
             }
             db += step;
         }
-        painter.text(pos2(spec.left() - 4.0, spec.bottom() + 1.0), Align2::RIGHT_TOP, "dB", theme::mono(9.0), theme::text_3());
+        painter.text(pos2(spec.left() - 4.0, spec.bottom() + 1.0), Align2::RIGHT_TOP, "dB", theme::mono(10.0), theme::text_3());
         // Frequency ticks on a 1-2-5 step, labeled under the plot.
         let fstep = crate::spectrum::nice_step(f64::from(span.hi - span.lo), (spec.width() / 64.0).clamp(3.0, 8.0) as f64) as f32;
         let mut hz = (span.lo / fstep).ceil() * fstep;
@@ -567,7 +567,7 @@ impl Scope {
                 painter.line_segment([pos2(x, spec.top() + 1.0), pos2(x, spec.bottom() - 1.0)], Stroke::new(1.0, theme::line()));
             }
             let align = if x <= spec.left() + 1.0 { Align2::LEFT_TOP } else if x >= spec.right() - 12.0 { Align2::RIGHT_TOP } else { Align2::CENTER_TOP };
-            painter.text(pos2(x.clamp(spec.left(), spec.right()), spec.bottom() + 1.0), align, fmt_khz(hz, fstep, span.signed), theme::mono(9.0), theme::text_3());
+            painter.text(pos2(x.clamp(spec.left(), spec.right()), spec.bottom() + 1.0), align, fmt_khz(hz, fstep, span.signed), theme::mono(10.0), theme::text_3());
             hz += fstep;
         }
         // Peak hold first, faint, then the spectrum in the display's own style
@@ -606,8 +606,8 @@ impl Scope {
             }
             painter.rect_stroke(mini, egui::CornerRadius::ZERO, Stroke::new(1.0, theme::line()), egui::StrokeKind::Inside);
             let secs = MINI_H as f32 / self.rate_hz.max(1.0);
-            painter.text(pos2(mini.left() - 4.0, mini.top()), Align2::RIGHT_TOP, "now", theme::mono(9.0), theme::text_3());
-            painter.text(pos2(mini.left() - 4.0, mini.bottom()), Align2::RIGHT_BOTTOM, format!("−{secs:.0}s"), theme::mono(9.0), theme::text_3());
+            painter.text(pos2(mini.left() - 4.0, mini.top()), Align2::RIGHT_TOP, "now", theme::mono(10.0), theme::text_3());
+            painter.text(pos2(mini.left() - 4.0, mini.bottom()), Align2::RIGHT_BOTTOM, format!("−{secs:.0}s"), theme::mono(10.0), theme::text_3());
         }
         // The spectrum's readout: under the cursor while it is over the plot,
         // otherwise what the mode's bands measure.
@@ -697,8 +697,8 @@ impl Scope {
         if disc {
             for (lvl, name) in [(0.6, "+3"), (0.2, "+1"), (-0.2, "−1"), (-0.6, "−3")] {
                 let y = r.center().y - lvl * (r.height() / 2.0 - 4.0);
-                crate::spectrum::dashed_h(painter, r.left(), r.left() + r.width() * 0.76, y, alpha(theme::WARN, 0.35));
-                painter.text(pos2(r.left() + r.width() * 0.77, y), Align2::LEFT_CENTER, name, theme::mono(9.0), alpha(theme::WARN, 0.8));
+                crate::spectrum::dashed_h(painter, r.left(), r.left() + r.width() * 0.76, y, alpha(theme::AMBER, 0.35));
+                painter.text(pos2(r.left() + r.width() * 0.77, y), Align2::LEFT_CENTER, name, theme::mono(10.0), alpha(theme::AMBER, 0.8));
             }
         }
         let to_screen = |p: &[f32; 2]| pos2(r.left() + p[0] * r.width(), r.center().y - p[1] * (r.height() / 2.0 - 4.0));
@@ -871,7 +871,7 @@ impl Scope {
         let cx = r.left() + r.width() * 0.25;
         painter.line_segment([pos2(cx - 6.0, r.center().y - open_h), pos2(cx + 6.0, r.center().y - open_h)], Stroke::new(1.5, theme::AMBER));
         painter.line_segment([pos2(cx - 6.0, r.center().y + open_h), pos2(cx + 6.0, r.center().y + open_h)], Stroke::new(1.5, theme::AMBER));
-        painter.text(pos2(cx + 8.0, r.center().y - open_h - 2.0), Align2::LEFT_BOTTOM, format!("EYE {:.0}%", self.eye_open), theme::mono(9.5), theme::AMBER);
+        painter.text(pos2(cx + 8.0, r.center().y - open_h - 2.0), Align2::LEFT_BOTTOM, format!("EYE {:.0}%", self.eye_open), theme::mono(10.0), theme::AMBER);
     }
 }
 
@@ -879,7 +879,7 @@ fn level_color(levels: usize, k: usize) -> Color32 {
     if levels == 2 {
         [theme::OK, theme::ERR][k.min(1)]
     } else {
-        [theme::CYAN, theme::OK, theme::WARN, theme::ERR][k.min(3)]
+        [theme::CYAN, theme::OK, theme::AMBER, theme::ERR][k.min(3)]
     }
 }
 

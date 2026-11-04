@@ -1132,7 +1132,7 @@ impl Panafall {
                     painter.text(
                         pos2(time_axis.right() - 7.0, y),
                         Align2::RIGHT_CENTER,
-                        fmt_age(next_mark, step_s),
+                        fmt_age(next_mark, step_s, visible_s >= 60.0),
                         theme::mono(10.0),
                         theme::text_3(),
                     );
@@ -1982,7 +1982,7 @@ impl SliceFlag {
         let fade = |c: Color32| if rds.locked { c } else { theme::text_3() };
         let who_font = theme::sans_semibold(12.5);
         let kind = rds.kind.as_deref().map(|k| format!(" · {k}")).unwrap_or_default();
-        let snr = self.snr_db.map(|s| format!("SNR {s:.1}"));
+        let snr = self.snr_db.map(|s| format!("SNR {s:.1} dB"));
         // Sized by what it says, within bounds, and by the widest SNR so it
         // does not breathe as the figure changes.
         // One size whatever arrives or whether it is recording (each line is
@@ -2073,12 +2073,13 @@ fn mini_meter(painter: &egui::Painter, bar: Rect, pos: f32, below: Color32) {
 fn receiver_tab(painter: &egui::Painter, r: Rect, letter: &str, color: Color32, active: bool) {
     let tab = Rect::from_min_size(r.left_top() + vec2(8.0, 8.0), vec2(14.0, 14.0));
     painter.rect_filled(tab, CornerRadius::same(3), alpha(color, if active { 0.9 } else { 0.3 }));
-    painter.text(tab.center(), Align2::CENTER_CENTER, letter, theme::mono_bold(9.5), if active { theme::ink() } else { theme::text() });
+    painter.text(tab.center(), Align2::CENTER_CENTER, letter, theme::mono_bold(10.0), if active { theme::ink() } else { theme::text() });
 }
 
-/// A waterfall age for the time axis: seconds under a minute, else m:ss.
-fn fmt_age(s: f64, step: f64) -> String {
-    if s >= 60.0 {
+/// A waterfall age for the time axis: m:ss on an axis that reaches a
+/// minute, every label alike, else seconds.
+fn fmt_age(s: f64, step: f64, minutes: bool) -> String {
+    if minutes {
         format!("−{}:{:02}", (s / 60.0).floor(), (s % 60.0).round())
     } else if step < 1.0 {
         format!("−{s:.1}s")
@@ -2285,9 +2286,11 @@ mod tests {
 
     #[test]
     fn ages_read_as_seconds_then_minutes() {
-        assert_eq!(fmt_age(5.0, 5.0), "−5s");
-        assert_eq!(fmt_age(0.5, 0.5), "−0.5s");
-        assert_eq!(fmt_age(90.0, 30.0), "−1:30");
+        assert_eq!(fmt_age(5.0, 5.0, false), "−5s");
+        assert_eq!(fmt_age(0.5, 0.5, false), "−0.5s");
+        assert_eq!(fmt_age(90.0, 30.0, true), "−1:30");
+        // One format down an axis that reaches a minute: not −20s, −40s, −1:00.
+        assert_eq!(fmt_age(20.0, 20.0, true), "−0:20");
     }
 
     #[test]

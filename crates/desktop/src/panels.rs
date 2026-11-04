@@ -16,7 +16,7 @@ fn small(t: impl Into<String>) -> RichText {
 
 pub fn side(app: &mut App, ui: &mut Ui) {
     ui.spacing_mut().item_spacing.y = 8.0;
-    egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+    let out = egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
         // On broadcast FM the station is what the column is for; it leads.
         if app.status.mode == Mode::Wfm {
             let head = |ui: &mut Ui| {
@@ -49,6 +49,29 @@ pub fn side(app: &mut App, ui: &mut Ui) {
         // clearing open here when wanted.
         widgets::applet_folded(ui, "memory-bank", "Memory bank", |_| {}, |ui| memories(app, ui));
     });
+    // More cards than the column shows: its edge fades into the panel
+    // where they continue, so a card cut in half reads as "scroll on".
+    let (shown, whole, off) = (out.inner_rect, out.content_size.y, out.state.offset.y);
+    let fade = |top: bool| {
+        let h = 32.0;
+        let edge = if top { egui::Rect::from_min_size(shown.min, vec2(shown.width(), h)) } else { egui::Rect::from_min_max(egui::pos2(shown.left(), shown.bottom() - h), shown.max) };
+        let (clear, solid) = (alpha(theme::surface_1(), 0.0), theme::surface_1());
+        let (a, b) = if top { (solid, clear) } else { (clear, solid) };
+        let mut mesh = egui::Mesh::default();
+        mesh.colored_vertex(edge.left_top(), a);
+        mesh.colored_vertex(edge.right_top(), a);
+        mesh.colored_vertex(edge.right_bottom(), b);
+        mesh.colored_vertex(edge.left_bottom(), b);
+        mesh.add_triangle(0, 1, 2);
+        mesh.add_triangle(0, 2, 3);
+        ui.painter().add(egui::Shape::mesh(mesh));
+    };
+    if off > 1.0 {
+        fade(true);
+    }
+    if whole - off > shown.height() + 1.0 {
+        fade(false);
+    }
 }
 
 /// What a broadcast station is sending over RDS, in rows of fixed height:

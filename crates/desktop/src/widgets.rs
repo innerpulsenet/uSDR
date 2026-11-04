@@ -380,7 +380,7 @@ impl<F: Fn(f64) -> String> Fader<'_, F> {
             let x = track.left() + track.width() * f;
             p.line_segment([pos2(x, track.bottom() + 2.0), pos2(x, track.bottom() + 5.0)], Stroke::new(1.0, theme::text_3()));
             let align = if *f <= 0.0 { Align2::LEFT_TOP } else if *f >= 1.0 { Align2::RIGHT_TOP } else { Align2::CENTER_TOP };
-            p.text(pos2(x, track.bottom() + 6.0), align, label, theme::mono(9.5), theme::text_3());
+            p.text(pos2(x, track.bottom() + 6.0), align, label, theme::mono(10.0), theme::text_3());
         }
         let mut changed = false;
         if let Some(pos) = resp.interact_pointer_pos()

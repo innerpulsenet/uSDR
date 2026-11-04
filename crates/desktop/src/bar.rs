@@ -259,7 +259,7 @@ fn tuning(app: &mut App, ui: &mut Ui) {
             None => format!("AUTO {}", crate::tuning::fmt_short_hz(auto)),
             Some(s) => crate::tuning::fmt_short_hz(s),
         };
-        let color = if app.prefs.step_hz.is_some() { theme::WARN } else { theme::text() };
+        let color = if app.prefs.step_hz.is_some() { theme::AMBER } else { theme::text() };
         let top = ui.horizontal(|ui| {
             widgets::selector(ui, "step", &label, color, 118.0, |ui| {
                 if ui.selectable_label(app.prefs.step_hz.is_none(), format!("Auto · mode raster ({})", crate::tuning::fmt_short_hz(auto))).clicked() {
@@ -410,11 +410,14 @@ fn filter(app: &mut App, ui: &mut Ui, width_px: f32) {
         ui.set_min_width(width_px);
         ui.set_max_width(width_px);
         let Some(range) = range else {
-            ui.label(small(if app.server.as_ref().is_some_and(|i| i.has("filter")) {
-                format!("{} keeps its decoder's filter", mode.label())
+            // One short line, so it never wraps in the narrow bay; the
+            // whole of it is a hover away.
+            let (note, tip) = if app.server.as_ref().is_some_and(|i| i.has("filter")) {
+                ("set by the decoder", format!("{}'s decoder sets its own channel filter", mode.label()))
             } else {
-                "this server cannot set the filter".into()
-            }));
+                ("fixed on this server", "This server predates the adjustable filter".to_string())
+            };
+            ui.label(small(note)).on_hover_text(tip);
             return;
         };
         let mut presets: Vec<f32> = match mode {
@@ -1029,8 +1032,8 @@ fn memory_pill(ui: &mut Ui, slot: usize, m: Option<&crate::prefs::Memory>, lit: 
         let mhz = mhz.trim_end_matches('0').trim_end_matches('.').to_string();
         let f = p.layout_no_wrap(mhz, font.clone(), egui::Color32::PLACEHOLDER);
         let room = SLOT_W - 8.0 - num.size().x - 6.0 - f.size().x - 5.0 - 8.0;
-        let name = widgets::ellipsize(&p, &m.name, theme::mono_bold(9.5), room);
-        (f, p.layout_no_wrap(name, theme::mono_bold(9.5), egui::Color32::PLACEHOLDER), mode_tally(m.mode))
+        let name = widgets::ellipsize(&p, &m.name, theme::mono_bold(10.0), room);
+        (f, p.layout_no_wrap(name, theme::mono_bold(10.0), egui::Color32::PLACEHOLDER), mode_tally(m.mode))
     });
     let (rect, resp) = ui.allocate_exact_size(vec2(SLOT_W, 22.0), Sense::click());
     let name = m.map_or_else(|| format!("empty slot {slot}"), |m| m.name.clone());
