@@ -1,8 +1,11 @@
 //! The scope: what the demodulator hands the speaker or the slicer.
 //!
 //! Left, a spectrum — the passband slice of the main display, the audio, or
-//! the FM multiplex with its pilot, stereo and RDS marks — over a small
-//! waterfall of it. Right, the time domain: an oscilloscope triggered on a
+//! the FM multiplex with its pilot, stereo and RDS bands — over a small
+//! waterfall of it. The spectrum is every frame's FFT averaged between
+//! updates (Welch, across frames), drawn on a dB axis that follows the
+//! signal, with a falling peak-hold above it and the mode's bands on a
+//! ruler over the plot, so no label ever sits on the trace. Right, the time domain: an oscilloscope triggered on a
 //! rising zero crossing, or for digital modes an eye diagram whose clock
 //! phase is searched each frame, with the eye opening and EVM measured from
 //! the same strobes.
@@ -15,7 +18,7 @@
 use crate::theme::{self, alpha};
 use egui::{Align2, Color32, CornerRadius, Pos2, Rect, Sense, Shape, Stroke, Ui, pos2, vec2};
 use std::collections::VecDeque;
-use usdr_proto::{FftFrame, Mode, ScopeKind};
+use usdr_proto::{FftFrame, Mode, ScopeKind, Status};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum Sub {
@@ -29,7 +32,21 @@ pub enum Sub {
 pub struct Scope {
     pub sub: std::collections::HashMap<Mode, Sub>,
     fft: Option<Fft>,
+    /// Power summed per bin over the frames since the spectrum last updated,
+    /// and how many windowed segments went in.
+    psd_acc: Vec<f32>,
+    psd_n: u32,
+    /// The averaged spectrum, dB, smoothed across updates.
     spectrum: Vec<f32>,
+    /// Each bin's recent maximum, dB, falling at `PEAK_FALL_DB_S`.
+    peak: Vec<f32>,
+    peak_t: f64,
+    /// The dB span drawn, (floor, top), easing after the spectrum.
+    range: Option<(f32, f32)>,
+    /// What the spectrum is of, so a new mode or view starts it afresh.
+    spec_key: Option<(Mode, Sub)>,
+    /// Rows of the little waterfall, newest first: each update's average in
+    /// dB, unsmoothed, colored against the current range when drawn.
     mini_wf: VecDeque<Vec<f32>>,
     mini_tex: Option<egui::TextureHandle>,
     eye_sweeps: VecDeque<Vec<Vec<f32>>>,
@@ -52,8 +69,6 @@ pub struct Scope {
     /// The mini waterfall's rows or palette changed since its texture was made.
     mini_dirty: bool,
     mini_palette: Option<crate::colormap::Colormap>,
-    /// The passband slice, normalized and smoothed across updates.
-    pass_smooth: Vec<f32>,
     /// The oscilloscope's recent sweeps, newest first, as (x 0..1, y −1..1).
     osc: VecDeque<Vec<[f32; 2]>>,
     eye_two_level: bool,
@@ -66,7 +81,13 @@ impl Default for Scope {
         Self {
             sub: Default::default(),
             fft: None,
+            psd_acc: Vec::new(),
+            psd_n: 0,
             spectrum: Vec::new(),
+            peak: Vec::new(),
+            peak_t: 0.0,
+            range: None,
+            spec_key: None,
             mini_wf: VecDeque::new(),
             mini_tex: None,
             eye_sweeps: VecDeque::new(),
@@ -83,7 +104,6 @@ impl Default for Scope {
             held: None,
             mini_dirty: true,
             mini_palette: None,
-            pass_smooth: Vec::new(),
             osc: VecDeque::new(),
             eye_two_level: false,
             wave_sig: 0,
@@ -142,12 +162,17 @@ impl Fft {
         }
     }
 }
-const MINI_W: usize = 160;
-const MINI_H: usize = 48;
+const MINI_W: usize = 256;
+const MINI_H: usize = 56;
+/// How fast the peak-hold trace falls back to the spectrum.
+const PEAK_FALL_DB_S: f32 = 12.0;
 
 fn default_sub(mode: Mode) -> Sub {
     match mode {
-        Mode::Wfm | Mode::Nfm | Mode::Am => Sub::Passband,
+        // The multiplex says more about a broadcast station than its
+        // passband does: pilot, stereo and RDS, each measured.
+        Mode::Wfm => Sub::Mpx,
+        Mode::Nfm | Mode::Am => Sub::Passband,
         Mode::Pager => Sub::Disc,
         _ => Sub::Audio,
     }
@@ -164,6 +189,74 @@ impl Sub {
     }
 }
 
+/// The frequencies the spectrum spans: audio from zero, or the passband
+/// either side of the carrier.
+struct Span {
+    lo: f32,
+    hi: f32,
+    signed: bool,
+}
+
+/// A stretch of the spectrum a mode puts something in, shaded in the plot
+/// and named on the ruler above it.
+struct Band {
+    lo: f32,
+    hi: f32,
+    name: &'static str,
+    tone: Color32,
+}
+
+/// One frequency the mode marks: a pilot, a tone.
+struct Mark {
+    hz: f32,
+    name: &'static str,
+}
+
+/// What a mode's spectrum carries. The first band is the one whose peak the
+/// readout reports.
+fn annotations(status: &Status, sub: Sub, from_pass: bool) -> (Vec<Band>, Vec<Mark>) {
+    let band = |lo: f32, hi: f32, name, tone| Band { lo, hi, name, tone };
+    let mark = |hz: f32, name| Mark { hz, name };
+    let (flo, fhi) = (status.filter_low_hz as f32, status.filter_high_hz as f32);
+    if from_pass {
+        // The passband slice is the filter already.
+        return (vec![], vec![]);
+    }
+    match (status.mode, sub) {
+        (Mode::Wfm, Sub::Mpx) => (
+            vec![
+                band(30.0, 15_000.0, "L+R", theme::CYAN),
+                band(23_000.0, 53_000.0, "L−R", theme::VIOLET),
+                band(54_600.0, 59_400.0, "RDS", theme::OK),
+            ],
+            vec![mark(19_000.0, "PILOT")],
+        ),
+        (Mode::Usb | Mode::Lsb | Mode::Ft8 | Mode::Ft4, _) if fhi > flo => {
+            let (a, b) = (flo.abs().min(fhi.abs()), flo.abs().max(fhi.abs()));
+            (vec![band(a, b, "PASSBAND", theme::AMBER)], vec![])
+        }
+        (Mode::Nfm, _) => (vec![band(300.0, 3_000.0, "VOICE", theme::AMBER), band(67.0, 254.0, "CTCSS", theme::VIOLET)], vec![]),
+        (Mode::Am, _) if fhi > flo => (vec![band(50.0, (fhi - flo) / 2.0, "AUDIO", theme::AMBER)], vec![]),
+        (Mode::Packet, _) => (vec![band(900.0, 2_500.0, "AFSK", theme::AMBER)], vec![mark(1_200.0, "MARK"), mark(2_200.0, "SPACE")]),
+        // FLEX's deviation levels, seen as tones in the discriminator.
+        (Mode::Pager, Sub::Disc) => (vec![], vec![mark(1_600.0, "±1.6k"), mark(4_800.0, "±4.8k")]),
+        _ => (vec![], vec![]),
+    }
+}
+
+/// A tick label: whole kHz on a kHz step, tenths below it.
+fn fmt_khz(hz: f32, step: f32, signed: bool) -> String {
+    let k = hz / 1000.0;
+    let body = if step >= 1000.0 { format!("{:.0}k", k.abs()) } else { format!("{:.1}k", k.abs()) };
+    if signed && hz.abs() > 0.5 { format!("{}{body}", if hz < 0.0 { "−" } else { "+" }) } else if hz.abs() <= 0.5 { "0".into() } else { body }
+}
+
+/// A frequency in the readout: Hz under 1 kHz, kHz above.
+fn fmt_hz(hz: f32, signed: bool) -> String {
+    let sign = if !signed { "" } else if hz < 0.0 { "−" } else { "+" };
+    if hz.abs() < 1000.0 { format!("{sign}{:.0} Hz", hz.abs()) } else { format!("{sign}{:.3} kHz", hz.abs() / 1000.0) }
+}
+
 impl Scope {
     pub fn sub_for(&self, mode: Mode) -> Sub {
         self.sub.get(&mode).copied().unwrap_or_else(|| default_sub(mode))
@@ -177,18 +270,15 @@ impl Scope {
         }
         match mode {
             Mode::Wfm => &[Sub::Passband, Sub::Mpx],
-            Mode::Nfm | Mode::Am | Mode::Packet => &[Sub::Passband, Sub::Audio],
+            Mode::Nfm | Mode::Am | Mode::Packet | Mode::Ft8 | Mode::Ft4 => &[Sub::Passband, Sub::Audio],
             Mode::Pager => &[Sub::Passband, Sub::Disc],
             _ => &[],
         }
     }
 
     pub fn set_view(&mut self, mode: Mode, sub: Sub) {
-        if self.sub_for(mode) != sub {
-            self.sub.insert(mode, sub);
-            self.mini_wf.clear();
-            self.mini_dirty = true;
-        }
+        // The spectrum notices the change and starts afresh.
+        self.sub.insert(mode, sub);
     }
 
     /// The scope's title, and a note on what it shows where there is no
@@ -202,89 +292,162 @@ impl Scope {
             (Mode::Wfm, _, _) => ("WFM passband", None),
             (Mode::Pager, _, Sub::Disc) => ("Pager discriminator", None),
             (_, _, Sub::Passband) => ("Passband", None),
-            (Mode::Usb | Mode::Lsb, _, _) => ("Sideband audio", Some("300–2800 Hz")),
+            (Mode::Usb | Mode::Lsb, _, _) => ("Sideband audio", None),
             (Mode::Packet, _, _) => ("AFSK audio", None),
+            (Mode::Ft8, _, _) => ("FT8 audio", None),
+            (Mode::Ft4, _, _) => ("FT4 audio", None),
             _ => ("Audio", None),
         }
     }
 
-    fn audio_spectrum(&mut self, s: &[i16]) {
+    /// Add a frame's audio to the running average: Hann-windowed segments,
+    /// half overlapped, so a frame longer than the FFT is used whole. A
+    /// full-scale sine reads 0 dB in its bin.
+    fn accumulate(&mut self, s: &[i16]) {
         if s.len() < 64 {
             return;
         }
         let fft = self.fft.get_or_insert_with(|| Fft::new(N_FFT));
         let take = s.len().min(N_FFT);
-        let start = s.len() - take;
-        let mut re: Vec<f32> = (0..N_FFT)
-            .map(|i| {
-                if i < take {
-                    let w = 0.5 - 0.5 * (std::f32::consts::TAU * i as f32 / (take - 1) as f32).cos();
-                    s[start + i] as f32 / 32000.0 * w
-                } else {
-                    0.0
-                }
-            })
-            .collect();
-        let mut im = vec![0.0; N_FFT];
-        fft.process(&mut re, &mut im);
-        let norm = take as f32 / 4.0;
-        let out: Vec<f32> = re[..N_FFT / 2]
-            .iter()
-            .zip(&im)
-            .map(|(r, i)| 20.0 * (r.hypot(*i) / norm).max(1e-6).log10())
-            .collect();
-        if self.spectrum.len() == out.len() {
-            for (a, b) in self.spectrum.iter_mut().zip(&out) {
-                *a += (b - *a) * 0.5;
+        let win: Vec<f32> = (0..take).map(|i| 0.5 - 0.5 * (std::f32::consts::TAU * i as f32 / (take - 1) as f32).cos()).collect();
+        let norm = (win.iter().sum::<f32>() / 2.0 * 32000.0).powi(2);
+        if self.psd_acc.len() != N_FFT / 2 {
+            self.psd_acc = vec![0.0; N_FFT / 2];
+            self.psd_n = 0;
+        }
+        let hop = (take / 2).max(1);
+        let mut start = 0;
+        loop {
+            let mut re = vec![0.0f32; N_FFT];
+            for (i, (r, w)) in re.iter_mut().zip(&win).enumerate() {
+                *r = s[start + i] as f32 * w;
+            }
+            let mut im = vec![0.0; N_FFT];
+            fft.process(&mut re, &mut im);
+            for (a, (r, i)) in self.psd_acc.iter_mut().zip(re.iter().zip(&im)) {
+                *a += (r * r + i * i) / norm;
+            }
+            self.psd_n += 1;
+            if start + take >= s.len() {
+                break;
+            }
+            start = (start + hop).min(s.len() - take);
+        }
+    }
+
+    /// Close the average gathered since the last update into the spectrum.
+    fn settle(&mut self, now: f64) {
+        if self.psd_n == 0 {
+            return;
+        }
+        let n = self.psd_n as f32;
+        let db: Vec<f32> = self.psd_acc.iter().map(|p| 10.0 * (p / n).max(1e-12).log10()).collect();
+        self.psd_acc.fill(0.0);
+        self.psd_n = 0;
+        self.take_trace(db, 0.5, now);
+    }
+
+    /// One update's trace, dB: smoothed into the spectrum, raised into the
+    /// peak hold, a row of the little waterfall as it came, and the range
+    /// eased toward the floor and the top it shows.
+    fn take_trace(&mut self, db: Vec<f32>, keep: f32, now: f64) {
+        let dt = (now - self.peak_t).clamp(0.0, 1.0) as f32;
+        self.peak_t = now;
+        if self.spectrum.len() == db.len() {
+            for (a, b) in self.spectrum.iter_mut().zip(&db) {
+                *a += (b - *a) * (1.0 - keep);
+            }
+            for (p, b) in self.peak.iter_mut().zip(&db) {
+                *p = (*p - PEAK_FALL_DB_S * dt).max(*b);
             }
         } else {
-            self.spectrum = out;
+            self.spectrum = db.clone();
+            self.peak = db.clone();
         }
+        let mut sorted = self.spectrum.clone();
+        sorted.sort_by(f32::total_cmp);
+        let floor = ((sorted[sorted.len() * 15 / 100] - 10.0) / 5.0).floor() * 5.0;
+        let top = ((self.peak.iter().copied().fold(f32::MIN, f32::max) + 6.0) / 5.0).ceil() * 5.0;
+        let top = top.max(floor + 40.0);
+        self.range = Some(match self.range {
+            Some((f, t)) => (f + (floor - f) * 0.25, t + (top - t) * 0.25),
+            None => (floor, top),
+        });
+        let row = (0..MINI_W)
+            .map(|i| {
+                let x = i as f32 / (MINI_W - 1) as f32 * (db.len() - 1) as f32;
+                let a = x as usize;
+                let b = (a + 1).min(db.len() - 1);
+                db[a] + (db[b] - db[a]) * (x - a as f32)
+            })
+            .collect();
+        self.mini_wf.push_front(row);
+        self.mini_wf.truncate(MINI_H);
+        self.mini_dirty = true;
+    }
+
+    /// Forget the spectrum, for a new mode or view.
+    fn clear_spectrum(&mut self) {
+        self.psd_acc.clear();
+        self.psd_n = 0;
+        self.spectrum.clear();
+        self.peak.clear();
+        self.range = None;
+        self.mini_wf.clear();
+        self.mini_dirty = true;
     }
 
     pub fn ui(
         &mut self,
         ui: &mut Ui,
         f: Option<&FftFrame>,
-        mode: Mode,
+        status: &Status,
         pass: Option<(&[f32], (f32, f32))>,
+        tags: &[(f32, String)],
         look: &crate::spectrum::Look,
     ) {
+        let mode = status.mode;
         let palette = look.palette;
         let rect = ui.available_rect_before_wrap();
-        ui.allocate_rect(rect, Sense::hover());
+        let hover = ui.allocate_rect(rect, Sense::hover()).hover_pos();
         let painter = ui.painter_at(rect);
         painter.rect_filled(rect, CornerRadius::same(4), theme::ink());
         let Some(live) = f else {
             painter.text(rect.center(), Align2::CENTER_CENTER, "no signal yet", theme::sans(12.0), theme::text_3());
             return;
         };
-        // Measure at the scope's own rate; draw the held measurement between.
+        let sub = self.sub_for(mode);
+        if self.spec_key != Some((mode, sub)) {
+            self.spec_key = Some((mode, sub));
+            self.clear_spectrum();
+        }
+        let symbols = live.scope_kind == ScopeKind::Symbols || mode == Mode::Flex;
+        let from_pass = sub == Sub::Passband && !symbols;
+        // The waveform and the eye take every new frame (the server's 25 a
+        // second), and so does the spectrum's average; the rate setting paces
+        // only when that average is drawn and the waterfall steps.
+        let sig = live.scope.iter().take(64).fold(live.scope.len() as u64, |h, &v| h.wrapping_mul(31).wrapping_add(v as u16 as u64));
+        let wave_fresh = sig != self.wave_sig;
+        self.wave_sig = sig;
+        if wave_fresh && !symbols && !from_pass {
+            self.accumulate(&live.scope);
+        }
         let now = ui.input(|i| i.time);
         let fresh = now - self.last_update >= 1.0 / f64::from(self.rate_hz.max(1.0)) || self.held.is_none();
         if fresh {
             self.last_update = now;
             self.held = Some((live.scope_kind, live.scope_rate_hz));
-            if let Some((p, (lo, hi))) = pass
-                && p.len() > 2
-            {
-                let range = (hi - lo).max(1.0);
-                let tr: Vec<f32> = p.iter().map(|v| ((v - lo) / range).clamp(0.0, 1.0)).collect();
-                if self.pass_smooth.len() == tr.len() {
-                    for (a, b) in self.pass_smooth.iter_mut().zip(&tr) {
-                        *a += (b - *a) * 0.45;
-                    }
-                } else {
-                    self.pass_smooth = tr;
+            if from_pass {
+                if let Some((p, _)) = pass
+                    && p.len() > 2
+                {
+                    self.take_trace(p.to_vec(), 0.55, now);
                 }
+            } else {
+                self.settle(now);
             }
         }
-        let Some((held_kind, held_rate)) = self.held else { return };
-        // The waveform and the eye take every new frame (the server's 25 a
-        // second); the rate setting paces only the spectrum and its waterfall.
-        let sig = live.scope.iter().take(64).fold(live.scope.len() as u64, |h, &v| h.wrapping_mul(31).wrapping_add(v as u16 as u64));
-        let wave_fresh = sig != self.wave_sig;
-        self.wave_sig = sig;
+        let Some((_, held_rate)) = self.held else { return };
         let gap = 8.0;
         // Readouts get a strip of their own under the plots, never over a trace.
         let strip = 16.0;
@@ -292,8 +455,6 @@ impl Scope {
         let left = Rect::from_min_size(plots.min, vec2((plots.width() - gap) * 0.5, plots.height()));
         let right = Rect::from_min_max(pos2(left.right() + gap, plots.top()), plots.max);
         let text_y = rect.bottom() - 1.0;
-        let sub = self.sub_for(mode);
-        let symbols = held_kind == ScopeKind::Symbols || mode == Mode::Flex;
         if symbols {
             // Digital: the eye on the left, the slicer on the right.
             grid(&painter, left, 4, 4);
@@ -305,82 +466,125 @@ impl Scope {
             return;
         }
 
-        // ---- left: spectrum
-        let spec = Rect::from_min_max(left.min, pos2(left.right(), left.top() + left.height() * 0.6 - 14.0));
-        let mini = Rect::from_min_max(pos2(left.left(), spec.bottom() + 14.0), left.max);
-        grid(&painter, spec, 4, 3);
-        let (trace, axis): (Vec<f32>, Vec<(f32, String)>) = if sub == Sub::Passband && !symbols {
-            if self.pass_smooth.len() > 2 {
-                (self.pass_smooth.clone(), vec![(0.0, "−".into()), (0.5, "center".into()), (1.0, "+".into())])
-            } else {
-                (Vec::new(), Vec::new())
-            }
+        // ---- left: spectrum, under its band ruler, over its waterfall
+        let span = if from_pass {
+            let bw = if status.bandwidth_hz > 0.0 { status.bandwidth_hz as f32 } else { 12_500.0 };
+            Span { lo: -bw / 2.0, hi: bw / 2.0, signed: true }
         } else {
-            if fresh {
-                self.audio_spectrum(&live.scope);
+            Span { lo: 0.0, hi: held_rate.max(1.0) / 2.0, signed: false }
+        };
+        let (gutter, ruler_h, axis_h) = (30.0, 14.0, 14.0);
+        let ruler = Rect::from_min_max(pos2(left.left() + gutter, left.top()), pos2(left.right(), left.top() + ruler_h));
+        let spec = Rect::from_min_max(pos2(ruler.left(), ruler.bottom() + 2.0), pos2(left.right(), left.top() + left.height() * 0.62 - axis_h));
+        let mini = Rect::from_min_max(pos2(spec.left(), spec.bottom() + axis_h), left.max);
+        painter.rect(spec, CornerRadius::same(3), theme::ink(), Stroke::new(1.0, theme::line()), egui::StrokeKind::Inside);
+        let x_of = |hz: f32| spec.left() + (hz - span.lo) / (span.hi - span.lo) * spec.width();
+        let (bands, marks) = annotations(status, sub, from_pass);
+        // Bands shaded faintly in the plot and named on the ruler; marks
+        // dashed through the plot, named where the ruler has room.
+        // Pills and labels kept apart: a mark's name needs clear ruler, a
+        // callsign only clear of other names (it sits on the passband).
+        let mut placed: Vec<Rect> = Vec::new();
+        let mut names: Vec<Rect> = Vec::new();
+        let tagged = !tags.is_empty() && !from_pass;
+        for b in &bands {
+            let (x0, x1) = (x_of(b.lo).max(spec.left()), x_of(b.hi).min(spec.right()));
+            if x1 - x0 < 1.0 {
+                continue;
             }
-            let max_hz = held_rate.max(1.0) / 2.0;
-            let tr: Vec<f32> = self.spectrum.iter().map(|d| ((d + 80.0) / 80.0).clamp(0.0, 1.0)).collect();
-            let mut ax: Vec<(f32, String)> = (0..=4)
-                .map(|i| (i as f32 / 4.0, format!("{:.1}k", max_hz * i as f32 / 4.0 / 1000.0)))
-                .collect();
-            let marks: &[(f32, &str)] = match (mode, sub) {
-                (Mode::Wfm, Sub::Mpx) => &[(19_000.0, "PILOT"), (38_000.0, "STEREO"), (57_000.0, "RDS")],
-                (Mode::Packet, _) => &[(1_200.0, "MARK"), (2_200.0, "SPACE")],
-                (Mode::Nfm, _) => &[(250.0, "CTCSS")],
-                // FLEX's deviation levels, seen as tones in the discriminator.
-                (Mode::Pager, Sub::Disc) => &[(1_600.0, "±1.6k"), (4_800.0, "±4.8k")],
-                _ => &[],
-            };
-            for (hz, name) in marks {
-                if *hz < max_hz {
-                    let x = spec.left() + hz / max_hz * spec.width();
-                    crate::spectrum::dashed_v(&painter, x, spec.top(), spec.bottom(), alpha(theme::WARN, 0.5));
-                    painter.text(pos2(x + 3.0, spec.top() + 4.0), Align2::LEFT_TOP, *name, theme::mono(9.0), alpha(theme::WARN, 0.9));
+            painter.rect_filled(Rect::from_min_max(pos2(x0, spec.top() + 1.0), pos2(x1, spec.bottom() - 1.0)), CornerRadius::ZERO, alpha(b.tone, 0.06));
+            let pill = Rect::from_min_max(pos2(x0, ruler.top() + 2.0), pos2(x1, ruler.bottom() - 1.0));
+            painter.rect_filled(pill, CornerRadius::same(2), alpha(b.tone, 0.2));
+            painter.line_segment([pos2(x0, pill.bottom()), pos2(x1, pill.bottom())], Stroke::new(1.0, alpha(b.tone, 0.7)));
+            placed.push(pill);
+            let g = painter.layout_no_wrap(b.name.to_string(), theme::mono(9.0), b.tone);
+            if g.size().x + 6.0 <= pill.width() && !tagged {
+                names.push(Rect::from_center_size(pill.center(), g.size()));
+                painter.galley(pill.center() - g.size() / 2.0, g, b.tone);
+            }
+        }
+        for m in &marks {
+            if m.hz <= span.lo || m.hz >= span.hi {
+                continue;
+            }
+            let x = x_of(m.hz);
+            crate::spectrum::dashed_v(&painter, x, spec.top() + 1.0, spec.bottom() - 1.0, alpha(theme::WARN, 0.45));
+            let g = painter.layout_no_wrap(m.name.to_string(), theme::mono(9.0), theme::WARN);
+            let r = Rect::from_center_size(pos2(x, ruler.center().y + 0.5), g.size());
+            if r.left() >= ruler.left() && r.right() <= ruler.right() && !placed.iter().any(|p| p.intersects(r.expand(2.0))) {
+                painter.galley(r.min, g, alpha(theme::WARN, 0.95));
+                placed.push(r);
+                names.push(r);
+            } else {
+                painter.circle_filled(pos2(x, ruler.center().y + 0.5), 2.0, alpha(theme::WARN, 0.9));
+            }
+        }
+        // What was decoded in the last slot, each at its audio frequency:
+        // a tick in the plot, its callsign on the ruler where it fits.
+        if tagged {
+            let c = crate::widgets::protocol_color(mode.label());
+            for (hz, name) in tags {
+                if *hz <= span.lo || *hz >= span.hi {
+                    continue;
+                }
+                let x = x_of(*hz);
+                painter.line_segment([pos2(x, spec.top() + 1.0), pos2(x, spec.top() + 6.0)], Stroke::new(1.5, c));
+                let g = painter.layout_no_wrap(name.clone(), theme::mono(9.0), c);
+                let r = Rect::from_center_size(pos2(x, ruler.center().y + 0.5), g.size());
+                if r.left() >= ruler.left() && r.right() <= ruler.right() && !names.iter().any(|p| p.intersects(r.expand(2.0))) {
+                    painter.rect_filled(r.expand2(vec2(2.0, 0.0)), CornerRadius::same(2), theme::ink());
+                    painter.galley(r.min, g, c);
+                    names.push(r);
+                } else {
+                    painter.circle_filled(pos2(x, ruler.center().y + 0.5), 1.8, c);
                 }
             }
-            ax.retain(|(t, _)| *t < 1.01);
-            (tr, ax)
-        };
-        if trace.len() > 1 {
-            let pts: Vec<Pos2> = trace
-                .iter()
-                .enumerate()
-                .map(|(i, t)| pos2(spec.left() + i as f32 / (trace.len() - 1) as f32 * spec.width(), spec.bottom() - t * spec.height()))
-                .collect();
-            // In the display's own style, so the scope and the panadapter
-            // read as one instrument.
+        }
+        // The dB grid, labeled in the gutter.
+        let (floor, top) = self.range.unwrap_or((-90.0, -10.0));
+        let y_of = |db: f32| spec.bottom() - (db - floor) / (top - floor) * spec.height();
+        let step = crate::spectrum::nice_step(f64::from(top - floor), 4.0) as f32;
+        let mut db = (floor / step).ceil() * step;
+        while db <= top {
+            let y = y_of(db);
+            if y > spec.top() + 6.0 && y < spec.bottom() - 4.0 {
+                painter.line_segment([pos2(spec.left() + 1.0, y), pos2(spec.right() - 1.0, y)], Stroke::new(1.0, theme::line()));
+                painter.text(pos2(spec.left() - 4.0, y), Align2::RIGHT_CENTER, format!("{db:.0}"), theme::mono(9.0), theme::text_3());
+            }
+            db += step;
+        }
+        painter.text(pos2(spec.left() - 4.0, spec.bottom() + 1.0), Align2::RIGHT_TOP, "dB", theme::mono(9.0), theme::text_3());
+        // Frequency ticks on a 1-2-5 step, labeled under the plot.
+        let fstep = crate::spectrum::nice_step(f64::from(span.hi - span.lo), (spec.width() / 64.0).clamp(3.0, 8.0) as f64) as f32;
+        let mut hz = (span.lo / fstep).ceil() * fstep;
+        while hz <= span.hi + 0.5 {
+            let x = x_of(hz);
+            if x > spec.left() + 1.0 && x < spec.right() - 1.0 {
+                painter.line_segment([pos2(x, spec.top() + 1.0), pos2(x, spec.bottom() - 1.0)], Stroke::new(1.0, theme::line()));
+            }
+            let align = if x <= spec.left() + 1.0 { Align2::LEFT_TOP } else if x >= spec.right() - 12.0 { Align2::RIGHT_TOP } else { Align2::CENTER_TOP };
+            painter.text(pos2(x.clamp(spec.left(), spec.right()), spec.bottom() + 1.0), align, fmt_khz(hz, fstep, span.signed), theme::mono(9.0), theme::text_3());
+            hz += fstep;
+        }
+        // Peak hold first, faint, then the spectrum in the display's own style
+        // so the scope and the panadapter read as one instrument.
+        let bin_x = |i: usize, n: usize| if from_pass { spec.left() + i as f32 / (n - 1).max(1) as f32 * spec.width() } else { spec.left() + i as f32 / n as f32 * spec.width() };
+        let to_pts = |v: &[f32]| -> Vec<Pos2> { v.iter().enumerate().map(|(i, d)| pos2(bin_x(i, v.len()), y_of(*d).clamp(spec.top() + 1.0, spec.bottom()))).collect() };
+        if self.spectrum.len() > 1 {
+            painter.add(Shape::line(to_pts(&self.peak), Stroke::new(1.0, alpha(look.peak, 0.55))));
+            let pts = to_pts(&self.spectrum);
             crate::spectrum::fill_under(&painter, &pts, spec.bottom(), look.fill, 0.4);
             painter.add(Shape::line(pts.clone(), Stroke::new(2.6, alpha(look.glow, 0.25))));
             painter.add(Shape::line(pts, Stroke::new(1.1, look.core)));
-            // Resampled to a fixed width so rows of any length stack. One row
-            // per update, so the little waterfall runs at the scope's rate.
-            let row: Vec<f32> = if !fresh { Vec::new() } else { (0..MINI_W)
-                .map(|i| {
-                    let x = i as f32 / (MINI_W - 1) as f32 * (trace.len() - 1) as f32;
-                    let a = x as usize;
-                    let b = (a + 1).min(trace.len() - 1);
-                    trace[a] + (trace[b] - trace[a]) * (x - a as f32)
-                })
-                .collect() };
-            if fresh {
-                self.mini_wf.push_front(row);
-                self.mini_wf.truncate(MINI_H);
-                self.mini_dirty = true;
-            }
         }
-        for (t, label) in axis {
-            let x = spec.left() + t * spec.width();
-            let align = if t <= 0.0 { Align2::LEFT_TOP } else if t >= 1.0 { Align2::RIGHT_TOP } else { Align2::CENTER_TOP };
-            painter.text(pos2(x, spec.bottom() + 1.0), align, label, theme::mono(9.0), theme::text_3());
-        }
-        // Mini waterfall, one small texture rebuilt when a row arrives.
+        // Mini waterfall, one small texture rebuilt when a row arrives,
+        // colored against the spectrum's own range.
         if self.mini_dirty || self.mini_palette != Some(palette) || self.mini_tex.is_none() {
             let lut = palette.lut();
             let mut px = Vec::with_capacity(MINI_W * MINI_H);
             for r in 0..MINI_H {
                 match self.mini_wf.get(r) {
-                    Some(row) => px.extend(row.iter().map(|v| lut[(v.clamp(0.0, 1.0) * 255.0) as usize])),
+                    Some(row) => px.extend(row.iter().map(|v| lut[(((v - floor) / (top - floor)).clamp(0.0, 1.0) * 255.0) as usize])),
                     None => px.extend(std::iter::repeat_n(theme::ink(), MINI_W)),
                 }
             }
@@ -396,12 +600,86 @@ impl Scope {
             painter.image(tex.id(), mini, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
         }
         painter.rect_stroke(mini, egui::CornerRadius::ZERO, Stroke::new(1.0, theme::line()), egui::StrokeKind::Inside);
+        let secs = MINI_H as f32 / self.rate_hz.max(1.0);
+        painter.text(pos2(mini.left() - 4.0, mini.top()), Align2::RIGHT_TOP, "now", theme::mono(9.0), theme::text_3());
+        painter.text(pos2(mini.left() - 4.0, mini.bottom()), Align2::RIGHT_BOTTOM, format!("−{secs:.0}s"), theme::mono(9.0), theme::text_3());
+        // The spectrum's readout: under the cursor while it is over the plot,
+        // otherwise what the mode's bands measure.
+        let hz_at = |x: f32| span.lo + (x - spec.left()) / spec.width() * (span.hi - span.lo);
+        let readout = match hover.filter(|p| spec.expand(1.0).contains(*p) || mini.contains(*p)) {
+            Some(p) if !self.spectrum.is_empty() => {
+                let hz = hz_at(p.x);
+                let x = p.x.clamp(spec.left(), spec.right());
+                painter.line_segment([pos2(x, spec.top()), pos2(x, mini.bottom())], Stroke::new(1.0, alpha(theme::text(), 0.35)));
+                let i = self.bin_of(hz, &span, from_pass);
+                format!("{} · {:.1} dB · peak {:.1}", fmt_hz(hz, span.signed), self.spectrum[i], self.peak[i])
+            }
+            _ => self.measure(status, sub, &span, from_pass),
+        };
+        // Cut at a field boundary to the left plot's width, so it never runs
+        // into the time domain's readout.
+        let mut parts: Vec<&str> = readout.split(" · ").collect();
+        let fits = |p: &[&str]| painter.layout_no_wrap(p.join(" · "), theme::mono(10.0), Color32::PLACEHOLDER).size().x <= left.width() - 6.0;
+        while parts.len() > 1 && !fits(&parts) {
+            parts.pop();
+        }
+        painter.text(pos2(left.left() + 4.0, text_y), Align2::LEFT_BOTTOM, parts.join(" · "), theme::mono(10.0), theme::text_2());
 
         // ---- right: time domain
         grid(&painter, right, 8, 4);
         self.oscilloscope(&painter, right, live, mode == Mode::Pager && sub == Sub::Disc, wave_fresh);
         painter.text(pos2(right.left() + 4.0, text_y), Align2::LEFT_BOTTOM, &self.level_text, theme::mono(10.0), theme::text_2());
         painter.text(pos2(right.right() - 4.0, text_y), Align2::RIGHT_BOTTOM, &self.time_text, theme::mono(10.0), theme::text_3());
+    }
+
+    /// The spectrum bin nearest a frequency on the span.
+    fn bin_of(&self, hz: f32, span: &Span, from_pass: bool) -> usize {
+        let n = self.spectrum.len();
+        let t = (hz - span.lo) / (span.hi - span.lo);
+        let i = if from_pass { (t * (n - 1) as f32).round() } else { (t * n as f32).floor() };
+        (i.max(0.0) as usize).min(n - 1)
+    }
+
+    /// Linear-power mean and max of the averaged spectrum over a band, dB.
+    fn band_db(&self, lo: f32, hi: f32, span: &Span, from_pass: bool) -> (f32, f32) {
+        let (a, b) = (self.bin_of(lo, span, from_pass), self.bin_of(hi, span, from_pass));
+        let v = &self.spectrum[a.min(b)..=b.max(a)];
+        let mean = v.iter().map(|d| 10f32.powf(d / 10.0)).sum::<f32>() / v.len() as f32;
+        (10.0 * mean.max(1e-12).log10(), v.iter().copied().fold(f32::MIN, f32::max))
+    }
+
+    /// What the bands measure, said in the strip under the spectrum.
+    fn measure(&self, status: &Status, sub: Sub, span: &Span, from_pass: bool) -> String {
+        if self.spectrum.len() < 8 {
+            return String::new();
+        }
+        let rbw = if from_pass { None } else { Some(span.hi * 2.0 / N_FFT as f32) };
+        let rbw_text = rbw.map(|r| if r >= 1000.0 { format!("RBW {:.2} kHz", r / 1000.0) } else { format!("RBW {r:.1} Hz") });
+        if status.mode == Mode::Wfm && sub == Sub::Mpx && span.hi > 60_000.0 {
+            // Each against the multiplex's own floor above RDS, where a
+            // station sends nothing.
+            let floor = self.band_db(60_500.0, 63_500.0, span, false).0;
+            let (_, pilot) = self.band_db(18_700.0, 19_300.0, span, false);
+            let (stereo, _) = self.band_db(24_000.0, 52_000.0, span, false);
+            let (rds, _) = self.band_db(55_500.0, 58_500.0, span, false);
+            let rel = |name: &str, d: f32| if d >= 3.0 { format!("{name} +{d:.0}") } else { format!("{name} —") };
+            return format!("{} · {} · {} dB over floor", rel("pilot", pilot - floor), rel("L−R", stereo - floor), rel("RDS", rds - floor));
+        }
+        // Elsewhere, the strongest bin in the mode's passband (or anywhere).
+        let (bands, _) = annotations(status, sub, from_pass);
+        let (lo, hi) = bands.first().map_or((span.lo, span.hi), |b| (b.lo.max(span.lo), b.hi.min(span.hi)));
+        let (a, b) = (self.bin_of(lo, span, from_pass), self.bin_of(hi, span, from_pass));
+        let Some(i) = (a..=b).max_by(|&x, &y| self.spectrum[x].total_cmp(&self.spectrum[y])) else {
+            return String::new();
+        };
+        let n = self.spectrum.len();
+        let hz = if from_pass { span.lo + i as f32 / (n - 1) as f32 * (span.hi - span.lo) } else { (i as f32 + 0.5) * span.hi / n as f32 };
+        let mut out = format!("peak {} · {:.0} dB", fmt_hz(hz, span.signed), self.spectrum[i]);
+        if let Some(r) = rbw_text {
+            out.push_str(" · ");
+            out.push_str(&r);
+        }
+        out
     }
 
     fn oscilloscope(&mut self, painter: &egui::Painter, r: Rect, f: &FftFrame, disc: bool, fresh: bool) {
@@ -672,7 +950,34 @@ fn grid(painter: &egui::Painter, r: Rect, cols: usize, rows: usize) {
 
 #[cfg(test)]
 mod tests {
-    use super::Fft;
+    use super::{Fft, Scope};
+
+    #[test]
+    fn the_averaged_spectrum_reads_a_tone_at_its_level() {
+        // Half-scale 1 kHz at 8 kS/s, two frames of 1024: four segments.
+        let s: Vec<i16> = (0..1024).map(|i| (16000.0 * (std::f32::consts::TAU * 1000.0 * i as f32 / 8000.0).sin()) as i16).collect();
+        let mut sc = Scope::default();
+        sc.accumulate(&s);
+        sc.accumulate(&s);
+        assert_eq!(sc.psd_n, 6);
+        sc.settle(0.0);
+        let top = (0..sc.spectrum.len()).max_by(|&a, &b| sc.spectrum[a].total_cmp(&sc.spectrum[b])).unwrap();
+        assert_eq!(top, 64);
+        assert!((sc.spectrum[64] + 6.0).abs() < 0.5, "{}", sc.spectrum[64]);
+        // The range brackets it, and the peak hold starts at the spectrum.
+        let (lo, hi) = sc.range.unwrap();
+        assert!(lo < -40.0 && hi > -6.0, "{lo} {hi}");
+        assert_eq!(sc.peak, sc.spectrum);
+    }
+
+    #[test]
+    fn the_peak_hold_falls_back_after_a_burst() {
+        let mut sc = Scope::default();
+        sc.take_trace(vec![-20.0; 8], 0.5, 0.0);
+        sc.take_trace(vec![-80.0; 8], 0.5, 1.0);
+        assert!((sc.peak[0] - (-20.0 - super::PEAK_FALL_DB_S)).abs() < 1e-3);
+        assert!(sc.spectrum[0] < -40.0);
+    }
 
     #[test]
     fn the_fft_agrees_with_a_plain_dft() {

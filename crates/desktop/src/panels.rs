@@ -774,7 +774,7 @@ fn radio(app: &mut App, ui: &mut Ui) {
         }
     });
     // Sideband has no carrier, so there is nothing to calibrate from.
-    let sideband = matches!(s.mode, Mode::Usb | Mode::Lsb);
+    let sideband = matches!(s.mode, Mode::Usb | Mode::Lsb | Mode::Ft8 | Mode::Ft4);
     ui.horizontal(|ui| {
         ui.label(small("PPM"));
         let mut ppm = s.ppm;

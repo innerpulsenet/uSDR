@@ -462,7 +462,7 @@ pub fn fill_under(painter: &egui::Painter, pts: &[Pos2], base_y: f32, color: Col
 }
 
 /// 1-2-5 grid steps.
-fn nice_step(range: f64, target_lines: f64) -> f64 {
+pub(crate) fn nice_step(range: f64, target_lines: f64) -> f64 {
     let raw = range / target_lines.max(1.0);
     let mag = 10f64.powf(raw.log10().floor());
     let norm = raw / mag;

@@ -449,7 +449,19 @@ pub enum SdrMode {
     /// Dedicated Motorola FLEX pager decoding on the tuned channel with
     /// 4-FSK/2-FSK symbol eye and discriminator level scope.
     Flex,
+    /// HF weak-signal data: the upper-sideband demodulator over a fixed
+    /// 100–3100 Hz, its audio cut into UTC slots and decoded at the end of
+    /// each, 15 s for FT8 and 7.5 s for FT4. The tuned frequency is the
+    /// dial (the suppressed carrier), as the bands publish it.
+    Ft8,
+    Ft4,
 }
+
+/// The audio the FT8/FT4 decoder searches, above the dial: the whole of a
+/// sideband transmitter's passband, wider than voice so the signals near
+/// either edge of the sub-band are heard.
+const FT8_LOW_HZ: f32 = 100.0;
+const FT8_HIGH_HZ: f32 = 3_100.0;
 
 /// The operator's filter for each mode that has one, as (low, high) edges
 /// in Hz relative to the carrier. One radio per server, so one table.
@@ -474,6 +486,20 @@ pub struct FilterRange {
 }
 
 impl SdrMode {
+    /// Demodulated as single sideband, so there is no carrier to measure.
+    pub fn is_sideband(self) -> bool {
+        matches!(self, SdrMode::Usb | SdrMode::Lsb | SdrMode::Ft8 | SdrMode::Ft4)
+    }
+
+    /// The slot decoder a data mode runs on its sideband audio.
+    fn ft8_protocol(self) -> Option<scannerd_engine::ft8::Protocol> {
+        match self {
+            SdrMode::Ft8 => Some(scannerd_engine::ft8::Protocol::Ft8),
+            SdrMode::Ft4 => Some(scannerd_engine::ft8::Protocol::Ft4),
+            _ => None,
+        }
+    }
+
     pub fn filter_range(self) -> Option<FilterRange> {
         let sym = |lo: f32, hi: f32| FilterRange { min_width_hz: lo, max_width_hz: hi, max_edge_hz: hi / 2.0, symmetric: true };
         match self {
@@ -547,6 +573,7 @@ impl SdrMode {
             // The voice passband itself, drawn offset from the carrier
             // (see passband_offset_hz).
             SdrMode::Usb | SdrMode::Lsb => SSB_HIGH_HZ - SSB_LOW_HZ,
+            SdrMode::Ft8 | SdrMode::Ft4 => FT8_HIGH_HZ - FT8_LOW_HZ,
             // What the mode actually DECODES: the walking bank covers this
             // whole span, so the display should shade it — not the 15 kHz of
             // the (idle) per-channel demod chain.
@@ -630,6 +657,7 @@ impl SdrMode {
         match self {
             SdrMode::Usb => center,
             SdrMode::Lsb => -center,
+            SdrMode::Ft8 | SdrMode::Ft4 => (FT8_LOW_HZ + FT8_HIGH_HZ) / 2.0,
             _ => 0.0,
         }
     }
@@ -643,7 +671,7 @@ impl SdrMode {
 
     fn chain_bandwidth_hz(self) -> f32 {
         match self {
-            SdrMode::Usb | SdrMode::Lsb => {
+            SdrMode::Usb | SdrMode::Lsb | SdrMode::Ft8 | SdrMode::Ft4 => {
                 let (lo, hi) = self.filter_edges();
                 2.0 * lo.abs().max(hi.abs()) + 400.0
             }
@@ -688,6 +716,8 @@ impl SdrMode {
             SdrMode::Auto => ("AUTO", "voice+data", "Every decoder at once on the tuned channel: classifier, P25, DMR, and all packet/paging paths"),
             SdrMode::Pager => ("PAGER", "data", "POCSAG+FLEX bank walked across the 25 kHz paging channels around the tuned frequency"),
             SdrMode::Flex => ("FLEX", "data", "Dedicated Motorola FLEX demodulator with symbol eye and discriminator scope"),
+            SdrMode::Ft8 => ("FT8", "data", "FT8 on upper sideband: 100–3100 Hz above the dial, decoded at the end of every 15 s UTC slot"),
+            SdrMode::Ft4 => ("FT4", "data", "FT4 on upper sideband: 100–3100 Hz above the dial, decoded at the end of every 7.5 s UTC slot"),
             SdrMode::Scan => ("SCAN", "voice+data", "Peak-driven voice scan over a configured range: AM/NFM/P25/DMR slots, locks and holds what decodes"),
         };
         ModeCapabilities {
@@ -716,7 +746,7 @@ impl SdrMode {
                 // between locks): the channel I/Q only.
                 // Sideband audio comes out at the channel rate, so the ring
                 // keeps it with the I/Q.
-                SdrMode::Usb | SdrMode::Lsb => &["iq", "voice"],
+                SdrMode::Usb | SdrMode::Lsb | SdrMode::Ft8 | SdrMode::Ft4 => &["iq", "voice"],
                 SdrMode::Am | SdrMode::P25 | SdrMode::Dmr | SdrMode::Nxdn | SdrMode::Scan => &["iq"],
                 // WFM's I/Q is 256 kHz and unreplayable; PAGER walks a bank.
                 SdrMode::Wfm | SdrMode::Pager => &[],
@@ -738,6 +768,8 @@ impl SdrMode {
             SdrMode::Packet,
             SdrMode::Pager,
             SdrMode::Flex,
+            SdrMode::Ft8,
+            SdrMode::Ft4,
             SdrMode::Auto,
             SdrMode::Scan,
         ]
@@ -2213,6 +2245,11 @@ enum Demod {
     Ssb {
         demod: SsbDemod,
         audio: Vec<f32>,
+        /// FT8/FT4: the same audio before the speech AGC, so the decoder
+        /// measures signals against each other as they arrived, and the
+        /// slot decoder it feeds.
+        linear: Vec<f32>,
+        slots: Option<Box<scannerd_engine::ft8::SlotDecoder>>,
     },
     P25 {
         rx: Box<P25ChannelReceiver>,
@@ -2320,17 +2357,25 @@ impl Demod {
                 },
                 audio: Vec::new(),
             },
-            SdrMode::Usb | SdrMode::Lsb => Demod::Ssb {
+            SdrMode::Usb | SdrMode::Lsb | SdrMode::Ft8 | SdrMode::Ft4 => Demod::Ssb {
                 demod: {
                     let (lo, hi) = mode.filter_edges();
                     SsbDemod::with_passband(
                         fs_out,
-                        if mode == SdrMode::Usb { Sideband::Upper } else { Sideband::Lower },
+                        if mode == SdrMode::Lsb { Sideband::Lower } else { Sideband::Upper },
                         lo.abs().min(hi.abs()),
                         lo.abs().max(hi.abs()),
                     )
                 },
                 audio: Vec::new(),
+                linear: Vec::new(),
+                slots: mode.ft8_protocol().map(|p| {
+                    let mut d = scannerd_engine::ft8::SlotDecoder::new(p, fs_out);
+                    // USDR_FT8_DUMP=<dir> keeps every slot's audio, for
+                    // decoding a band again offline.
+                    d.set_dump(std::env::var_os("USDR_FT8_DUMP").map(Into::into));
+                    Box::new(d)
+                }),
             },
             SdrMode::Wfm => {
                 let decim = (fs_out / 48_000.0).round().max(1.0) as usize;
@@ -2413,9 +2458,12 @@ impl Demod {
                 demod.reset();
                 audio.clear();
             }
-            Demod::Ssb { demod, audio } => {
+            // The slot decoder keeps its slot: it places audio by the wall
+            // clock, so a hole is silence in the slot, not a splice.
+            Demod::Ssb { demod, audio, linear, .. } => {
                 demod.reset();
                 audio.clear();
+                linear.clear();
             }
             Demod::P25 { rx } => rx.reset(),
             Demod::Dmr { rx } => rx.reset(),
@@ -2771,6 +2819,33 @@ fn packet_event(packet: &scannerd_engine::aprs::AprsPacket) -> DecodeEvent {
         kind: "AX.25 UI frame".into(),
         summary: format!("{} > {}{} · {}", packet.from, packet.to, via, packet.text),
         // Only frames whose FCS checked out are handed back by the decoder.
+        valid: true,
+        fields,
+    }
+}
+
+/// An FT8/FT4 decode as the log carries it: the message as the operator
+/// reads it, and its measurements and parts as fields.
+fn ft8_event(slot_ms: u64, d: &scannerd_engine::ft8::Decode) -> DecodeEvent {
+    let secs = slot_ms / 1000;
+    let mut fields = std::collections::BTreeMap::new();
+    fields.insert("snr".to_string(), format!("{:.0}", d.snr_db));
+    fields.insert("dt".to_string(), format!("{:.1}", d.dt_s));
+    fields.insert("df".to_string(), format!("{:.0}", d.freq_hz));
+    fields.insert("slot".to_string(), format!("{:02}{:02}{:02}", (secs / 3600) % 24, (secs / 60) % 60, secs % 60));
+    fields.insert("slotMs".to_string(), slot_ms.to_string());
+    fields.insert("type".to_string(), d.message.kind.to_string());
+    fields.insert("cq".to_string(), if d.message.is_cq { "yes" } else { "no" }.to_string());
+    fields.insert("ldpcErrors".to_string(), d.ldpc_errors.to_string());
+    for (k, v) in [("to", &d.message.to), ("de", &d.message.de), ("extra", &d.message.extra), ("grid", &d.message.grid)] {
+        if let Some(v) = v {
+            fields.insert(k.to_string(), v.clone());
+        }
+    }
+    DecodeEvent {
+        protocol: d.protocol.label().into(),
+        kind: if d.message.is_cq { "CQ".into() } else { d.message.kind.into() },
+        summary: d.text.clone(),
         valid: true,
         fields,
     }
@@ -5068,14 +5143,29 @@ fn run_sdr(
                     ..Default::default()
                 }
             }
-            SdrMode::Usb | SdrMode::Lsb => {
+            SdrMode::Usb | SdrMode::Lsb | SdrMode::Ft8 | SdrMode::Ft4 => {
                 // No classifier either: sideband has no carrier to measure
                 // and no FM to discriminate. The demodulator picks the side
                 // and runs its own speech AGC; the audio leaves at the
                 // channel rate, so the rolling capture keeps it as voice.
-                if let Demod::Ssb { demod: ssb, audio } = &mut demod {
+                if let Demod::Ssb { demod: ssb, audio, linear, slots } = &mut demod {
                     ssb.set_agc(processing.agc);
-                    ssb.process(&inspect_iq, audio);
+                    match slots {
+                        // FT8/FT4: the decoder hears the audio before the
+                        // AGC and the speaker's processing, stamped with
+                        // the wall clock the slots are cut by.
+                        Some(slots) => {
+                            ssb.process_with_linear(&inspect_iq, audio, linear);
+                            slots.push(linear, now_ms());
+                            for (slot_ms, decodes) in slots.take() {
+                                for d in &decodes {
+                                    decode_history.note(inspect_hz, d.protocol.label());
+                                    let _ = events.send(SdrEvent::Decode { inspect_hz, event: ft8_event(slot_ms, d) });
+                                }
+                            }
+                        }
+                        None => ssb.process(&inspect_iq, audio),
+                    }
                     if processing.auto_notch {
                         mon_notch.process(audio);
                     }
@@ -5091,7 +5181,13 @@ fn run_sdr(
                 }
                 ClassificationResult {
                     active: true,
-                    modulation: if current_mode == SdrMode::Usb { "USB" } else { "LSB" }.into(),
+                    modulation: match current_mode {
+                        SdrMode::Lsb => "LSB",
+                        SdrMode::Ft8 => "FT8",
+                        SdrMode::Ft4 => "FT4",
+                        _ => "USB",
+                    }
+                    .into(),
                     ..Default::default()
                 }
             }
@@ -6672,7 +6768,7 @@ fn run_sdr(
             // is not. One such reading, calibrated from, left a 25 ppm
             // correction on an RSP1A whose TCXO is good to 0.5. So nothing
             // is measured in USB/LSB; the dial is checked in AM or FM.
-            let sideband = matches!(current_mode, SdrMode::Usb | SdrMode::Lsb);
+            let sideband = current_mode.is_sideband();
 
             // 2. Direct in-channel spectral centroid if channel energy stands over the noise floor
             let in_channel_offset = if !sideband && channel_dbfs - noise_dbfs > 3.0 {

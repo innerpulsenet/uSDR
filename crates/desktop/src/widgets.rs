@@ -537,6 +537,10 @@ pub fn protocol_color(p: &str) -> Color32 {
         rgb(0xf59e0b)
     } else if u.contains("ANALOG") {
         rgb(0xc084fc)
+    } else if u.contains("FT8") {
+        rgb(0xe879f9)
+    } else if u.contains("FT4") {
+        rgb(0xa78bfa)
     } else if u.contains("RDS") {
         rgb(0xa3e635)
     } else if u.contains("SAME") {

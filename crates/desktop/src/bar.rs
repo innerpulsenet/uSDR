@@ -278,7 +278,7 @@ fn tuning(app: &mut App, ui: &mut Ui) {
 fn mode_tally(m: Mode) -> egui::Color32 {
     match m {
         Mode::Nfm | Mode::Am | Mode::Usb | Mode::Lsb => theme::AMBER,
-        Mode::Wfm | Mode::Pager | Mode::Flex => theme::CYAN,
+        Mode::Wfm | Mode::Pager | Mode::Flex | Mode::Ft8 | Mode::Ft4 => theme::CYAN,
         Mode::P25 | Mode::Dmr | Mode::Nxdn | Mode::Packet => theme::OK,
         _ => theme::VIOLET,
     }
@@ -328,8 +328,10 @@ fn modes_inner(app: &mut App, ui: &mut Ui, b: Option<usdr_proto::SubRx>) {
         }
         None => {
             // Listening modes and the two that pick for you on the first
-            // row, the decoders on the second.
-            let decode: Vec<Mode> = Mode::ALL.iter().copied().filter(|m| !LISTEN.contains(m)).collect();
+            // row, the decoders on the second: those the server offers, so
+            // an older one is never asked for a mode it does not have.
+            let offered = |m: &Mode| app.modes.is_empty() || app.modes.iter().any(|c| c.mode == *m);
+            let decode: Vec<Mode> = Mode::ALL.iter().copied().filter(|m| !LISTEN.contains(m) && offered(m)).collect();
             for row in [&LISTEN[..], &decode[..]] {
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = 3.0;

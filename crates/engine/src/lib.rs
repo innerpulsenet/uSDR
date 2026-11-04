@@ -17,6 +17,7 @@ pub mod denoise;
 pub mod detect;
 pub mod dmr;
 pub mod flex;
+pub mod ft8;
 pub mod legacy_digital;
 pub mod leveler;
 pub mod autonotch;

@@ -34,6 +34,8 @@ pub struct DecodeRow {
     pub open: bool,
     /// Protocol, kind and summary in lower case, for the filter.
     pub key: String,
+    /// Which of the log's families it belongs to, if any.
+    pub family: Option<crate::decoders::Family>,
     /// Its height in the log when last laid out; 0 until it has been.
     pub height: f32,
     /// When the log first showed it, for its arrival flash.
@@ -43,7 +45,8 @@ pub struct DecodeRow {
 impl DecodeRow {
     pub fn new(at: SystemTime, freq_hz: f64, ev: proto::DecodeEvent) -> Self {
         let key = format!("{} {} {}", ev.protocol, ev.kind, ev.summary).to_lowercase();
-        Self { at, freq_hz, ev, open: false, key, height: 0.0, born: None }
+        let family = crate::decoders::family_of(&ev.protocol);
+        Self { at, freq_hz, ev, open: false, key, family, height: 0.0, born: None }
     }
 }
 
@@ -150,6 +153,10 @@ pub struct App {
     pub toasts: Vec<Toast>,
     pub dock_tab: DockTab,
     pub decode_filter: String,
+    /// The family the decode log shows (`None`: all of them), and the one
+    /// decoder within it, by its chip.
+    pub decode_family: Option<crate::decoders::Family>,
+    pub decode_chip: Option<&'static str>,
     /// Rows that arrived since the log last drew, and where it was scrolled,
     /// so new frames arriving on top do not move what is being read.
     pub decodes_added: usize,
@@ -279,6 +286,8 @@ impl App {
             toasts: Vec::new(),
             dock_tab: qa_tab,
             decode_filter: String::new(),
+            decode_family: None,
+            decode_chip: None,
             decodes_added: 0,
             decode_scroll: 0.0,
             decodes_unseen: 0,
@@ -501,6 +510,10 @@ impl App {
             self.prefs.last_voice_mode = m;
         }
         self.status.mode = m;
+        if let Some(f) = crate::decoders::Family::for_mode(m) {
+            self.decode_family = Some(f);
+            self.decode_chip = None;
+        }
         self.post("/api/sdr/mode", json!({ "mode": m.wire() }));
     }
 
@@ -548,7 +561,9 @@ impl App {
         if self.decode_scroll > 1.0 {
             self.decodes_unseen += 1;
         }
-        self.decodes.truncate(400);
+        // FT8 on a busy band is forty decodes a slot; the log keeps a
+        // quarter hour of that.
+        self.decodes.truncate(1500);
         self.selected_decode = self.selected_decode.map(|i| i + 1).filter(|&i| i < self.decodes.len());
     }
 
@@ -675,6 +690,13 @@ impl App {
         }
         if s.rx2.is_none() {
             self.active_b = false;
+        }
+        // A new mode opens the log on its own decodes, when it has a family.
+        if (!self.have_status || s.mode != self.status.mode)
+            && let Some(f) = crate::decoders::Family::for_mode(s.mode)
+        {
+            self.decode_family = Some(f);
+            self.decode_chip = None;
         }
         self.status = s;
         self.have_status = true;
@@ -1461,6 +1483,8 @@ pub fn mode_idle_text(m: Mode) -> &'static str {
         Mode::Scan => "scanning for voice…",
         Mode::Pager => "paging sweep",
         Mode::Packet => "packet and paging decoders",
+        Mode::Ft8 => "FT8 · decoding each 15 s slot",
+        Mode::Ft4 => "FT4 · decoding each 7.5 s slot",
         Mode::Nfm => "listening · classifier on",
     }
 }
@@ -1928,8 +1952,8 @@ mod tests {
         h.run_steps(3);
         // B's modes are the listener's five; P25 is not among them.
         let role = egui::accesskit::Role::CheckBox;
-        // (The one P25 key left is the decode log's filter.)
-        assert_eq!(h.query_all_by_role_and_label(role, "P25").count(), 1);
+        // (The decode log keeps its P25 key inside the VOICE family.)
+        assert_eq!(h.query_all_by_role_and_label(role, "P25").count(), 0);
         h.get_by_role_and_label(role, "AM").click();
         h.run_steps(2);
         assert!(drain(&h).contains(&("/api/sdr/rx2".into(), json!({ "freq_hz": 146.1e6, "mode": "am" }))));
@@ -2034,6 +2058,28 @@ mod tests {
                 assert_eq!(h.get_by_label("Scan").rect(), before, "after {} decodes", n + 1);
             }
         }
+    }
+
+    #[test]
+    fn ft8_decodes_read_as_a_slot_log_in_their_family() {
+        let mut h = harness();
+        for (text, df, snr) in [("CQ K1ABC FN42", "1234", "-12"), ("K1ABC W9XYZ -11", "811", "-3")] {
+            let fields = [("snr", snr), ("dt", "0.2"), ("df", df), ("slot", "193015"), ("slotMs", "1762284615000")].into_iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
+            let ev = proto::DecodeEvent { protocol: "FT8".into(), kind: "standard".into(), summary: text.into(), valid: true, fields };
+            h.state().wire.events.send(NetEvent::Decode { inspect_hz: 14.074e6, event: ev, at: SystemTime::now() }).unwrap();
+        }
+        h.state_mut().app.status.mode = Mode::Ft8;
+        h.run_steps(2);
+        // The mode chose the family; the log is the HF view, both in it.
+        h.state_mut().app.decode_family = Some(crate::decoders::Family::HfData);
+        h.run_steps(3);
+        let (a, b) = (h.get_by_label("K1ABC W9XYZ -11").rect(), h.get_by_label("CQ K1ABC FN42").rect());
+        assert!(b.top() >= a.bottom() - 1.0, "{a:?} {b:?}");
+        assert!(h.query_by_label("2 decodes").is_some());
+        // Another family hides them.
+        h.state_mut().app.decode_family = Some(crate::decoders::Family::Paging);
+        h.run_steps(2);
+        assert!(h.query_by_label("CQ K1ABC FN42").is_none());
     }
 
     #[test]

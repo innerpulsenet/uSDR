@@ -227,6 +227,23 @@ impl SsbDemod {
         }
     }
 
+    /// Demodulate one block twice over: `out` through the speech AGC for
+    /// the speaker, `linear` straight from the Weaver chain with its level
+    /// untouched, for a decoder that weighs signals against each other and
+    /// against the noise. A weak FT8 signal beside a strong one is measured
+    /// wrongly through an AGC that pumps on the strong one.
+    pub fn process_with_linear(&mut self, input: &[Complex32], out: &mut Vec<f32>, linear: &mut Vec<f32>) {
+        out.clear();
+        out.reserve(input.len());
+        linear.clear();
+        linear.reserve(input.len());
+        for &x in input {
+            let (audio, env) = self.weaver(x);
+            linear.push(audio);
+            out.push(self.agc(audio, env));
+        }
+    }
+
     /// The Weaver chain for one sample: returns the (pre-AGC) audio and its
     /// envelope. The envelope is the magnitude of the filtered baseband,
     /// which is exactly the envelope of the real output — smooth, with no
@@ -358,6 +375,25 @@ fn chebyshev_lowpass(fc: f64, fs: f64, order: usize, ripple_db: f64) -> Cascade 
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn the_linear_output_is_the_chain_before_the_agc() {
+        use super::*;
+        let fs = 48_000.0;
+        let x: Vec<Complex32> = (0..9_600).map(|i| Complex32::from_polar(if i < 4_800 { 0.5 } else { 0.005 }, std::f32::consts::TAU * 1_500.0 * i as f32 / fs as f32)).collect();
+        let (mut a, mut b, mut c) = (SsbDemod::new(fs, Sideband::Upper), SsbDemod::new(fs, Sideband::Upper), SsbDemod::new(fs, Sideband::Upper));
+        let (mut out, mut lin, mut plain, mut raw) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+        a.process_with_linear(&x, &mut out, &mut lin);
+        b.process(&x, &mut plain);
+        c.process_raw(&x, &mut raw);
+        // The speaker's audio is unchanged; the decoder's keeps the 40 dB step
+        // the AGC would level away.
+        assert_eq!(out, plain);
+        assert_eq!(lin, raw);
+        let rms = |v: &[f32]| (v.iter().map(|s| s * s).sum::<f32>() / v.len() as f32).sqrt();
+        let step = 20.0 * (rms(&lin[2_400..4_800]) / rms(&lin[7_200..])).log10();
+        assert!((step - 40.0).abs() < 1.0, "{step}");
+    }
 
     /// Power of `f` in `x`, by Goertzel.
     fn tone_power(x: &[f32], fs: f64, f: f64) -> f64 {

@@ -601,12 +601,16 @@ pub enum Mode {
     Packet,
     Pager,
     Flex,
+    /// HF weak-signal data: sideband audio cut into UTC slots and decoded,
+    /// 15 s for FT8, 7.5 s for FT4.
+    Ft8,
+    Ft4,
     Auto,
     Scan,
 }
 
 impl Mode {
-    pub const ALL: [Mode; 13] = [
+    pub const ALL: [Mode; 15] = [
         Mode::Nfm,
         Mode::Am,
         Mode::Usb,
@@ -618,6 +622,8 @@ impl Mode {
         Mode::Packet,
         Mode::Pager,
         Mode::Flex,
+        Mode::Ft8,
+        Mode::Ft4,
         Mode::Auto,
         Mode::Scan,
     ];
@@ -634,6 +640,8 @@ impl Mode {
             Mode::Packet => "PACKET",
             Mode::Pager => "PAGER",
             Mode::Flex => "FLEX",
+            Mode::Ft8 => "FT8",
+            Mode::Ft4 => "FT4",
             Mode::Auto => "AUTO",
             Mode::Scan => "SCAN",
         }
@@ -651,6 +659,8 @@ impl Mode {
             Mode::Packet => "packet",
             Mode::Pager => "pager",
             Mode::Flex => "flex",
+            Mode::Ft8 => "ft8",
+            Mode::Ft4 => "ft4",
             Mode::Auto => "auto",
             Mode::Scan => "scan",
         }

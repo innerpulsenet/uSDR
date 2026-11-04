@@ -16,6 +16,7 @@ mod bandplan;
 mod bench;
 mod brand;
 mod colormap;
+mod decoders;
 mod dock;
 mod meter;
 mod net;

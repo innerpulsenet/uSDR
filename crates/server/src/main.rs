@@ -1200,7 +1200,7 @@ async fn post_sdr_calibrate(
     };
     // A sideband signal has no carrier to measure against; whatever the
     // receiver would report is the voice passband's centroid, not an error.
-    if matches!(mode, sdr::SdrMode::Usb | sdr::SdrMode::Lsb) {
+    if mode.is_sideband() {
         return Err(ApiError::BadRequest(
             "sideband has no carrier to calibrate from: tune an AM or FM station with a known carrier (WWV, CHU, a broadcast station) and calibrate there".into(),
         ));

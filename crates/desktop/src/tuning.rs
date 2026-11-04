@@ -10,7 +10,7 @@ use usdr_proto::Mode;
 /// The channel raster a mode's signals are allocated on.
 pub fn mode_raster_hz(mode: Mode, near_hz: f64) -> f64 {
     match mode {
-        Mode::Usb | Mode::Lsb => 100.0,
+        Mode::Usb | Mode::Lsb | Mode::Ft8 | Mode::Ft4 => 100.0,
         Mode::Wfm => 100_000.0,
         Mode::Packet | Mode::Flex => 2_500.0,
         Mode::Pager => 25_000.0,

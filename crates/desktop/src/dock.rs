@@ -7,6 +7,7 @@ use crate::theme::{self, alpha};
 use crate::widgets::{self, Tone};
 use egui::{RichText, Ui, vec2};
 use serde_json::json;
+use crate::decoders::Family;
 use usdr_proto::Mode;
 
 fn mono(t: impl Into<String>, c: egui::Color32) -> RichText {
@@ -103,22 +104,59 @@ fn cell(ui: &mut Ui, w: f32, t: RichText, sense: egui::Sense) -> egui::Response 
 }
 
 fn decodes(app: &mut App, ui: &mut Ui) {
-    // Wrapped rather than split left and right, so a narrow dock moves the
-    // keys to a second line instead of drawing them over the chips.
+    // The families first, each with what it holds: what kind of traffic the
+    // log shows. Wrapped, so a narrow dock moves keys to a second line
+    // instead of drawing them over each other.
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing.x = 3.0;
+        let mut counts = std::collections::HashMap::new();
+        for d in &app.decodes {
+            *counts.entry(d.family).or_insert(0usize) += 1;
+        }
+        if widgets::chip_key(ui, &format!("ALL {}", app.decodes.len()), app.decode_family.is_none(), theme::AMBER).clicked() {
+            app.decode_family = None;
+            app.decode_chip = None;
+        }
+        for f in Family::ALL {
+            let n = counts.get(&Some(f)).copied().unwrap_or(0);
+            let label = if n > 0 { format!("{} {n}", f.label()) } else { f.label().to_string() };
+            if widgets::chip_key(ui, &label, app.decode_family == Some(f), family_color(f)).clicked() {
+                app.decode_family = Some(f);
+                app.decode_chip = None;
+                app.selected_decode = None;
+            }
+        }
+    });
+    ui.add_space(2.0);
     ui.horizontal_wrapped(|ui| {
         ui.add(egui::TextEdit::singleline(&mut app.decode_filter).hint_text("filter decodes").desired_width(150.0))
             .on_hover_text("Protocol, kind or any text in the summary");
         ui.spacing_mut().item_spacing.x = 3.0;
-        for chip in ["ALL", "FLEX", "POCSAG", "APRS", "P25", "DMR", "NXDN", "RDS"] {
-            let on = if chip == "ALL" { app.decode_filter.is_empty() } else { app.decode_filter.eq_ignore_ascii_case(chip) };
-            let tally = if chip == "ALL" { theme::AMBER } else { widgets::protocol_color(chip) };
-            if widgets::chip_key(ui, chip, on, tally).clicked() {
-                app.decode_filter = if chip == "ALL" { String::new() } else { chip.to_string() };
+        // Within a family, its decoders one at a time.
+        if let Some(f) = app.decode_family {
+            let list: Vec<&crate::decoders::Decoder> = crate::decoders::in_family(f).collect();
+            if list.len() > 1 {
+                if widgets::chip_key(ui, "ANY", app.decode_chip.is_none(), family_color(f)).clicked() {
+                    app.decode_chip = None;
+                }
+                for d in list {
+                    if widgets::chip_key(ui, d.chip, app.decode_chip == Some(d.chip), widgets::protocol_color(d.chip)).clicked() {
+                        app.decode_chip = if app.decode_chip == Some(d.chip) { None } else { Some(d.chip) };
+                    }
+                }
+            }
+            if f == Family::HfData {
+                ui.add_space(6.0);
+                hf_bands(app, ui);
             }
         }
         ui.add_space(6.0);
+        // Clears what is in view: one family's, or the whole log.
         if widgets::action_small(ui, "CLEAR").clicked() {
-            app.decodes.clear();
+            match app.decode_family {
+                Some(f) => app.decodes.retain(|d| d.family != Some(f)),
+                None => app.decodes.clear(),
+            }
             app.selected_decode = None;
         }
         widgets::menu_chip(ui, "···", theme::text_2(), |ui| {
@@ -133,13 +171,21 @@ fn decodes(app: &mut App, ui: &mut Ui) {
         });
     });
     let filter = app.decode_filter.to_lowercase();
+    let chip = app.decode_chip.and_then(|c| crate::decoders::DECODERS.iter().find(|d| d.chip == c));
+    let family = app.decode_family;
     let visible: Vec<usize> = app
         .decodes
         .iter()
         .enumerate()
+        .filter(|(_, d)| family.is_none() || d.family == family)
+        .filter(|(_, d)| chip.is_none_or(|c| c.takes(&d.ev.protocol.to_ascii_uppercase())))
         .filter(|(_, d)| filter.is_empty() || d.key.contains(&filter))
         .map(|(i, _)| i)
         .collect();
+    if family == Some(Family::HfData) {
+        hf_data(app, ui, &visible);
+        return;
+    }
     let total = app.decodes.len();
     let avail = ui.available_size();
     let list_w = if app.selected_decode.is_some() { avail.x * 0.58 } else { avail.x };
@@ -153,6 +199,7 @@ fn decodes(app: &mut App, ui: &mut Ui) {
             let proto_w = visible.iter().map(|&i| app.decodes[i].ev.protocol.chars().count() + 3).max().unwrap_or(6).clamp(6, 11) as f32 * char_w;
             let kind_w = visible.iter().map(|&i| app.decodes[i].ev.kind.chars().count()).max().unwrap_or(4).clamp(4, 16) as f32 * char_w;
             let count = if visible.len() == total { format!("{total} frames") } else { format!("{} of {total} frames", visible.len()) };
+            let family_empty = family.is_some_and(|f| !app.decodes.iter().any(|d| d.family == Some(f)));
             {
                 // Column heads over the columns, the count at the end: there
                 // from the start, so the first frame does not push the list
@@ -173,11 +220,11 @@ fn decodes(app: &mut App, ui: &mut Ui) {
             }
             // Said inside the list, so a short dock scrolls it rather than
             // growing past its panel.
-            let empty = (total == 0).then_some(match app.status.mode {
+            let empty = if family_empty { family.map(|f| f.empty_text()) } else { (total == 0).then_some(match app.status.mode {
                 Mode::Auto => "Frames decoded on receiver A appear here, newest first. AUTO is running every decoder on this channel.",
                 Mode::P25 | Mode::Dmr | Mode::Nxdn | Mode::Pager | Mode::Flex | Mode::Packet => "Frames decoded on receiver A appear here, newest first. Click a frame's frequency to tune to it; expand one for its fields.",
                 _ => "Frames decoded on receiver A appear here. This mode has no decoder: pick a digital mode, or AUTO to run every decoder on the channel.",
-            });
+            }) };
             // Scrolled into the log, new frames arriving on top push it down
             // by their height, so the rows being read stay where they are.
             let row_h = 24.0;
@@ -372,6 +419,10 @@ fn scope(app: &mut App, ui: &mut Ui) {
     let mode = app.status.mode;
     let kind = app.frame.as_ref().map(|f| f.scope_kind).unwrap_or_default();
     let (title, note) = app.scope.title(mode, kind);
+    // Sideband says the filter it is listening through, as set.
+    let edges = (app.status.filter_high_hz > app.status.filter_low_hz && matches!(mode, Mode::Usb | Mode::Lsb | Mode::Ft8 | Mode::Ft4))
+        .then(|| format!("{:.0}–{:.0} Hz", app.status.filter_low_hz.abs().min(app.status.filter_high_hz.abs()), app.status.filter_low_hz.abs().max(app.status.filter_high_hz.abs())));
+    let note = note.map(str::to_string).or(edges);
     ui.horizontal(|ui| {
         ui.label(RichText::new(title).font(theme::sans_semibold(12.0)).color(theme::text()));
         // Every view the mode offers, named, rather than a click that cycles.
@@ -399,9 +450,27 @@ fn scope(app: &mut App, ui: &mut Ui) {
     });
     app.scope.rate_hz = app.prefs.scope_rate_hz;
     let pass = crate::panels::passband_slice(app);
+    // FT8/FT4: the last slot's decodes, by who sent them, at their tones.
+    let tags: Vec<(f32, String)> = if matches!(mode, Mode::Ft8 | Mode::Ft4) {
+        let slot = app.decodes.iter().find(|d| d.ev.protocol == mode.label()).and_then(|d| d.ev.fields.get("slotMs").cloned());
+        app.decodes
+            .iter()
+            .take_while(|d| d.ev.fields.get("slotMs") == slot.as_ref() || d.ev.protocol != mode.label())
+            .filter(|d| d.ev.protocol == mode.label())
+            .filter_map(|d| {
+                let df: f32 = d.ev.fields.get("df")?.parse().ok()?;
+                let who = d.ev.fields.get("de").or(d.ev.fields.get("to")).cloned().unwrap_or_else(|| d.ev.summary.chars().take(8).collect());
+                // Tone 0 is the reported frequency; the signal's middle is
+                // half its width above.
+                Some((df + if mode == Mode::Ft4 { 41.7 } else { 25.0 }, who))
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
     let rect = ui.available_rect_before_wrap();
     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect));
-    app.scope.ui(&mut child, app.frame.as_deref(), mode, pass.as_ref().map(|(v, r)| (v.as_slice(), *r)), &app.prefs.view.style.look());
+    app.scope.ui(&mut child, app.frame.as_deref(), &app.status, pass.as_ref().map(|(v, r)| (v.as_slice(), *r)), &tags, &app.prefs.view.style.look());
     ui.advance_cursor_after_rect(rect);
 }
 
@@ -761,4 +830,226 @@ fn scan(app: &mut App, ui: &mut Ui) {
             });
         });
     });
+}
+
+/// A family's tally: the color of its first decoder.
+fn family_color(f: Family) -> egui::Color32 {
+    crate::decoders::in_family(f).next().map_or(theme::AMBER, |d| widgets::protocol_color(d.chip))
+}
+
+/// The FT8 and FT4 dial frequencies by band: choosing one sets the mode
+/// and tunes the carrier there.
+fn hf_bands(app: &mut App, ui: &mut Ui) {
+    widgets::menu_chip(ui, "BANDS", theme::text_2(), |ui| {
+        egui::Grid::new("hf-dials").num_columns(3).spacing(vec2(8.0, 2.0)).show(ui, |ui| {
+            for &(band, ft8, ft4) in crate::decoders::HF_DIALS {
+                ui.label(mono(band, theme::text_3()));
+                for (mode, hz) in [(Mode::Ft8, ft8), (Mode::Ft4, ft4)] {
+                    let text = format!("{} {}", mode.label(), crate::tuning::fmt_mhz(hz, 4));
+                    let on = app.status.mode == mode && (app.status.freq_hz - hz).abs() < 50.0;
+                    if widgets::chip_key(ui, &text, on, widgets::protocol_color(mode.label())).clicked() {
+                        if app.status.mode != mode {
+                            app.set_mode(mode);
+                        }
+                        app.tune(hz, false);
+                        ui.close();
+                    }
+                }
+                ui.end_row();
+            }
+        });
+    });
+}
+
+/// One FT8/FT4 decode as the HF view reads it from the event's fields.
+struct HfRow {
+    i: usize,
+    slot: String,
+    slot_ms: u64,
+    snr: Option<f32>,
+    dt: Option<f32>,
+    df: Option<f32>,
+    cq: bool,
+}
+
+fn hf_row(app: &App, i: usize) -> HfRow {
+    let d = &app.decodes[i];
+    let f = |k: &str| d.ev.fields.get(k).and_then(|v| v.trim().parse::<f32>().ok());
+    let slot_ms = d.ev.fields.get("slotMs").and_then(|v| v.parse::<u64>().ok()).unwrap_or_else(|| {
+        d.at.duration_since(std::time::SystemTime::UNIX_EPOCH).map(|t| t.as_millis() as u64).unwrap_or(0)
+    });
+    let slot = d.ev.fields.get("slot").cloned().unwrap_or_else(|| local_hms(d.at).replace(':', ""));
+    HfRow { i, slot, slot_ms, snr: f("snr"), dt: f("dt"), df: f("df"), cq: d.ev.fields.get("cq").is_some_and(|v| v == "yes") || d.ev.summary.starts_with("CQ ") }
+}
+
+/// The HF data view: where the current slot is, the band's activity slot
+/// by slot across the audio passband, and the decodes as an operator's log.
+fn hf_data(app: &mut App, ui: &mut Ui, visible: &[usize]) {
+    let rows: Vec<HfRow> = visible.iter().map(|&i| hf_row(app, i)).collect();
+    hf_clock(app, ui);
+    ui.add_space(4.0);
+    hf_activity(app, ui, &rows);
+    ui.add_space(4.0);
+    let char_w = 6.7;
+    let cols = [("UTC", 7.5), ("dB", 4.5), ("DT", 5.0), ("FREQ", 6.0), ("MODE", 5.0)];
+    let head = |t: &str| RichText::new(t).font(theme::mono(10.0)).color(theme::text_3()).extra_letter_spacing(0.6);
+    let r = ui.horizontal(|ui| {
+        ui.set_min_height(18.0);
+        for (t, w) in cols {
+            cell(ui, w * char_w, head(t), egui::Sense::hover());
+        }
+        ui.label(head("MESSAGE"));
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| ui.label(mono(format!("{} decodes", rows.len()), theme::text_3())));
+    });
+    let y = r.response.rect.bottom() + 1.0;
+    ui.painter().line_segment([egui::pos2(r.response.rect.left(), y), egui::pos2(r.response.rect.right(), y)], egui::Stroke::new(1.0, theme::line()));
+    if rows.is_empty() {
+        empty_state(ui, Family::HfData.empty_text());
+        return;
+    }
+    let mut select = None;
+    egui::ScrollArea::vertical().id_salt("hf-decodes").auto_shrink([false, false]).show_rows(ui, 20.0, rows.len(), |ui, range| {
+        for k in range {
+            let row = &rows[k];
+            let d = &app.decodes[row.i];
+            // A rule where a slot begins, so each slot's decodes read as one.
+            let new_slot = k == 0 || rows[k - 1].slot_ms != row.slot_ms;
+            let resp = ui
+                .horizontal(|ui| {
+                    ui.set_min_height(18.0);
+                    let slot_text = if new_slot { format!("{}:{}:{}", &row.slot[..2.min(row.slot.len())], row.slot.get(2..4).unwrap_or(""), row.slot.get(4..).unwrap_or("")) } else { String::new() };
+                    cell(ui, 7.5 * char_w, mono(slot_text, theme::text_3()), egui::Sense::hover());
+                    let snr_c = row.snr.map_or(theme::text_3(), snr_color);
+                    cell(ui, 4.5 * char_w, mono(row.snr.map_or("—".into(), |v| format!("{v:+.0}")), snr_c), egui::Sense::hover());
+                    cell(ui, 5.0 * char_w, mono(row.dt.map_or("—".into(), |v| format!("{v:+.1}")), theme::text_2()), egui::Sense::hover());
+                    cell(ui, 6.0 * char_w, mono(row.df.map_or("—".into(), |v| format!("{v:.0}")), theme::AMBER), egui::Sense::hover());
+                    cell(ui, 5.0 * char_w, mono(&d.ev.protocol, widgets::protocol_color(&d.ev.protocol)), egui::Sense::hover());
+                    let msg = RichText::new(&d.ev.summary).font(theme::mono(11.5));
+                    let msg = if row.cq { msg.color(theme::OK).strong() } else { msg.color(theme::text()) };
+                    ui.add(egui::Label::new(msg).truncate());
+                })
+                .response
+                .interact(egui::Sense::click());
+            if new_slot && k > 0 {
+                let y = resp.rect.top() - 1.0;
+                ui.painter().line_segment([egui::pos2(resp.rect.left(), y), egui::pos2(resp.rect.right(), y)], egui::Stroke::new(1.0, theme::line()));
+            }
+            if app.selected_decode == Some(row.i) {
+                ui.painter().rect_filled(resp.rect, egui::CornerRadius::same(3), alpha(theme::AMBER, 0.1));
+            }
+            let resp = resp.on_hover_ui(|ui| {
+                egui::Grid::new(("hf-fields", row.i)).num_columns(2).spacing(vec2(10.0, 1.0)).show(ui, |ui| {
+                    for (k, v) in &d.ev.fields {
+                        ui.label(mono(k, theme::text_3()));
+                        ui.label(mono(v, theme::text()));
+                        ui.end_row();
+                    }
+                });
+            });
+            if resp.clicked() {
+                select = Some(if app.selected_decode == Some(row.i) { None } else { Some(row.i) });
+            }
+        }
+    });
+    if let Some(s) = select {
+        app.selected_decode = s;
+    }
+}
+
+/// Weak to strong: the color a decode's SNR is drawn in.
+fn snr_color(snr: f32) -> egui::Color32 {
+    let t = ((snr + 22.0) / 24.0).clamp(0.0, 1.0);
+    if t < 0.5 { theme::lerp(theme::ERR, theme::AMBER, t * 2.0) } else { theme::lerp(theme::AMBER, theme::OK, (t - 0.5) * 2.0) }
+}
+
+/// Where the receiver is in the UTC slot: a bar across the slot, and when
+/// the next decode lands.
+fn hf_clock(app: &App, ui: &mut Ui) {
+    let slot = match app.status.mode {
+        Mode::Ft8 => 15.0,
+        Mode::Ft4 => 7.5,
+        _ => {
+            ui.label(mono("Not decoding: pick FT8 or FT4 (BANDS tunes a dial frequency).", theme::text_3()));
+            return;
+        }
+    };
+    let now = std::time::SystemTime::now().duration_since(std::time::SystemTime::UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or(0.0);
+    let into = now.rem_euclid(slot);
+    let start = now - into;
+    let secs = start as u64;
+    ui.horizontal(|ui| {
+        ui.label(mono(format!("{} · slot {:02}:{:02}:{:04.1}", app.status.mode.label(), (secs / 3600) % 24, (secs / 60) % 60, start.rem_euclid(60.0)), theme::text_2()));
+        let w = (ui.available_width() - 150.0).clamp(80.0, 420.0);
+        let (r, _) = ui.allocate_exact_size(vec2(w, 6.0), egui::Sense::hover());
+        let p = ui.painter();
+        p.rect_filled(r, egui::CornerRadius::same(3), theme::ink());
+        let done = egui::Rect::from_min_size(r.min, vec2(r.width() * (into / slot) as f32, r.height()));
+        p.rect_filled(done, egui::CornerRadius::same(3), alpha(widgets::protocol_color(app.status.mode.label()), 0.8));
+        ui.label(mono(format!("decode in {:.1} s", slot - into), theme::text_3()));
+    });
+    // The bar moves on its own; a few frames a second is plenty.
+    ui.ctx().request_repaint_after(std::time::Duration::from_millis(200));
+}
+
+/// The band's activity: the last few slots, newest on top, each decode a
+/// tile at its audio frequency colored by its SNR. Hover for the message,
+/// click to find it in the log.
+fn hf_activity(app: &mut App, ui: &mut Ui, rows: &[HfRow]) {
+    let mut slots: Vec<u64> = rows.iter().map(|r| r.slot_ms).collect();
+    slots.dedup();
+    slots.truncate(8);
+    let lanes = 8usize;
+    let (lane_h, axis_h, max_hz) = (9.0f32, 13.0, 3_200.0f32);
+    let w = ui.available_width();
+    let (outer, _) = ui.allocate_exact_size(vec2(w, lanes as f32 * lane_h + axis_h + 2.0), egui::Sense::hover());
+    let plot = egui::Rect::from_min_max(egui::pos2(outer.left() + 44.0, outer.top()), egui::pos2(outer.right() - 4.0, outer.bottom() - axis_h));
+    let p = ui.painter().clone();
+    p.rect(plot, egui::CornerRadius::same(3), theme::ink(), egui::Stroke::new(1.0, theme::line()), egui::StrokeKind::Inside);
+    let x_of = |hz: f32| plot.left() + hz / max_hz * plot.width();
+    for k in 1..(max_hz / 500.0) as usize + 1 {
+        let hz = k as f32 * 500.0;
+        let x = x_of(hz);
+        if x < plot.right() - 1.0 {
+            p.line_segment([egui::pos2(x, plot.top() + 1.0), egui::pos2(x, plot.bottom() - 1.0)], egui::Stroke::new(1.0, theme::line()));
+        }
+        let align = if x > plot.right() - 16.0 { egui::Align2::RIGHT_TOP } else { egui::Align2::CENTER_TOP };
+        p.text(egui::pos2(x.min(plot.right()), plot.bottom() + 1.0), align, format!("{:.1}k", hz / 1000.0), theme::mono(9.0), theme::text_3());
+    }
+    p.text(egui::pos2(plot.left() - 4.0, plot.top()), egui::Align2::RIGHT_TOP, "newest", theme::mono(9.0), theme::text_3());
+    p.text(egui::pos2(plot.left() - 4.0, plot.bottom()), egui::Align2::RIGHT_BOTTOM, format!("{} slots", slots.len()), theme::mono(9.0), theme::text_3());
+    // The filter's edges, where the decoder can hear.
+    let (flo, fhi) = (app.status.filter_low_hz.abs().min(app.status.filter_high_hz.abs()) as f32, app.status.filter_low_hz.abs().max(app.status.filter_high_hz.abs()) as f32);
+    if matches!(app.status.mode, Mode::Ft8 | Mode::Ft4) && fhi > flo {
+        for hz in [flo, fhi] {
+            crate::spectrum::dashed_v(&p, x_of(hz), plot.top() + 1.0, plot.bottom() - 1.0, alpha(theme::AMBER, 0.4));
+        }
+    }
+    let hover = ui.input(|i| i.pointer.hover_pos()).filter(|h| plot.contains(*h));
+    let mut tip: Option<usize> = None;
+    let clicked = ui.input(|i| i.pointer.primary_clicked());
+    for r in rows {
+        let Some(lane) = slots.iter().position(|s| *s == r.slot_ms) else { continue };
+        let Some(df) = r.df else { continue };
+        // FT8 spans 50 Hz of audio, FT4 83.
+        let width_hz = if app.decodes[r.i].ev.protocol.contains("FT4") { 83.3 } else { 50.0 };
+        let y = plot.top() + 1.0 + lane as f32 * lane_h;
+        let tile = egui::Rect::from_min_max(egui::pos2(x_of(df), y + 1.0), egui::pos2(x_of(df + width_hz).max(x_of(df) + 3.0), y + lane_h - 1.0));
+        let c = r.snr.map_or(theme::text_3(), snr_color);
+        let sel = app.selected_decode == Some(r.i);
+        p.rect_filled(tile, egui::CornerRadius::same(2), alpha(c, if lane == 0 { 0.95 } else { 0.75 - lane as f32 * 0.06 }));
+        if r.cq || sel {
+            p.rect_stroke(tile.expand(1.0), egui::CornerRadius::same(2), egui::Stroke::new(1.0, if sel { theme::text() } else { theme::OK }), egui::StrokeKind::Outside);
+        }
+        if hover.is_some_and(|h| tile.expand(1.5).contains(h)) {
+            tip = Some(r.i);
+        }
+    }
+    if let Some(i) = tip {
+        let d = &app.decodes[i];
+        let text = format!("{}  {}", d.ev.summary, d.ev.fields.get("snr").map(|s| format!("{s} dB")).unwrap_or_default());
+        egui::Tooltip::always_open(ui.ctx().clone(), ui.layer_id(), egui::Id::new("hf-tile"), egui::PopupAnchor::Pointer).show(|ui| ui.label(mono(text, theme::text())));
+        if clicked {
+            app.selected_decode = Some(i);
+        }
+    }
 }
