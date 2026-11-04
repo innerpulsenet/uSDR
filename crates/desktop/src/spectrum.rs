@@ -978,8 +978,9 @@ impl Panafall {
         while db <= self.max_db {
             let y = self.y_for(db, pan);
             painter.line_segment([pos2(pan.left(), y), pos2(pan.right(), y)], Stroke::new(1.0, theme::line()));
-            // Clear of the unit caption at the top of the scale.
-            if y < db_axis.top() + 20.0 {
+            // Clear of the unit caption at the top of the scale, and whole
+            // above its foot, where the band plan's strip begins.
+            if y < db_axis.top() + 20.0 || y > db_axis.bottom() - 7.0 {
                 db += db_step;
                 continue;
             }

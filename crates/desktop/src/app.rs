@@ -157,6 +157,8 @@ pub struct App {
     /// decoder within it, by its chip.
     pub decode_family: Option<crate::decoders::Family>,
     pub decode_chip: Option<&'static str>,
+    /// The tab row had no room for the log's keys; they ride the family row.
+    pub decode_keys_below: bool,
     /// Rows that arrived since the log last drew, and where it was scrolled,
     /// so new frames arriving on top do not move what is being read.
     pub decodes_added: usize,
@@ -288,6 +290,7 @@ impl App {
             decode_filter: String::new(),
             decode_family: None,
             decode_chip: None,
+            decode_keys_below: false,
             decodes_added: 0,
             decode_scroll: 0.0,
             decodes_unseen: 0,
@@ -1755,15 +1758,39 @@ mod tests {
         harness_sized(1600.0)
     }
 
+    #[test]
+    fn the_dock_fits_its_panel_in_the_smallest_window() {
+        // A family with its own decoders, a filter and the scope, all in a
+        // 1100 x 700 window: content taller than the dock slid it down
+        // under the display, which hid its tabs.
+        // The scope as wide as an operator leaves it, so the log is narrow.
+        let mut h = harness_with(Prefs { auto_connect: false, scope_width: 420.0, ..Default::default() }, 1100.0, 700.0);
+        h.state_mut().app.status.mode = Mode::Wfm;
+        h.state_mut().app.decode_family = Some(crate::decoders::Family::Broadcast);
+        h.run_steps(4);
+        let dock_top = 700.0 - 26.0 - h.state().app.prefs.dock_height;
+        let tab = h.get_by_label("Decodes").rect();
+        assert!(tab.top() >= dock_top && tab.top() <= dock_top + 12.0, "tab at {tab:?}, dock from {dock_top}");
+        // The display ends where the dock begins.
+        assert!(h.get_by_label("CENTER").rect().bottom() < dock_top);
+    }
+
     fn harness_sized(w: f32) -> Harness<'static, T> {
+        harness_wh(w, 1000.0)
+    }
+
+    fn harness_wh(w: f32, ht: f32) -> Harness<'static, T> {
+        harness_with(Prefs { auto_connect: false, ..Default::default() }, w, ht)
+    }
+
+    fn harness_with(prefs: Prefs, w: f32, ht: f32) -> Harness<'static, T> {
         let ctx = egui::Context::default();
-        let prefs = Prefs { auto_connect: false, ..Default::default() };
         let mut app = App::build(&ctx, prefs, Player::silent(), Player::silent(), None);
         let (link, wire) = Link::wire();
         app.link = Some(link);
         let info = proto::ServerInfo { name: "usdr".into(), version: "test".into(), api: 2, features: vec!["filter".into(), "rx2".into()] };
         wire.events.send(NetEvent::Connected(Box::new(rsp_status()), Some(info))).unwrap();
-        let mut h = Harness::builder().with_size(egui::vec2(w, 1000.0)).build_ui_state(
+        let mut h = Harness::builder().with_size(egui::vec2(w, ht)).build_ui_state(
             |ui, t: &mut T| {
                 let ctx = ui.ctx().clone();
                 if !t.ready {

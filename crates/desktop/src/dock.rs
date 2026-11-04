@@ -17,9 +17,9 @@ fn mono(t: impl Into<String>, c: egui::Color32) -> RichText {
 pub fn dock(app: &mut App, ui: &mut Ui) {
     // The scope: always in view beside the logs.
     if app.prefs.show_scope {
-        // The logs keep at least 360 px beside the scope, so their tabs
-        // never run under its title.
-        let scope_max = (ui.available_width() - 360.0).clamp(240.0, 800.0);
+        // The logs keep at least 390 px beside the scope, so their four tabs
+        // and their counts never run under its title.
+        let scope_max = (ui.available_width() - 390.0).clamp(240.0, 800.0);
         let resp = egui::Panel::right("dock-scope")
             .resizable(true)
             .default_size(app.prefs.scope_width.min(scope_max))
@@ -47,6 +47,27 @@ pub fn dock(app: &mut App, ui: &mut Ui) {
                 app.dock_tab = t;
             }
         }
+        // The open log's keys at the row's far end, where the tabs leave
+        // room: a row of the dock's height given back to the log.
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.spacing_mut().item_spacing.x = 3.0;
+            match app.dock_tab {
+                // Below the menu's own width the keys ride the family row.
+                DockTab::Decodes => {
+                    let room = ui.available_width() - 12.0;
+                    app.decode_keys_below = room < 56.0;
+                    if !app.decode_keys_below {
+                        decode_keys(app, ui, room);
+                    }
+                }
+                DockTab::Classifier => {
+                    if widgets::action_small(ui, "CLEAR").clicked() {
+                        app.class_log.clear();
+                    }
+                }
+                _ => {}
+            }
+        });
         // The amber underline slides to the tab that was chosen.
         if let Some(rr) = under {
             let ctx = ui.ctx().clone();
@@ -104,72 +125,70 @@ fn cell(ui: &mut Ui, w: f32, t: RichText, sense: egui::Sense) -> egui::Response 
 }
 
 fn decodes(app: &mut App, ui: &mut Ui) {
-    // The families first, each with what it holds: what kind of traffic the
-    // log shows. Wrapped, so a narrow dock moves keys to a second line
-    // instead of drawing them over each other.
-    ui.horizontal_wrapped(|ui| {
-        ui.spacing_mut().item_spacing.x = 3.0;
-        let mut counts = std::collections::HashMap::new();
-        for d in &app.decodes {
-            *counts.entry(d.family).or_insert(0usize) += 1;
-        }
-        if widgets::chip_key(ui, &format!("ALL {}", app.decodes.len()), app.decode_family.is_none(), theme::AMBER).clicked() {
-            app.decode_family = None;
-            app.decode_chip = None;
-        }
-        for f in Family::ALL {
-            let n = counts.get(&Some(f)).copied().unwrap_or(0);
-            let label = if n > 0 { format!("{} {n}", f.label()) } else { f.label().to_string() };
-            if widgets::chip_key(ui, &label, app.decode_family == Some(f), family_color(f)).clicked() {
-                app.decode_family = Some(f);
-                app.decode_chip = None;
-                app.selected_decode = None;
+    // The families, each with what it holds, then the chosen family's own
+    // decoders: one row, never wrapped, scrolled sideways where the dock is
+    // too narrow for it, so the log below keeps the height it was given.
+    let row = egui::ScrollArea::horizontal().id_salt("families").scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden).auto_shrink([false, true]).show(ui, |ui| {
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 3.0;
+            if app.decode_keys_below {
+                decode_keys(app, ui, 0.0);
             }
-        }
-    });
-    ui.add_space(2.0);
-    ui.horizontal_wrapped(|ui| {
-        ui.add(egui::TextEdit::singleline(&mut app.decode_filter).hint_text("filter decodes").desired_width(150.0))
-            .on_hover_text("Protocol, kind or any text in the summary");
-        ui.spacing_mut().item_spacing.x = 3.0;
-        // Within a family, its decoders one at a time.
-        if let Some(f) = app.decode_family {
-            let list: Vec<&crate::decoders::Decoder> = crate::decoders::in_family(f).collect();
-            if list.len() > 1 {
-                if widgets::chip_key(ui, "ANY", app.decode_chip.is_none(), family_color(f)).clicked() {
+            let mut counts = std::collections::HashMap::new();
+            for d in &app.decodes {
+                *counts.entry(d.family).or_insert(0usize) += 1;
+            }
+            if widgets::chip_key(ui, &format!("ALL {}", app.decodes.len()), app.decode_family.is_none(), theme::AMBER).clicked() {
+                app.decode_family = None;
+                app.decode_chip = None;
+            }
+            for f in Family::ALL {
+                let n = counts.get(&Some(f)).copied().unwrap_or(0);
+                let label = if n > 0 { format!("{} {n}", f.label()) } else { f.label().to_string() };
+                if widgets::chip_key(ui, &label, app.decode_family == Some(f), family_color(f)).clicked() {
+                    app.decode_family = Some(f);
                     app.decode_chip = None;
+                    app.selected_decode = None;
                 }
-                for d in list {
-                    if widgets::chip_key(ui, d.chip, app.decode_chip == Some(d.chip), widgets::protocol_color(d.chip)).clicked() {
-                        app.decode_chip = if app.decode_chip == Some(d.chip) { None } else { Some(d.chip) };
+            }
+            if let Some(f) = app.decode_family {
+                let list: Vec<&crate::decoders::Decoder> = crate::decoders::in_family(f).collect();
+                if list.len() > 1 || f == Family::HfData {
+                    // A rule between the families and this one's decoders.
+                    let (r, _) = ui.allocate_exact_size(vec2(9.0, 18.0), egui::Sense::hover());
+                    ui.painter().line_segment([r.center_top(), r.center_bottom()], egui::Stroke::new(1.0, theme::line()));
+                }
+                if list.len() > 1 {
+                    if widgets::chip_key(ui, "ANY", app.decode_chip.is_none(), family_color(f)).clicked() {
+                        app.decode_chip = None;
+                    }
+                    for d in list {
+                        if widgets::chip_key(ui, d.chip, app.decode_chip == Some(d.chip), widgets::protocol_color(d.chip)).clicked() {
+                            app.decode_chip = if app.decode_chip == Some(d.chip) { None } else { Some(d.chip) };
+                        }
                     }
                 }
-            }
-            if f == Family::HfData {
-                ui.add_space(6.0);
-                hf_bands(app, ui);
-            }
-        }
-        ui.add_space(6.0);
-        // Clears what is in view: one family's, or the whole log.
-        if widgets::action_small(ui, "CLEAR").clicked() {
-            match app.decode_family {
-                Some(f) => app.decodes.retain(|d| d.family != Some(f)),
-                None => app.decodes.clear(),
-            }
-            app.selected_decode = None;
-        }
-        widgets::menu_chip(ui, "···", theme::text_2(), |ui| {
-            if ui.button("Expand all").clicked() {
-                app.decodes.iter_mut().for_each(|d| (d.open, d.height) = (true, 0.0));
-                ui.close();
-            }
-            if ui.button("Collapse all").clicked() {
-                app.decodes.iter_mut().for_each(|d| (d.open, d.height) = (false, 0.0));
-                ui.close();
+                if f == Family::HfData {
+                    hf_bands(app, ui);
+                }
             }
         });
     });
+    // More to the right than the dock shows: the row fades out at its edge.
+    let (shown, whole) = (row.inner_rect, row.content_size.x);
+    if whole - row.state.offset.x > shown.width() + 1.0 {
+        let edge = egui::Rect::from_min_max(egui::pos2(shown.right() - 28.0, shown.top()), shown.max);
+        let mut mesh = egui::Mesh::default();
+        let (clear, solid) = (alpha(theme::surface_1(), 0.0), theme::surface_1());
+        mesh.colored_vertex(edge.left_top(), clear);
+        mesh.colored_vertex(edge.right_top(), solid);
+        mesh.colored_vertex(edge.right_bottom(), solid);
+        mesh.colored_vertex(edge.left_bottom(), clear);
+        mesh.add_triangle(0, 1, 2);
+        mesh.add_triangle(0, 2, 3);
+        ui.painter().add(egui::Shape::mesh(mesh));
+    }
+    ui.add_space(2.0);
     let filter = app.decode_filter.to_lowercase();
     let chip = app.decode_chip.and_then(|c| crate::decoders::DECODERS.iter().find(|d| d.chip == c));
     let family = app.decode_family;
@@ -228,7 +247,7 @@ fn decodes(app: &mut App, ui: &mut Ui) {
             // Scrolled into the log, new frames arriving on top push it down
             // by their height, so the rows being read stay where they are.
             let row_h = 24.0;
-            let mut area = egui::ScrollArea::vertical().id_salt("decodes").auto_shrink([false, false]);
+            let mut area = egui::ScrollArea::vertical().id_salt("decodes").auto_shrink([false, false]).min_scrolled_height(0.0);
             if app.decode_jump {
                 area = area.vertical_scroll_offset(0.0);
                 app.decode_jump = false;
@@ -331,7 +350,7 @@ fn decodes(app: &mut App, ui: &mut Ui) {
         {
             ui.separator();
             ui.vertical(|ui| {
-                egui::ScrollArea::vertical().id_salt("inspector").auto_shrink([false, false]).show(ui, |ui| {
+                egui::ScrollArea::vertical().id_salt("inspector").auto_shrink([false, false]).min_scrolled_height(0.0).show(ui, |ui| {
                     ui.horizontal(|ui| {
                         ui.label(RichText::new(format!("[{}] {}", d.ev.protocol, d.ev.kind)).font(theme::sans_semibold(13.0)).color(widgets::protocol_color(&d.ev.protocol)));
                         if d.ev.valid {
@@ -517,20 +536,15 @@ fn signal_details(app: &App, ui: &mut Ui) {
 
 fn classifier(app: &mut App, ui: &mut Ui) {
     signal_details(app, ui);
-    ui.horizontal(|ui| {
-        ui.label(mono(format!("{} detections", app.class_log.len()), theme::text_3()));
-        if widgets::action_small(ui, "CLEAR").clicked() {
-            app.class_log.clear();
-        }
-    });
+    ui.label(mono(format!("{} detections", app.class_log.len()), theme::text_3()));
     let mut tune_to = None;
     if app.class_log.is_empty() {
-        egui::ScrollArea::vertical().id_salt("class").auto_shrink([false, false]).show(ui, |ui| {
+        egui::ScrollArea::vertical().id_salt("class").auto_shrink([false, false]).min_scrolled_height(0.0).show(ui, |ui| {
             empty_state(ui, "What the classifier hears on receiver A is logged here: a row when the protocol or channel changes, or every three seconds while a signal holds.");
         });
         return;
     }
-    egui::ScrollArea::vertical().id_salt("class").auto_shrink([false, false]).show_rows(ui, 20.0, app.class_log.len(), |ui, range| {
+    egui::ScrollArea::vertical().id_salt("class").auto_shrink([false, false]).min_scrolled_height(0.0).show_rows(ui, 20.0, app.class_log.len(), |ui, range| {
         for row in app.class_log.range(range) {
             ui.horizontal(|ui| {
                 ui.label(mono(local_hms(row.at), theme::text_3()));
@@ -557,7 +571,7 @@ fn calls(app: &mut App, ui: &mut Ui) {
     let mut actions: Vec<(u64, &'static str)> = Vec::new();
     let mut tune_to = None;
     let progress = app.player.clip_progress();
-    egui::ScrollArea::vertical().id_salt("calls").auto_shrink([false, false]).show(ui, |ui| {
+    egui::ScrollArea::vertical().id_salt("calls").auto_shrink([false, false]).min_scrolled_height(0.0).show(ui, |ui| {
         if app.calls.is_empty() {
             empty_state(ui, "Finished voice calls are kept here with their audio, the most recent sixteen, so a call that went past can be played again. P25, DMR and NFM calls arrive once the receiver, or the scanner, hears one.");
         }
@@ -713,7 +727,7 @@ fn scan(app: &mut App, ui: &mut Ui) {
     ui.add_space(4.0);
     ui.horizontal_top(|ui| {
         // The form scrolls, so a short dock never hides START.
-        egui::ScrollArea::vertical().id_salt("scanform-scroll").max_width(380.0).auto_shrink([true, false]).show(ui, |ui| ui.vertical(|ui| {
+        egui::ScrollArea::vertical().id_salt("scanform-scroll").max_width(380.0).auto_shrink([true, false]).min_scrolled_height(0.0).show(ui, |ui| ui.vertical(|ui| {
             ui.set_width(360.0);
             let f = &mut app.scan_form;
             let mut touched = false;
@@ -809,7 +823,7 @@ fn scan(app: &mut App, ui: &mut Ui) {
         ui.vertical(|ui| {
             let skips = st.as_ref().map(|s| s.skip_list.clone()).unwrap_or_default();
             ui.label(mono(if skips.is_empty() { "nothing parked".into() } else { format!("{} parked", skips.len()) }, theme::text_3()));
-            egui::ScrollArea::vertical().id_salt("skips").auto_shrink([false, false]).show(ui, |ui| {
+            egui::ScrollArea::vertical().id_salt("skips").auto_shrink([false, false]).min_scrolled_height(0.0).show(ui, |ui| {
                 for s in skips {
                     ui.horizontal(|ui| {
                         ui.label(mono(crate::tuning::fmt_mhz(s.freq_hz, 4), theme::AMBER));
@@ -830,6 +844,51 @@ fn scan(app: &mut App, ui: &mut Ui) {
             });
         });
     });
+}
+
+/// The decode log's keys on the tab row, laid right to left: the menu,
+/// CLEAR (what is in view: one family's, or the whole log), the filter.
+/// Where the tabs leave less `room` than they need, the filter and then
+/// CLEAR fold into the menu rather than run over a tab.
+fn decode_keys(app: &mut App, ui: &mut Ui, room: f32) {
+    let (filter_out, clear_out) = (room >= 230.0, room >= 100.0);
+    let filtering = !app.decode_filter.is_empty();
+    // The menu lights while a filter it holds is narrowing the log.
+    let tally = if filtering && !filter_out { theme::AMBER } else { theme::text_2() };
+    widgets::menu_chip(ui, "···", tally, |ui| {
+        if !filter_out {
+            ui.add(egui::TextEdit::singleline(&mut app.decode_filter).hint_text("filter decodes").desired_width(180.0));
+        }
+        if !clear_out && ui.button("Clear what is shown").clicked() {
+            clear_shown(app);
+            ui.close();
+        }
+        if ui.button("Expand all").clicked() {
+            app.decodes.iter_mut().for_each(|d| (d.open, d.height) = (true, 0.0));
+            ui.close();
+        }
+        if ui.button("Collapse all").clicked() {
+            app.decodes.iter_mut().for_each(|d| (d.open, d.height) = (false, 0.0));
+            ui.close();
+        }
+    });
+    if clear_out && widgets::action_small(ui, "CLEAR").clicked() {
+        clear_shown(app);
+    }
+    if filter_out {
+        let w = (room - 110.0).clamp(90.0, 170.0);
+        ui.add(egui::TextEdit::singleline(&mut app.decode_filter).hint_text("filter decodes").desired_width(w))
+            .on_hover_text("Protocol, kind or any text in the summary");
+    }
+}
+
+/// Clear what the log shows: one family's decodes, or all of them.
+fn clear_shown(app: &mut App) {
+    match app.decode_family {
+        Some(f) => app.decodes.retain(|d| d.family != Some(f)),
+        None => app.decodes.clear(),
+    }
+    app.selected_decode = None;
 }
 
 /// A family's tally: the color of its first decoder.
@@ -908,7 +967,7 @@ fn hf_data(app: &mut App, ui: &mut Ui, visible: &[usize]) {
         return;
     }
     let mut select = None;
-    egui::ScrollArea::vertical().id_salt("hf-decodes").auto_shrink([false, false]).show_rows(ui, 20.0, rows.len(), |ui, range| {
+    egui::ScrollArea::vertical().id_salt("hf-decodes").auto_shrink([false, false]).min_scrolled_height(0.0).show_rows(ui, 20.0, rows.len(), |ui, range| {
         for k in range {
             let row = &rows[k];
             let d = &app.decodes[row.i];
@@ -999,7 +1058,9 @@ fn hf_activity(app: &mut App, ui: &mut Ui, rows: &[HfRow]) {
     slots.dedup();
     slots.truncate(8);
     let lanes = 8usize;
-    let (lane_h, axis_h, max_hz) = (9.0f32, 13.0, 3_200.0f32);
+    // About a third of the view, so the log under it keeps the rest.
+    let (axis_h, max_hz) = (13.0f32, 3_200.0f32);
+    let lane_h = ((ui.available_height() * 0.32 - axis_h) / lanes as f32).clamp(4.0, 9.0);
     let w = ui.available_width();
     let (outer, _) = ui.allocate_exact_size(vec2(w, lanes as f32 * lane_h + axis_h + 2.0), egui::Sense::hover());
     let plot = egui::Rect::from_min_max(egui::pos2(outer.left() + 44.0, outer.top()), egui::pos2(outer.right() - 4.0, outer.bottom() - axis_h));

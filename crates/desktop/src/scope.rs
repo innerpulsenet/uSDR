@@ -475,7 +475,11 @@ impl Scope {
         };
         let (gutter, ruler_h, axis_h) = (30.0, 14.0, 14.0);
         let ruler = Rect::from_min_max(pos2(left.left() + gutter, left.top()), pos2(left.right(), left.top() + ruler_h));
-        let spec = Rect::from_min_max(pos2(ruler.left(), ruler.bottom() + 2.0), pos2(left.right(), left.top() + left.height() * 0.62 - axis_h));
+        // A short dock gives the little waterfall's share to the spectrum,
+        // which says more in the height there is.
+        let with_mini = left.height() >= 150.0;
+        let spec_bottom = if with_mini { left.top() + left.height() * 0.62 - axis_h } else { left.bottom() - axis_h };
+        let spec = Rect::from_min_max(pos2(ruler.left(), ruler.bottom() + 2.0), pos2(left.right(), spec_bottom));
         let mini = Rect::from_min_max(pos2(spec.left(), spec.bottom() + axis_h), left.max);
         painter.rect(spec, CornerRadius::same(3), theme::ink(), Stroke::new(1.0, theme::line()), egui::StrokeKind::Inside);
         let x_of = |hz: f32| spec.left() + (hz - span.lo) / (span.hi - span.lo) * spec.width();
@@ -596,21 +600,23 @@ impl Scope {
             self.mini_dirty = false;
             self.mini_palette = Some(palette);
         }
-        if let Some(tex) = &self.mini_tex {
-            painter.image(tex.id(), mini, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+        if with_mini {
+            if let Some(tex) = &self.mini_tex {
+                painter.image(tex.id(), mini, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+            }
+            painter.rect_stroke(mini, egui::CornerRadius::ZERO, Stroke::new(1.0, theme::line()), egui::StrokeKind::Inside);
+            let secs = MINI_H as f32 / self.rate_hz.max(1.0);
+            painter.text(pos2(mini.left() - 4.0, mini.top()), Align2::RIGHT_TOP, "now", theme::mono(9.0), theme::text_3());
+            painter.text(pos2(mini.left() - 4.0, mini.bottom()), Align2::RIGHT_BOTTOM, format!("−{secs:.0}s"), theme::mono(9.0), theme::text_3());
         }
-        painter.rect_stroke(mini, egui::CornerRadius::ZERO, Stroke::new(1.0, theme::line()), egui::StrokeKind::Inside);
-        let secs = MINI_H as f32 / self.rate_hz.max(1.0);
-        painter.text(pos2(mini.left() - 4.0, mini.top()), Align2::RIGHT_TOP, "now", theme::mono(9.0), theme::text_3());
-        painter.text(pos2(mini.left() - 4.0, mini.bottom()), Align2::RIGHT_BOTTOM, format!("−{secs:.0}s"), theme::mono(9.0), theme::text_3());
         // The spectrum's readout: under the cursor while it is over the plot,
         // otherwise what the mode's bands measure.
         let hz_at = |x: f32| span.lo + (x - spec.left()) / spec.width() * (span.hi - span.lo);
-        let readout = match hover.filter(|p| spec.expand(1.0).contains(*p) || mini.contains(*p)) {
+        let readout = match hover.filter(|p| spec.expand(1.0).contains(*p) || (with_mini && mini.contains(*p))) {
             Some(p) if !self.spectrum.is_empty() => {
                 let hz = hz_at(p.x);
                 let x = p.x.clamp(spec.left(), spec.right());
-                painter.line_segment([pos2(x, spec.top()), pos2(x, mini.bottom())], Stroke::new(1.0, alpha(theme::text(), 0.35)));
+                painter.line_segment([pos2(x, spec.top()), pos2(x, if with_mini { mini.bottom() } else { spec.bottom() })], Stroke::new(1.0, alpha(theme::text(), 0.35)));
                 let i = self.bin_of(hz, &span, from_pass);
                 format!("{} · {:.1} dB · peak {:.1}", fmt_hz(hz, span.signed), self.spectrum[i], self.peak[i])
             }
@@ -662,8 +668,9 @@ impl Scope {
             let (_, pilot) = self.band_db(18_700.0, 19_300.0, span, false);
             let (stereo, _) = self.band_db(24_000.0, 52_000.0, span, false);
             let (rds, _) = self.band_db(55_500.0, 58_500.0, span, false);
-            let rel = |name: &str, d: f32| if d >= 3.0 { format!("{name} +{d:.0}") } else { format!("{name} —") };
-            return format!("{} · {} · {} dB over floor", rel("pilot", pilot - floor), rel("L−R", stereo - floor), rel("RDS", rds - floor));
+            // Each over the floor; a band that does not stand out is "none".
+            let rel = |name: &str, d: f32| if d >= 3.0 { format!("{name} +{d:.0} dB") } else { format!("{name} none") };
+            return format!("{} · {} · {}", rel("pilot", pilot - floor), rel("L−R", stereo - floor), rel("RDS", rds - floor));
         }
         // Elsewhere, the strongest bin in the mode's passband (or anywhere).
         let (bands, _) = annotations(status, sub, from_pass);

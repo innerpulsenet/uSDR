@@ -81,7 +81,10 @@ fn applet_opened<R>(ui: &mut Ui, id: &str, title: &str, first_open: bool, extra:
             let natural: f32 = ui.data(|d| d.get_temp(natural_id).unwrap_or(0.0));
             let shown_h = if t >= 0.999 { f32::INFINITY } else { natural * t };
             let mut child = ui.new_child(egui::UiBuilder::new().max_rect(Rect::from_min_size(full.min, vec2(full.width(), f32::INFINITY))));
-            child.set_clip_rect(Rect::from_min_max(full.min, pos2(full.right(), (full.top() + shown_h).min(ui.clip_rect().bottom()))));
+            // Inside the parent's clip on every side: a scrolled side panel
+            // puts the body's top above the panel, and a clip that started
+            // there painted the card over the bar.
+            child.set_clip_rect(Rect::from_min_max(full.min, pos2(full.right(), full.top() + shown_h)).intersect(ui.clip_rect()));
             let r = add(&mut child);
             let h = child.min_rect().height();
             ui.data_mut(|d| d.insert_temp(natural_id, h));

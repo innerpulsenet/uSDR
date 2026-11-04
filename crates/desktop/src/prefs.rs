@@ -142,6 +142,11 @@ impl Prefs {
     }
 
     pub fn save(&self) {
+        // A QA window (USDR_QA_SIZE) reads the operator's settings but never
+        // writes them: its small window would leave its panel sizes behind.
+        if std::env::var_os("USDR_QA_SIZE").is_some() {
+            return;
+        }
         let Some(p) = path() else { return };
         if let Some(d) = p.parent() {
             let _ = std::fs::create_dir_all(d);
