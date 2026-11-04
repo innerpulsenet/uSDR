@@ -58,7 +58,6 @@ pub struct RxB {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Style {
     /// The house look: an amber trace on the ground, ember waterfall.
-    #[default]
     Ember,
     /// The classic panadapter: a white trace over a blue fill on deep navy,
     /// and the blue-to-red waterfall.
@@ -75,6 +74,7 @@ pub enum Style {
     Inferno,
     /// A violet trace over an indigo pan, and the prism waterfall: the
     /// rainbow look.
+    #[default]
     Prism,
 }
 
@@ -185,8 +185,8 @@ pub struct View {
 impl Default for View {
     fn default() -> Self {
         Self {
-            style: Style::Ember,
-            palette: Colormap::Ember,
+            style: Style::Prism,
+            palette: Colormap::Prism,
             peak_hold: true,
             fill: true,
             auto_range: true,
