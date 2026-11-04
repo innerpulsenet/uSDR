@@ -1775,6 +1775,29 @@ mod tests {
         assert!(h.get_by_label("CENTER").rect().bottom() < dock_top);
     }
 
+    #[test]
+    fn the_receiver_bar_never_cuts_off_its_signal_bay() {
+        // Between 1500 and 1840 px the one-band fits used to run past the
+        // window, cutting off the CAL key and the SNR and, narrower still,
+        // laying the CAL key over the dBFS reading.
+        for w in [1500.0, 1560.0, 1600.0, 1650.0, 1700.0, 1760.0, 1800.0, 1840.0, 1900.0] {
+            for with_b in [false, true] {
+                let mut h = harness_sized(w);
+                h.run_steps(2);
+                h.state_mut().app.status.freq_error_hz = Some(1_900.0);
+                if with_b {
+                    h.state_mut().app.status.rx2 = Some(proto::SubRx { freq_hz: 146.1e6, mode: Mode::Nfm, bandwidth_hz: 12_500.0, ..Default::default() });
+                }
+                h.run_steps(4);
+                let cal = h.get_by_label("CAL +1.9k").rect();
+                let signal = h.get_by_label("SIGNAL").rect();
+                assert!(cal.right() <= w - 14.0 + 0.5, "{w} px{}: the CAL key ends at {}", if with_b { " with B" } else { "" }, cal.right());
+                // Room between the label and the key for S9+60 and -100.0 dBFS.
+                assert!(cal.left() - signal.right() >= 130.0, "{w} px: the CAL key at {} crowds the reading after {}", cal.left(), signal.right());
+            }
+        }
+    }
+
     fn harness_sized(w: f32) -> Harness<'static, T> {
         harness_wh(w, 1000.0)
     }

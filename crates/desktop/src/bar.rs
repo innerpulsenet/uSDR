@@ -44,8 +44,13 @@ const MODES_W: f32 = 290.0;
 const AUDIO_W: f32 = 232.0;
 const GAP: f32 = 22.0;
 
+/// Where each one-band fit is first tried, widest first: estimates of the
+/// bar each needs, which `receiver_bar` raises to what it measures.
+const ONE_BAND: [f32; 3] = [1840.0, 1700.0, 1554.0];
+
 pub fn receiver_bar(app: &mut App, ui: &mut Ui) {
     let w = ui.available_width();
+    let edge = ui.max_rect().right();
     let b_active = app.active_b && app.status.rx2.is_some();
     // A violet wash says, before anything is read, that B is being driven;
     // it fades in and out, so the switch is seen before it is read.
@@ -55,60 +60,87 @@ pub fn receiver_bar(app: &mut App, ui: &mut Ui) {
         ui.painter().rect_filled(r, egui::CornerRadius::ZERO, alpha(theme::VIOLET, 0.06 * wash));
     }
     ui.spacing_mut().item_spacing.x = 10.0;
+    // The narrowest bar each one-band fit has been seen to need. A fit whose
+    // row ran past the edge is not tried again below the width it took, so
+    // the signal bay at the end of the row is never cut off: the readings
+    // and labels that set the bays' widths change with the mode, B and the
+    // station, so measuring beats any fixed threshold.
+    let need_id = egui::Id::new("rx-bar-need");
+    let mut need: [f32; 3] = ui.data(|d| d.get_temp(need_id)).unwrap_or(ONE_BAND);
+    let fit = need.iter().position(|&n| w >= n);
     // Four fits, widest first. Each row ends in a section that takes what
     // is left, so no row trails off into empty space.
-    if w >= 1840.0 {
-        ui.horizontal_top(|ui| {
-            switch(app, ui);
-            readout(app, ui);
-            tuning(app, ui);
-            modes(app, ui);
-            filter(app, ui, 310.0);
-            audio(app, ui, 220.0);
-            meter(app, ui, 300.0, 560.0);
-        });
-    } else if w >= 1640.0 {
+    let row = match fit {
+        Some(0) => Some(
+            ui.horizontal_top(|ui| {
+                switch(app, ui);
+                readout(app, ui);
+                tuning(app, ui);
+                modes(app, ui);
+                filter(app, ui, 310.0);
+                audio(app, ui, 220.0);
+                meter(app, ui, 300.0, 560.0);
+            })
+            .response
+            .rect,
+        ),
         // The filter and the meter narrow.
-        ui.horizontal_top(|ui| {
-            switch(app, ui);
-            readout(app, ui);
-            tuning(app, ui);
-            modes(app, ui);
-            filter(app, ui, 250.0);
-            audio(app, ui, 220.0);
-            meter(app, ui, 230.0, 560.0);
-        });
-    } else if w >= 1500.0 {
+        Some(1) => Some(
+            ui.horizontal_top(|ui| {
+                switch(app, ui);
+                readout(app, ui);
+                tuning(app, ui);
+                modes(app, ui);
+                filter(app, ui, 220.0);
+                audio(app, ui, 200.0);
+                meter(app, ui, 0.0, 560.0);
+            })
+            .response
+            .rect,
+        ),
         // The default 1600 px window: still one band, with a smaller
-        // readout, a filter of three presets and its slider, and the meter
-        // taking the rest. Two rows here would cost the waterfall 110 px.
-        ui.horizontal_top(|ui| {
-            switch(app, ui);
-            readout_sized(app, ui, 34.0);
-            tuning(app, ui);
-            modes(app, ui);
-            // The filter and the audio give up a little so the signal bay
-            // can say what it hears.
-            filter(app, ui, (w - 1450.0).clamp(150.0, 250.0));
-            audio(app, ui, 190.0);
-            meter(app, ui, 290.0, 560.0);
-        });
-    } else {
-        ui.horizontal_top(|ui| {
-            switch(app, ui);
-            readout(app, ui);
-            tuning(app, ui);
-            // A long bar is a finer one: on its own row the meter may run on.
-            meter(app, ui, 260.0, 900.0);
-        });
-        ui.add_space(4.0);
-        // A fader wider than this is a slab of empty track.
-        let filter_w = (w - MODES_W - AUDIO_W - 3.0 * GAP).clamp(230.0, 380.0);
-        ui.horizontal_top(|ui| {
-            modes(app, ui);
-            filter(app, ui, filter_w);
-            audio(app, ui, 220.0);
-        });
+        // readout, a narrow filter and audio, and the meter at the width
+        // its readings need. Two rows here would cost the waterfall 110 px.
+        Some(_) => Some(
+            ui.horizontal_top(|ui| {
+                switch(app, ui);
+                readout_sized(app, ui, 32.0);
+                tuning(app, ui);
+                modes(app, ui);
+                filter(app, ui, 140.0);
+                audio(app, ui, 160.0);
+                meter(app, ui, 0.0, 560.0);
+            })
+            .response
+            .rect,
+        ),
+        None => {
+            ui.horizontal_top(|ui| {
+                switch(app, ui);
+                readout(app, ui);
+                tuning(app, ui);
+                // A long bar is a finer one: on its own row the meter may run on.
+                meter(app, ui, 260.0, 900.0);
+            });
+            ui.add_space(4.0);
+            // A fader wider than this is a slab of empty track.
+            let filter_w = (w - MODES_W - AUDIO_W - 3.0 * GAP).clamp(230.0, 380.0);
+            ui.horizontal_top(|ui| {
+                modes(app, ui);
+                filter(app, ui, filter_w);
+                audio(app, ui, 220.0);
+            });
+            None
+        }
+    };
+    if let (Some(i), Some(r)) = (fit, row) {
+        let over = r.right() - edge;
+        if over > 0.5 {
+            need[i] = need[i].max((w + over + 2.0).ceil());
+            ui.data_mut(|d| d.insert_temp(need_id, need));
+            // Lay the bar out again before anything is shown.
+            ui.ctx().request_discard("the receiver bar ran past its edge");
+        }
     }
 }
 
@@ -679,10 +711,23 @@ fn meter(app: &mut App, ui: &mut Ui, min_w: f32, max_w: f32) {
     let is_b = app.active_b && app.status.rx2.is_some();
     let rm = app.reduce_motion();
     let mark = app.prefs.view.sql_mark;
-    // The last bay takes whatever width the row has left.
-    let w = (ui.available_width() - 20.0).clamp(min_w, max_w);
     let s = &app.status;
     let err = s.freq_error_hz.filter(|_| !is_b);
+    // Never narrower than its header, so the CAL key cannot land on the
+    // reading; past that the last bay takes whatever width the row has left.
+    let text_w = |t: &str, f: egui::FontId| ui.painter().layout_no_wrap(t.into(), f, egui::Color32::PLACEHOLDER).size().x;
+    let label = if is_b { "SIGNAL B" } else { "SIGNAL" };
+    // (The label is set with a point of tracking a letter.)
+    let head_w = text_w(label, theme::mono(10.5))
+        + label.len() as f32
+        + text_w("S9+60", theme::mono_bold(15.0))
+        + text_w("-100.0 dBFS", theme::mono(11.0))
+        + 2.0 * 8.0
+        + err.map_or(0.0, |_| 8.0 + text_w("CAL -99.9k", theme::mono_bold(10.0)) + 12.0)
+        + 8.0;
+    // (Less the gap and hairline space the bay leaves after itself, so the
+    // row ends at the bar's edge.)
+    let w = (ui.available_width() - 22.0).clamp(min_w.max(head_w), max_w.max(head_w));
     let now = ui.input(|i| i.time);
     if err.is_some_and(|e| e.abs() > 2000.0) {
         app.err_warn_until = now + 5.0;

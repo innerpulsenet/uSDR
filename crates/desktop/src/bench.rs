@@ -444,7 +444,19 @@ fn shots() {
         with_b: bool,
         wfm: bool,
     }
-    for (w, h, with_b, wfm) in [(1600.0, 980.0, false, false), (1900.0, 980.0, false, false), (1400.0, 900.0, false, false), (1600.0, 980.0, true, false), (1600.0, 980.0, false, true)] {
+    // USDR_SHOTS_SIZES overrides the set: `1536x830,1600x980-b,1600x980-wfm`.
+    let sizes: Vec<(f32, f32, bool, bool)> = match std::env::var("USDR_SHOTS_SIZES") {
+        Ok(v) => v
+            .split(',')
+            .filter_map(|s| {
+                let (wh, rest) = s.trim().split_once('-').map_or((s.trim(), ""), |(a, b)| (a, b));
+                let (w, h) = wh.split_once('x')?;
+                Some((w.parse().ok()?, h.parse().ok()?, rest.contains('b'), rest.contains("wfm")))
+            })
+            .collect(),
+        Err(_) => vec![(1600.0, 980.0, false, false), (1900.0, 980.0, false, false), (1400.0, 900.0, false, false), (1600.0, 980.0, true, false), (1600.0, 980.0, false, true)],
+    };
+    for (w, h, with_b, wfm) in sizes {
         let mut harness = Harness::builder().with_size(egui::vec2(w, h)).wgpu().build_ui_state(
             |ui, s: &mut S| {
                 let ctx = ui.ctx().clone();
