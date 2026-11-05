@@ -510,7 +510,14 @@ async fn main() -> Result<()> {
     });
     axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>())
         .with_graceful_shutdown(async move {
-            let _ = tokio::signal::ctrl_c().await;
+            // systemd stops the unit with SIGTERM; Ctrl-C is SIGINT. Either
+            // way the server shuts down cleanly, so the debounced settings
+            // write below still lands (a deploy used to lose the last tune).
+            let mut term = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()).expect("SIGTERM handler");
+            tokio::select! {
+                _ = tokio::signal::ctrl_c() => {}
+                _ = term.recv() => {}
+            }
             println!("\nshutting down");
             shutdown_state.shutdown.notify_waiters();
         })

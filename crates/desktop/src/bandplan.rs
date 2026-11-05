@@ -98,6 +98,52 @@ pub const BANDS: &[Band] = &[
     b(1240.0, 1300.0, "23 cm", Kind::Amateur),
 ];
 
+/// Single frequencies known by what is on them, as (Hz, ± Hz, name).
+const SPOTS: &[(f64, f64, &str)] = &[
+    (2.5e6, 1_500.0, "WWV time signal"),
+    (3.330e6, 1_500.0, "CHU time signal"),
+    (5.0e6, 1_500.0, "WWV time signal"),
+    (7.850e6, 1_500.0, "CHU time signal"),
+    (10.0e6, 1_500.0, "WWV time signal"),
+    (14.670e6, 1_500.0, "CHU time signal"),
+    (15.0e6, 1_500.0, "WWV time signal"),
+    (20.0e6, 1_500.0, "WWV time signal"),
+    (25.0e6, 1_500.0, "WWV time signal"),
+    (121.5e6, 4_000.0, "Aviation emergency, 121.5"),
+    (146.52e6, 4_000.0, "2 m national simplex"),
+    (156.8e6, 6_000.0, "Marine channel 16, distress and calling"),
+    (156.45e6, 6_000.0, "Marine channel 9, calling"),
+    (162.400e6, 6_000.0, "NOAA Weather Radio"),
+    (162.425e6, 6_000.0, "NOAA Weather Radio"),
+    (162.450e6, 6_000.0, "NOAA Weather Radio"),
+    (162.475e6, 6_000.0, "NOAA Weather Radio"),
+    (162.500e6, 6_000.0, "NOAA Weather Radio"),
+    (162.525e6, 6_000.0, "NOAA Weather Radio"),
+    (162.550e6, 6_000.0, "NOAA Weather Radio"),
+];
+
+/// What a frequency is for, in a few words, from the spots and then the
+/// allocations: what the receiver says when no decoder has named the
+/// signal. `present` is whether a signal stands clear of the noise there.
+/// The words say what the frequency is allocated to, never what was
+/// decoded, so they are worded as a station or a band, not a protocol.
+pub fn describe(hz: f64, mode: usdr_proto::Mode, present: bool) -> String {
+    use usdr_proto::Mode;
+    if let Some((_, _, name)) = SPOTS.iter().find(|(f, w, _)| (hz - f).abs() <= *w) {
+        return if present { (*name).to_string() } else { format!("{name} · quiet") };
+    }
+    let band = BANDS.iter().find(|b| hz >= b.lo_hz && hz < b.hi_hz);
+    let what = match band {
+        Some(b) if b.name == "FM broadcast" && mode == Mode::Wfm => "FM broadcast station".to_string(),
+        Some(b) if b.name == "AM broadcast" => "AM broadcast station".to_string(),
+        Some(b) if b.name.ends_with(" broadcast") && b.name.contains(" m ") => format!("Shortwave broadcast, {}", b.name.trim_end_matches(" broadcast")),
+        Some(b) if b.kind == Kind::Amateur => format!("{} amateur band", b.name),
+        Some(b) => b.name.to_string(),
+        None => return if present { "Signal".into() } else { "Noise".into() },
+    };
+    if present { what } else { format!("{what} · quiet") }
+}
+
 /// The allocations that overlap `lo_hz..hi_hz`.
 pub fn within(lo_hz: f64, hi_hz: f64) -> impl Iterator<Item = &'static Band> {
     BANDS.iter().filter(move |b| b.hi_hz > lo_hz && b.lo_hz < hi_hz)
@@ -115,5 +161,20 @@ mod tests {
         assert!(BANDS.iter().all(|b| b.hi_hz > b.lo_hz));
         let fm: Vec<&str> = within(100e6, 101e6).map(|b| b.name).collect();
         assert_eq!(fm, vec!["FM broadcast"]);
+    }
+
+    #[test]
+    fn frequencies_are_described() {
+        use usdr_proto::Mode;
+        assert_eq!(describe(100.5e6, Mode::Wfm, true), "FM broadcast station");
+        assert_eq!(describe(100.5e6, Mode::Nfm, false), "FM broadcast · quiet");
+        assert_eq!(describe(15.31e6, Mode::Am, true), "Shortwave broadcast, 19 m");
+        assert_eq!(describe(1.09e6, Mode::Am, true), "AM broadcast station");
+        assert_eq!(describe(10.0e6, Mode::Am, true), "WWV time signal");
+        assert_eq!(describe(162.55e6, Mode::Nfm, true), "NOAA Weather Radio");
+        assert_eq!(describe(121.5e6, Mode::Am, false), "Aviation emergency, 121.5 · quiet");
+        assert_eq!(describe(127.85e6, Mode::Am, true), "Airband");
+        assert_eq!(describe(14.2e6, Mode::Usb, true), "20 m amateur band");
+        assert_eq!(describe(46.0e6, Mode::Nfm, false), "Noise");
     }
 }

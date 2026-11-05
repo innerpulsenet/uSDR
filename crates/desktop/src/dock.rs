@@ -1187,7 +1187,7 @@ fn hf_activity(app: &mut App, ui: &mut Ui, rows: &[HfRow]) {
     if let Some(i) = tip {
         let d = &app.decodes[i];
         let text = format!("{}  {}", d.ev.summary, d.ev.fields.get("snr").map(|s| format!("{s} dB")).unwrap_or_default());
-        egui::Tooltip::always_open(ui.ctx().clone(), ui.layer_id(), egui::Id::new("hf-tile"), egui::PopupAnchor::Pointer).show(|ui| ui.label(mono(text, theme::text())));
+        egui::Tooltip::always_open(ui.ctx().clone(), ui.layer_id(), egui::Id::new("hf-tile"), egui::PopupAnchor::Pointer).show(|ui| ui.add(egui::Label::new(mono(text, theme::text())).extend()));
         if clicked {
             app.selected_decode = Some(i);
         }

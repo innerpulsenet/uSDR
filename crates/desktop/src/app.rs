@@ -1559,6 +1559,73 @@ impl App {
         crate::anim::more(ctx);
     }
 
+    /// The receiver flag's line: what the HF data decoder hears; else what
+    /// the classifier has named, live or just held; else what the frequency
+    /// is allocated to, and whether a signal stands clear of the noise
+    /// there. Never the classifier's "Idle / Noise", which it also says in
+    /// every mode it does not run in.
+    pub fn flag_line(&self) -> String {
+        if let Some(t) = self.hf_flag_text() {
+            return t;
+        }
+        let (c, _) = self.shown_class();
+        if let Some(c) = c.filter(|c| c.active && !matches!(c.protocol.as_str(), "Idle / Noise" | "Noise" | "FLEX Search" | "") && !c.protocol.starts_with("Unclassified")) {
+            return c.protocol;
+        }
+        let present = self.meter.snr.is_some_and(|s| s >= 10.0);
+        crate::bandplan::describe(self.inspect_hz(), self.status.mode, present)
+    }
+
+    /// What the HF data decoder hears, for the receiver's flag: one line in
+    /// place of the classifier's, which has nothing to say about sideband.
+    /// FT8 and FT4 count the stations in the newest slot, PSK31 the signals
+    /// it is copying. Short, so the SNR after it stays on the card.
+    fn hf_flag_text(&self) -> Option<String> {
+        let mode = self.status.mode;
+        if !mode.is_hf_data() {
+            return None;
+        }
+        let r = self.status.digital.clone().unwrap_or_default();
+        let plural = |n: usize, one: &str, many: &str| format!("{n} {}", if n == 1 { one } else { many });
+        Some(match mode {
+            Mode::Ft8 | Mode::Ft4 => {
+                // The decodes arrive newest first and a slot's together, so
+                // the newest slot is the run at the front of the log.
+                let slot_of = |d: &DecodeRow| d.ev.fields.get("slotMs").and_then(|v| v.parse::<u64>().ok());
+                let mut rows = self.decodes.iter().filter(|d| d.ev.protocol == mode.label());
+                let Some(newest) = rows.next() else { return Some(format!("{} · listening", mode.label())) };
+                let slot = slot_of(newest);
+                let now_ms = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0);
+                let period_ms = if mode == Mode::Ft8 { 15_000 } else { 7_500 };
+                // Two slots without a decode, and the band has gone quiet.
+                if slot.is_none_or(|s| now_ms.saturating_sub(s) > 3 * period_ms) {
+                    return Some(format!("{} · quiet", mode.label()));
+                }
+                let mut calls = std::collections::HashSet::new();
+                for d in std::iter::once(newest).chain(rows).take_while(|d| slot_of(d) == slot) {
+                    calls.insert(d.ev.fields.get("de").cloned().unwrap_or_else(|| d.ev.summary.clone()));
+                }
+                format!("{} · {}", mode.label(), plural(calls.len(), "station", "stations"))
+            }
+            Mode::Psk31 => {
+                let n = r.channels.iter().filter(|c| c.active).count();
+                if n == 0 { "PSK31 · listening".into() } else { format!("PSK31 · copying {}", plural(n, "signal", "signals")) }
+            }
+            Mode::Rtty | Mode::Navtex => match (r.locked, r.center_hz) {
+                (true, Some(hz)) if r.in_message => format!("{} · message at {hz:.0} Hz", mode.label()),
+                (true, Some(hz)) => format!("{} · copying at {hz:.0} Hz", mode.label()),
+                _ => format!("{} · listening", mode.label()),
+            },
+            Mode::Wefax => match r.fax_state.as_deref() {
+                Some("receiving") => format!("WEFAX · row {}", r.fax_lines),
+                Some("phasing") => "WEFAX · phasing".into(),
+                Some("starting") => "WEFAX · start tone".into(),
+                _ => "WEFAX · waiting".into(),
+            },
+            _ => return None,
+        })
+    }
+
     fn panafall(&mut self, ui: &mut Ui) {
         let mut acts = Vec::new();
         let rec = self.player.reading().recording.is_some();
@@ -1571,7 +1638,7 @@ impl App {
             snr_db: self.meter.snr,
             // A broadcast station's own name, once RDS has confirmed it; for
             // one that scrolls words through its PS, the title it tags.
-            protocol: self.shown_class().0.filter(|c| c.active).map(|c| c.protocol),
+            protocol: Some(self.flag_line()),
             rds: self.rds().map(|r| crate::spectrum::FlagRds {
                 station: crate::bar::rds_station(r),
                 kind: r.pty_name.clone().filter(|_| r.pty != Some(0)),
@@ -2491,6 +2558,26 @@ mod tests {
                 assert_eq!(h.get_by_label("Scan").rect(), before, "after {} decodes", n + 1);
             }
         }
+    }
+
+    #[test]
+    fn the_flag_counts_the_stations_in_the_newest_slot() {
+        let mut h = harness();
+        h.state_mut().app.status.mode = Mode::Ft8;
+        assert_eq!(h.state().app.hf_flag_text().as_deref(), Some("FT8 · listening"));
+        let now = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap().as_millis() as u64;
+        let (old, new) = ((now / 15_000 - 1) * 15_000, (now / 15_000) * 15_000);
+        // An older slot of three, then the newest: two stations, one heard twice.
+        for (slot, de) in [(old, "W1AW"), (old, "K1ABC"), (old, "N0XYZ"), (new, "K1ABC"), (new, "W9XYZ"), (new, "K1ABC")] {
+            let fields = [("slotMs", slot.to_string()), ("de", de.to_string()), ("df", "1000".into())].into_iter().map(|(k, v)| (k.to_string(), v)).collect();
+            let ev = proto::DecodeEvent { protocol: "FT8".into(), kind: "standard".into(), summary: format!("CQ {de}"), valid: true, fields };
+            h.state().wire.events.send(NetEvent::Decode { inspect_hz: 14.074e6, event: ev, at: SystemTime::now() }).unwrap();
+        }
+        h.run_steps(2);
+        assert_eq!(h.state().app.hf_flag_text().as_deref(), Some("FT8 · 2 stations"));
+        // Other modes keep the classifier's line.
+        h.state_mut().app.status.mode = Mode::Nfm;
+        assert_eq!(h.state().app.hf_flag_text(), None);
     }
 
     #[test]

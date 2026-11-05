@@ -5311,8 +5311,12 @@ fn run_sdr(
                             ssb.process_with_linear(&inspect_iq, audio, linear);
                             slots.push(linear, now_ms());
                             for (slot_ms, decodes) in slots.take() {
+                                // No peak labels: the history tags every peak
+                                // near the noted frequency, and the dial is
+                                // the only one FT8 has, so each signal in the
+                                // 3 kHz above it was tagged and the tags
+                                // came and went with the peaks.
                                 for d in &decodes {
-                                    decode_history.note(inspect_hz, d.protocol.label());
                                     let _ = events.send(SdrEvent::Decode { inspect_hz, event: ft8_event(slot_ms, d) });
                                 }
                             }
