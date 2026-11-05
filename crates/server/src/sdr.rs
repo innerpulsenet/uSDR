@@ -1219,8 +1219,11 @@ pub enum SdrEvent {
     /// count. Never serialized: the socket path ships it as a binary message
     /// before the JSON arm can see it.
     FftBytes {
+        /// Shared, not copied: the broadcast hands every subscriber a clone
+        /// of the event, and the socket a clone of the frame, which for a
+        /// `Vec` was two copies of the whole frame per client per frame.
         #[serde(skip)]
-        frame: Vec<u8>,
+        frame: axum::body::Bytes,
     },
 }
 
@@ -1402,9 +1405,9 @@ struct CaptureBuffer {
     /// Inspected complex baseband at `fs_hz`, interleaved as I/Q when exported.
     iq: VecDeque<(i16, i16)>,
     /// Raw device span at `span_rate`, interleaved as I/Q. Twelve seconds
-    /// rolling — at 2.4 MS/s that is over 100 MiB, plus a clamp-and-convert
-    /// pass over every sample, so the ring only runs while something wants
-    /// it: the `USDR_PAGE_DUMP` feature, or a window after a span capture
+    /// rolling, capped at `SPAN_MAX_SAMPLES` — at 2 MS/s that is 96 MiB,
+    /// plus a clamp-and-convert pass over every sample, so the ring only
+    /// runs while something wants it: the `USDR_PAGE_DUMP` feature, or a window after a span capture
     /// was last downloaded (nothing in the UI asks for it — it is a curl
     /// diagnostic). See `span_armed`.
     span: VecDeque<(i16, i16)>,
@@ -1420,6 +1423,13 @@ impl CaptureBuffer {
         self.discriminator.clear();
         self.iq.clear();
     }
+
+    /// Most raw span samples the ring holds: 96 MiB as i16 pairs, twelve
+    /// seconds up to 2 MS/s and three at 8 MS/s. A download holds the ring,
+    /// an interleaved copy and the WAV at once, so twelve seconds at 8 MS/s
+    /// (384 MiB each) was three times what the daemon's 512 MiB memory limit
+    /// allows, and the download killed it.
+    const SPAN_MAX_SAMPLES: usize = 24 << 20;
 
     /// How long a span download keeps the raw ring filling after the request.
     /// Generous enough to re-download the full 12 s once it has rolled in.
@@ -1465,7 +1475,7 @@ impl CaptureBuffer {
                 (x.im.clamp(-1.0, 1.0) * 32_000.0) as i16,
             )
         }));
-        let max = rate.max(1.0) as usize * 12;
+        let max = (rate.max(1.0) as usize * 12).min(Self::SPAN_MAX_SAMPLES);
         while self.span.len() > max {
             self.span.drain(..(self.span.len() - max));
         }
@@ -1994,6 +2004,32 @@ fn lo_offset_for(rate_hz: f64, on: bool, mode: SdrMode) -> f64 {
         zero_if_offset(rate_hz, mode)
     } else {
         rate_hz * LO_OFFSET_FRACTION
+    }
+}
+
+/// What a mode change does to the LO.
+#[derive(Debug, PartialEq, Eq)]
+enum LoMove {
+    /// The offset comes on or goes off: only a reopen re-negotiates the
+    /// analog IF width it needs.
+    Reopen,
+    /// Same plan, another distance. The zero-IF offset follows the mode's
+    /// width (WFM parks the LO 150 kHz out, the narrow modes 100 kHz), and
+    /// the channel is mixed for the new one, so the tuner has to follow.
+    /// Without it, tuning in NFM and switching to WFM left the station 50 kHz
+    /// off in the channel: +0.6 of full scale of DC in the audio, its peaks
+    /// clipped, and the spectrum's axis 50 kHz out.
+    Retune,
+    Stay,
+}
+
+fn lo_move(rate_hz: f64, on: bool, from: SdrMode, to: SdrMode) -> LoMove {
+    if lo_active(rate_hz, on, from) != lo_active(rate_hz, on, to) {
+        LoMove::Reopen
+    } else if lo_offset_for(rate_hz, on, from) != lo_offset_for(rate_hz, on, to) {
+        LoMove::Retune
+    } else {
+        LoMove::Stay
     }
 }
 
@@ -4091,11 +4127,14 @@ fn run_sdr(
                         // Whether the LO offset applies depends on the mode's
                         // channel width, so switching to or from a wide mode
                         // moves the LO and changes the span on show.
-                        let was = lo_active(current_rate, lo_offset, current_mode);
-                        current_mode = m;
-                        if lo_active(current_rate, lo_offset, current_mode) != was {
-                            force_reopen_now = true;
+                        match lo_move(current_rate, lo_offset, current_mode, m) {
+                            LoMove::Reopen => force_reopen_now = true,
+                            // The chain is about to be mixed for the new
+                            // distance, so the tuner has to move there too.
+                            LoMove::Retune => pending_tune = Some(current_freq),
+                            LoMove::Stay => {}
                         }
+                        current_mode = m;
                         // Coalesced: rebuilt once after the drain, below.
                         inspect_dirty = true;
                         let mut s = status.lock().unwrap();
@@ -6993,7 +7032,7 @@ fn run_sdr(
             // client. A frame that will not encode falls back to the JSON
             // path rather than going dark.
             let _ = events.send(match encode_fft_frame(&ev) {
-                Some(frame) => SdrEvent::FftBytes { frame },
+                Some(frame) => SdrEvent::FftBytes { frame: frame.into() },
                 None => ev,
             });
 
@@ -7398,7 +7437,16 @@ mod tests {
         }
         assert_eq!(display_rate_for(5e6, true, SdrMode::Nfm), 4.8e6);
         assert_eq!(display_rate_for(5e6, true, SdrMode::Wfm), 4.7e6);
+        // NFM parks the LO 100 kHz out and WFM 150 kHz: a switch between
+        // them moves the tuner, or the channel is mixed 50 kHz off.
+        assert_eq!(lo_move(8e6, true, SdrMode::Nfm, SdrMode::Wfm), LoMove::Retune);
+        assert_eq!(lo_move(8e6, true, SdrMode::Wfm, SdrMode::Am), LoMove::Retune);
+        assert_eq!(lo_move(8e6, true, SdrMode::Nfm, SdrMode::Am), LoMove::Stay);
+        assert_eq!(lo_move(8e6, true, SdrMode::Wfm, SdrMode::Scan), LoMove::Reopen);
+        assert_eq!(lo_move(8e6, false, SdrMode::Nfm, SdrMode::Wfm), LoMove::Stay);
         LO_PLAN_ZERO_IF.store(false, Ordering::Relaxed);
+        // The RTL plan's offset is a fraction of the span, whatever the mode.
+        assert_eq!(lo_move(2.4e6, true, SdrMode::Nfm, SdrMode::Usb), LoMove::Stay);
         // The RTL plan is unchanged: fs/8 offset, 20% of the span shown.
         assert_eq!(lo_offset_for(2.4e6, true, SdrMode::Nfm), 300e3);
         assert!((display_rate_for(2.4e6, true, SdrMode::Nfm) - 480e3).abs() < 1.0);

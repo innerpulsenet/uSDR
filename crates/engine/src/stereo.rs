@@ -15,6 +15,10 @@
 //! a PLL on the pilot, and low-passing what lands in the audio band. Then
 //! L = M + S and R = M − S.
 //!
+//! The output is AC-coupled (the discriminator's DC is the carrier offset)
+//! and full deviation plays at half scale, [`WFM_AUDIO_SCALE`], so the
+//! peaks a hot station sends past 75 kHz are heard rather than clamped.
+//!
 //! De-emphasis and the audio low-pass are linear, so running them on M and S
 //! and matrixing afterward is the same filter as running them on L and R:
 //! each channel is de-emphasized after the matrix, never the composite
@@ -45,6 +49,20 @@ use crate::pilot::{PILOT_HZ, PilotPll};
 use crate::rds::{Bq, butter4};
 use scannerd_dsp::OnePole;
 use serde::Serialize;
+
+/// Full deviation (75 kHz) plays at this fraction of full scale. Program
+/// peaks routinely pass 75 kHz: stations run hot, the 15 kHz low-pass rings
+/// on a transient, and the pilot notch adds its own overshoot. At unity they
+/// met the clamp, and 0.5% of a loud station's samples were flattened there
+/// (most 10 ms windows of program touched it). Half scale leaves 6 dB for
+/// them and still plays processed broadcast audio at about -16 dBFS RMS.
+pub const WFM_AUDIO_SCALE: f32 = 0.5;
+
+/// The audio's DC tracker, as a time constant: a first-order high-pass near
+/// 3 Hz. An FM discriminator's DC is the carrier offset, not program, and a
+/// few kilohertz of crystal or station error is a few percent of full scale
+/// that would otherwise come out of the headroom.
+pub const WFM_DC_TAU_S: f32 = 0.05;
 
 /// The broadcast audio band: a 12th-order Butterworth at 15 kHz and a notch
 /// on the 19 kHz stereo pilot, run at the discriminator's rate.
@@ -97,9 +115,11 @@ pub struct WfmAudio {
     fs: f64,
     deviation_hz: f32,
     tau_s: f32,
-    /// The mono sum: de-emphasis, then the audio band.
+    /// The mono sum: de-emphasis, then the audio band, then the carrier
+    /// offset tracked out of it.
     deemph: OnePole,
     lp: Cascade,
+    dc: OnePole,
     /// The difference, after the subcarrier is taken off.
     deemph_s: OnePole,
     lp_s: Cascade,
@@ -144,6 +164,7 @@ impl WfmAudio {
             tau_s,
             deemph: OnePole::new(tau_s * fs as f32),
             lp: wfm_audio_filter(fs),
+            dc: OnePole::new(WFM_DC_TAU_S * fs as f32),
             deemph_s: OnePole::new(tau_s * fs as f32),
             lp_s: wfm_audio_filter(fs),
             deemph_q: OnePole::new(tau_s * fs as f32),
@@ -229,6 +250,7 @@ impl WfmAudio {
             self.q_var += (d * d - self.q_var) * self.smooth_k;
 
             let m = self.lp.process(self.deemph.process(x));
+            let m = m - self.dc.process(m);
             // The PLL holds the pilot at cos θ, so the subcarrier, which
             // crosses zero rising with the pilot (sin ωt = cos(θ), sin 2ωt),
             // is −sin 2θ = −2 sin θ cos θ; times two to bring S back at its
@@ -245,11 +267,11 @@ impl WfmAudio {
             self.phase += 1;
             if self.phase >= self.decim {
                 self.phase = 0;
-                mono.push(m.clamp(-1.0, 1.0));
+                mono.push((m * WFM_AUDIO_SCALE).clamp(-1.0, 1.0));
                 if active {
                     let b = self.blend as f32 * sd;
-                    stereo.push((m + b).clamp(-1.0, 1.0));
-                    stereo.push((m - b).clamp(-1.0, 1.0));
+                    stereo.push(((m + b) * WFM_AUDIO_SCALE).clamp(-1.0, 1.0));
+                    stereo.push(((m - b) * WFM_AUDIO_SCALE).clamp(-1.0, 1.0));
                 }
             }
             self.until_blend -= 1;
@@ -460,27 +482,48 @@ mod tests {
     }
 
     #[test]
-    fn no_pilot_stays_mono_and_unchanged() {
+    fn no_pilot_stays_mono() {
         let x = mpx(1.5, false, |t| 0.5 * (TAU * 1_000.0 * t).sin(), |_| 0.0);
         let disc = on_air(&x, sigma_for(50.0), 3);
         let mut dec = WfmAudio::new(FS, DECIM, DEV, TAU_S);
         let (mono, stereo, st) = run(&mut dec, &disc);
         assert!(!st.pilot && st.blend == 0.0 && st.snr_db.is_none(), "{st:?}");
         assert!(stereo.is_empty());
-        // The mono receiver's chain as it always was, sample for sample.
+        // The mono receiver's chain, sample for sample.
         let mut deemph = OnePole::new(TAU_S * FS as f32);
         let mut lp = wfm_audio_filter(FS);
+        let mut dc = OnePole::new(WFM_DC_TAU_S * FS as f32);
         let mut want = Vec::new();
         let mut phase = 0;
         for &hz in &disc {
             let v = lp.process(deemph.process(hz / DEV));
+            let v = v - dc.process(v);
             phase += 1;
             if phase >= DECIM {
-                want.push(v.clamp(-1.0, 1.0));
+                want.push((v * WFM_AUDIO_SCALE).clamp(-1.0, 1.0));
                 phase = 0;
             }
         }
         assert_eq!(mono, want);
+    }
+
+    #[test]
+    fn a_hot_station_off_frequency_keeps_its_headroom() {
+        // Mono bass at 110% of full deviation, on a carrier 6 kHz off. At
+        // unity scale this sat on the clamp; now it has room, and the
+        // offset is tracked out rather than spent from the headroom.
+        let off = 6_000.0 / DEV as f64;
+        let n = (1.5 * FS) as usize;
+        let x: Vec<f64> = (0..n).map(|k| off + 1.1 * (TAU * 200.0 * k as f64 / FS).sin()).collect();
+        let mut dec = WfmAudio::new(FS, DECIM, DEV, TAU_S);
+        let (mono, _, _) = run(&mut dec, &on_air(&x, sigma_for(50.0), 8));
+        let tail = &mono[mono.len() / 2..];
+        let peak = tail.iter().fold(0.0f32, |a, &v| a.max(v.abs()));
+        let mean = tail.iter().map(|&v| v as f64).sum::<f64>() / tail.len() as f64;
+        let amp = tone(tail, 200.0);
+        assert!(peak < 0.75, "peak {peak}");
+        assert!(mean.abs() < 0.005, "DC {mean}");
+        assert!((amp / (1.1 * WFM_AUDIO_SCALE as f64) - 1.0).abs() < 0.03, "200 Hz at {amp}");
     }
 
     #[test]
@@ -502,7 +545,9 @@ mod tests {
         let (_, stereo, st) = run(&mut dec, &on_air(&x, sigma_for(50.0), 5));
         let l = channel(&stereo, 0, 1.5);
         let p = l.iter().map(|&v| (v as f64).powi(2)).sum::<f64>() / l.len() as f64;
-        let measured = 10.0 * (0.5 / p).log10();
+        // Against a full-deviation sine, as played: at the audio scale.
+        let full = 0.5 * (WFM_AUDIO_SCALE as f64).powi(2);
+        let measured = 10.0 * (full / p).log10();
         let est = st.snr_db.unwrap() as f64;
         println!("S/N measured {measured:.1} dB, estimated {est:.1} dB, {st:?}");
         assert!((measured - est).abs() < 2.0, "measured {measured:.1}, estimated {est:.1}");

@@ -13,6 +13,7 @@ use scannerd_engine::am::AmDemod;
 use scannerd_engine::biquad::Cascade;
 use scannerd_engine::nbfm::NbfmDemod;
 use scannerd_engine::ssb::{Sideband, SsbDemod};
+use scannerd_engine::stereo::{WFM_AUDIO_SCALE, WFM_DC_TAU_S};
 use serde::Serialize;
 
 /// Narrowband FM deviation the audio is scaled to: 5 kHz peak plays at full
@@ -43,7 +44,7 @@ enum Demod {
     Fm { fm: NbfmDemod, disc: Vec<f32>, dc: OnePole },
     Am { am: AmDemod },
     Ssb { ssb: SsbDemod },
-    Wfm { fm: NbfmDemod, disc: Vec<f32>, deemph: OnePole, lp: Cascade, decim: usize, phase: usize },
+    Wfm { fm: NbfmDemod, disc: Vec<f32>, deemph: OnePole, lp: Cascade, dc: OnePole, decim: usize, phase: usize },
 }
 
 pub struct SubRx {
@@ -103,6 +104,8 @@ impl SubRx {
                 // average alone folds the pilot and the stereo subcarrier
                 // back into the audio as whistle and hiss.
                 lp: wfm_audio_filter(fs),
+                // Receiver A's mono, exactly: AC-coupled, at its scale.
+                dc: OnePole::new(WFM_DC_TAU_S * fs as f32),
                 decim: (fs / AUDIO_RATE).round().max(1.0) as usize,
                 phase: 0,
             },
@@ -159,13 +162,14 @@ impl SubRx {
                 }
                 fs
             }
-            Demod::Wfm { fm, disc, deemph, lp, decim, phase } => {
+            Demod::Wfm { fm, disc, deemph, lp, dc, decim, phase } => {
                 fm.discriminator_hz(&self.iq, disc);
                 for &hz in disc.iter() {
                     let v = lp.process(deemph.process(hz / WFM_DEVIATION_HZ));
+                    let v = v - dc.process(v);
                     *phase += 1;
                     if *phase >= *decim {
-                        self.audio.push(v.clamp(-1.0, 1.0));
+                        self.audio.push((v * WFM_AUDIO_SCALE).clamp(-1.0, 1.0));
                         *phase = 0;
                     }
                 }
