@@ -297,7 +297,7 @@ fn ws_loop(
                                 Ok(proto::Binary::Fft(f)) => {
                                     stats.fft_frames.fetch_add(1, Ordering::Relaxed);
                                     let _ = ev.send(NetEvent::Fft(f));
-                                    crate::anim::now(&ctx);
+                                    crate::anim::frame(&ctx);
                                 }
                                 Ok(proto::Binary::Audio(a)) => {
                                     stats.audio_frames.fetch_add(1, Ordering::Relaxed);

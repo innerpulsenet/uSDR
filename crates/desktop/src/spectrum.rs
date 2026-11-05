@@ -232,6 +232,11 @@ impl Default for View {
     }
 }
 
+/// Auto range leaves its targets alone until the measured ones have moved
+/// this far.
+const AUTO_RANGE_DEAD_DB: f32 = 1.0;
+/// How long the ceiling has to have been too high before it comes down.
+const AUTO_RANGE_SETTLE_S: f64 = 2.0;
 const WF_ROWS: usize = 768;
 /// The most ridges drawn, however deep they reach.
 const RIDGES_MAX: usize = 48;
@@ -294,7 +299,9 @@ const WF_Q_FLOOR_DB: f32 = -200.0;
 const WF_Q_PER_DB: f32 = 100.0;
 
 fn wf_quantize(db: f32) -> u16 {
-    ((db - WF_Q_FLOOR_DB) * WF_Q_PER_DB).round().clamp(0.0, 65535.0) as u16
+    // Half up by hand (`round` is a library call here, once per bin per
+    // row); below the floor it clamps to zero either way.
+    ((db - WF_Q_FLOOR_DB) * WF_Q_PER_DB + 0.5).clamp(0.0, 65535.0) as u16
 }
 
 /// The bins under each of `out_cols` texture columns, as the trace is
@@ -354,6 +361,12 @@ pub struct Panafall {
     max_db: f32,
     target_min: f32,
     target_max: f32,
+    /// Auto range's ceiling: the highest asked for since the given time,
+    /// and whether the last frame was ranged automatically.
+    auto_ceiling: (f32, f64),
+    auto_was_on: bool,
+    /// The floor auto range stands on: the 15th percentile, steadied.
+    auto_floor: f32,
     /// Noise floor estimate (15th percentile), smoothed.
     pub floor_est: f32,
     wf_shift_db: f32,
@@ -461,6 +474,9 @@ impl Default for Panafall {
             max_db: -20.0,
             target_min: -110.0,
             target_max: -20.0,
+            auto_ceiling: (-20.0, 0.0),
+            auto_was_on: false,
+            auto_floor: -100.0,
             floor_est: -100.0,
             wf_shift_db: 0.0,
             wf_cols: 0,
@@ -636,12 +652,47 @@ impl Panafall {
         let strongest = self.smooth.iter().copied().filter(|v| v.is_finite()).fold(f32::MIN, f32::max);
         self.floor_est += (p15 - self.floor_est) * 0.08;
         if view.auto_range {
-            self.target_min = (p15 - 6.0).clamp(-140.0, -30.0);
-            self.target_max = (self.target_min + 30.0).max((p98 + 14.0).max(p15 + 45.0).max(strongest + 5.0).min(5.0));
+            // A dead band of a decibel: the percentiles wander a few tenths
+            // frame to frame, and a scale that chased them was never still,
+            // its lines and the trace shimmering by a fraction of a pixel
+            // and the window repainting at the motion rate to show it. The
+            // ceiling rises at once, so the band never costs headroom, and
+            // comes down only once it is a decibel too high.
+            // The 15th percentile of 64 bins swings a decibel or more
+            // frame to frame on a busy band: the floor the scale stands on
+            // is its mean over about half a second, or the new reading at
+            // once when it has plainly moved (a retune, another band).
+            if !self.auto_was_on || (p15 - self.auto_floor).abs() > 4.0 {
+                self.auto_floor = p15;
+            } else {
+                self.auto_floor += (p15 - self.auto_floor) * 0.08;
+            }
+            let p15 = self.auto_floor;
+            let min = (p15 - 6.0).clamp(-140.0, -30.0);
+            let max = (min + 30.0).max((p98 + 14.0).max(p15 + 45.0).max(strongest + 5.0).min(5.0));
+            if (min - self.target_min).abs() >= AUTO_RANGE_DEAD_DB || !self.auto_was_on {
+                self.target_min = min;
+            }
+            // A broadcast station's crest swings several decibels with its
+            // program, so the ceiling comes down to the highest it was
+            // asked for over the last two seconds, not to each frame's.
+            if max > self.target_max || !self.auto_was_on {
+                self.target_max = max;
+                self.auto_ceiling = (max, now);
+            } else {
+                self.auto_ceiling.0 = self.auto_ceiling.0.max(max);
+                if now - self.auto_ceiling.1 >= AUTO_RANGE_SETTLE_S {
+                    if self.target_max - self.auto_ceiling.0 >= AUTO_RANGE_DEAD_DB {
+                        self.target_max = self.auto_ceiling.0;
+                    }
+                    self.auto_ceiling = (max, now);
+                }
+            }
         } else {
             self.target_min = view.floor_db;
             self.target_max = view.ceiling_db.max(view.floor_db + 10.0);
         }
+        self.auto_was_on = view.auto_range;
 
         // Waterfall row: the frame's own measurement, before the bin
         // smoothing and AVG the trace gets (an older server sends only the
@@ -855,7 +906,6 @@ impl Panafall {
         drawn
     }
 
-    /// Black and white points of the waterfall, dB.
     /// The ridges: rows of the waterfall's history from `view.ridge_secs`
     /// back to just behind the live trace, drawn far to near so each one's
     /// fill hides what stands behind it. Heights are on the panadapter's
@@ -874,12 +924,10 @@ impl Panafall {
             return;
         }
         let count = rows_back.min(RIDGES_MAX);
-        let pts = ((pan.width() / 3.0).round() as usize).clamp(32, cols);
         let range = (self.max_db - self.min_db).max(1.0);
         let level = |db: f32| if self.wf_lut.is_empty() { glow } else { self.wf_lut[wf_quantize(db) as usize] };
         // The color at each height up the scale, in 64 steps.
-        let tint: std::sync::Arc<Vec<Color32>> =
-            std::sync::Arc::new((0..64).map(|k| level((self.min_db + range * k as f32 / 63.0).max(dim_db))).collect());
+        let tint: Vec<Color32> = (0..64).map(|k| level((self.min_db + range * k as f32 / 63.0).max(dim_db))).collect();
         let bg_at = |y: f32| theme::lerp(bg.0, bg.1, ((y - pan.top()) / pan.height()).clamp(0.0, 1.0));
         // The floor: a faint line at each second back.
         let mut sec = 1.0f32;
@@ -888,6 +936,17 @@ impl Panafall {
             painter.line_segment([pos2(g.x0, g.base), pos2(g.x0 + g.w, g.base)], Stroke::new(1.0, alpha(theme::line_2(), 0.6)));
             sec += 1.0;
         }
+        // Every ridge goes into one mesh, fill then line, far to near, with
+        // the lines stroked here rather than handed to the tessellator as
+        // paths: forty-eight paths of a few hundred points each, colored by
+        // a callback per vertex, were three quarters of the frame's
+        // tessellation. The stroke is the tessellator's own thin
+        // anti-aliased line (a core in the color with a feathered edge a
+        // pixel to each side, mitered, a corner sharper than a right angle
+        // cut), so the picture is the same.
+        let feather = 1.0 / painter.ctx().pixels_per_point();
+        let mut mesh = Mesh::default();
+        let mut line: Vec<Pos2> = Vec::new();
         for i in (1..=count).rev() {
             let age = (i * rows_back + count / 2) / count;
             let r = (self.wf_head + age) % WF_ROWS;
@@ -904,7 +963,10 @@ impl Panafall {
             let g = ridge_at(pan, d);
             let hs = pan.height() * g.scale;
             let drag = self.drag_offset_px * g.w / pan.width();
-            let mut line = Vec::with_capacity(pts);
+            // A point every three pixels of the ridge's own width: the far
+            // ones are narrower and take fewer.
+            let pts = ((g.w / 3.0).round() as usize).clamp(32.min(cols), cols);
+            line.clear();
             for p in 0..pts {
                 let a0 = p * cols / pts;
                 let b0 = ((p + 1) * cols / pts).max(a0 + 1);
@@ -917,35 +979,82 @@ impl Panafall {
                 let frac = ((db - self.min_db) / range).clamp(0.0, 1.0);
                 line.push(pos2(g.x0 + (p as f32 + 0.5) / pts as f32 * g.w + drag, g.base - frac * hs));
             }
+            // Both colors depend only on how high up its ridge a point
+            // stands, so each ridge works them out once for the 64 steps
+            // the tint already has, not once for every vertex.
+            let step_of = |y: f32| (((g.base - y) / hs.max(1.0)).clamp(0.0, 1.0) * 63.0 + 0.5) as usize;
             // The fill: the background, so it hides the ridges behind, with
             // a little of the level's color toward the crest.
-            let mut mesh = Mesh::default();
             let foot = alpha(bg_at(g.base), 0.94);
             let warm = 0.2 * (1.0 - 0.7 * d);
-            for (k, p) in line.iter().enumerate() {
-                let lift = ((g.base - p.y) / hs.max(1.0)).clamp(0.0, 1.0);
-                let c = theme::lerp(bg_at(p.y), tint[(lift * 63.0).round() as usize], warm * lift.sqrt());
-                mesh.colored_vertex(*p, alpha(c, 0.94));
-                mesh.colored_vertex(pos2(p.x, g.base), foot);
-                if k > 0 {
-                    let v = mesh.vertices.len() as u32;
-                    mesh.add_triangle(v - 4, v - 3, v - 2);
-                    mesh.add_triangle(v - 3, v - 1, v - 2);
-                }
-            }
-            painter.add(Shape::mesh(mesh));
             // The line, fading with distance, and quieter along the floor
             // than on a signal, so the noise is a texture, not a wall.
             let a = 0.2 + 0.65 * (1.0 - d).powf(1.3);
-            let (tint, base) = (tint.clone(), g.base);
-            let stroke = egui::epaint::PathStroke::new_uv(if d < 0.3 { 1.1 } else { 0.9 }, move |_, pt| {
-                let lift = ((base - pt.y) / hs.max(1.0)).clamp(0.0, 1.0);
-                alpha(tint[(lift * 63.0).round() as usize], a * (0.3 + 0.7 * (lift * 2.5).min(1.0)))
-            });
-            painter.add(Shape::line(line, stroke));
+            let width: f32 = if d < 0.3 { 1.1 } else { 0.9 };
+            let core = a * (width / feather).min(1.0);
+            let reach = feather.max(0.5 * (width + feather));
+            let mut fill_c = [Color32::TRANSPARENT; 64];
+            let mut line_c = [Color32::TRANSPARENT; 64];
+            for k in 0..64 {
+                let lift = k as f32 / 63.0;
+                let c = theme::lerp(bg_at(g.base - lift * hs), tint[k], warm * lift.sqrt());
+                fill_c[k] = alpha(c, 0.94);
+                line_c[k] = alpha(tint[k], core * (0.3 + 0.7 * (lift * 2.5).min(1.0)));
+            }
+            let v0 = mesh.vertices.len() as u32;
+            mesh.reserve_vertices(line.len() * 6);
+            mesh.reserve_triangles(line.len() * 6);
+            for (k, p) in line.iter().enumerate() {
+                mesh.colored_vertex(*p, fill_c[step_of(p.y)]);
+                mesh.colored_vertex(pos2(p.x, g.base), foot);
+                if k > 0 {
+                    let v = v0 + 2 * k as u32;
+                    mesh.add_triangle(v - 2, v - 1, v);
+                    mesh.add_triangle(v - 1, v + 1, v);
+                }
+            }
+            let mut joined = false;
+            let mut put = |mesh: &mut Mesh, p: Pos2, n: egui::Vec2| {
+                let c = line_c[step_of(p.y)];
+                let v = mesh.vertices.len() as u32;
+                mesh.colored_vertex(p + n * reach, Color32::TRANSPARENT);
+                mesh.colored_vertex(p, c);
+                mesh.colored_vertex(p - n * reach, Color32::TRANSPARENT);
+                if joined {
+                    mesh.add_triangle(v - 3, v - 2, v);
+                    mesh.add_triangle(v - 2, v + 1, v);
+                    mesh.add_triangle(v - 2, v - 1, v + 1);
+                    mesh.add_triangle(v - 1, v + 2, v + 1);
+                }
+                joined = true;
+            };
+            let n = line.len();
+            let mut n0 = (line[1] - line[0]).normalized().rot90();
+            put(&mut mesh, line[0], n0);
+            for k in 1..n - 1 {
+                let n1 = (line[k + 1] - line[k]).normalized().rot90();
+                let mid = (n0 + n1) / 2.0;
+                let len_sq = mid.length_sq();
+                if len_sq < 0.5 {
+                    // Sharper than a right angle: the corner is cut, as a
+                    // miter there would run off as a spike.
+                    let center = if len_sq > 1e-6 { mid.normalized() } else { n0.rot90() };
+                    let (c0, c1) = ((n0 + center) / 2.0, (n1 + center) / 2.0);
+                    put(&mut mesh, line[k], c0 / c0.length_sq());
+                    put(&mut mesh, line[k], c1 / c1.length_sq());
+                } else {
+                    put(&mut mesh, line[k], mid / len_sq);
+                }
+                n0 = n1;
+            }
+            put(&mut mesh, line[n - 1], n0);
+        }
+        if !mesh.is_empty() {
+            painter.add(Shape::mesh(mesh));
         }
     }
 
+    /// Black and white points of the waterfall, dB.
     fn wf_levels(&mut self, view: &View) -> (f32, f32) {
         let black = if view.wf_auto_black {
             let want = self.floor_est + view.wf_black;
@@ -1099,8 +1208,14 @@ impl Panafall {
         let k = if reduce_motion { 1.0 } else { 1.0 - (-dt * 6.0).exp() };
         self.min_db += (self.target_min - self.min_db) * k;
         self.max_db += (self.target_max - self.max_db) * k;
-        if (self.min_db - self.target_min).abs() > 0.05 || (self.max_db - self.target_max).abs() > 0.05 {
+        // Motion while the scale is visibly on its way; the last pixel
+        // settles on the frames the spectrum brings.
+        let off_db = (self.min_db - self.target_min).abs().max((self.max_db - self.target_max).abs());
+        let off_px = off_db / (self.max_db - self.min_db).max(1.0) * full.height() * view.split.clamp(0.15, 0.85);
+        if off_px > 1.0 {
             crate::anim::more(&ctx);
+        } else if off_db > 0.02 {
+            crate::anim::drift(&ctx);
         }
 
         // The frequency axis, with the band plan as a named strip above the
@@ -1525,7 +1640,7 @@ impl Panafall {
                     let tint = tint.clone();
                     let stroke = egui::epaint::PathStroke::new_uv(width, move |_, p| {
                         let lift = (1.0 - (p.y - top) / h).clamp(0.0, 1.0);
-                        let c = tint.as_ref().map_or(glow, |t| t[(lift * 63.0).round() as usize]);
+                        let c = tint.as_ref().map_or(glow, |t| t[(lift * 63.0 + 0.5) as usize]);
                         alpha(c, lo + (hi - lo) * lift.powf(1.6))
                     });
                     pan_painter.add(Shape::line(line.clone(), stroke));
@@ -2658,6 +2773,68 @@ mod tests {
         wheel(&mut h, pos2(x_of(r, 146.2e6), r.center().y), 4.0, Modifiers::COMMAND);
         wheel(&mut h, r.center(), -4.0, Modifiers::COMMAND);
         assert_eq!(h.state().acts, vec![Act::Zoom(2.0), Act::Zoom(1.0)]);
+    }
+
+    #[test]
+    fn auto_range_stands_still_while_the_levels_flutter() {
+        // A broadcast band as it arrives: the floor's percentile wandering
+        // a decibel or so frame to frame, the strongest station's crest
+        // swinging several with its program.
+        let mut pan = Panafall::default();
+        let view = View::default();
+        let mut seed = 0x2545_f491u32;
+        let mut rnd = || {
+            seed ^= seed << 13;
+            seed ^= seed >> 17;
+            seed ^= seed << 5;
+            seed as f32 / u32::MAX as f32
+        };
+        let mut frame = |i: usize| {
+            let wander = 1.5 * ((i * 7 % 11) as f32 / 10.0 - 0.5);
+            let mut pwr: Vec<f32> = (0..4096).map(|_| -100.0 + wander + rnd() * 6.0).collect();
+            pwr[2081] = -32.0 - 4.0 * ((i * 5 % 9) as f32 / 8.0);
+            FftFrame { center_hz: 100e6, rate_hz: 8e6, pwr, ..Default::default() }
+        };
+        for i in 0..100 {
+            pan.push(&frame(i), &view, i as f64 * 0.04);
+        }
+        let mut moves = 0;
+        let (mut lo, mut hi) = (pan.target_min, pan.target_max);
+        for i in 100..400 {
+            pan.push(&frame(i), &view, i as f64 * 0.04);
+            if pan.target_min != lo || pan.target_max != hi {
+                moves += 1;
+                (lo, hi) = (pan.target_min, pan.target_max);
+            }
+            // Never at the cost of the station's headroom.
+            assert!(pan.target_max >= -32.0 + 4.0, "ceiling {} at frame {i}", pan.target_max);
+        }
+        // Twelve seconds: a scale that chased each frame moved 300 times.
+        assert!(moves <= 6, "the scale moved {moves} times");
+        // A real change is still followed at once: the band goes quiet.
+        let quiet = FftFrame { center_hz: 100e6, rate_hz: 8e6, pwr: vec![-125.0; 4096], ..Default::default() };
+        pan.push(&quiet, &view, 16.04);
+        assert!(pan.target_min < -128.0, "floor {}", pan.target_min);
+    }
+
+    #[test]
+    fn ridges_draw_a_frame_of_a_few_bins() {
+        // Deep in a narrow span, before the zoom path is ready, the server
+        // sends a crop of a couple of dozen bins: fewer than the fewest
+        // points a ridge used to insist on, which panicked the clamp.
+        let mut h = harness();
+        h.state_mut().view.spectrum = SpecMode::Ridges;
+        let mut f = h.state().frame.clone();
+        f.pwr.truncate(22);
+        f.max_hold.clear();
+        f.wf_peak.clear();
+        f.wf_row.clear();
+        for i in 0..40 {
+            let view = h.state().view.clone();
+            h.state_mut().pan.push(&f, &view, 1.0 + i as f64 * 0.04);
+        }
+        h.state_mut().frame = f;
+        h.run_steps(3);
     }
 
     #[test]

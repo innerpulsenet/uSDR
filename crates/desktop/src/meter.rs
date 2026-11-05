@@ -164,7 +164,8 @@ impl Meter {
             p.rect_filled(r, CornerRadius::ZERO, theme::alpha(c, lamp));
         }
         if fading {
-            crate::anim::more(ui.ctx());
+            // A quarter-second fade: the frames the spectrum brings carry it.
+            crate::anim::drift(ui.ctx());
         }
         if let Some(fl) = self.floor {
             let fx = at(fl);
@@ -202,8 +203,15 @@ impl Meter {
             last_right = x0 + g.size().x;
             p.galley(pos2(x0, rect.bottom() - g.size().y), g, theme::text_3());
         }
-        if !reduce_motion && (pos - self.rf.map(frac).unwrap_or(0.0)).abs() > 0.002 {
-            crate::anim::more(ui.ctx());
+        // The needle on its way gets the motion rate; within a segment of
+        // its reading it settles on the frames the spectrum brings.
+        if !reduce_motion {
+            let off_px = (pos - self.rf.map(frac).unwrap_or(0.0)).abs() * bar.width();
+            if off_px > 3.0 {
+                crate::anim::more(ui.ctx());
+            } else if off_px > 0.3 {
+                crate::anim::drift(ui.ctx());
+            }
         }
     }
 }

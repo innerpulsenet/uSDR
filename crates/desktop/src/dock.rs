@@ -218,7 +218,8 @@ fn decodes(app: &mut App, ui: &mut Ui) {
             let char_w = 6.7;
             let proto_w = visible.iter().map(|&i| app.decodes[i].ev.protocol.chars().count() + 3).max().unwrap_or(6).clamp(6, 11) as f32 * char_w;
             let kind_w = visible.iter().map(|&i| app.decodes[i].ev.kind.chars().count()).max().unwrap_or(4).clamp(4, 16) as f32 * char_w;
-            let count = if visible.len() == total { format!("{total} frames") } else { format!("{} of {total} frames", visible.len()) };
+            let frames = if total == 1 { "frame" } else { "frames" };
+            let count = if visible.len() == total { format!("{total} {frames}") } else { format!("{} of {total} {frames}", visible.len()) };
             let family_empty = family.is_some_and(|f| !app.decodes.iter().any(|d| d.family == Some(f)));
             {
                 // Column heads over the columns, the count at the end: there

@@ -668,8 +668,11 @@ impl Scope {
             let (_, pilot) = self.band_db(18_700.0, 19_300.0, span, false);
             let (stereo, _) = self.band_db(24_000.0, 52_000.0, span, false);
             let (rds, _) = self.band_db(55_500.0, 58_500.0, span, false);
-            // Each over the floor; a band that does not stand out is "none".
-            let rel = |name: &str, d: f32| if d >= 3.0 { format!("{name} +{d:.0} dB") } else { format!("{name} none") };
+            // Each over the floor. A band that does not stand out is said
+            // to be under 3 dB, which is what was measured: "none" said the
+            // station sends none, beside a panel showing its RDS decoded
+            // (a subcarrier a decibel over a noisy multiplex still locks).
+            let rel = |name: &str, d: f32| if d >= 3.0 { format!("{name} +{d:.0} dB") } else { format!("{name} under 3 dB") };
             return format!("{} · {} · {}", rel("pilot", pilot - floor), rel("L−R", stereo - floor), rel("RDS", rds - floor));
         }
         // Elsewhere, the strongest bin in the mode's passband (or anywhere).

@@ -843,7 +843,13 @@ fn stereo_badge(ui: &mut Ui, st: &usdr_proto::StereoReading, reduce_motion: bool
             target
         } else {
             let dt = ui.input(|i| i.stable_dt).min(0.1);
-            crate::anim::more(ui.ctx());
+            // A reading in steps of a twentieth: a real swing moves at the
+            // motion rate, a step or two rides the frames already coming.
+            if (cur - target).abs() > 0.15 {
+                crate::anim::more(ui.ctx());
+            } else {
+                crate::anim::drift(ui.ctx());
+            }
             cur + (target - cur) * (1.0 - (-dt * 14.0).exp())
         };
         ui.ctx().data_mut(|d| d.insert_temp(key, next));

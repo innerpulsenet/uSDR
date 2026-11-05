@@ -155,7 +155,9 @@ pub fn lerp(a: Color32, b: Color32, t: f32) -> Color32 {
     let t = t.clamp(0.0, 1.0);
     let [ar, ag, ab, aa] = a.to_array();
     let [br, bg, bb, ba] = b.to_array();
-    let m = |x: u8, y: u8| (x as f32 + (y as f32 - x as f32) * t).round() as u8;
+    // Half up by hand: `round` is a library call on a baseline x86-64
+    // build, and this runs for every vertex of a shaded trace.
+    let m = |x: u8, y: u8| (x as f32 + (y as f32 - x as f32) * t + 0.5) as u8;
     Color32::from_rgba_premultiplied(m(ar, br), m(ag, bg), m(ab, bb), m(aa, ba))
 }
 

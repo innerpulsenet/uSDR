@@ -10,6 +10,13 @@
 //! empties waits to refill rather than stuttering; one that backs up past
 //! half a second drops to the present, because this is a live monitor.
 //!
+//! How far ahead of the speaker the queue runs is the delay the operator
+//! hears, so it is no longer one figure for every link: it is what this
+//! link needs. The longest gap between arrivals lately, a callback of the
+//! card's, and a margin, never under 60 ms: about 70 ms on a wired LAN
+//! where the old fixed 120 ms was mostly idle, and more than 120 on a link
+//! that needs it. An underrun raises it for a while.
+//!
 //! Broadcast FM arrives in stereo when the station sends it; every frame is
 //! queued as L, R pairs (mono as the same sample twice) and each channel
 //! goes through the same interpolator, so a station that blends to mono and
@@ -29,8 +36,19 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-/// How far ahead of the speaker the queue aims to run.
+/// How far ahead of the speaker the queue aims to run before the link has
+/// been measured (and where nothing measures it: a test, a clip).
 const TARGET_S: f64 = 0.12;
+/// The measured target's limits and its margin over what was measured.
+const TARGET_MIN_S: f64 = 0.060;
+const TARGET_MAX_S: f64 = 0.250;
+const TARGET_MARGIN_S: f64 = 0.015;
+/// The longest gap is remembered with a half-life of about 20 s of frames,
+/// and an underrun's penalty with one of about a minute.
+const GAP_KEEP: f64 = 0.9995;
+const PENALTY_KEEP: f64 = 0.9998;
+/// Each underrun adds this to the target, up to three of them.
+const PENALTY_S: f64 = 0.030;
 /// Past this the queue is cut back to the target.
 const CEILING_S: f64 = 0.5;
 /// The limiter's look-ahead, release time constant, and the level nothing
@@ -63,6 +81,14 @@ struct Shared {
     level_rms: f32,
     underruns: u64,
     trimmed: u64,
+    /// The link, as measured: the longest gap between arrivals lately, the
+    /// card's longest callback, and what underruns have added. `target_s`
+    /// is the queue depth they call for; zero until a frame has arrived.
+    last_push: Option<std::time::Instant>,
+    gap_peak_s: f64,
+    callback_s: f64,
+    penalty_s: f64,
+    target_s: f64,
     /// Smoothed ratio correction, for display.
     drift_ppm: f64,
     /// A recording being played back in place of the live audio.
@@ -79,6 +105,28 @@ struct Clip {
     rate: f64,
     pos: f64,
     sinc: Sinc,
+}
+
+impl Shared {
+    /// The queue depth to hold, seconds.
+    fn target(&self) -> f64 {
+        if self.target_s > 0.0 { self.target_s } else { TARGET_S }
+    }
+
+    /// A frame arrived `gap_s` after the one before it.
+    ///
+    /// The queue has to outlast the longest wait for a frame, plus the
+    /// callback that empties it in one go, plus a margin. The whole gap is
+    /// counted, not just how late the frame was, which leaves a frame's
+    /// length of slack on top. A gap of a second or more is a pause in the
+    /// stream (a retune, a reconnect), not jitter.
+    fn arrived(&mut self, gap_s: f64) {
+        if gap_s < 1.0 {
+            self.gap_peak_s = gap_s.max(self.gap_peak_s * GAP_KEEP);
+        }
+        self.penalty_s *= PENALTY_KEEP;
+        self.target_s = (self.gap_peak_s + self.callback_s + TARGET_MARGIN_S + self.penalty_s).clamp(TARGET_MIN_S, TARGET_MAX_S);
+    }
 }
 
 /// Taps in the interpolator: half before the point it reads, half after.
@@ -280,6 +328,10 @@ impl Player {
                 priming: true,
                 in_rate: 48_000.0,
                 out_rate: 48_000.0,
+                // Until the link has shown what it does, assume gaps of
+                // 60 ms: the queue starts near the old fixed depth and
+                // comes down as the measurement replaces the guess.
+                gap_peak_s: 0.060,
                 ..Default::default()
             })),
             stream: Mutex::new(None),
@@ -333,6 +385,8 @@ impl Player {
             let mut s = self.shared.lock().unwrap();
             s.out_rate = config.sample_rate as f64;
             s.sinc = Some(Sinc::new(s.in_rate, s.out_rate));
+            // Another card, another callback size.
+            s.callback_s = 0.0;
         }
         let shared = self.shared.clone();
         let err_name = name.clone();
@@ -474,6 +528,10 @@ impl Player {
         let mut rate_changed = None;
         {
             let mut s = self.shared.lock().unwrap();
+            let now = std::time::Instant::now();
+            if let Some(prev) = s.last_push.replace(now) {
+                s.arrived(now.duration_since(prev).as_secs_f64());
+            }
             if rate_hz > 0 && (s.in_rate - rate_hz as f64).abs() > 0.5 {
                 // A mode change: the queued audio is at the old rate.
                 s.in_rate = rate_hz as f64;
@@ -489,9 +547,9 @@ impl Player {
             } else {
                 s.queue.extend(samples.iter().map(|&v| [pcm(v); 2]));
             }
-            let ceiling = (s.in_rate * CEILING_S) as usize;
+            let ceiling = (s.in_rate * CEILING_S.max(2.0 * s.target())) as usize;
             if s.queue.len() > ceiling {
-                let target = (s.in_rate * TARGET_S) as usize;
+                let target = (s.in_rate * s.target()) as usize;
                 let cut = s.queue.len() - target;
                 s.queue.drain(..cut);
                 s.trimmed += 1;
@@ -518,7 +576,10 @@ impl Player {
 fn fill(shared: &Mutex<Shared>, out: &mut [f32], channels: usize) {
     let mut s = shared.lock().unwrap();
     let frames = out.len() / channels.max(1);
-    let target = s.in_rate * TARGET_S;
+    if s.out_rate > 0.0 {
+        s.callback_s = s.callback_s.max(frames as f64 / s.out_rate).min(0.1);
+    }
+    let target = s.in_rate * s.target();
     if s.priming && (s.queue.len() as f64) >= target {
         s.priming = false;
     }
@@ -585,6 +646,9 @@ fn fill(shared: &Mutex<Shared>, out: &mut [f32], channels: usize) {
             if !s.priming {
                 s.priming = true;
                 s.underruns += 1;
+                // The queue was too short for this link: longer for a
+                // while, on top of whatever the gap that caused it adds.
+                s.penalty_s = (s.penalty_s + PENALTY_S).min(3.0 * PENALTY_S);
             }
             (0.0, 0.0)
         } else {
@@ -801,6 +865,64 @@ mod tests {
         for n in look..4_800 {
             assert_eq!(out[n], tone(n - look));
         }
+    }
+
+    #[test]
+    fn the_queue_runs_as_deep_as_the_link_needs() {
+        // A wired LAN: frames every 13 ms, now and then one 35 ms after
+        // the last, into a card that takes 21 ms a callback.
+        let mut s = Shared { gap_peak_s: 0.060, callback_s: 1024.0 / 48_000.0, ..Default::default() };
+        assert_eq!(s.target(), TARGET_S, "the fixed depth until a frame arrives");
+        for k in 0..6000 {
+            s.arrived(if k % 200 == 0 { 0.035 } else { 0.013 });
+        }
+        let lan = s.target();
+        assert!((0.065..0.080).contains(&lan), "LAN target {lan}");
+        // A link that stalls 150 ms at a time gets the depth to ride it out.
+        for k in 0..400 {
+            s.arrived(if k % 50 == 0 { 0.150 } else { 0.013 });
+        }
+        assert!(s.target() > 0.170, "bad link target {}", s.target());
+        // Never under the floor, however clean, nor over the ceiling.
+        let mut clean = Shared { callback_s: 0.005, ..Default::default() };
+        clean.arrived(0.010);
+        assert_eq!(clean.target(), TARGET_MIN_S);
+        clean.arrived(0.9);
+        assert_eq!(clean.target(), TARGET_MAX_S);
+        // A pause in the stream is not jitter.
+        let before = s.gap_peak_s;
+        s.arrived(3.0);
+        assert!(s.gap_peak_s <= before);
+    }
+
+    #[test]
+    fn an_underrun_deepens_the_queue_and_a_measured_target_is_held() {
+        let shared = Mutex::new(Shared { in_rate: 48_000.0, out_rate: 48_000.0, volume: 1.0, priming: true, ..Default::default() });
+        shared.lock().unwrap().arrived(0.020);
+        let target = shared.lock().unwrap().target();
+        let mut out = vec![0f32; 960];
+        // Ten steady seconds at the measured depth: it holds, with no underrun.
+        for _ in 0..500 {
+            let mut s = shared.lock().unwrap();
+            s.queue.extend(std::iter::repeat_n([0.1; 2], 960));
+            s.arrived(0.020);
+            drop(s);
+            fill(&shared, &mut out, 1);
+        }
+        {
+            let s = shared.lock().unwrap();
+            let depth = s.queue.len() as f64 / s.in_rate;
+            assert!((depth - target).abs() < 0.03, "queue at {depth} s for a target of {target}");
+            assert_eq!(s.underruns, 0);
+        }
+        // The stream stops: the queue runs dry once, and the target rises.
+        for _ in 0..20 {
+            fill(&shared, &mut out, 1);
+        }
+        let mut s = shared.lock().unwrap();
+        assert_eq!(s.underruns, 1);
+        s.arrived(0.020);
+        assert!(s.target() >= target + 0.02, "target {} after an underrun, {target} before", s.target());
     }
 
     #[test]

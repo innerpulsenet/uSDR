@@ -1613,7 +1613,15 @@ impl App {
             let mut t = T.lock().unwrap();
             let start = *t.get_or_insert_with(Instant::now);
             if start.elapsed() >= Duration::from_secs(2) {
-                eprintln!("ui frames/s {:.1} · repaint causes {:?}", n as f64 / start.elapsed().as_secs_f64(), ctx.repaint_causes());
+                let a = self.player.reading();
+                eprintln!(
+                    "ui frames/s {:.1} · audio queue {:.0} ms, {} underruns · motion asked by {:?} · repaint causes {:?}",
+                    n as f64 / start.elapsed().as_secs_f64(),
+                    a.queue_ms,
+                    a.underruns,
+                    crate::anim::asked(),
+                    ctx.repaint_causes()
+                );
                 N.store(0, Relaxed);
                 *t = Some(Instant::now());
             }

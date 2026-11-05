@@ -225,6 +225,8 @@ enum Case {
     Held,
     /// The held waterfall scrubbed back a row every frame.
     Scrub,
+    /// Live, with the ridges standing behind the trace.
+    Ridges,
 }
 
 fn panafall_case(name: &'static str, case: Case, bins: usize) {
@@ -235,6 +237,9 @@ fn panafall_case(name: &'static str, case: Case, bins: usize) {
     let size = egui::vec2(1600.0, 800.0);
     let mut pan = Panafall::default();
     let mut view = View::default();
+    if case == Case::Ridges {
+        view.spectrum = crate::spectrum::SpecMode::Ridges;
+    }
     let st = status();
     let flag = SliceFlag { freq_hz: 146.04e6, mode: Mode::Nfm, bandwidth_hz: 12_500.0, s_label: "S9".into(), ..Default::default() };
     let mut rng = Rng(0x9e37_79b9_7f4a_7c15);
@@ -255,7 +260,7 @@ fn panafall_case(name: &'static str, case: Case, bins: usize) {
     for i in 0..n + 30 {
         let t = start + i as f64 / 60.0;
         match case {
-            Case::Live | Case::Held => {
+            Case::Live | Case::Held | Case::Ridges => {
                 f = frame(bins, i, &mut rng);
                 pan.push(&f, &view, t);
             }
@@ -295,6 +300,7 @@ fn bench_panafall() {
     panafall_case("panafall retune 4096", Case::Retune, 4096);
     panafall_case("panafall held 4096", Case::Held, 4096);
     panafall_case("panafall scrub 4096", Case::Scrub, 4096);
+    panafall_case("panafall ridges 4096", Case::Ridges, 4096);
 }
 
 /// The whole window: masthead, receiver bar, side column, dock and scope,
@@ -317,7 +323,8 @@ fn bench_window() {
     let mut rng = Rng(0x2545_f491_4f6c_dd1d);
     let ground = app.prefs.ground;
     step(&ctx, 0.0, size, None, |ui| crate::theme::install(ui.ctx(), ground));
-    for (bins, name) in [(2048, "window 2048"), (4096, "window 4096")] {
+    for (bins, name) in [(2048, "window 2048"), (4096, "window 4096"), (4096, "window 4096 ridges")] {
+        app.prefs.view.spectrum = if name.ends_with("ridges") { crate::spectrum::SpecMode::Ridges } else { crate::spectrum::SpecMode::Trace };
         let mut tally = Tally::new(name);
         let n = frames();
         for i in 0..n + 60 {
@@ -335,6 +342,7 @@ fn bench_window() {
         }
         tally.report();
     }
+    app.prefs.view.spectrum = crate::spectrum::SpecMode::Trace;
     // A busy digital channel: the decode log full, a few frames open.
     for k in 0..400 {
         let mut fields = std::collections::BTreeMap::new();
