@@ -45,6 +45,7 @@ fn applet_opened<R>(ui: &mut Ui, id: &str, title: &str, first_open: bool, extra:
         .fill(theme::surface_2())
         .stroke(Stroke::new(1.0, theme::line()))
         .corner_radius(CornerRadius::same(theme::RADIUS))
+        .shadow(theme::shadow(theme::Depth::Raised))
         .inner_margin(egui::Margin::symmetric(10, 8));
     let out = frame
         .show(ui, |ui| {
@@ -52,17 +53,14 @@ fn applet_opened<R>(ui: &mut Ui, id: &str, title: &str, first_open: bool, extra:
             theme::glass_top(ui.painter(), egui::Rect::from_min_size(card.min, vec2(card.width(), 40.0_f32.min(card.height()))));
             ui.set_width(ui.available_width());
             ui.horizontal(|ui| {
-                let t = ui.ctx().animate_bool_with_time(open_id.with("a"), open, 0.15);
+                let t = fold(ui, open_id, open);
                 let (r, resp) = ui.allocate_exact_size(vec2(12.0, 14.0), Sense::click());
                 let c = r.center();
                 let rot = t * std::f32::consts::FRAC_PI_2;
                 let pts = [vec2(-3.0, -4.0), vec2(3.0, 0.0), vec2(-3.0, 4.0)]
                     .map(|v| c + egui::emath::Rot2::from_angle(rot) * v);
                 ui.painter().add(egui::Shape::convex_polygon(pts.to_vec(), theme::text_3(), Stroke::NONE));
-                let label = ui.add(
-                    egui::Label::new(egui::RichText::new(title.to_uppercase()).font(theme::mono(10.5)).color(theme::text_2()).extra_letter_spacing(1.2))
-                        .sense(Sense::click()),
-                );
+                let label = theme::engraved(ui, &title.to_uppercase(), theme::mono(10.5), theme::text_2(), 1.2, Sense::click());
                 if resp.clicked() || label.clicked() {
                     open = !open;
                 }
@@ -71,15 +69,17 @@ fn applet_opened<R>(ui: &mut Ui, id: &str, title: &str, first_open: bool, extra:
             // The body folds and unfolds with the chevron: it is laid out at
             // its full height and shown through a window that grows with
             // the same animation, so what is hidden cannot be hit either.
-            let t = ui.ctx().animate_bool_with_time(open_id.with("a"), open, 0.15);
-            if t <= 0.001 {
+            let lin = ui.ctx().animate_bool_with_time(open_id.with("a"), open, FOLD_S);
+            let t = fold(ui, open_id, open);
+            if lin <= 0.001 {
                 return None;
             }
             ui.add_space(4.0 * t);
             let full = ui.available_rect_before_wrap();
             let natural_id = open_id.with("h");
             let natural: f32 = ui.data(|d| d.get_temp(natural_id).unwrap_or(0.0));
-            let shown_h = if t >= 0.999 { f32::INFINITY } else { natural * t };
+            let settled = lin >= 0.999;
+            let shown_h = if settled { f32::INFINITY } else { natural * t };
             let mut child = ui.new_child(egui::UiBuilder::new().max_rect(Rect::from_min_size(full.min, vec2(full.width(), f32::INFINITY))));
             // Inside the parent's clip on every side: a scrolled side panel
             // puts the body's top above the panel, and a clip that started
@@ -88,8 +88,8 @@ fn applet_opened<R>(ui: &mut Ui, id: &str, title: &str, first_open: bool, extra:
             let r = add(&mut child);
             let h = child.min_rect().height();
             ui.data_mut(|d| d.insert_temp(natural_id, h));
-            ui.allocate_space(vec2(full.width(), if t >= 0.999 { h } else { h * t }));
-            if t < 0.999 {
+            ui.allocate_space(vec2(full.width(), if settled { h } else { h * t }));
+            if !settled {
                 crate::anim::more(ui.ctx());
             }
             Some(r)
@@ -97,6 +97,25 @@ fn applet_opened<R>(ui: &mut Ui, id: &str, title: &str, first_open: bool, extra:
         .inner;
     ui.data_mut(|d| d.insert_persisted(open_id, open));
     out
+}
+
+/// How long an applet takes to open or fold, seconds.
+const FOLD_S: f32 = 0.26;
+
+/// An applet's fold, 0 shut to 1 open, on a spring: opening, it runs a
+/// few percent past open and settles back; folding, it eases shut. Snaps
+/// with reduced motion.
+fn fold(ui: &Ui, id: egui::Id, open: bool) -> f32 {
+    let lin = ui.ctx().animate_bool_with_time(id.with("a"), open, if reduced(ui) { 0.0 } else { FOLD_S });
+    if open { spring_out(lin) } else { lin * lin * (3.0 - 2.0 * lin) }
+}
+
+/// Ease out past the end and back: an underdamped spring's first swing,
+/// with an overshoot of about 3 percent.
+pub fn spring_out(t: f32) -> f32 {
+    let s = 0.7;
+    let u = t - 1.0;
+    1.0 + (s + 1.0) * u * u * u + s * u * u
 }
 
 /// `text` cut to fit `max_w` in `font`, with an ellipsis where it was cut.
@@ -140,8 +159,10 @@ pub fn menu_chip_fit<R>(ui: &mut Ui, label: &str, labels: &[&str], tally: Color3
     let stroke = theme::lerp(theme::line(), alpha(tally, 0.75), t);
     let p = ui.painter();
     p.rect(rect, CornerRadius::same(3), bg, Stroke::new(1.0, stroke), egui::StrokeKind::Inside);
+    let press = pressed(ui, &resp).max(t);
+    theme::key_face(p, rect, 3, press);
     let c = theme::lerp(theme::text_2(), theme::text(), t.max(hover));
-    p.galley(rect.center() - galley.size() / 2.0, galley, c);
+    p.galley(rect.center() - galley.size() / 2.0 + vec2(0.0, press), galley, c);
     egui::Popup::menu(&resp).show(add).map(|r| r.inner)
 }
 
@@ -155,8 +176,10 @@ pub fn selector<R>(ui: &mut Ui, id: &str, text: &str, color: Color32, width: f32
     let hover = ui.ctx().animate_bool_with_time(resp.id.with("hv"), resp.hovered(), 0.12);
     let p = ui.painter();
     p.rect(rect, CornerRadius::same(theme::RADIUS), theme::lerp(theme::surface_3(), theme::surface_4(), hover), Stroke::new(1.0, theme::lerp(theme::line(), theme::line_2(), hover)), egui::StrokeKind::Inside);
+    let press = pressed(ui, &resp);
+    theme::key_face(p, rect, theme::RADIUS, press);
     let shown = ellipsize(p, text, font.clone(), w - 30.0);
-    p.text(pos2(rect.left() + 8.0, rect.center().y), Align2::LEFT_CENTER, shown, font, color);
+    p.text(pos2(rect.left() + 8.0, rect.center().y + press), Align2::LEFT_CENTER, shown, font, color);
     p.text(pos2(rect.right() - 7.0, rect.center().y), Align2::RIGHT_CENTER, "▾", theme::mono(10.0), theme::text_3());
     if resp.has_focus() {
         p.rect_stroke(rect.expand(1.5), CornerRadius::same(theme::RADIUS + 1), Stroke::new(1.0, theme::EMBER), egui::StrokeKind::Outside);
@@ -185,10 +208,12 @@ pub fn action_small(ui: &mut Ui, label: &str) -> Response {
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, label));
     let hover = ui.ctx().animate_bool_with_time(resp.id.with("hv"), resp.hovered(), 0.12);
     let p = ui.painter();
-    let bg = if resp.is_pointer_button_down_on() { theme::surface_4() } else { theme::lerp(theme::surface_3(), theme::surface_4(), hover) };
+    let press = pressed(ui, &resp);
+    let bg = theme::lerp(theme::lerp(theme::surface_3(), theme::surface_4(), hover), theme::surface_4(), press);
     p.rect(rect, CornerRadius::same(3), bg, Stroke::new(1.0, theme::line_2()), egui::StrokeKind::Inside);
+    theme::key_face(p, rect, 3, press);
     let c = if enabled { theme::text() } else { theme::text_3() };
-    p.galley(rect.center() - galley.size() / 2.0, galley, c);
+    p.galley(rect.center() - galley.size() / 2.0 + vec2(0.0, press), galley, c);
     resp
 }
 
@@ -210,12 +235,10 @@ pub fn key_sized(ui: &mut Ui, label: &str, on: bool, tally: Color32, size: egui:
     let dim = if ui.is_enabled() { 1.0 } else { 0.4 };
     let tally = alpha(tally, dim);
     p.rect(rect, CornerRadius::same(theme::RADIUS), bg, Stroke::new(1.0, theme::lerp(theme::line(), alpha(tally, 0.55), t)), egui::StrokeKind::Inside);
-    let led = pos2(rect.left() + 11.0, rect.center().y);
-    if t > 0.01 {
-        p.circle_filled(led, 6.0, alpha(tally, 0.18 * t));
-    }
-    p.circle_filled(led, 3.0, theme::lerp(theme::surface_4().gamma_multiply(1.4), tally, t));
-    p.galley(pos2(rect.left() + 21.0, rect.center().y - galley.size().y / 2.0), galley, alpha(theme::lerp(theme::text_2(), theme::text(), t.max(hover)), dim));
+    let press = pressed(ui, &resp);
+    theme::key_face(p, rect, theme::RADIUS, press);
+    theme::lamp(p, pos2(rect.left() + 11.0, rect.center().y + press), 3.2, tally, t, theme::LampShape::Round);
+    p.galley(pos2(rect.left() + 21.0, rect.center().y - galley.size().y / 2.0 + press), galley, alpha(theme::lerp(theme::text_2(), theme::text(), t.max(hover)), dim));
     if resp.has_focus() {
         p.rect_stroke(rect.expand(1.5), CornerRadius::same(theme::RADIUS + 1), Stroke::new(1.0, theme::EMBER), egui::StrokeKind::Outside);
     }
@@ -242,8 +265,11 @@ pub fn chip_key_w(ui: &mut Ui, label: &str, on: bool, tally: Color32, width: f32
     let stroke = theme::lerp(theme::line(), alpha(tally, 0.75), t);
     let p = ui.painter();
     p.rect(rect, CornerRadius::same(3), bg, Stroke::new(1.0, stroke), egui::StrokeKind::Inside);
+    // A lit chip is latched down; the pointer presses an unlit one in.
+    let press = pressed(ui, &resp).max(t * 0.6);
+    theme::key_face(p, rect, 3, press);
     let c = theme::lerp(theme::text_2(), theme::text(), t.max(hover));
-    p.galley(rect.center() - galley.size() / 2.0, galley, if enabled { c } else { theme::text_3() });
+    p.galley(rect.center() - galley.size() / 2.0 + vec2(0.0, press), galley, if enabled { c } else { theme::text_3() });
     resp
 }
 
@@ -258,7 +284,9 @@ pub fn mini_key(ui: &mut Ui, label: &str, tally: Color32, lit: bool) -> Response
     let p = ui.painter();
     let bg = theme::lerp(alpha(tally, 0.06 + 0.10 * hover), alpha(tally, 0.24), t);
     p.rect(rect, CornerRadius::same(3), bg, Stroke::new(1.0, alpha(tally, 0.45 + 0.4 * hover.max(t))), egui::StrokeKind::Inside);
-    p.galley(rect.center() - galley.size() / 2.0, galley, theme::lerp(alpha(tally, 0.85), theme::text(), t));
+    let press = pressed(ui, &resp);
+    theme::key_face(p, rect, 3, press);
+    p.galley(rect.center() - galley.size() / 2.0 + vec2(0.0, press), galley, theme::lerp(alpha(tally, 0.85), theme::text(), t));
     if resp.hovered() {
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
     }
@@ -273,8 +301,10 @@ pub fn step_chip(ui: &mut Ui, wider: bool, enabled: bool) -> Response {
     let hover = ui.ctx().animate_bool_with_time(resp.id.with("hv"), enabled && resp.hovered(), 0.12);
     let p = ui.painter();
     p.rect(rect, CornerRadius::same(3), theme::lerp(theme::surface_3(), theme::surface_4(), hover), Stroke::new(1.0, theme::line()), egui::StrokeKind::Inside);
+    let press = if enabled { pressed(ui, &resp) } else { 0.0 };
+    theme::key_face(p, rect, 3, press);
     let c = if enabled { theme::lerp(theme::text_2(), theme::text(), hover) } else { theme::text_3() };
-    let (x, y, d) = (rect.center().x, rect.center().y, if wider { 1.0 } else { -1.0 });
+    let (x, y, d) = (rect.center().x, rect.center().y + press, if wider { 1.0 } else { -1.0 });
     p.line_segment([pos2(x - 2.0 * d, y - 4.0), pos2(x + 2.0 * d, y)], Stroke::new(1.5, c));
     p.line_segment([pos2(x + 2.0 * d, y), pos2(x - 2.0 * d, y + 4.0)], Stroke::new(1.5, c));
     resp
@@ -288,10 +318,12 @@ pub fn action(ui: &mut Ui, label: &str) -> Response {
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, label));
     let hover = ui.ctx().animate_bool_with_time(resp.id.with("hv"), resp.hovered(), 0.12);
     let p = ui.painter();
-    let bg = if resp.is_pointer_button_down_on() { theme::surface_4() } else { theme::lerp(theme::surface_3(), theme::surface_4(), hover) };
+    let press = pressed(ui, &resp);
+    let bg = theme::lerp(theme::lerp(theme::surface_3(), theme::surface_4(), hover), theme::surface_4(), press);
     p.rect(rect, CornerRadius::same(theme::RADIUS), bg, Stroke::new(1.0, theme::line_2()), egui::StrokeKind::Inside);
+    theme::key_face(p, rect, theme::RADIUS, press);
     let c = if ui.is_enabled() { theme::text() } else { theme::text_3() };
-    p.galley(rect.center() - galley.size() / 2.0, galley, c);
+    p.galley(rect.center() - galley.size() / 2.0 + vec2(0.0, press), galley, c);
     resp
 }
 
@@ -303,7 +335,9 @@ pub fn primary(ui: &mut Ui, label: &str) -> Response {
     let hover = ui.ctx().animate_bool_with_time(resp.id.with("hv"), resp.hovered(), 0.12);
     let p = ui.painter();
     p.rect_filled(rect, CornerRadius::same(theme::RADIUS), theme::lerp(theme::ACTION, theme::ACTION_HOVER, hover));
-    p.galley(rect.center() - galley.size() / 2.0, galley, Color32::WHITE);
+    let press = pressed(ui, &resp);
+    theme::key_face(p, rect, theme::RADIUS, press);
+    p.galley(rect.center() - galley.size() / 2.0 + vec2(0.0, press), galley, Color32::WHITE);
     resp
 }
 
@@ -450,25 +484,30 @@ pub enum Tone {
 /// chip (recording) breathes: its lamp swells and dims over two seconds,
 /// so a recording in progress is seen to be in progress.
 pub fn chip(ui: &mut Ui, tone: Tone, text: &str) -> Response {
-    let (c, glyph) = match tone {
-        Tone::Ok => (theme::OK, "●"),
-        Tone::Warn => (theme::WARN, "▲"),
-        Tone::Err => (theme::ERR, "■"),
-        Tone::Idle => (theme::text_3(), "○"),
-        Tone::Live => (theme::EMBER, "●"),
+    let (c, shape, lit) = match tone {
+        Tone::Ok => (theme::OK, theme::LampShape::Round, 1.0),
+        Tone::Warn => (theme::WARN, theme::LampShape::Triangle, 1.0),
+        Tone::Err => (theme::ERR, theme::LampShape::Square, 1.0),
+        Tone::Idle => (theme::text_3(), theme::LampShape::Round, 0.0),
+        Tone::Live => (theme::EMBER, theme::LampShape::Round, 1.0),
     };
-    let g = ui.painter().layout_no_wrap(format!("{glyph} {text}"), theme::mono(10.5), c);
-    let (rect, resp) = ui.allocate_exact_size(g.size() + vec2(12.0, 6.0), Sense::hover());
+    let g = ui.painter().layout_no_wrap(text.to_owned(), theme::mono(10.5), c);
+    let lamp_w = 13.0;
+    let (rect, resp) = ui.allocate_exact_size(g.size() + vec2(12.0 + lamp_w, 6.0), Sense::hover());
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, text));
     let p = ui.painter();
     p.rect(rect, CornerRadius::same(3), alpha(c, 0.08), Stroke::new(1.0, alpha(c, 0.5)), egui::StrokeKind::Inside);
+    let at = pos2(rect.left() + 6.0 + 4.0, rect.center().y);
+    let mut glow = lit;
     if tone == Tone::Live && !reduced(ui) {
         let t = ui.input(|i| i.time);
         let breath = 0.5 + 0.5 * (t * std::f64::consts::TAU / 2.0).sin() as f32;
-        let lamp = pos2(rect.left() + 9.5, rect.center().y);
-        p.circle_filled(lamp, 5.0 + 2.0 * breath, alpha(c, 0.10 + 0.14 * breath));
+        glow = 0.55 + 0.45 * breath;
         crate::anim::more(ui.ctx());
     }
-    p.galley(rect.min + vec2(6.0, 3.0), g, c);
+    // Idle reads as a dark lamp in the text's gray, not as a lit one.
+    theme::lamp(p, at, 3.6, if tone == Tone::Idle { theme::text_2() } else { c }, glow, shape);
+    p.galley(pos2(rect.left() + 6.0 + lamp_w, rect.top() + 3.0), g, c);
     resp
 }
 
@@ -555,6 +594,16 @@ pub fn protocol_color(p: &str) -> Color32 {
     }
 }
 
+/// How far a key is pressed in, 0 to 1: down while the pointer holds it,
+/// quick both ways so a click is felt without slowing it.
+fn pressed(ui: &Ui, resp: &Response) -> f32 {
+    let down = resp.is_pointer_button_down_on();
+    if reduced(ui) {
+        return if down { 1.0 } else { 0.0 };
+    }
+    ui.ctx().animate_bool_with_time(resp.id.with("press"), down, 0.05)
+}
+
 fn reduce_motion_id() -> egui::Id {
     egui::Id::new("usdr-reduce-motion")
 }
@@ -621,4 +670,77 @@ pub fn segmented(ui: &mut Ui, id: &str, labels: &[&str], current: Option<usize>,
         }
     }
     out
+}
+
+/// A run of digits that roll like an odometer when they change: each
+/// changed character slides out and its new one in, up for a larger
+/// number and down for a smaller, over `ROLL_S`. The value shown is always
+/// the new one once the roll ends, and at once with reduced motion.
+/// Returns where it was drawn.
+pub fn rolling_text(painter: &egui::Painter, id: egui::Id, pos: egui::Pos2, anchor: Align2, text: &str, font: egui::FontId, color: Color32) -> Rect {
+    const ROLL_S: f64 = 0.12;
+    #[derive(Clone, Default)]
+    struct Roll {
+        shown: String,
+        rolls: Vec<Option<(f64, char, f32)>>,
+    }
+    let ctx = painter.ctx().clone();
+    let now = ctx.input(|i| i.time);
+    let rm = ctx.data(|d| d.get_temp(reduce_motion_id()).unwrap_or(false));
+    let mut st: Roll = ctx.data(|d| d.get_temp(id)).unwrap_or_default();
+    let chars: Vec<char> = text.chars().collect();
+    if st.rolls.len() != chars.len() {
+        st.rolls = vec![None; chars.len()];
+    }
+    if !st.shown.is_empty() && st.shown != text && st.shown.chars().count() == chars.len() && !rm {
+        let num = |s: &str| s.chars().filter(|c| c.is_ascii_digit()).collect::<String>().parse::<u64>().unwrap_or(0);
+        let dir = if num(text) >= num(&st.shown) { 1.0 } else { -1.0 };
+        for (i, (a, b)) in st.shown.chars().zip(chars.iter()).enumerate() {
+            if a != *b {
+                st.rolls[i] = Some((now, a, dir));
+            }
+        }
+    }
+    st.shown = text.to_owned();
+    let whole = painter.layout_no_wrap(text.to_owned(), font.clone(), color);
+    let rect = anchor.anchor_size(pos, whole.size());
+    let mut x = rect.left();
+    let mut rolling = false;
+    for (i, ch) in chars.iter().enumerate() {
+        let g = painter.layout_no_wrap(ch.to_string(), font.clone(), color);
+        let w = g.size().x;
+        let cell = Rect::from_min_size(pos2(x, rect.top()), vec2(w, rect.height()));
+        match st.rolls[i].filter(|(t0, _, _)| now - t0 < ROLL_S && !rm) {
+            Some((t0, old, dir)) => {
+                let t = ((now - t0) / ROLL_S) as f32;
+                let e = 1.0 - (1.0 - t).powi(3);
+                let shift = rect.height() * 0.8 * dir;
+                let cp = painter.with_clip_rect(cell.expand2(vec2(1.0, 0.0)).intersect(painter.clip_rect()));
+                cp.text(cell.left_top() - vec2(0.0, e * shift), Align2::LEFT_TOP, old.to_string(), font.clone(), color);
+                cp.galley(cell.left_top() + vec2(0.0, (1.0 - e) * shift), g, color);
+                rolling = true;
+            }
+            None => {
+                st.rolls[i] = None;
+                painter.galley(cell.min, g, color);
+            }
+        }
+        x += w;
+    }
+    if rolling {
+        crate::anim::more(&ctx);
+    }
+    ctx.data_mut(|d| d.insert_temp(id, st));
+    rect
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn the_fold_spring_lands_open_after_a_small_overshoot() {
+        let peak = (0..=100).map(|i| super::spring_out(i as f32 / 100.0)).fold(0.0, f32::max);
+        assert!(peak > 1.0 && peak < 1.03, "{peak}");
+        assert!(super::spring_out(0.0).abs() < 1e-6);
+        assert!((super::spring_out(1.0) - 1.0).abs() < 1e-6);
+    }
 }

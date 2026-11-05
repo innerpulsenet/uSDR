@@ -20,7 +20,7 @@ fn small(t: impl Into<String>) -> RichText {
 
 /// A bay: a labelled section of the bar, divided from the next by a hairline.
 fn bay<R>(ui: &mut Ui, label: &str, add: impl FnOnce(&mut Ui) -> R) -> R {
-    bay_with(ui, |ui| ui.label(RichText::new(label).font(theme::mono(10.5)).color(theme::text_3()).extra_letter_spacing(1.0)), add)
+    bay_with(ui, |ui| theme::engraved(ui, label, theme::mono(10.5), theme::text_3(), 1.0, egui::Sense::hover()), add)
 }
 
 /// A bay whose top line is more than its label.
@@ -699,10 +699,9 @@ fn level_meter(ui: &mut Ui, w: f32, rms: f32, peak: f32) {
     let on = now - clipped_at < 1.0;
     let lamp = egui::pos2(rect.right() - 4.0 - lamp_w / 2.0, bar.center().y);
     if on {
-        p.circle_filled(lamp, 5.0, alpha(theme::ERR, 0.25));
         crate::anim::more(ui.ctx());
     }
-    p.circle_filled(lamp, 2.5, if on { theme::ERR } else { alpha(theme::ERR, 0.18) });
+    theme::lamp(&p, lamp, 2.6, theme::ERR, if on { 1.0 } else { 0.0 }, theme::LampShape::Round);
     resp.on_hover_text(if rms > 1e-5 {
         format!("Output: {:.0} dBFS RMS, peak {:.0} dBFS · ticks at −40, −20, −6 · the lamp lights on a clip", db(rms), db(peak))
     } else {
@@ -747,7 +746,7 @@ fn meter(app: &mut App, ui: &mut Ui, min_w: f32, max_w: f32) {
         ui.set_max_width(w);
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 8.0;
-            ui.label(RichText::new(if is_b { "SIGNAL B" } else { "SIGNAL" }).font(theme::mono(10.5)).color(theme::text_3()).extra_letter_spacing(1.0));
+            theme::engraved(ui, if is_b { "SIGNAL B" } else { "SIGNAL" }, theme::mono(10.5), theme::text_3(), 1.0, egui::Sense::hover());
             // Fixed widths in the mono face, so nothing after them moves
             // while the numbers change.
             fixed(ui, &s_txt, theme::mono_bold(15.0), s_col, "S9+60");

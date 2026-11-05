@@ -312,6 +312,27 @@ fn decodes(app: &mut App, ui: &mut Ui) {
                     if t < 1.0 {
                         let c = widgets::protocol_color(&d.ev.protocol);
                         ui.painter().rect_filled(resp.rect, egui::CornerRadius::same(3), alpha(c, 0.16 * (1.0 - t).powi(2)));
+                        // And a band of light runs once across it, left to
+                        // right, in the first half second.
+                        let s = ((now - born) / 0.6).clamp(0.0, 1.0) as f32;
+                        if s < 1.0 {
+                            let e = 1.0 - (1.0 - s).powi(3);
+                            let r = resp.rect;
+                            let band = 140.0;
+                            let x = r.left() - band + (r.width() + 2.0 * band) * e;
+                            let hot = alpha(theme::lerp(c, egui::Color32::WHITE, 0.5), 0.20 * (1.0 - s * 0.5));
+                            let p = ui.painter_at(r);
+                            let mut mesh = egui::Mesh::default();
+                            for (dx, col) in [(-band, alpha(c, 0.0)), (0.0, hot), (band * 0.35, alpha(c, 0.0))] {
+                                mesh.colored_vertex(egui::pos2(x + dx, r.top()), col);
+                                mesh.colored_vertex(egui::pos2(x + dx, r.bottom()), col);
+                            }
+                            mesh.add_triangle(0, 1, 2);
+                            mesh.add_triangle(1, 3, 2);
+                            mesh.add_triangle(2, 3, 4);
+                            mesh.add_triangle(3, 5, 4);
+                            p.add(egui::Shape::mesh(mesh));
+                        }
                         crate::anim::more(ui.ctx());
                     }
                     if resp.clicked() {

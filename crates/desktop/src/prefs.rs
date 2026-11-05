@@ -82,6 +82,10 @@ pub struct Prefs {
     pub last_voice_mode: usdr_proto::Mode,
     /// The one-time hint that `?` lists the shortcuts has been shown.
     pub hinted_shortcuts: bool,
+    /// The masthead is the title bar, with no system frame. Read at startup.
+    pub own_titlebar: bool,
+    /// Windows 11's Mica backdrop through the chrome. Read at startup.
+    pub mica: bool,
 }
 
 impl Default for Prefs {
@@ -116,6 +120,8 @@ impl Default for Prefs {
             max_fps: 60,
             last_voice_mode: usdr_proto::Mode::Nfm,
             hinted_shortcuts: false,
+            own_titlebar: false,
+            mica: false,
         }
     }
 }

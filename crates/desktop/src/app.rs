@@ -213,6 +213,10 @@ pub struct App {
     /// is shown (it takes ALSA tens of milliseconds) and on request after.
     pub audio_devices: Option<Vec<String>>,
     pub fullscreen: bool,
+    /// Rolled up to the shade strip: how to unroll.
+    pub shade: Option<crate::shade::Restore>,
+    /// The window's frame as it was opened.
+    pub chrome: crate::chrome::Chrome,
     /// The window is wide enough for the memories to ride on the toolbar.
     pub memories_on_toolbar: bool,
     /// The window title as last set.
@@ -225,6 +229,11 @@ impl App {
         let player = Player::new(prefs.audio_device.as_deref());
         let player_b = Player::new(prefs.audio_device.as_deref());
         let mut app = App::build(&cc.egui_ctx, prefs, player, player_b, server.clone());
+        let qa = std::env::var_os("USDR_QA_SIZE").is_some();
+        app.chrome = crate::chrome::Chrome {
+            own_titlebar: app.prefs.own_titlebar,
+            mica: !qa && app.prefs.mica && crate::chrome::apply_mica(cc),
+        };
         if server.is_some() || app.prefs.auto_connect && app.prefs.last_server.is_some() {
             let s = app.connect_input.clone();
             app.connect(&cc.egui_ctx, &s);
@@ -330,6 +339,8 @@ impl App {
             memory_armed: false,
             audio_devices: None,
             fullscreen: false,
+            shade: None,
+            chrome: Default::default(),
             memories_on_toolbar: false,
             title: String::new(),
         }
@@ -559,6 +570,7 @@ impl App {
     }
 
     fn push_decode(&mut self, row: DecodeRow) {
+        self.pan.ping(row.freq_hz, crate::widgets::protocol_color(&row.ev.protocol));
         self.decodes.push_front(row);
         self.decodes_added += 1;
         if self.decode_scroll > 1.0 {
@@ -964,10 +976,11 @@ impl App {
         use egui::Key;
         for k in keys {
             match k {
-                Key::F11 => {
+                Key::F11 if self.shade.is_none() => {
                     self.fullscreen = !self.fullscreen;
                     ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(self.fullscreen));
                 }
+                Key::F9 => self.toggle_shade(ctx),
                 Key::Comma if mods.command => self.settings_open = !self.settings_open,
                 _ if !self.prefs.shortcuts || !self.have_status => {}
                 Key::L if !mods.command => self.prefs.span_lock = !self.prefs.span_lock,
@@ -1090,9 +1103,13 @@ impl App {
         let now = ui.input(|i| i.time);
         ui.horizontal_centered(|ui| {
             ui.spacing_mut().item_spacing.x = 10.0;
-            let (r, _) = ui.allocate_exact_size(vec2(22.0, 22.0), Sense::hover());
+            let (r, mark) = ui.allocate_exact_size(vec2(22.0, 22.0), Sense::click());
             brand::mark_static(ui.painter(), r);
-            theme::steel_label(ui, "uSDR", theme::wordmark(20.0));
+            let word = theme::steel_label(ui, "uSDR", theme::wordmark(20.0)).interact(Sense::click());
+            if mark.double_clicked() || word.double_clicked() {
+                self.toggle_shade(ui.ctx());
+            }
+            word.on_hover_text("Double-click to roll the window up to a strip (F9)");
             ui.add_space(6.0);
             let s = &self.status;
             if self.have_status {
@@ -1136,6 +1153,12 @@ impl App {
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.spacing_mut().item_spacing.x = 10.0;
+                if self.chrome.own_titlebar {
+                    ui.spacing_mut().item_spacing.x = 2.0;
+                    crate::chrome::window_keys(ui);
+                    ui.spacing_mut().item_spacing.x = 10.0;
+                    sep(ui);
+                }
                 if icon_button(ui, "⚙", "Settings (Ctrl+,)").clicked() {
                     self.settings_open = !self.settings_open;
                 }
@@ -1211,6 +1234,10 @@ impl App {
             if ui.button("Full layout").clicked() {
                 self.prefs.show_side = true;
                 self.prefs.show_dock = true;
+                ui.close();
+            }
+            if ui.button("Roll up to a strip   F9").clicked() {
+                self.toggle_shade(ui.ctx());
                 ui.close();
             }
             if ui.button(if self.fullscreen { "Leave full screen   F11" } else { "Full screen   F11" }).clicked() {
@@ -1356,7 +1383,10 @@ impl App {
                         .stroke(Stroke::new(1.0, alpha(theme::line_2(), fade)))
                         .corner_radius(CornerRadius::same(5))
                         .inner_margin(egui::Margin::symmetric(12, 8))
-                        .shadow(egui::Shadow { offset: [0, 6], blur: 18, spread: 0, color: egui::Color32::from_black_alpha((120.0 * fade) as u8) })
+                        .shadow({
+                            let s = theme::shadow(theme::Depth::Floating);
+                            egui::Shadow { color: s.color.gamma_multiply(fade), ..s }
+                        })
                         .show(ui, |ui| {
                             ui.set_max_width(460.0);
                             ui.horizontal(|ui| {
@@ -1454,6 +1484,9 @@ impl App {
     }
 }
 
+/// The faceplate's margin around the display, points.
+const BEZEL: f32 = 6.0;
+
 fn sep(ui: &mut Ui) {
     let (r, _) = ui.allocate_exact_size(vec2(1.0, 18.0), Sense::hover());
     ui.painter().rect_filled(r, CornerRadius::ZERO, theme::line_2());
@@ -1522,7 +1555,11 @@ impl eframe::App for App {
     }
 
     fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
-        theme::ink().to_normalized_gamma_f32()
+        if self.chrome.mica {
+            return [0.0; 4];
+        }
+        let c = theme::ink();
+        if theme::night() { theme::night_color(c) } else { c }.to_normalized_gamma_f32()
     }
 }
 
@@ -1596,6 +1633,31 @@ impl App {
             self.title = title.clone();
             ctx.send_viewport_cmd(egui::ViewportCommand::Title(title));
         }
+        if self.chrome.own_titlebar {
+            crate::chrome::resize_edges(&ctx);
+            if !ctx.input(|i| i.viewport().maximized.unwrap_or(false)) {
+                crate::chrome::outline(&ctx);
+            }
+        }
+        if self.shade.is_some() {
+            crate::shade::strip(self, ui);
+            return;
+        }
+        if !live && self.chrome.own_titlebar {
+            // No masthead before a connection: a bare title bar, so the
+            // window can still be moved and closed.
+            egui::Panel::top("titlebar")
+                .exact_size(36.0)
+                .frame(egui::Frame::new().fill(self.chrome.panel_fill()).inner_margin(egui::Margin::symmetric(14, 0)))
+                .show(ui, |ui| {
+                    crate::chrome::title_drag(ui, ui.max_rect().expand2(vec2(14.0, 0.0)));
+                    ui.horizontal_centered(|ui| {
+                        let (r, _) = ui.allocate_exact_size(vec2(18.0, 18.0), Sense::hover());
+                        brand::mark_static(ui.painter(), r);
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), crate::chrome::window_keys);
+                    });
+                });
+        }
         if !live {
             crate::screens::connect_screen(self, ui);
             crate::screens::settings_window(self, &ctx);
@@ -1605,26 +1667,37 @@ impl App {
 
         egui::Panel::top("masthead")
             .exact_size(44.0)
-            .frame(egui::Frame::new().fill(theme::surface_1()).inner_margin(egui::Margin::symmetric(14, 0)).stroke(Stroke::new(1.0, theme::line())))
+            .frame(egui::Frame::new().fill(self.chrome.panel_fill()).inner_margin(egui::Margin::symmetric(14, 0)).stroke(Stroke::new(1.0, theme::line())))
             .show(ui, |ui| {
                 theme::paint_weave(ui.painter(), ui.max_rect().expand2(vec2(14.0, 0.0)));
+                if self.chrome.own_titlebar {
+                    crate::chrome::title_drag(ui, ui.max_rect().expand2(vec2(14.0, 0.0)));
+                }
                 self.masthead(ui)
             });
         egui::Panel::bottom("statusbar")
             .exact_size(26.0)
-            .frame(egui::Frame::new().fill(theme::surface_1()).inner_margin(egui::Margin::symmetric(14, 0)).stroke(Stroke::new(1.0, theme::line())))
+            .frame(egui::Frame::new().fill(self.chrome.panel_fill()).inner_margin(egui::Margin::symmetric(14, 0)).stroke(Stroke::new(1.0, theme::line())))
             .show(ui, |ui| self.status_bar(ui));
         // The receiver bar: the receiver being driven, across the window.
         egui::Panel::top("receiver")
-            .frame(egui::Frame::new().fill(theme::surface_1()).inner_margin(egui::Margin::symmetric(14, 8)).stroke(Stroke::new(1.0, theme::line())))
+            .frame(egui::Frame::new().fill(self.chrome.panel_fill()).inner_margin(egui::Margin::symmetric(14, 8)).stroke(Stroke::new(1.0, theme::line())))
             .show(ui, |ui| {
+                theme::paint_brushed(ui.painter(), ui.max_rect().expand2(vec2(14.0, 8.0)));
                 ui.set_width(ui.available_width());
                 crate::bar::receiver_bar(self, ui);
                 // The index tick: the bar belongs to the active receiver; it
                 // takes B's violet as the wash does.
                 let r = ui.max_rect().expand2(vec2(14.0, 8.0));
-                let b = ui.ctx().animate_bool_with_time(egui::Id::new("rx-b-wash"), self.active_b && self.status.rx2.is_some(), 0.2);
+                let on_b = self.active_b && self.status.rx2.is_some();
+                let b = ui.ctx().animate_bool_with_time(egui::Id::new("rx-b-wash"), on_b, 0.2);
                 ui.painter().rect_filled(Rect::from_min_size(r.left_top(), vec2(16.0, 2.0)), CornerRadius::ZERO, theme::lerp(theme::EMBER, theme::VIOLET, b));
+                // The edge light: amber for A, violet for B. On a switch it
+                // runs out across the bar and back as its color turns.
+                let rm = self.reduce_motion();
+                let sweep = if rm { if on_b { 1.0 } else { 0.0 } } else { ui.ctx().animate_bool_with_time(egui::Id::new("rx-edge-sweep"), on_b, 0.45) };
+                let travel = (sweep * std::f32::consts::PI).sin() * 0.6;
+                theme::edge_light(ui.painter(), r.shrink2(vec2(0.0, 0.0)), theme::lerp(theme::AMBER, theme::VIOLET, b), travel);
             });
         // The toolbar's own items take about 880 px; the memories about 140
         // for their label and STORE and a fixed width a slot, so where they
@@ -1637,7 +1710,7 @@ impl App {
         if self.prefs.show_memories && !self.memories_on_toolbar {
             egui::Panel::top("memories")
                 .exact_size(30.0)
-                .frame(egui::Frame::new().fill(theme::surface_1()).inner_margin(egui::Margin::symmetric(14, 4)).stroke(Stroke::new(1.0, theme::line())))
+                .frame(egui::Frame::new().fill(self.chrome.panel_fill()).inner_margin(egui::Margin::symmetric(14, 4)).stroke(Stroke::new(1.0, theme::line())))
                 .show(ui, |ui| crate::bar::memory_row(self, ui));
         }
         // The display is the instrument: the column and the dock may not
@@ -1650,7 +1723,7 @@ impl App {
                 .resizable(true)
                 .default_size(self.prefs.side_width.min(side_max))
                 .size_range(260.0..=side_max)
-                .frame(egui::Frame::new().fill(theme::surface_1()).inner_margin(egui::Margin::same(10)))
+                .frame(egui::Frame::new().fill(self.chrome.panel_fill()).inner_margin(egui::Margin::same(10)))
                 .show(ui, |ui| {
                     theme::paint_weave(ui.painter(), ui.max_rect().expand(10.0));
                     crate::panels::side(self, ui);
@@ -1662,22 +1735,31 @@ impl App {
                 .resizable(true)
                 .default_size(self.prefs.dock_height.min(dock_max))
                 .size_range(120.0..=dock_max)
-                .frame(egui::Frame::new().fill(theme::surface_1()).inner_margin(egui::Margin::symmetric(10, 8)).stroke(Stroke::new(1.0, theme::line())))
+                .frame(egui::Frame::new().fill(self.chrome.panel_fill()).inner_margin(egui::Margin::symmetric(10, 8)).stroke(Stroke::new(1.0, theme::line())))
                 .show(ui, |ui| crate::dock::dock(self, ui));
             self.prefs.dock_height = resp.response.rect.height();
         }
+        let chrome_fill = self.chrome.panel_fill();
         egui::CentralPanel::default()
-            .frame(egui::Frame::new().fill(theme::ink()).inner_margin(egui::Margin::same(0)))
+            .frame(egui::Frame::new().fill(if self.chrome.mica { egui::Color32::TRANSPARENT } else { theme::ink() }).inner_margin(egui::Margin::same(0)))
             .show(ui, |ui| {
                 egui::Frame::new()
-                    .fill(theme::surface_1())
+                    .fill(chrome_fill)
                     .inner_margin(egui::Margin::symmetric(10, 2))
                     .show(ui, |ui| {
                         ui.set_width(ui.available_width());
                         ui.set_height(28.0);
                         crate::toolbar::toolbar(self, ui);
                     });
-                self.panafall(ui);
+                // The display set into the faceplate behind a bezel.
+                let plate = ui.available_rect_before_wrap();
+                ui.painter().rect_filled(plate, CornerRadius::ZERO, chrome_fill);
+                theme::paint_weave(ui.painter(), plate);
+                let screen = plate.shrink(BEZEL);
+                let mut child = ui.new_child(egui::UiBuilder::new().max_rect(screen));
+                self.panafall(&mut child);
+                theme::bezel(ui.painter(), screen, BEZEL);
+                ui.advance_cursor_after_rect(plate);
             });
         crate::screens::settings_window(self, &ctx);
         crate::screens::help_window(self, &ctx);
@@ -1819,6 +1901,33 @@ mod tests {
 
     fn harness_wh(w: f32, ht: f32) -> Harness<'static, T> {
         harness_with(Prefs { auto_connect: false, ..Default::default() }, w, ht)
+    }
+
+    #[test]
+    fn the_shade_strip_keeps_the_frequency_and_unrolls() {
+        let mut h = harness();
+        h.run_steps(2);
+        let ctx = h.ctx.clone();
+        h.state_mut().app.toggle_shade(&ctx);
+        h.run_steps(3);
+        assert!(h.state().app.shade.is_some());
+        // The strip alone: no receiver bar, the meter and the keys.
+        assert_eq!(h.query_all_by_label("RECEIVER A").count(), 0);
+        h.get_by_label("MUTE");
+        h.get_by_label("UNROLL").click();
+        h.run_steps(2);
+        assert!(h.state().app.shade.is_none());
+        h.get_by_label("RECEIVER A");
+    }
+
+    #[test]
+    fn a_decode_pings_the_display_once() {
+        let mut h = harness();
+        h.run_steps(2);
+        let event = proto::DecodeEvent { protocol: "P25".into(), kind: "voice header".into(), summary: "group call".into(), valid: true, fields: Default::default() };
+        h.state().wire.events.send(NetEvent::Decode { inspect_hz: 146.04e6, event, at: std::time::SystemTime::now() }).unwrap();
+        h.run_steps(2);
+        assert_eq!(h.state().app.pan.pings_live(), 1);
     }
 
     fn harness_with(prefs: Prefs, w: f32, ht: f32) -> Harness<'static, T> {

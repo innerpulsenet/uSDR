@@ -358,6 +358,8 @@ pub struct Panafall {
     pub hold: Option<Hold>,
     /// Where each receiver's flag was drawn last frame (A, B), for clicks.
     flags: [Option<Rect>; 2],
+    /// Decodes just heard: where, in what color, and when first drawn.
+    pings: Vec<(f64, Color32, Option<f64>)>,
 }
 
 /// A passband edge being dragged, or (Ctrl) the whole passband shifted.
@@ -436,6 +438,7 @@ impl Default for Panafall {
             edge_drag: None,
             rx_b: None,
             flags: [None, None],
+            pings: Vec::new(),
             archive: VecDeque::new(),
             archived: 0,
             hold: None,
@@ -665,6 +668,22 @@ impl Panafall {
         self.last_frame = Some(Instant::now());
     }
 
+    /// A decode was just heard at `hz`: its place on the display pulses once.
+    pub fn ping(&mut self, hz: f64, color: Color32) {
+        if self.pings.iter().any(|(f, _, born)| (f - hz).abs() < 1.0 && born.is_none()) {
+            return;
+        }
+        if self.pings.len() < 32 {
+            self.pings.push((hz, color, None));
+        }
+    }
+
+    /// Decode pings still showing, for tests.
+    #[cfg(test)]
+    pub fn pings_live(&self) -> usize {
+        self.pings.len()
+    }
+
     pub fn toggle_hold(&mut self) {
         // The live texture is not kept current while held.
         self.fade = None;
@@ -684,7 +703,7 @@ impl Panafall {
 
     /// The held waterfall: the archived rows from `back` downward, mapped to
     /// the display's current frequency axis, with UTC times beside them.
-    fn draw_held(&mut self, ui: &mut Ui, wf: Rect, time_axis: Rect, view: &View, px_w: usize) {
+    fn draw_held(&mut self, ui: &mut Ui, wf: Rect, time_axis: Rect, view: &View, px_w: usize) -> Option<WfDraw> {
         let rows_vis = (wf.height().round() as usize).clamp(1, 2048);
         // As live: no more columns than pixels, each the strongest it covers.
         let cols = ARCH_W.min(px_w.max(16));
@@ -693,7 +712,7 @@ impl Panafall {
         let lo = self.center_hz - self.span_hz / 2.0;
         let span = self.span_hz.max(1.0);
         let max_back = self.archive.len().saturating_sub(rows_vis.min(self.archive.len()));
-        let Some(h) = self.hold.as_mut() else { return };
+        let h = self.hold.as_mut()?;
         h.back = h.back.min(max_back);
         let key: HeldKey = (
             self.archived - h.back as u64,
@@ -750,8 +769,9 @@ impl Panafall {
             h.shown = Some(key);
         }
         let painter = ui.painter_at(wf);
-        if let Some(t) = &h.tex {
-            painter.image(t.id(), wf, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+        let drawn = h.tex.as_ref().map(|t| (t.id(), wf, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE));
+        if let Some((id, rect, uv, tint)) = drawn {
+            painter.image(id, rect, uv, tint);
         }
         // Wall-clock times on the held rows, about every 60 px.
         let p = ui.painter();
@@ -771,6 +791,7 @@ impl Panafall {
                 theme::text_2(),
             );
         }
+        drawn
     }
 
     /// Black and white points of the waterfall, dB.
@@ -1062,8 +1083,10 @@ impl Panafall {
         // ---- waterfall
         let rows_vis = (wf.height().round() as usize).clamp(1, WF_ROWS);
         let px_w = (wf.width() * ctx.pixels_per_point()).round() as usize;
+        // What the waterfall drew, for the overlays on it to frost.
+        let mut wf_draws: Vec<WfDraw> = Vec::new();
         if self.hold.is_some() {
-            self.draw_held(ui, wf, time_axis, view, px_w);
+            wf_draws.extend(self.draw_held(ui, wf, time_axis, view, px_w));
         } else if let Some(tex) = {
             self.upload(&ctx, view, now, reduce_motion, rows_vis, px_w);
             &self.wf_tex
@@ -1109,6 +1132,11 @@ impl Panafall {
                             pos2(1.0, (start + run) as f32 / WF_ROWS as f32),
                         );
                         painter_wf.image(id, rect, uv, tint);
+                        // The live picture only: mid-fade, the old palette
+                        // fades out from under the frost as it does here.
+                        if id == tex.id() {
+                            wf_draws.push((id, rect, uv, tint));
+                        }
                     }
                     i += run;
                 }
@@ -1169,6 +1197,8 @@ impl Panafall {
             }
         }
 
+        let mut frost = Frost { pan, wf, line: Vec::new(), glow: look.glow, fill: view.fill, bg: (bg_top, bg_bottom), wf_draws };
+
         // ---- replay controls on the waterfall: HOLD when live; when held,
         // how far back, and LIVE (ember: the live state) to return.
         {
@@ -1178,11 +1208,7 @@ impl Panafall {
             let r = Rect::from_min_size(pos2(wf.right() - g.size().x - 22.0, wf.top() + 8.0), g.size() + vec2(14.0, 8.0));
             let b = ui.interact(r, resp.id.with("hold"), Sense::click());
             let hover = b.hovered();
-            let (fill, stroke, text_c) = if held.is_some() {
-                (theme::ACTION, theme::ACTION, Color32::WHITE)
-            } else {
-                (alpha(theme::surface_3(), if hover { 0.95 } else { 0.8 }), theme::line_2(), theme::text())
-            };
+            let text_c = if held.is_some() { Color32::WHITE } else { theme::text() };
             if let Some(age) = held {
                 // Held: a timeline of the whole history beside LIVE, its
                 // knob where the display is, to drag or click anywhere along.
@@ -1200,7 +1226,7 @@ impl Panafall {
                 let ends_x = track.left() - 8.0 - ends.size().x;
                 let label_x = ends_x - 12.0 - label.size().x;
                 let plate = Rect::from_min_max(pos2(label_x - 8.0, r.top() - 4.0), pos2(r.right() + 4.0, r.bottom() + 4.0));
-                painter.rect_filled(plate, CornerRadius::same(5), alpha(theme::surface_1(), 0.92));
+                frost.plate(&painter, plate, 5, theme::line_2());
                 painter.galley(pos2(label_x, r.center().y - label.size().y / 2.0), label, theme::WARN);
                 // A hairline between where the display is and where the history starts.
                 painter.line_segment([pos2(ends_x - 6.0, r.top()), pos2(ends_x - 6.0, r.bottom())], Stroke::new(1.0, theme::line_2()));
@@ -1219,7 +1245,14 @@ impl Panafall {
                 }
                 t.on_hover_text("Drag or click to move through the held history; the wheel steps a second a notch");
             }
-            painter.rect(r, CornerRadius::same(3), fill, Stroke::new(1.0, stroke), egui::StrokeKind::Inside);
+            if held.is_some() {
+                painter.rect(r, CornerRadius::same(3), theme::ACTION, Stroke::new(1.0, theme::ACTION), egui::StrokeKind::Inside);
+            } else {
+                frost.plate(&painter, r, 3, theme::line_2());
+                if hover {
+                    painter.rect_filled(r, CornerRadius::same(3), alpha(theme::surface_4(), 0.45));
+                }
+            }
             painter.galley(r.min + vec2(7.0, 4.0), g, text_c);
             if b.on_hover_text(if held.is_some() { "Back to the live waterfall (H)" } else { "Hold the waterfall to look back up to five minutes (H)" }).clicked() {
                 self.toggle_hold();
@@ -1291,9 +1324,25 @@ impl Panafall {
                 let pts: Vec<Pos2> = xs.iter().enumerate().map(|(c, &x)| pos2(x, self.y_for(column(&self.peak, c), pan))).collect();
                 pan_painter.add(Shape::line(pts, Stroke::new(1.0, alpha(look.peak, 0.5))));
             }
-            pan_painter.add(Shape::line(line.clone(), Stroke::new(3.2, alpha(look.glow, 0.22))));
+            if view.style == Style::Classic {
+                pan_painter.add(Shape::line(line.clone(), Stroke::new(3.2, alpha(look.glow, 0.22))));
+            } else {
+                // Bloom: the glow around the trace grows with the signal, a
+                // haze on the floor and a halo on a strong carrier's crest.
+                // Drawn under the line, which itself is untouched.
+                let (top, h) = (pan.top(), pan.height().max(1.0));
+                for (width, lo, hi) in [(16.0, 0.0, 0.16), (7.0, 0.07, 0.30)] {
+                    let glow = look.glow;
+                    let stroke = egui::epaint::PathStroke::new_uv(width, move |_, p| {
+                        let lift = (1.0 - (p.y - top) / h).clamp(0.0, 1.0);
+                        alpha(glow, lo + (hi - lo) * lift.powf(1.6))
+                    });
+                    pan_painter.add(Shape::line(line.clone(), stroke));
+                }
+            }
             pan_painter.add(Shape::line(line.clone(), Stroke::new(1.25, look.core)));
         }
+        frost.line = line.clone();
 
         // ---- spurs being notched
         for off in &status.spurs_hz {
@@ -1367,6 +1416,24 @@ impl Panafall {
             let wf_band = Rect::from_min_max(pos2(px0.max(wf.left()), wf.top()), pos2(px1.min(wf.right()), wf.bottom()));
             painter.rect_filled(wf_band, CornerRadius::ZERO, alpha(theme::AMBER, 0.035 + 0.08 * pulse));
             if px1 - px0 > 6.0 {
+                // Light from the passband's edges, falling inward a little,
+                // as if the edges were lit glass.
+                let reach = ((px1 - px0) * 0.25).min(14.0);
+                for (x, d) in [(px0, 1.0), (px1, -1.0)] {
+                    if x < pan.left() || x > pan.right() {
+                        continue;
+                    }
+                    let inner = x + d * reach;
+                    let a = alpha(theme::AMBER, 0.16 + 0.16 * pulse);
+                    let mut mesh = Mesh::default();
+                    mesh.colored_vertex(pos2(x, pan.top()), a);
+                    mesh.colored_vertex(pos2(x, pan.bottom()), a);
+                    mesh.colored_vertex(pos2(inner, pan.top()), alpha(theme::AMBER, 0.0));
+                    mesh.colored_vertex(pos2(inner, pan.bottom()), alpha(theme::AMBER, 0.0));
+                    mesh.add_triangle(0, 1, 2);
+                    mesh.add_triangle(2, 1, 3);
+                    painter.with_clip_rect(pan).add(Shape::mesh(mesh));
+                }
                 for x in [px0, px1] {
                     painter.line_segment([pos2(x, pan.top()), pos2(x, pan.bottom())], Stroke::new(1.0, alpha(theme::AMBER, 0.45 + 0.4 * pulse)));
                     dashed_v(&painter, x, wf.top(), wf.bottom(), alpha(theme::AMBER, 0.22));
@@ -1431,10 +1498,45 @@ impl Panafall {
                         guard += 1;
                     }
                     placed.push(r);
-                    painter.rect(r, CornerRadius::same(3), alpha(theme::ink(), 0.88), Stroke::new(1.0, alpha(c, 0.6)), egui::StrokeKind::Inside);
+                    frost.plate(&painter, r, 3, alpha(c, 0.6));
                     painter.galley(pos2(r.left() + 5.0, r.center().y - g.size().y / 2.0), g, theme::text());
                 }
             }
+        }
+
+        // ---- decodes just heard: a ring rises from the foot of the display
+        // where each was, and a faint column of its color fades there.
+        if reduce_motion {
+            self.pings.clear();
+        }
+        self.pings.retain(|(_, _, born)| born.is_none_or(|b| now - b < 0.9));
+        for (_, _, born) in &mut self.pings {
+            born.get_or_insert(now);
+        }
+        let pings: Vec<(f64, Color32, f64)> = self.pings.iter().map(|(h, c, b)| (*h, *c, b.unwrap_or(now))).collect();
+        for (hz, c, born) in &pings {
+            let t = ((now - born) / 0.9) as f32;
+            let e = 1.0 - (1.0 - t).powi(3);
+            let x = self.x_for(*hz, pan);
+            if x < pan.left() || x > pan.right() {
+                continue;
+            }
+            let fade = 1.0 - t;
+            let foot = pos2(x, pan.bottom() - 6.0);
+            painter.circle_stroke(foot, 4.0 + 18.0 * e, Stroke::new(1.5, alpha(*c, 0.8 * fade)));
+            painter.circle_filled(foot, 3.0, alpha(*c, fade));
+            let col = Rect::from_min_max(pos2(x - 6.0, pan.top()), pos2(x + 6.0, pan.bottom()));
+            let mut mesh = Mesh::default();
+            mesh.colored_vertex(col.left_top(), alpha(*c, 0.0));
+            mesh.colored_vertex(col.right_top(), alpha(*c, 0.0));
+            mesh.colored_vertex(col.left_bottom(), alpha(*c, 0.22 * fade));
+            mesh.colored_vertex(col.right_bottom(), alpha(*c, 0.22 * fade));
+            mesh.add_triangle(0, 1, 2);
+            mesh.add_triangle(2, 1, 3);
+            painter.add(Shape::mesh(mesh));
+        }
+        if !self.pings.is_empty() {
+            crate::anim::more(&ctx);
         }
 
         // ---- squelch mark (a visual threshold; the server has no squelch)
@@ -1444,14 +1546,14 @@ impl Panafall {
             dashed_h(&painter, pan.left(), pan.right(), y, c);
             let g = painter.layout_no_wrap(format!("MARK {sql:.0} dB"), theme::mono(10.0), theme::ERR);
             let r = Rect::from_min_size(pos2(pan.left() + 6.0, y - 8.0), vec2(g.size().x + 8.0, 15.0));
-            painter.rect(r, CornerRadius::same(3), alpha(theme::ink(), 0.9), Stroke::new(1.0, alpha(theme::ERR, 0.6)), egui::StrokeKind::Inside);
+            frost.plate(&painter, r, 3, alpha(theme::ERR, 0.6));
             painter.galley(pos2(r.left() + 4.0, r.center().y - g.size().y / 2.0), g, theme::ERR);
         }
 
         // ---- slice flag at the carrier
         if on_screen {
             let active_a = !self.rx_b.as_ref().is_some_and(|b| b.active);
-            self.flags[0] = Some(flag.paint(&painter, pan, ix, line_y_at(&line, ix).unwrap_or(pan.center().y), active_a));
+            self.flags[0] = Some(flag.paint(&painter, &frost, pan, pos2(ix, line_y_at(&line, ix).unwrap_or(pan.center().y)), active_a));
         } else {
             self.flags[0] = None;
         }
@@ -1472,7 +1574,7 @@ impl Panafall {
                     theme::VIOLET,
                     Stroke::NONE,
                 ));
-                self.flags[1] = Some(paint_b_flag(&painter, pan, bx, &b));
+                self.flags[1] = Some(paint_b_flag(&painter, &frost, pan, bx, &b));
             }
         }
 
@@ -1582,7 +1684,7 @@ impl Panafall {
                 painter.circle(pos2(lx, y), 3.0, look.core, Stroke::new(1.0, theme::ink()));
                 let g = painter.layout_no_wrap(format!("{l:.0}"), theme::mono_bold(10.0), theme::text());
                 let plate = Rect::from_center_size(pos2(db_axis.right() - 6.0 - g.size().x / 2.0, y), g.size() + vec2(8.0, 4.0));
-                painter.rect(plate, CornerRadius::same(3), alpha(theme::surface_3(), 0.96), Stroke::new(1.0, theme::line_2()), egui::StrokeKind::Inside);
+                frost.plate(&painter, plate, 3, theme::line_2());
                 painter.galley(plate.min + vec2(4.0, 2.0), g, theme::text());
             }
             let g = painter.layout_no_wrap(text, theme::mono(11.0), theme::text());
@@ -1593,7 +1695,7 @@ impl Panafall {
             if r.bottom() > full.bottom() - 4.0 {
                 r = r.translate(vec2(0.0, -r.height() - 28.0));
             }
-            painter.rect(r, CornerRadius::same(4), alpha(theme::surface_3(), 0.94), Stroke::new(1.0, theme::line_2()), egui::StrokeKind::Inside);
+            frost.plate(&painter, r, 4, theme::line_2());
             painter.galley(r.min + vec2(6.0, 4.0), g, theme::text());
 
             // Squelch mark drag.
@@ -1897,6 +1999,106 @@ pub fn dashed_h(painter: &egui::Painter, x0: f32, x1: f32, y: f32, c: Color32) {
 }
 
 /// The card at the carrier: what the receiver is on and what it hears.
+/// A texture drawn on the waterfall: the texture, where, which part of it
+/// and its tint.
+type WfDraw = (egui::TextureId, Rect, Rect, Color32);
+
+/// What lies behind the overlays the display draws over itself, so they can
+/// show it through frosted glass. egui cannot read back the screen, but the
+/// display owns every pixel under its own overlays: the waterfall is a
+/// texture it can draw again, offset and averaged, and the trace a line it
+/// can draw again as soft light. Only the overlays are touched; the data
+/// they sit on is drawn as it always was.
+pub(crate) struct Frost {
+    pan: Rect,
+    wf: Rect,
+    line: Vec<Pos2>,
+    glow: Color32,
+    fill: bool,
+    /// The panadapter's ground, top and foot: the glass takes its tint.
+    bg: (Color32, Color32),
+    wf_draws: Vec<WfDraw>,
+}
+
+impl Frost {
+    /// Nine taps on a square, about 5 px apart: a box blur about 15 px wide.
+    const TAPS: [(f32, f32); 9] = [(0.0, 0.0), (-1.0, -1.0), (1.0, 1.0), (1.0, -1.0), (-1.0, 1.0), (0.0, -1.0), (0.0, 1.0), (-1.0, 0.0), (1.0, 0.0)];
+
+    /// A frosted plate over `r`: what is behind it blurred and dimmed, a
+    /// rim in `rim`, and the glass sheen lit from above.
+    pub(crate) fn plate(&self, painter: &egui::Painter, r: Rect, radius: u8, rim: Color32) {
+        let cr = CornerRadius::same(radius);
+        painter.rect_filled(r, cr, theme::surface_2());
+        // The rounded corners are left to the base: the blur inside is
+        // clipped a corner radius short of them.
+        let inner = r.shrink(radius as f32 * 0.3);
+        let w = inner.intersect(self.wf).intersect(painter.clip_rect());
+        if w.is_positive() && !self.wf_draws.is_empty() {
+            let pw = painter.with_clip_rect(w);
+            // Each tap drawn at 1/(k+1) over the ones before leaves their
+            // mean: the picture averaged over the nine offsets.
+            for (k, (dx, dy)) in Self::TAPS.iter().enumerate() {
+                let d = vec2(*dx, *dy) * 5.0;
+                let a = 1.0 / (k as f32 + 1.0);
+                for (id, rect, uv, tint) in &self.wf_draws {
+                    pw.image(*id, rect.translate(d), *uv, tint.gamma_multiply(a));
+                }
+            }
+            pw.rect_filled(w, CornerRadius::ZERO, alpha(theme::surface_2(), 0.62));
+        }
+        let p = inner.intersect(self.pan).intersect(painter.clip_rect());
+        if p.is_positive() {
+            // The ground behind, at its height in the panadapter.
+            let at = |y: f32| theme::lerp(self.bg.0, self.bg.1, (y - self.pan.top()) / self.pan.height().max(1.0));
+            let a = 0.6;
+            let mesh = Mesh {
+                indices: vec![0, 1, 2, 2, 1, 3],
+                vertices: vec![
+                    crate::brand::vtx(p.left_top(), alpha(at(p.top()), a)),
+                    crate::brand::vtx(p.right_top(), alpha(at(p.top()), a)),
+                    crate::brand::vtx(p.left_bottom(), alpha(at(p.bottom()), a)),
+                    crate::brand::vtx(p.right_bottom(), alpha(at(p.bottom()), a)),
+                ],
+                texture_id: egui::TextureId::default(),
+            };
+            painter.add(Shape::mesh(mesh));
+        }
+        if p.is_positive() && self.line.len() >= 2 {
+            let pp = painter.with_clip_rect(p);
+            // What the glass shows is blurred anyway: the trace as the
+            // crest of every 6 px, eased, so a dense noise floor does not
+            // stack its wide strokes over and over into a bright band.
+            let raw: Vec<Pos2> = self.line.iter().copied().filter(|q| q.x >= r.left() - 30.0 && q.x <= r.right() + 30.0).collect();
+            let mut pts: Vec<Pos2> = raw
+                .chunks(6)
+                .map(|c| {
+                    let x = c.iter().map(|q| q.x).sum::<f32>() / c.len() as f32;
+                    pos2(x, c.iter().map(|q| q.y).fold(f32::INFINITY, f32::min))
+                })
+                .collect();
+            for _ in 0..2 {
+                let src = pts.clone();
+                for i in 1..pts.len().saturating_sub(1) {
+                    pts[i].y = 0.25 * src[i - 1].y + 0.5 * src[i].y + 0.25 * src[i + 1].y;
+                }
+            }
+            if pts.len() >= 2 {
+                // A small label is one line of text with the trace often
+                // running right through it: its glass is more frosted.
+                let k = if r.height() < 30.0 { 0.35 } else { 1.0 };
+                if self.fill {
+                    fill_under(&pp, &pts, self.pan.bottom(), self.glow, 0.10 * k);
+                }
+                for (width, a) in [(30.0, 0.05), (16.0, 0.08), (8.0, 0.11)] {
+                    pp.add(Shape::line(pts.clone(), Stroke::new(width, alpha(self.glow, a * k))));
+                }
+            }
+        }
+        painter.rect_stroke(r, cr, Stroke::new(1.0, rim), egui::StrokeKind::Inside);
+        theme::glass(painter, r);
+    }
+}
+
 #[derive(Default, Clone)]
 pub struct SliceFlag {
     pub freq_hz: f64,
@@ -1926,9 +2128,11 @@ pub struct FlagRds {
 }
 
 impl SliceFlag {
-    fn paint(&self, painter: &egui::Painter, pan: Rect, x: f32, trace_y: f32, active: bool) -> Rect {
+    /// `at`: the carrier's x and the trace's height there.
+    fn paint(&self, painter: &egui::Painter, frost: &Frost, pan: Rect, at: Pos2, active: bool) -> Rect {
+        let (x, trace_y) = (at.x, at.y);
         if let Some(rds) = &self.rds {
-            return self.paint_rds(painter, pan, x, trace_y, active, rds);
+            return self.paint_rds(painter, frost, pan, at, active, rds);
         }
         let bottom = match (&self.protocol, self.snr_db) {
             (Some(p), Some(s)) => format!("{p} · SNR {s:.1} dB"),
@@ -1947,8 +2151,7 @@ impl SliceFlag {
         // Keep the card clear of the trace where there is room above it.
         let top = (pan.top() + 8.0).max((trace_y - h - 14.0).min(pan.top() + 8.0));
         let r = Rect::from_min_size(pos2(left, top), vec2(w, h));
-        painter.rect(r, CornerRadius::same(4), alpha(theme::surface_2(), 0.93), Stroke::new(1.0, alpha(theme::AMBER, 0.45)), egui::StrokeKind::Inside);
-        theme::glass(painter, r);
+        frost.plate(painter, r, 4, alpha(theme::AMBER, 0.45));
         // The index tick: the active receiver.
         if active {
             painter.rect_filled(Rect::from_min_size(r.left_top(), vec2(16.0, 2.0)), CornerRadius::ZERO, theme::EMBER);
@@ -1956,7 +2159,7 @@ impl SliceFlag {
         receiver_tab(painter, r, "A", theme::AMBER, active);
         let anchor_x = if right_side { r.left() } else { r.right() };
         painter.line_segment([pos2(x, r.top() + 14.0), pos2(anchor_x, r.top() + 14.0)], Stroke::new(1.0, alpha(theme::AMBER, 0.5)));
-        painter.text(r.left_top() + vec2(27.0, 7.0), Align2::LEFT_TOP, crate::tuning::fmt_mhz(self.freq_hz, 4), theme::mono_bold(14.0), theme::text());
+        crate::widgets::rolling_text(painter, egui::Id::new("flag-a-freq"), r.left_top() + vec2(27.0, 7.0), Align2::LEFT_TOP, &crate::tuning::fmt_mhz(self.freq_hz, 4), theme::mono_bold(14.0), theme::text());
         let chip = format!("{} · {}", self.mode.label(), crate::tuning::fmt_short_hz(self.bandwidth_hz));
         painter.text(r.right_top() + vec2(-8.0, 9.0), Align2::RIGHT_TOP, chip, theme::mono(10.0), theme::AMBER);
         // Mini S-meter.
@@ -1977,7 +2180,8 @@ impl SliceFlag {
     /// The flag for a broadcast station with RDS: a line for who it is and
     /// its program type with the SNR beside them, and a line for what is on,
     /// a text still arriving shown with its gaps and a bar of how much is in.
-    fn paint_rds(&self, painter: &egui::Painter, pan: Rect, x: f32, trace_y: f32, active: bool, rds: &FlagRds) -> Rect {
+    fn paint_rds(&self, painter: &egui::Painter, frost: &Frost, pan: Rect, at: Pos2, active: bool, rds: &FlagRds) -> Rect {
+        let (x, trace_y) = (at.x, at.y);
         let rec_w = if self.recording { 16.0 } else { 0.0 };
         let fade = |c: Color32| if rds.locked { c } else { theme::text_3() };
         let who_font = theme::sans_semibold(12.5);
@@ -1994,15 +2198,14 @@ impl SliceFlag {
         let left = if right_side { x + 10.0 } else { x - 10.0 - w };
         let top = (pan.top() + 8.0).max((trace_y - h - 14.0).min(pan.top() + 8.0));
         let r = Rect::from_min_size(pos2(left, top), vec2(w, h));
-        painter.rect(r, CornerRadius::same(4), alpha(theme::surface_2(), 0.93), Stroke::new(1.0, alpha(theme::AMBER, 0.45)), egui::StrokeKind::Inside);
-        theme::glass(painter, r);
+        frost.plate(painter, r, 4, alpha(theme::AMBER, 0.45));
         if active {
             painter.rect_filled(Rect::from_min_size(r.left_top(), vec2(16.0, 2.0)), CornerRadius::ZERO, theme::EMBER);
         }
         receiver_tab(painter, r, "A", theme::AMBER, active);
         let anchor_x = if right_side { r.left() } else { r.right() };
         painter.line_segment([pos2(x, r.top() + 14.0), pos2(anchor_x, r.top() + 14.0)], Stroke::new(1.0, alpha(theme::AMBER, 0.5)));
-        painter.text(r.left_top() + vec2(27.0, 7.0), Align2::LEFT_TOP, crate::tuning::fmt_mhz(self.freq_hz, 4), theme::mono_bold(14.0), theme::text());
+        crate::widgets::rolling_text(painter, egui::Id::new("flag-a-freq"), r.left_top() + vec2(27.0, 7.0), Align2::LEFT_TOP, &crate::tuning::fmt_mhz(self.freq_hz, 4), theme::mono_bold(14.0), theme::text());
         let chip = format!("{} · {}", self.mode.label(), crate::tuning::fmt_short_hz(self.bandwidth_hz));
         painter.text(r.right_top() + vec2(-8.0, 9.0), Align2::RIGHT_TOP, chip, theme::mono(10.0), theme::AMBER);
         let bar = Rect::from_min_size(r.left_top() + vec2(8.0, 30.0), vec2(w - 64.0, 6.0));
@@ -2115,20 +2318,19 @@ fn resample(old: &[f32], (oc, os): (f64, f64), n: usize, (nc, ns): (f64, f64)) -
 
 /// Receiver B's flag: smaller than A's, in violet, set below it so the two
 /// never cover each other when the receivers are close.
-fn paint_b_flag(painter: &egui::Painter, pan: Rect, x: f32, b: &RxB) -> Rect {
+fn paint_b_flag(painter: &egui::Painter, frost: &Frost, pan: Rect, x: f32, b: &RxB) -> Rect {
     let (w, h) = (150.0, 44.0);
     let right = x + 10.0 + w < pan.right() - 4.0;
     let left = if right { x + 10.0 } else { x - 10.0 - w };
     let r = Rect::from_min_size(pos2(left, pan.top() + 78.0), vec2(w, h));
-    painter.rect(r, CornerRadius::same(4), alpha(theme::surface_2(), 0.93), Stroke::new(1.0, alpha(theme::VIOLET, 0.55)), egui::StrokeKind::Inside);
-    theme::glass(painter, r);
+    frost.plate(painter, r, 4, alpha(theme::VIOLET, 0.55));
     if b.active {
         painter.rect_filled(Rect::from_min_size(r.left_top(), vec2(16.0, 2.0)), CornerRadius::ZERO, theme::EMBER);
     }
     receiver_tab(painter, r, "B", theme::VIOLET, b.active);
     let anchor = if right { r.left() } else { r.right() };
     painter.line_segment([pos2(x, r.top() + 12.0), pos2(anchor, r.top() + 12.0)], Stroke::new(1.0, alpha(theme::VIOLET, 0.5)));
-    painter.text(r.left_top() + vec2(27.0, 6.0), Align2::LEFT_TOP, crate::tuning::fmt_mhz(b.freq_hz, 4), theme::mono_bold(12.5), theme::text());
+    crate::widgets::rolling_text(painter, egui::Id::new("flag-b-freq"), r.left_top() + vec2(27.0, 6.0), Align2::LEFT_TOP, &crate::tuning::fmt_mhz(b.freq_hz, 4), theme::mono_bold(12.5), theme::text());
     painter.text(r.right_top() + vec2(-8.0, 7.0), Align2::RIGHT_TOP, b.mode.label(), theme::mono(10.0), theme::VIOLET);
     match (&b.note, b.level) {
         (Some(n), _) => {

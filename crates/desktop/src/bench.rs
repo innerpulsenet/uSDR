@@ -443,26 +443,40 @@ fn shots() {
         wire: Option<crate::net::Wire>,
         with_b: bool,
         wfm: bool,
+        night: bool,
+        shade: bool,
+        title: bool,
     }
-    // USDR_SHOTS_SIZES overrides the set: `1536x830,1600x980-b,1600x980-wfm`.
-    let sizes: Vec<(f32, f32, bool, bool)> = match std::env::var("USDR_SHOTS_SIZES") {
+    // USDR_SHOTS_SIZES overrides the set: `1536x830,1600x980-b,1600x980-wfm`,
+    // `1600x980-night` for the Night ground, `1000x56-shade` for the strip,
+    // `1600x980-title` for the integrated title bar.
+    let sizes: Vec<(f32, f32, bool, bool, bool, bool, bool)> = match std::env::var("USDR_SHOTS_SIZES") {
         Ok(v) => v
             .split(',')
             .filter_map(|s| {
                 let (wh, rest) = s.trim().split_once('-').map_or((s.trim(), ""), |(a, b)| (a, b));
                 let (w, h) = wh.split_once('x')?;
-                Some((w.parse().ok()?, h.parse().ok()?, rest.contains('b'), rest.contains("wfm")))
+                let flags: Vec<&str> = rest.split('-').collect();
+                Some((w.parse().ok()?, h.parse().ok()?, flags.contains(&"b"), flags.contains(&"wfm"), flags.contains(&"night"), flags.contains(&"shade"), flags.contains(&"title")))
             })
             .collect(),
-        Err(_) => vec![(1600.0, 980.0, false, false), (1900.0, 980.0, false, false), (1400.0, 900.0, false, false), (1600.0, 980.0, true, false), (1600.0, 980.0, false, true)],
+        Err(_) => vec![
+            (1600.0, 980.0, false, false, false, false, false),
+            (1900.0, 980.0, false, false, false, false, false),
+            (1400.0, 900.0, false, false, false, false, false),
+            (1600.0, 980.0, true, false, false, false, false),
+            (1600.0, 980.0, false, true, false, false, false),
+        ],
     };
-    for (w, h, with_b, wfm) in sizes {
+    for (w, h, with_b, wfm, night, shade, title) in sizes {
         let mut harness = Harness::builder().with_size(egui::vec2(w, h)).wgpu().build_ui_state(
             |ui, s: &mut S| {
                 let ctx = ui.ctx().clone();
                 if s.app.is_none() {
-                    let prefs = Prefs { auto_connect: false, ..Default::default() };
+                    let ground = if s.night { crate::theme::Ground::Night } else { crate::theme::Ground::Carbon };
+                    let prefs = Prefs { auto_connect: false, ground, ..Default::default() };
                     let mut app = App::build(&ctx, prefs, Player::silent(), Player::silent(), None);
+                    app.chrome.own_titlebar = s.title;
                     let (link, wire) = Link::wire();
                     app.link = Some(link);
                     let info = proto::ServerInfo { name: "usdr".into(), version: "shots".into(), api: 2, features: vec!["filter".into(), "rx2".into()] };
@@ -559,13 +573,16 @@ fn shots() {
                     return;
                 }
                 let app = s.app.as_mut().unwrap();
+                if s.shade && app.shade.is_none() && app.have_status {
+                    app.toggle_shade(&ctx);
+                }
                 app.tick(&ctx);
                 app.draw(ui);
                 if let Some(wire) = &s.wire {
                     while wire.reqs.try_recv().is_ok() {}
                 }
             },
-            S { app: None, wire: None, with_b, wfm },
+            S { app: None, wire: None, with_b, wfm, night, shade, title },
         );
         let mut rng = Rng(0x2545_f491_4f6c_dd1d);
         harness.run_steps(2);
@@ -577,7 +594,16 @@ fn shots() {
         }
         harness.run_steps(20);
         let img = harness.render().expect("render");
-        let name = format!("shot-{}x{}{}{}.png", w as u32, h as u32, if with_b { "-b" } else { "" }, if wfm { "-wfm" } else { "" });
+        let name = format!(
+            "shot-{}x{}{}{}{}{}{}.png",
+            w as u32,
+            h as u32,
+            if with_b { "-b" } else { "" },
+            if wfm { "-wfm" } else { "" },
+            if night { "-night" } else { "" },
+            if shade { "-shade" } else { "" },
+            if title { "-title" } else { "" },
+        );
         img.save(out.join(&name)).expect("save");
         println!("SHOT {}", out.join(&name).display());
     }

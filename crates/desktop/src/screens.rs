@@ -201,16 +201,21 @@ pub fn settings_window(app: &mut App, ctx: &egui::Context) {
                 });
 
                 section(ui, "Interface");
-                ui.horizontal(|ui| {
+                ui.horizontal_top(|ui| {
                     ui.label("Ground");
                     use crate::theme::Ground;
-                    for g in [Ground::Carbon, Ground::Ink] {
+                    ui.vertical(|ui| for g in Ground::ALL {
                         if ui.radio(app.prefs.ground == g, g.label()).clicked() && app.prefs.ground != g {
                             app.prefs.ground = g;
                             crate::theme::set_ground(ctx, g);
                         }
-                    }
+                    });
                 });
+                ui.checkbox(&mut app.prefs.own_titlebar, "Integrated title bar: the masthead moves and sizes the window (on the next start)")
+                    .on_hover_text("Replaces the system's title bar and frame. On Windows 11 this gives up the snap-layout menu on the maximize key.");
+                if cfg!(windows) {
+                    ui.checkbox(&mut app.prefs.mica, "Mica backdrop behind the chrome, Windows 11 (on the next start)");
+                }
                 ui.checkbox(&mut app.prefs.shortcuts, "Keyboard tuning shortcuts (arrows, PgUp/PgDn, M, C, R, digits)");
                 ui.checkbox(&mut app.prefs.show_scope, "Show the scope in the dock");
                 ui.horizontal(|ui| {
@@ -236,7 +241,7 @@ pub fn settings_window(app: &mut App, ctx: &egui::Context) {
 
 fn section(ui: &mut Ui, title: &str) {
     ui.add_space(10.0);
-    ui.label(RichText::new(title.to_uppercase()).font(theme::mono(10.5)).color(theme::text_3()).extra_letter_spacing(1.2));
+    theme::engraved(ui, &title.to_uppercase(), theme::mono(10.5), theme::text_3(), 1.2, egui::Sense::hover());
     ui.separator();
 }
 
@@ -276,6 +281,7 @@ pub fn help_window(app: &mut App, ctx: &egui::Context) {
                 ("Ctrl+1 … 9", "recall a memory"),
                 ("S / D", "show or hide the right column / the dock"),
                 ("F11", "full screen"),
+                ("F9", "roll up to a strip (shade)"),
                 ("Ctrl+,", "settings"),
                 ("Drop a .iq + .json", "decode it on the server"),
             ];

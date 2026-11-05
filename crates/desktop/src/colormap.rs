@@ -205,6 +205,25 @@ impl Colormap {
                 .collect()
         });
         let idx = Colormap::ALL.iter().position(|m| *m == self).unwrap_or(0);
+        if crate::theme::night() {
+            // Night: each palette by its brightness alone, so it still
+            // climbs from dark to bright once it is all red.
+            static NIGHT: OnceLock<Vec<[Color32; 256]>> = OnceLock::new();
+            let night = NIGHT.get_or_init(|| {
+                luts.iter()
+                    .map(|l| {
+                        let mut out = *l;
+                        for c in &mut out {
+                            let [r, g, b, _] = c.to_array();
+                            let y = (0.2126 * r as f32 + 0.7152 * g as f32 + 0.0722 * b as f32) as u8;
+                            *c = Color32::from_gray(y);
+                        }
+                        out
+                    })
+                    .collect()
+            });
+            return &night[idx];
+        }
         &luts[idx]
     }
 

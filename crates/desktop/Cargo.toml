@@ -23,6 +23,9 @@ cpal = "0.18"
 rfd = "0.17"
 directories = "6"
 
+[target.'cfg(windows)'.dependencies]
+window-vibrancy = "0.8"
+
 [dev-dependencies]
 egui_kittest = { version = "0.35", features = ["wgpu"] }
 

@@ -15,6 +15,7 @@ mod bandplan;
 #[cfg(test)]
 mod bench;
 mod brand;
+mod chrome;
 mod colormap;
 mod decoders;
 mod dock;
@@ -24,6 +25,7 @@ mod panels;
 mod prefs;
 mod scope;
 mod screens;
+mod shade;
 mod spectrum;
 mod theme;
 mod toolbar;
@@ -244,6 +246,14 @@ fn main() -> anyhow::Result<()> {
         .with_min_inner_size([1100.0, 700.0]);
     if let Some(i) = icon() {
         viewport = viewport.with_icon(std::sync::Arc::new(i));
+    }
+    // The window's frame options take effect as it opens.
+    let prefs = prefs::Prefs::load();
+    if prefs.own_titlebar {
+        viewport = viewport.with_decorations(false);
+    }
+    if cfg!(windows) && prefs.mica {
+        viewport = viewport.with_transparent(true);
     }
     // QA: USDR_QA_SIZE=1740x1000 opens at that size, ignoring the saved one.
     let qa_size = std::env::var("USDR_QA_SIZE").ok().and_then(|v| {

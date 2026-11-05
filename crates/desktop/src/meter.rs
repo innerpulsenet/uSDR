@@ -49,6 +49,9 @@ pub struct Meter {
     peak: f32,
     peak_at: f64,
     pub clipping: bool,
+    /// Each segment's phosphor: 1 lit, fading after the needle drops below
+    /// it, so a burst leaves a trace of how far it reached.
+    glow: Vec<f32>,
 }
 
 impl Meter {
@@ -130,8 +133,22 @@ impl Meter {
         let lit_to = bar.left() + bar.width() * pos;
         let at = |db: f32| bar.left() + bar.width() * frac(db);
         let (s9_x, p40_x) = (at(S9_DBFS), at(-20.0));
-        let mut x = bar.left();
-        while x < bar.right() - 0.5 {
+        let n = ((bar.width() - 0.5) / 3.0).ceil().max(0.0) as usize;
+        if self.glow.len() != n {
+            self.glow = vec![0.0; n];
+        }
+        // Afterglow: a segment the needle leaves fades over about a quarter
+        // second. The reading itself is never held back: the needle's own
+        // segments are lit at full the frame it reaches them.
+        let decay = if reduce_motion { 0.0 } else { (-dt / 0.25).exp() };
+        let mut fading = false;
+        for (i, g) in self.glow.iter_mut().enumerate() {
+            let x = bar.left() + i as f32 * 3.0;
+            let lit = if x < lit_to { 1.0 } else { 0.0 };
+            *g = (*g * decay).max(lit);
+            if *g < 1.0 && *g > 0.02 {
+                fading = true;
+            }
             let r = Rect::from_min_max(pos2(x, bar.top()), pos2((x + 2.0).min(bar.right()), bar.bottom()));
             let c = if x < s9_x {
                 theme::OK
@@ -140,8 +157,14 @@ impl Meter {
             } else {
                 theme::EMBER
             };
-            p.rect_filled(r, CornerRadius::ZERO, if x < lit_to { c } else { theme::alpha(c, 0.10) });
-            x += 3.0;
+            if *g > 0.02 {
+                p.rect_filled(r.expand(1.0), CornerRadius::ZERO, theme::alpha(c, 0.16 * *g));
+            }
+            let lamp = if lit > 0.0 { 1.0 } else { 0.10 + 0.55 * *g };
+            p.rect_filled(r, CornerRadius::ZERO, theme::alpha(c, lamp));
+        }
+        if fading {
+            crate::anim::more(ui.ctx());
         }
         if let Some(fl) = self.floor {
             let fx = at(fl);

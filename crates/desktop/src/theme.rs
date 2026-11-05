@@ -18,13 +18,19 @@ pub enum Ground {
     #[default]
     Carbon,
     Ink,
+    /// Carbon in red alone, for operating in the dark with dark-adapted
+    /// eyes: every color the app draws is turned to its brightness in red.
+    Night,
 }
 
 impl Ground {
+    pub const ALL: [Ground; 3] = [Ground::Carbon, Ground::Ink, Ground::Night];
+
     pub fn label(self) -> &'static str {
         match self {
             Ground::Carbon => "Carbon — brushed steel on cool blacks",
             Ground::Ink => "Ink — warm product ground",
+            Ground::Night => "Night — red only, for dark-adapted eyes",
         }
     }
 }
@@ -65,14 +71,29 @@ const INK_P: Palette = Palette {
     select: rgb(0x7a521f),
 };
 
+// Night is Carbon's palette, its ground a hair off Carbon's so whatever
+// caches colors by the ground (the waterfall) redraws on the switch.
+const NIGHT_P: Palette = Palette { ground: rgb(0x0b0c10), ..CARBON };
+
 static GROUND: AtomicU8 = AtomicU8::new(0);
 
 fn pal() -> &'static Palette {
-    if GROUND.load(Ordering::Relaxed) == 1 { &INK_P } else { &CARBON }
+    match GROUND.load(Ordering::Relaxed) {
+        1 => &INK_P,
+        2 => &NIGHT_P,
+        _ => &CARBON,
+    }
 }
 
+/// The ground's materials: Night is built on Carbon and reports it, so it
+/// keeps the weave, the brushed plate and the steel.
 pub fn ground() -> Ground {
     if GROUND.load(Ordering::Relaxed) == 1 { Ground::Ink } else { Ground::Carbon }
+}
+
+/// Whether everything is being drawn in red alone.
+pub fn night() -> bool {
+    GROUND.load(Ordering::Relaxed) == 2
 }
 
 pub fn ink() -> Color32 {
@@ -198,7 +219,16 @@ pub fn install(ctx: &egui::Context, g: Ground) {
 
 /// Switch grounds and restyle every widget to match.
 pub fn set_ground(ctx: &egui::Context, g: Ground) {
-    GROUND.store(if g == Ground::Ink { 1 } else { 0 }, Ordering::Relaxed);
+    GROUND.store(
+        match g {
+            Ground::Carbon => 0,
+            Ground::Ink => 1,
+            Ground::Night => 2,
+        },
+        Ordering::Relaxed,
+    );
+    ctx.add_plugin(NightFilter);
+    ctx.request_repaint();
     ctx.all_styles_mut(|style| {
         style.text_styles = [
             (TextStyle::Small, sans(11.0)),
@@ -225,10 +255,10 @@ pub fn set_ground(ctx: &egui::Context, g: Ground) {
         v.window_stroke = Stroke::new(1.0, line_2());
         v.window_corner_radius = egui::CornerRadius::same(6);
         v.menu_corner_radius = egui::CornerRadius::same(RADIUS);
-        v.window_shadow = egui::Shadow { offset: [0, 10], blur: 28, spread: 0, color: Color32::from_black_alpha(160) };
-        v.popup_shadow = egui::Shadow { offset: [0, 6], blur: 16, spread: 0, color: Color32::from_black_alpha(150) };
-        v.selection.bg_fill = if g == Ground::Carbon { alpha(pal().select, 0.85) } else { alpha(AMBER, 0.28) };
-        v.selection.stroke = Stroke::new(1.0, if g == Ground::Carbon { Color32::WHITE } else { AMBER });
+        v.window_shadow = shadow(Depth::Floating);
+        v.popup_shadow = egui::Shadow { blur: 18, offset: [0, 6], ..shadow(Depth::Floating) };
+        v.selection.bg_fill = if g != Ground::Ink { alpha(pal().select, 0.85) } else { alpha(AMBER, 0.28) };
+        v.selection.stroke = Stroke::new(1.0, if g != Ground::Ink { Color32::WHITE } else { AMBER });
         v.hyperlink_color = AMBER;
         v.warn_fg_color = WARN;
         v.error_fg_color = ERR;
@@ -394,5 +424,388 @@ pub fn paint_weave(painter: &egui::Painter, r: egui::Rect) {
     if let Some(t) = weave(painter.ctx()) {
         let uv = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(r.width() / 16.0, r.height() / 16.0));
         painter.image(t.id(), r, uv, Color32::WHITE);
+    }
+}
+
+/// A lamp's outline: what shape it lights in, so a state reads by shape as
+/// well as color.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum LampShape {
+    Round,
+    Triangle,
+    Square,
+}
+
+fn lamp_outline(shape: LampShape, c: egui::Pos2, r: f32) -> Vec<egui::Pos2> {
+    match shape {
+        LampShape::Round => (0..24)
+            .map(|k| {
+                let a = k as f32 / 24.0 * std::f32::consts::TAU;
+                c + egui::vec2(a.cos(), a.sin()) * r
+            })
+            .collect(),
+        LampShape::Triangle => {
+            let r = r * 1.18;
+            vec![c + egui::vec2(0.0, -r), c + egui::vec2(r * 0.95, r * 0.7), c + egui::vec2(-r * 0.95, r * 0.7)]
+        }
+        LampShape::Square => {
+            let r = r * 0.88;
+            vec![c + egui::vec2(-r, -r), c + egui::vec2(r, -r), c + egui::vec2(r, r), c + egui::vec2(-r, r)]
+        }
+    }
+}
+
+/// A fan from `center` to `outline`, `inner` at the center and `outer` at
+/// the edge: a radial gradient in any convex shape.
+pub fn radial_fan(painter: &egui::Painter, center: egui::Pos2, outline: &[egui::Pos2], inner: Color32, outer: Color32) {
+    let mut mesh = egui::Mesh::default();
+    mesh.colored_vertex(center, inner);
+    for p in outline {
+        mesh.colored_vertex(*p, outer);
+    }
+    let n = outline.len() as u32;
+    for k in 0..n {
+        mesh.add_triangle(0, 1 + k, 1 + (k + 1) % n);
+    }
+    painter.add(egui::Shape::mesh(mesh));
+}
+
+/// An indicator lamp of radius `r`: lit (`lit` 1), a glass bulb glowing in
+/// `color` with a halo on the panel and a hot core; dark (0), the same bulb
+/// unlit, smoked glass with only its specular highlight, so an off state
+/// still reads as a lamp that is off rather than as nothing.
+pub fn lamp(painter: &egui::Painter, center: egui::Pos2, r: f32, color: Color32, lit: f32, shape: LampShape) {
+    let lit = lit.clamp(0.0, 1.0);
+    if lit > 0.01 {
+        let halo: Vec<egui::Pos2> = lamp_outline(LampShape::Round, center, r * 2.7);
+        radial_fan(painter, center, &halo, alpha(color, 0.32 * lit), alpha(color, 0.0));
+    }
+    let outline = lamp_outline(shape, center, r);
+    let dark_core = lerp(surface_4(), color, 0.22);
+    let dark_edge = lerp(ink(), color, 0.10);
+    let core = lerp(dark_core, lerp(color, Color32::WHITE, 0.6), lit);
+    let edge = lerp(dark_edge, color, lit);
+    // The hot center sits a little above middle, where the light falls.
+    radial_fan(painter, center + egui::vec2(0.0, -r * 0.15), &outline, core, edge);
+    let mut closed = outline.clone();
+    closed.push(outline[0]);
+    painter.add(egui::Shape::line(closed, Stroke::new(1.0, Color32::from_black_alpha(140))));
+    let spec = center + egui::vec2(-r * 0.32, -r * 0.38);
+    painter.circle_filled(spec, (r * 0.32).max(0.9), Color32::from_white_alpha((70.0 + 60.0 * (1.0 - lit)) as u8));
+}
+
+/// Text stamped into the panel, as if lit from above: the letters' upper
+/// walls cast a hairline of shadow and their lower lips catch the light.
+pub fn paint_engraved(painter: &egui::Painter, pos: egui::Pos2, galley: std::sync::Arc<egui::Galley>, color: Color32) {
+    let lip = if ground() == Ground::Carbon { 30 } else { 20 };
+    painter.galley_with_override_text_color(pos + egui::vec2(0.0, 1.0), galley.clone(), Color32::from_white_alpha(lip));
+    painter.galley_with_override_text_color(pos + egui::vec2(0.0, -0.7), galley.clone(), Color32::from_black_alpha(150));
+    painter.galley_with_override_text_color(pos, galley, color);
+}
+
+/// An engraved label: a section's name stamped into the panel, in `font`,
+/// letter-spaced by `spacing`. Senses `sense` for labels that also act.
+pub fn engraved(ui: &mut egui::Ui, text: &str, font: FontId, color: Color32, spacing: f32, sense: egui::Sense) -> egui::Response {
+    let mut job = egui::text::LayoutJob::default();
+    job.append(text, 0.0, egui::TextFormat { font_id: font, color: Color32::PLACEHOLDER, extra_letter_spacing: spacing, ..Default::default() });
+    let galley = ui.painter().layout_job(job);
+    let (rect, resp) = ui.allocate_exact_size(galley.size(), sense);
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, text));
+    paint_engraved(ui.painter(), rect.min, galley, color);
+    resp
+}
+
+/// Brushed metal: fine horizontal grain, each line its own shade and
+/// drifting slowly along its length, as a brushed plate catches the light.
+/// A 512 x 64 tile, repeated. Carbon's faceplate only.
+pub fn brushed(ctx: &egui::Context) -> Option<egui::TextureHandle> {
+    if ground() != Ground::Carbon {
+        return None;
+    }
+    let id = egui::Id::new("brushed-metal");
+    if let Some(t) = ctx.data(|d| d.get_temp::<egui::TextureHandle>(id)) {
+        return Some(t);
+    }
+    let (w, h) = (512usize, 64usize);
+    // A small fixed-seed generator: the same plate every run.
+    let mut seed = 0x2545_f491_u32;
+    let mut rnd = move || {
+        seed ^= seed << 13;
+        seed ^= seed >> 17;
+        seed ^= seed << 5;
+        seed as f32 / u32::MAX as f32
+    };
+    let mut px = vec![Color32::TRANSPARENT; w * h];
+    for y in 0..h {
+        let line = rnd();
+        // Knots along the line, smoothed between: the streak's slow drift.
+        let knots: Vec<f32> = (0..=16).map(|_| rnd()).collect();
+        for x in 0..w {
+            let f = x as f32 / w as f32 * 16.0;
+            let k = f.floor() as usize;
+            let t = f - k as f32;
+            let t = t * t * (3.0 - 2.0 * t);
+            let drift = knots[k] + (knots[(k + 1) % 16] - knots[k]) * t;
+            let grain = rnd();
+            let v = 0.45 * line + 0.35 * drift + 0.20 * grain;
+            px[y * w + x] = Color32::from_white_alpha((v * 13.0) as u8);
+        }
+    }
+    let tex = ctx.load_texture(
+        "brushed-metal",
+        egui::ColorImage::new([w, h], px),
+        egui::TextureOptions { wrap_mode: egui::TextureWrapMode::Repeat, ..egui::TextureOptions::LINEAR },
+    );
+    ctx.data_mut(|d| d.insert_temp(id, tex.clone()));
+    Some(tex)
+}
+
+/// Brush `r` like a faceplate: the grain, and a broad soft sheen across
+/// it where the light from above falls.
+pub fn paint_brushed(painter: &egui::Painter, r: egui::Rect) {
+    if let Some(t) = brushed(painter.ctx()) {
+        let uv = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(r.width() / 512.0, r.height() / 64.0));
+        painter.image(t.id(), r, uv, Color32::WHITE);
+        let mut mesh = egui::Mesh::default();
+        let top = Color32::from_white_alpha(9);
+        mesh.colored_vertex(r.left_top(), top);
+        mesh.colored_vertex(r.right_top(), top);
+        mesh.colored_vertex(r.left_bottom(), Color32::TRANSPARENT);
+        mesh.colored_vertex(r.right_bottom(), Color32::TRANSPARENT);
+        mesh.add_triangle(0, 1, 2);
+        mesh.add_triangle(2, 1, 3);
+        painter.add(egui::Shape::mesh(mesh));
+    }
+}
+
+/// A key's relief over its face, `press` 0 up to 1 down. Up, it stands
+/// proud of the panel: a lit top edge and a dark foot under it. Down, it
+/// sits in the panel: shade falls into it from the top edge and the foot
+/// is gone.
+pub fn key_face(painter: &egui::Painter, r: egui::Rect, radius: u8, press: f32) {
+    let up = 1.0 - press.clamp(0.0, 1.0);
+    let rr = radius as f32;
+    if up > 0.0 {
+        painter.line_segment(
+            [r.left_top() + egui::vec2(rr, 1.5), r.right_top() + egui::vec2(-rr, 1.5)],
+            Stroke::new(1.0, Color32::from_white_alpha((16.0 * up) as u8)),
+        );
+        painter.line_segment(
+            [r.left_bottom() + egui::vec2(rr, 0.5), r.right_bottom() + egui::vec2(-rr, 0.5)],
+            Stroke::new(1.0, Color32::from_black_alpha((110.0 * up) as u8)),
+        );
+    }
+    if press > 0.0 {
+        let shade = egui::Rect::from_min_size(r.min + egui::vec2(1.0, 1.0), egui::vec2(r.width() - 2.0, (r.height() * 0.45).min(7.0)));
+        let mut mesh = egui::Mesh::default();
+        let c = Color32::from_black_alpha((120.0 * press) as u8);
+        mesh.colored_vertex(shade.left_top(), c);
+        mesh.colored_vertex(shade.right_top(), c);
+        mesh.colored_vertex(shade.left_bottom(), Color32::TRANSPARENT);
+        mesh.colored_vertex(shade.right_bottom(), Color32::TRANSPARENT);
+        mesh.add_triangle(0, 1, 2);
+        mesh.add_triangle(2, 1, 3);
+        painter.add(egui::Shape::mesh(mesh));
+    }
+}
+
+/// A light along the top edge of `r` in the driven receiver's color: a
+/// hairline brightest at `travel` (0 the left end, 1 the right) and fading
+/// away from it, with a soft wash falling from it into the panel.
+pub fn edge_light(painter: &egui::Painter, r: egui::Rect, color: Color32, travel: f32) {
+    let w = r.width();
+    let peak = r.left() + w * travel.clamp(0.0, 1.0);
+    let xs = [r.left(), peak - w * 0.12, peak, peak + w * 0.5, r.right()];
+    let level = |x: f32| -> f32 {
+        if x <= peak {
+            (1.0 - (peak - x) / (w * 0.12)).clamp(0.0, 1.0)
+        } else {
+            (1.0 - (x - peak) / (w * 0.5)).clamp(0.0, 1.0)
+        }
+    };
+    let mut cols: Vec<f32> = xs.iter().map(|x| x.clamp(r.left(), r.right())).collect();
+    cols.sort_by(f32::total_cmp);
+    cols.dedup();
+    for (h, a) in [(1.0, 0.85), (10.0, 0.16)] {
+        let mut mesh = egui::Mesh::default();
+        for x in &cols {
+            let i = mesh.vertices.len() as u32;
+            mesh.colored_vertex(egui::pos2(*x, r.top()), alpha(color, a * level(*x)));
+            mesh.colored_vertex(egui::pos2(*x, r.top() + h), if h > 1.0 { alpha(color, 0.0) } else { alpha(color, a * level(*x)) });
+            if i >= 2 {
+                mesh.add_triangle(i - 2, i - 1, i);
+                mesh.add_triangle(i - 1, i + 1, i);
+            }
+        }
+        painter.add(egui::Shape::mesh(mesh));
+    }
+}
+
+/// How far a surface stands from the panel. Sunken parts are wells
+/// (`well`); raised parts are cards and keys, which cast a short close
+/// shadow; floating parts are windows, menus and toasts, which cast a long
+/// soft one. Overlays drawn on the spectrum float by their frosted glass
+/// and rim alone: a shadow there would darken the data around them.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Depth {
+    Raised,
+    Floating,
+}
+
+pub fn shadow(d: Depth) -> egui::Shadow {
+    match d {
+        Depth::Raised => egui::Shadow { offset: [0, 2], blur: 7, spread: 0, color: Color32::from_black_alpha(95) },
+        Depth::Floating => egui::Shadow { offset: [0, 10], blur: 28, spread: 0, color: Color32::from_black_alpha(160) },
+    }
+}
+
+/// The faceplate's bezel around the display's screen: the plate slopes
+/// down into a dark groove at the screen's edge, shaded along its top where
+/// the light from above cannot reach and lit along its foot. All of it lies
+/// outside `screen`; the display inside is drawn as it is.
+pub fn bezel(painter: &egui::Painter, screen: egui::Rect, width: f32) {
+    let band = |a: egui::Pos2, b: egui::Pos2, c: egui::Pos2, d: egui::Pos2, inner: Color32| {
+        // a-b on the screen's edge, c-d on the plate's.
+        let mut mesh = egui::Mesh::default();
+        mesh.colored_vertex(a, inner);
+        mesh.colored_vertex(b, inner);
+        mesh.colored_vertex(c, Color32::TRANSPARENT);
+        mesh.colored_vertex(d, Color32::TRANSPARENT);
+        mesh.add_triangle(0, 1, 2);
+        mesh.add_triangle(2, 1, 3);
+        painter.add(egui::Shape::mesh(mesh));
+    };
+    let o = screen.expand(width);
+    let s = screen;
+    let dark = Color32::from_black_alpha(120);
+    let lit = Color32::from_white_alpha(10);
+    band(s.left_top(), s.right_top(), o.left_top(), o.right_top(), dark);
+    band(s.left_top(), s.left_bottom(), o.left_top(), o.left_bottom(), Color32::from_black_alpha(80));
+    band(s.right_top(), s.right_bottom(), o.right_top(), o.right_bottom(), Color32::from_black_alpha(60));
+    band(s.left_bottom(), s.right_bottom(), o.left_bottom(), o.right_bottom(), lit);
+    painter.rect_stroke(s, egui::CornerRadius::ZERO, Stroke::new(1.0, Color32::from_black_alpha(200)), egui::StrokeKind::Outside);
+    painter.line_segment(
+        [s.left_bottom() + egui::vec2(0.0, 1.5), s.right_bottom() + egui::vec2(0.0, 1.5)],
+        Stroke::new(1.0, Color32::from_white_alpha(if ground() == Ground::Carbon { 22 } else { 16 })),
+    );
+}
+
+/// A color as Night shows it: its brightness, in red. Premultiplied in and
+/// out, so a translucent color stays as translucent; egui's placeholder
+/// color passes through for the painter to fill in.
+pub fn night_color(c: Color32) -> Color32 {
+    if c == Color32::PLACEHOLDER {
+        return c;
+    }
+    let [r, g, b, a] = c.to_array();
+    // Rec. 709 luma on the gamma-encoded channels: cheap, and the eye's
+    // order of brightness is what has to survive, not exact lightness.
+    let l = 0.2126 * r as f32 + 0.7152 * g as f32 + 0.0722 * b as f32;
+    let red = (l * 1.1).min(a as f32).min(255.0);
+    Color32::from_rgba_premultiplied(red as u8, (l * 0.07).min(red) as u8, 0, a)
+}
+
+fn night_stroke(s: &mut Stroke) {
+    s.color = night_color(s.color);
+}
+
+fn night_path_stroke(s: &mut egui::epaint::PathStroke) {
+    use egui::epaint::ColorMode;
+    s.color = match &s.color {
+        ColorMode::Solid(c) => ColorMode::Solid(night_color(*c)),
+        ColorMode::UV(f) => {
+            let f = f.clone();
+            ColorMode::UV(Arc::new(move |r, p| night_color(f(r, p))))
+        }
+    };
+}
+
+fn night_shape(shape: &mut egui::Shape) {
+    use egui::Shape;
+    match shape {
+        Shape::Noop | Shape::Callback(_) => {}
+        Shape::Vec(v) => v.iter_mut().for_each(night_shape),
+        Shape::Circle(c) => {
+            c.fill = night_color(c.fill);
+            night_stroke(&mut c.stroke);
+        }
+        Shape::Ellipse(e) => {
+            e.fill = night_color(e.fill);
+            night_stroke(&mut e.stroke);
+        }
+        Shape::LineSegment { stroke, .. } => night_stroke(stroke),
+        Shape::Path(p) => {
+            p.fill = night_color(p.fill);
+            night_path_stroke(&mut p.stroke);
+        }
+        Shape::Rect(r) => {
+            r.fill = night_color(r.fill);
+            night_stroke(&mut r.stroke);
+        }
+        Shape::Text(t) => {
+            t.fallback_color = night_color(t.fallback_color);
+            t.override_text_color = t.override_text_color.map(night_color);
+            night_stroke(&mut t.underline);
+            // The galley's own colors are baked into its rows' meshes.
+            let g = Arc::make_mut(&mut t.galley);
+            for row in &mut g.rows {
+                let row = Arc::make_mut(&mut row.row);
+                for v in &mut row.visuals.mesh.vertices {
+                    v.color = night_color(v.color);
+                }
+            }
+        }
+        Shape::Mesh(m) => {
+            let m = Arc::make_mut(m);
+            for v in &mut m.vertices {
+                v.color = night_color(v.color);
+            }
+        }
+        Shape::QuadraticBezier(q) => {
+            q.fill = night_color(q.fill);
+            night_path_stroke(&mut q.stroke);
+        }
+        Shape::CubicBezier(c) => {
+            c.fill = night_color(c.fill);
+            night_path_stroke(&mut c.stroke);
+        }
+    }
+}
+
+/// Turns the whole frame red as it leaves egui, when Night is the ground:
+/// one pass over what was drawn, so no part of the app has to know.
+struct NightFilter;
+
+impl egui::Plugin for NightFilter {
+    fn debug_name(&self) -> &'static str {
+        "usdr-night"
+    }
+
+    fn output_hook(&mut self, _ctx: &egui::Context, output: &mut egui::FullOutput) {
+        if night() {
+            for c in &mut output.shapes {
+                night_shape(&mut c.shape);
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn night_keeps_brightness_order_and_alpha_in_red() {
+        let w = night_color(Color32::WHITE);
+        let g = night_color(Color32::from_gray(90));
+        let [r, gg, b, a] = w.to_array();
+        assert!(r > 240 && gg < 30 && b == 0 && a == 255);
+        assert!(g.r() < w.r() && g.r() > 60);
+        // A translucent color stays as translucent, and valid premultiplied.
+        let t = night_color(alpha(AMBER, 0.3));
+        assert_eq!(t.a(), alpha(AMBER, 0.3).a());
+        assert!(t.r() <= t.a());
+        // The painter's placeholder is left for the painter to fill.
+        assert_eq!(night_color(Color32::PLACEHOLDER), Color32::PLACEHOLDER);
     }
 }
