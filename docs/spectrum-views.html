@@ -1,0 +1,955 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>uSDR — spectrum and waterfall views</title>
+<style>
+:root {
+  --ground: #0b0d10;
+  --s0: #111317;
+  --s1: #171a1f;
+  --s2: #1f2329;
+  --line: #2b3037;
+  --text: #e3e6e9;
+  --text-2: #b9bdc3;
+  --text-3: #8f949b;
+  --accent: #ffb347;
+  --select: #1a73b8;
+  --sans: "Helvetica Neue", Helvetica, ui-sans-serif, system-ui, Arial, sans-serif;
+  --mono: ui-monospace, "SF Mono", Menlo, Consolas, "Courier New", monospace;
+  --ease: cubic-bezier(.2, .8, .2, 1);
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html { background: var(--ground); color: var(--text); font: 15px/1.55 var(--sans); -webkit-font-smoothing: antialiased; }
+body { background:
+  radial-gradient(1200px 600px at 70% -10%, rgba(26,115,184,.10), transparent 60%),
+  linear-gradient(var(--ground), var(--ground)); min-height: 100vh; }
+.wrap { width: min(1360px, 94vw); margin: 0 auto; }
+a { color: var(--accent); }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+header { padding: clamp(40px, 6vw, 72px) 0 28px; }
+.eyebrow { font-size: 11px; letter-spacing: .28em; text-transform: uppercase; color: var(--accent); margin-bottom: 14px; }
+h1 { font-size: clamp(34px, 4.6vw, 64px); line-height: 1.03; letter-spacing: -.025em; font-weight: 600; max-width: 18ch; }
+.lede { margin-top: 18px; max-width: 64ch; color: var(--text-2); font-size: 17px; }
+.sim { margin-top: 14px; display: inline-flex; gap: 10px; align-items: center; font: 12px/1.4 var(--mono); color: var(--text-3);
+  border: 1px solid var(--line); border-radius: 4px; padding: 7px 10px; background: var(--s0); }
+.sim b { color: var(--accent); font-weight: 500; letter-spacing: .12em; }
+
+.rig { display: grid; grid-template-columns: 1fr 268px; gap: 12px; }
+.screen { background: var(--s0); border: 1px solid var(--line); border-radius: 6px; padding: 8px; }
+#stage { position: relative; height: clamp(440px, 46vw, 640px); border-radius: 3px; overflow: hidden; background: #020208; touch-action: none; }
+#stage canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+#stage.orbit { cursor: grab; }
+#stage.orbit.dragging { cursor: grabbing; }
+#gl { visibility: hidden; }
+#stage.gl #gl { visibility: visible; }
+.meta { display: flex; justify-content: space-between; gap: 16px; flex-wrap: wrap; padding: 8px 4px 2px; font: 11.5px/1.4 var(--mono); color: var(--text-3); font-variant-numeric: tabular-nums; }
+
+aside.dock { background: var(--s0); border: 1px solid var(--line); border-radius: 6px; padding: 14px 14px 16px; display: flex; flex-direction: column; gap: 14px; }
+.dock h2 { font-size: 11px; letter-spacing: .24em; text-transform: uppercase; color: var(--text-3); font-weight: 500; display: flex; justify-content: space-between; }
+.dock h2 span { color: var(--text-3); letter-spacing: .08em; text-transform: none; }
+fieldset { border: 0; display: flex; flex-direction: column; gap: 6px; }
+fieldset[disabled] { opacity: .42; }
+legend { font-size: 12px; color: var(--text-2); margin-bottom: 6px; }
+.seg { display: flex; background: var(--ground); border: 1px solid var(--line); border-radius: 4px; padding: 2px; gap: 2px; }
+.seg button { flex: 1; font: 12px/1 var(--sans); color: var(--text-2); background: transparent; border: 0; border-radius: 3px; padding: 8px 4px; cursor: pointer; transition: background .2s var(--ease), color .2s var(--ease); }
+.seg button:hover { color: var(--text); background: var(--s2); }
+.seg button[aria-pressed="true"] { background: var(--select); color: #fff; }
+fieldset[disabled] .seg button { cursor: not-allowed; }
+.slider { display: grid; grid-template-columns: 1fr auto; gap: 2px 8px; font-size: 12px; color: var(--text-2); align-items: center; }
+.slider output { font: 11.5px var(--mono); color: var(--text-3); font-variant-numeric: tabular-nums; }
+.slider input { grid-column: 1 / -1; width: 100%; accent-color: var(--select); }
+.slider.off { opacity: .42; }
+.play { font: 12px var(--sans); color: var(--text); background: var(--s2); border: 1px solid var(--line); border-radius: 4px; padding: 9px; cursor: pointer; }
+.play:hover { background: var(--line); }
+.hint { font-size: 11.5px; color: var(--text-3); line-height: 1.45; }
+
+section { padding: clamp(48px, 7vw, 96px) 0 0; }
+section > h2 { font-size: clamp(26px, 2.6vw, 36px); letter-spacing: -.015em; font-weight: 600; margin-bottom: 8px; }
+section > p.sub { color: var(--text-2); max-width: 66ch; margin-bottom: 26px; }
+
+.cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+.card { background: var(--s0); border: 1px solid var(--line); border-radius: 6px; padding: 18px 18px 16px; display: flex; flex-direction: column; gap: 10px; transition: border-color .3s var(--ease), background .3s var(--ease); }
+.card.on { border-color: var(--select); background: linear-gradient(180deg, rgba(26,115,184,.10), var(--s0) 60%); }
+.card .kind { font-size: 10.5px; letter-spacing: .24em; text-transform: uppercase; color: var(--accent); }
+.card h3 { font-size: 21px; letter-spacing: -.01em; font-weight: 600; }
+.card p { color: var(--text-2); font-size: 14px; }
+.card dl { display: grid; grid-template-columns: 74px 1fr; gap: 4px 10px; font-size: 13px; margin-top: 2px; }
+.card dt { color: var(--text-3); }
+.card dd { color: var(--text-2); }
+.card code, td code, p code { font: 12px var(--mono); color: var(--text); background: var(--s2); padding: 1px 5px; border-radius: 3px; }
+.card button { margin-top: auto; align-self: flex-start; font: 12px var(--sans); color: var(--text); background: var(--s2); border: 1px solid var(--line); border-radius: 4px; padding: 7px 12px; cursor: pointer; }
+.card button:hover { background: var(--line); }
+
+table { width: 100%; border-collapse: collapse; font-size: 14px; background: var(--s0); border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+th, td { text-align: left; padding: 11px 14px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { font-size: 11px; letter-spacing: .18em; text-transform: uppercase; color: var(--text-3); font-weight: 500; background: var(--s1); }
+td { color: var(--text-2); }
+td:first-child { color: var(--text); font-weight: 600; white-space: nowrap; }
+tr:last-child td { border-bottom: 0; }
+.yes { color: #7dffb0; } .part { color: #ffe45e; } .no { color: #ff9a8f; }
+.call { color: var(--text); }
+
+.split2 { display: grid; grid-template-columns: 1.1fr 1fr; gap: 28px; align-items: start; }
+ol.plan { counter-reset: n; list-style: none; display: flex; flex-direction: column; gap: 14px; }
+ol.plan li { counter-increment: n; position: relative; padding-left: 40px; color: var(--text-2); max-width: 60ch; }
+ol.plan li::before { content: counter(n); position: absolute; left: 0; top: 1px; width: 26px; height: 26px; border-radius: 50%; border: 1px solid var(--accent); color: var(--accent); font: 12px/24px var(--mono); text-align: center; }
+ol.plan b { color: var(--text); }
+pre { background: var(--s0); border: 1px solid var(--line); border-radius: 6px; padding: 16px 18px; font: 12.5px/1.6 var(--mono); color: var(--text-2); overflow-x: auto; }
+pre .k { color: #c39cff; } pre .c { color: var(--text-3); } pre .t { color: #52e3ff; }
+footer { padding: 72px 0 48px; color: var(--text-3); font-size: 13px; }
+
+.shot header, .shot section, .shot footer { display: none; }
+.shot main { padding-top: 12px; }
+@media (max-width: 1000px) {
+  .rig { grid-template-columns: 1fr; }
+  .cards { grid-template-columns: 1fr 1fr; }
+  .split2 { grid-template-columns: 1fr; }
+}
+@media (max-width: 640px) {
+  .cards { grid-template-columns: 1fr; }
+  table { font-size: 13px; } th, td { padding: 9px 8px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  * { transition: none !important; }
+}
+</style>
+</head>
+<body>
+
+<header class="wrap">
+  <p class="eyebrow">uSDR desktop · display study</p>
+  <h1>Five other ways to see the band</h1>
+  <p class="lede">AetherSDR's 3D mode stacks recent FFT frames into a perspective surface and leaves the waterfall flat underneath. Your mockup goes further and turns the whole history into terrain. Both are here, with three quieter options between them and today's panafall for reference. They all run on one band, in the app's own palettes, so you can switch and judge.</p>
+  <p class="sim"><b>SIMULATED</b> Every signal on this page is invented: CW, FT8 and FT4 in their slots, an NCDXF beacon cycle, RTTY, PSK31 and two SSB contacts. Nothing here is a recording.</p>
+</header>
+
+<main class="wrap">
+  <div class="rig">
+    <div class="screen">
+      <div id="stage" tabindex="0" role="img" aria-label="Simulated 20 meter band, 14.020 to 14.170 MHz, drawn in the selected spectrum and waterfall view">
+        <canvas id="gl" aria-hidden="true"></canvas>
+        <canvas id="c2d" aria-hidden="true"></canvas>
+      </div>
+      <div class="meta"><span id="meta">—</span><span id="hint"></span></div>
+    </div>
+
+    <aside class="dock" aria-label="Display settings mockup">
+      <h2>Display <span>Settings → Display</span></h2>
+      <fieldset><legend>Style</legend>
+        <div class="seg" data-group="style">
+          <button data-v="Prism">Prism</button><button data-v="Ember">Ember</button><button data-v="Inferno">Inferno</button><button data-v="Midnight">Midnight</button>
+        </div>
+      </fieldset>
+      <fieldset><legend>Scene</legend>
+        <div class="seg" data-group="scene">
+          <button data-v="split">Split</button><button data-v="terrain">Terrain</button><button data-v="tilted">Tilted</button>
+        </div>
+      </fieldset>
+      <fieldset id="fs-spec"><legend>Spectrum</legend>
+        <div class="seg" data-group="spectrum">
+          <button data-v="trace">Trace</button><button data-v="ridges">Ridges</button><button data-v="persist">Persistence</button>
+        </div>
+      </fieldset>
+      <fieldset id="fs-wf"><legend>Waterfall</legend>
+        <div class="seg" data-group="waterfall">
+          <button data-v="flat">Flat</button><button data-v="relief">Relief</button>
+        </div>
+      </fieldset>
+      <label class="slider" data-for="ridges">Ridge depth <output id="o-ridge"></output><input id="s-ridge" type="range" min="2" max="10" step="0.5" value="6"></label>
+      <label class="slider" data-for="persist">Persistence <output id="o-decay"></output><input id="s-decay" type="range" min="0.25" max="4" step="0.25" value="1"></label>
+      <label class="slider" data-for="relief">Relief <output id="o-relief"></output><input id="s-relief" type="range" min="0.25" max="2" step="0.05" value="1"></label>
+      <label class="slider" data-for="terrain">Terrain height <output id="o-height"></output><input id="s-height" type="range" min="0.1" max="0.8" step="0.02" value="0.42"></label>
+      <button class="play" id="play">Pause</button>
+      <p class="hint">Spectrum and Waterfall apply to the Split scene. Terrain and Tilted replace both with one 3D scene; drag it to orbit, use the wheel to zoom, double-click to reset.</p>
+      <p class="sr" id="status" aria-live="polite" style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)"></p>
+    </aside>
+  </div>
+
+  <section aria-labelledby="h-opts">
+    <h2 id="h-opts">The options</h2>
+    <p class="sub">Each one says what it shows, how it would go into <code>spectrum.rs</code>, and where it falls short. Highlighted cards are what the display above is showing.</p>
+    <div class="cards">
+      <article class="card" data-key="trace">
+        <span class="kind">Spectrum · today</span>
+        <h3>Trace</h3>
+        <p>The panafall as it ships: the live trace and peak hold over the level-colored fill, and the waterfall below. It's here as the reference point.</p>
+        <dl><dt>Accuracy</dt><dd>Exact. One frame, one line.</dd><dt>Cost</dt><dd>What you pay now.</dd></dl>
+        <button data-set="scene=split,spectrum=trace,waterfall=flat">Show this</button>
+      </article>
+      <article class="card" data-key="ridges">
+        <span class="kind">Spectrum · AetherSDR's approach</span>
+        <h3>Ridges</h3>
+        <p>The last few seconds of frames stand behind the live trace in perspective. Each one is filled to its own floor, so it hides what's behind it. A keyed carrier becomes a dotted ridge, and an FT8 slot rises and falls as a block. The waterfall underneath stays flat and exact.</p>
+        <dl><dt>Build</dt><dd>The rows are already in <code>wf_q</code>. Draw R of them back to front as one <code>egui::Mesh</code> (a quad strip per trace, colored from the LUT), then the live trace on top. About 60 × 512 quads.</dd>
+        <dt>Tuning</dt><dd>Unchanged. The front trace keeps today's x scale.</dd>
+        <dt>Weak spot</dt><dd>A strong ridge can hide weak ones behind it. Only the front trace sits on the dB scale.</dd></dl>
+        <button data-set="scene=split,spectrum=ridges,waterfall=flat">Show this</button>
+      </article>
+      <article class="card" data-key="persist">
+        <span class="kind">Spectrum · real-time analyzer</span>
+        <h3>Persistence</h3>
+        <p>The panadapter becomes a heat map of where the trace has been over the last second. A steady carrier is a hard line and noise is a soft band. A 20 ms CW element still burns in, and you see the full spread of an SSB voice instead of one instant of it.</p>
+        <dl><dt>Build</dt><dd>A 1024 × 256 hit buffer in <code>Panafall::push</code>, decayed each frame, uploaded and colored the same way the waterfall texture is.</dd>
+        <dt>Tuning</dt><dd>Unchanged.</dd>
+        <dt>Weak spot</dt><dd>Slower to read at a glance. Its memory is the decay time, not the waterfall's five minutes.</dd></dl>
+        <button data-set="scene=split,spectrum=persist,waterfall=flat">Show this</button>
+      </article>
+      <article class="card" data-key="relief">
+        <span class="kind">Waterfall · lit</span>
+        <h3>Relief</h3>
+        <p>Every pixel stays where it is today, but each cell is shaded by its slope against its neighbors in frequency and time, like a relief map. Carriers stand off the noise, and keying edges and slot boundaries catch the light. It's the 3D feel with no geometry change.</p>
+        <dl><dt>Build</dt><dd>One multiply per cell in <code>color_row</code>, using the row below it, which is already in <code>wf_q</code>. CPU only.</dd>
+        <dt>Tuning</dt><dd>Unchanged.</dd>
+        <dt>Weak spot</dt><dd>Brightness carries slope as well as level, so a cell no longer reads as one exact level. That's what the strength slider is for.</dd></dl>
+        <button data-set="scene=split,spectrum=trace,waterfall=relief">Show this</button>
+      </article>
+      <article class="card" data-key="terrain">
+        <span class="kind">Scene · your mockup</span>
+        <h3>Terrain</h3>
+        <p>The whole history becomes one lit surface: frequency across, time into the distance, level as both height and color. The receiver's passband is a glass slab through time. Orbit it with a drag.</p>
+        <dl><dt>Build</dt><dd>An <code>egui_wgpu</code> paint callback with its own pipeline. <code>wf_q</code> is already u16, so it uploads as an R16 texture, and a vertex shader displaces a 512 × 256 grid. Peak-of-two per column keeps one-bin carriers.</dd>
+        <dt>Tuning</dt><dd>Needs a ray pick onto the front edge, or a flat strip to click.</dd>
+        <dt>Weak spot</dt><dd>Perspective makes frequency unreadable away from the front, and near peaks hide far ones. It uses the most GPU, which the Windows PC's GPU needs checking for.</dd></dl>
+        <button data-set="scene=terrain">Show this</button>
+      </article>
+      <article class="card" data-key="tilted">
+        <span class="kind">Scene · 2.5D</span>
+        <h3>Tilted</h3>
+        <p>The waterfall is laid back like a floor, with the live spectrum standing as a curtain on its front edge. It reads as depth without hiding anything behind peaks.</p>
+        <dl><dt>Build</dt><dd>The terrain pipeline with zero height plus one curtain strip. Nearly free once Terrain exists.</dd>
+        <dt>Tuning</dt><dd>On the curtain, which is to scale.</dd>
+        <dt>Weak spot</dt><dd>Time is compressed with distance, and it shows less than Split in the same space. It's mostly a look.</dd></dl>
+        <button data-set="scene=tilted">Show this</button>
+      </article>
+    </div>
+  </section>
+
+  <section aria-labelledby="h-cmp">
+    <h2 id="h-cmp">Side by side</h2>
+    <p class="sub">Effort figures are rough estimates for this codebase, not measurements.</p>
+    <table>
+      <thead><tr><th>View</th><th>Setting</th><th>Waterfall stays exact</th><th>Click to tune</th><th>Cost per frame</th><th>Effort</th><th>My call</th></tr></thead>
+      <tbody>
+        <tr><td>Ridges</td><td>Spectrum</td><td class="yes">Yes</td><td class="yes">Yes, front trace</td><td>~60k triangles through the painter</td><td>~1 day</td><td class="call">Build first</td></tr>
+        <tr><td>Persistence</td><td>Spectrum</td><td class="yes">Yes</td><td class="yes">Yes</td><td>One 1 MB texture upload</td><td>~1 day</td><td class="call">Build second</td></tr>
+        <tr><td>Relief</td><td>Waterfall</td><td class="part">Positions yes, brightness shaded</td><td class="yes">Yes</td><td>Negligible, CPU per row</td><td>½ day</td><td class="call">Build third</td></tr>
+        <tr><td>Terrain</td><td>Scene</td><td class="no">Replaced</td><td class="part">Needs ray pick</td><td>wgpu pipeline, ~260k triangles</td><td>3–5 days</td><td class="call">Only as a showpiece</td></tr>
+        <tr><td>Tilted</td><td>Scene</td><td class="no">Replaced</td><td class="part">Curtain only</td><td>Rides on Terrain</td><td>+½ day</td><td class="call">Skip unless Terrain lands</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section aria-labelledby="h-rec">
+    <h2 id="h-rec">What I'd build</h2>
+    <div class="split2">
+      <ol class="plan">
+        <li><b>Ridges first.</b> It gives the most depth for the least risk. It's the same direction AetherSDR took (a stacked-trace surface added in v26.7.1, a depth slider in v26.8.2). It leaves the waterfall pixel-exact, which is your stated priority, and click-to-tune doesn't change.</li>
+        <li><b>Persistence second.</b> This is the one that shows you something new rather than something prettier: intermittent and bursty signals under a busy band. It's cheap because it reuses the waterfall's texture and color path.</li>
+        <li><b>Relief third.</b> Half a day of work, and it makes the flat waterfall look dimensional while keeping every pixel where it is today. Default it to off, with a strength slider.</li>
+        <li><b>Terrain only if you want the showpiece.</b> It's the most striking view and the worst one to operate from, and it's the only one that needs a custom wgpu pipeline. If it lands, Tilted is a free preset on top of it.</li>
+      </ol>
+      <pre aria-label="Proposed settings model"><span class="c">// crates/desktop/src/spectrum.rs — View gains three fields;
+// #[serde(default)] keeps existing prefs loading as today.</span>
+<span class="k">pub enum</span> <span class="t">Scene</span>     { Split, Terrain, Tilted }
+<span class="k">pub enum</span> <span class="t">SpecMode</span>  { Trace, Ridges, Persistence }
+<span class="k">pub enum</span> <span class="t">WfMode</span>    { Flat, Relief }
+
+<span class="k">pub struct</span> <span class="t">View</span> {
+    <span class="c">// …existing fields…</span>
+    pub scene: Scene,          <span class="c">// Split</span>
+    pub spectrum: SpecMode,    <span class="c">// Trace</span>
+    pub waterfall: WfMode,     <span class="c">// Flat</span>
+    pub ridge_secs: f32,       <span class="c">// 6.0, slider 2–10 s</span>
+    pub persist_secs: f32,     <span class="c">// 1.0, half-life slider</span>
+    pub relief: f32,           <span class="c">// 1.0, slider 0.25–2</span>
+    pub terrain_height: f32,   <span class="c">// 0.42</span>
+}</pre>
+    </div>
+  </section>
+</main>
+
+<footer class="wrap">
+  uSDR display study · simulated 20 m band, 1024 bins of 146 Hz at 20 rows per second · palettes and trace colors taken from <code>colormap.rs</code> and <code>Style::look</code> ·
+  AetherSDR's 3D mode per its <a href="https://newreleases.io/project/github/aethersdr/AetherSDR/release/v26.7.1">v26.7.1</a> and <a href="https://newreleases.io/project/github/aethersdr/AetherSDR/release/v26.8.2">v26.8.2</a> release notes.
+</footer>
+
+<script>
+'use strict';
+const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+/* ---------------- palettes and looks (from colormap.rs / Style::look) ---------------- */
+const STOPS = {
+  Prism: [[0,'000000'],[.18,'06021a'],[.30,'2a0a6e'],[.40,'1830d0'],[.50,'0a8cff'],[.58,'10e0f0'],[.66,'38f07a'],[.75,'e8f020'],[.84,'ff9a10'],[.92,'ff2a2a'],[1,'ffffff']],
+  Ember: [[0,'0a0908'],[.22,'0c0a20'],[.32,'18206a'],[.40,'4a1a8a'],[.48,'8a1458'],[.56,'c81e2a'],[.64,'f43a2a'],[.72,'ff7020'],[.80,'ffb347'],[.88,'ffd870'],[.95,'fff2c0'],[1,'fff8f0']],
+  Inferno: [[0,'000004'],[.20,'0a0628'],[.30,'2a0c78'],[.38,'5a10a0'],[.46,'8c1898'],[.54,'c02078'],[.62,'e83850'],[.70,'f85a28'],[.78,'fc8a10'],[.86,'fcb820'],[.93,'f8e050'],[1,'fcffc0']],
+  Midnight: [[0,'000000'],[.30,'00040f'],[.38,'001a6a'],[.45,'0a40d0'],[.52,'1a80f8'],[.58,'18c0f0'],[.64,'40f0b0'],[.70,'c0f050'],[.76,'ffe050'],[.82,'ffa020'],[.88,'ff4a2a'],[.94,'ff4ab8'],[1,'fff0fa']],
+};
+const LOOKS = {
+  Prism:    { bg: ['#0c0b2a', '#020208'], fill: '#8a5cff', glow: '#c39cff', core: '#fbf7ff', peak: '#7dffb0', ramp: false },
+  Ember:    { bg: ['#111317', '#0b0d10'], fill: '#ffb347', glow: '#ffb347', core: '#ffe4bd', peak: '#52e3ff', ramp: true },
+  Inferno:  { bg: ['#1c0a26', '#06020a'], fill: '#f26b1d', glow: '#ffa040', core: '#fff1cc', peak: '#f2a0ff', ramp: true },
+  Midnight: { bg: ['#0b1830', '#000104'], fill: '#4aa0ff', glow: '#9fd2ff', core: '#f4faff', peak: '#ffe85a', ramp: true },
+};
+const hex = h => [parseInt(h.slice(0,2),16), parseInt(h.slice(2,4),16), parseInt(h.slice(4,6),16)];
+const hexc = h => hex(h.replace('#',''));
+function buildLut(stops) {
+  const lut = new Uint8Array(256 * 4);
+  for (let i = 0; i < 256; i++) {
+    const t = i / 255;
+    let j = 0; while (j < stops.length - 2 && t > stops[j + 1][0]) j++;
+    const [t0, c0] = stops[j], [t1, c1] = stops[j + 1];
+    const f = Math.min(1, Math.max(0, (t - t0) / (t1 - t0)));
+    const a = hex(c0), b = hex(c1);
+    for (let k = 0; k < 3; k++) lut[i * 4 + k] = Math.round(a[k] + (b[k] - a[k]) * f);
+    lut[i * 4 + 3] = 255;
+  }
+  return lut;
+}
+let LUT = buildLut(STOPS.Prism);
+const lutCss = t => { const i = Math.max(0, Math.min(255, Math.round(t * 255))) * 4; return `rgb(${LUT[i]},${LUT[i+1]},${LUT[i+2]})`; };
+
+/* ---------------- the simulated band ---------------- */
+const N = 1024, H = 256, F0 = 14.020e6, SPAN = 150e3, BIN = SPAN / N, ROW_HZ = 20, DT = 1 / ROW_HZ;
+const PMIN = -128, PMAX = -48, WF_RANGE = 65;
+let seed = 0x5eed1234;
+function rnd() { seed = (seed + 0x6D2B79F5) | 0; let t = Math.imul(seed ^ (seed >>> 15), 1 | seed); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }
+const db2p = db => Math.pow(10, db / 10);
+const lin = new Float64Array(N);
+let simT = 0;
+
+function addTone(f, db, sigma = 0.55) {
+  const x = (f - F0) / BIN; if (x < -16 || x > N + 16) return;
+  const p = db2p(db), k0 = Math.round(x);
+  for (let k = k0 - 16; k <= k0 + 16; k++) {
+    if (k < 0 || k >= N) continue;
+    const d = k - x;
+    lin[k] += p * (Math.exp(-d * d / (2 * sigma * sigma)) + 2e-5 / (1 + 0.4 * d * d));
+  }
+}
+function keyer(wpm) {
+  return { dit: 1.2 / wpm, on: false, left: 0, pause: 0,
+    step(dt) {
+      this.left -= dt;
+      if (this.left <= 0) {
+        this.on = !this.on;
+        if (this.on) this.left = this.dit * (rnd() < 0.55 ? 1 : 3);
+        else { const r = rnd(); this.left = this.dit * (r < 0.6 ? 1 : r < 0.9 ? 3 : 7); if (rnd() < 0.012) this.left += 1.5 + rnd() * 5; }
+      }
+      return this.on;
+    } };
+}
+function keyFrac(k, dt) { let on = 0, n = 0; for (let s = 0; s < dt - 1e-9; s += 0.005) { if (k.step(0.005)) on++; n++; } return on / n; }
+
+const cw = [
+  [14.0262e6, -74, 24], [14.0297e6, -93, 18], [14.0336e6, -84, 28], [14.0418e6, -69, 20],
+  [14.0455e6, -100, 15], [14.0521e6, -88, 25], [14.0587e6, -96, 30], [14.0632e6, -81, 22],
+].map(([f, db, wpm]) => ({ f, db, k: keyer(wpm), per: 7 + rnd() * 14, ph: rnd() * 6.3 }));
+const beaconK = keyer(22);
+const beacons = [-82, null, -95, -78, null, null, -101, -88, null, -92, null, -105, null, -86, -97, null, null, -90];
+const ft8 = { slot: -1, sigs: [] }, ft4 = { slot: -1, sigs: [] };
+function talker() { return { on: true, left: 1 + rnd() * 2, ph: rnd() * 6.3,
+  step(dt) { this.left -= dt; if (this.left <= 0) { this.on = !this.on; this.left = this.on ? 0.8 + rnd() * 2.4 : 0.15 + rnd() * 0.7; }
+    this.ph += dt * 2 * Math.PI * (3.4 + rnd() * 1.8);
+    return this.on ? 0.18 + 0.82 * Math.pow(Math.abs(Math.sin(this.ph)), 1.6) : 0; } }; }
+const qsos = [
+  { f: 14.1550e6, lv: [-64, -83], who: 0, left: 22, gap: 0, t: talker() },
+  { f: 14.1622e6, lv: [-89, -96], who: 1, left: 9, gap: 0, t: talker() },
+];
+function addSSB(q, dt) {
+  q.left -= dt;
+  if (q.left <= 0) { q.who ^= 1; q.left = 14 + rnd() * 12; q.gap = 1.2; }
+  if (q.gap > 0) { q.gap -= dt; return; }
+  const env = q.t.step(dt); if (env <= 0) return;
+  const L = q.lv[q.who] + 10 * Math.log10(env);
+  const k0 = Math.floor((q.f + 150 - F0) / BIN), k1 = Math.ceil((q.f + 3000 - F0) / BIN);
+  for (let k = k0; k <= k1; k++) {
+    const a = F0 + k * BIN - q.f;
+    let s = a < 500 ? -6 * (500 - a) / 200 : -9 * (a - 500) / 1000;
+    if (a < 300) s -= Math.pow((300 - a) / 60, 2) * 3;
+    if (a > 2700) s -= Math.pow((a - 2700) / 60, 2) * 3;
+    s += 5 * Math.sin(a / 260 + simT * 2.7) + (rnd() - 0.5) * 8;
+    lin[k] += db2p(L + s);
+  }
+}
+
+function simRow() {
+  for (let k = 0; k < N; k++) {
+    const base = -119 + 1.6 * Math.cos(k / N * Math.PI) + 0.7 * Math.sin(k / 57);
+    let e = 0; for (let j = 0; j < 5; j++) e -= Math.log(rnd() + 1e-12);
+    lin[k] = db2p(base) * e / 5;
+  }
+  for (const s of cw) { const fr = keyFrac(s.k, DT); if (fr > 0) addTone(s.f, s.db + 5 * Math.sin(2 * Math.PI * simT / s.per + s.ph) + 10 * Math.log10(fr)); }
+  // NCDXF beacon: callsign, then four one-second dashes at 100, 10, 1, 0.1 W
+  { const w = Math.floor(simT / 10), ph = simT - w * 10, L = beacons[w % 18];
+    if (L !== null) {
+      if (ph < 2) { const fr = keyFrac(beaconK, DT); if (fr > 0) addTone(14.1000e6, L + 10 * Math.log10(fr)); }
+      else for (let j = 0; j < 4; j++) { const s = 2.3 + j; if (ph >= s && ph < s + 0.9) addTone(14.1000e6, L - 10 * j); }
+    } }
+  // FT8: 15 s slots on 14.074
+  { const s = Math.floor(simT / 15), ph = simT - s * 15;
+    if (s !== ft8.slot) { ft8.slot = s; ft8.sigs = []; const n = 9 + Math.floor(rnd() * 7); for (let i = 0; i < n; i++) ft8.sigs.push([14.074e6 + 250 + rnd() * 2700, -104 + 28 * rnd() * rnd()]); }
+    if (ph > 0.5 && ph < 13.14) for (const [f, db] of ft8.sigs) addTone(f, db, 0.42); }
+  // FT4: 7.5 s slots on 14.080
+  { const s = Math.floor(simT / 7.5), ph = simT - s * 7.5;
+    if (s !== ft4.slot) { ft4.slot = s; ft4.sigs = []; const n = 2 + Math.floor(rnd() * 3); for (let i = 0; i < n; i++) ft4.sigs.push([14.080e6 + 400 + rnd() * 2200, -100 + 18 * rnd()]); }
+    if (ph > 0.5 && ph < 5.5) for (const [f, db] of ft4.sigs) addTone(f, db, 0.5); }
+  // PSK31 and RTTY
+  addTone(14.07100e6, -96 + 2 * Math.sin(simT * 0.7), 0.4);
+  addTone(14.07163e6, -101 + 2 * Math.sin(simT * 1.1), 0.4);
+  if ((simT % 37) < 25) { const m = rnd(); addTone(14.08530e6, -82 + 10 * Math.log10(0.3 + 0.7 * m), 0.45); addTone(14.08547e6, -82 + 10 * Math.log10(1 - 0.7 * m), 0.45); }
+  for (const q of qsos) addSSB(q, DT);
+  simT += DT;
+  const row = new Float32Array(N);
+  for (let k = 0; k < N; k++) row[k] = 10 * Math.log10(lin[k]);
+  return row;
+}
+
+/* ---------------- history and derived buffers ---------------- */
+const hist = new Float32Array(N * H);   // dB, ring
+const tHist = new Uint8Array(N * H);    // 0..255 level on the waterfall scale, ring (also the GL height texture)
+let head = H - 1, total = 0, floorEst = -118;
+const peak = new Float32Array(N).fill(-200);
+const prevT = new Float32Array(N), curT = new Float32Array(N);
+const PC = 512, PR = 200; const dens = new Float32Array(PC * PR);
+const persist = document.createElement('canvas'); persist.width = PC; persist.height = PR;
+const pctx = persist.getContext('2d'); const pimg = pctx.createImageData(PC, PR);
+const wfFlat = document.createElement('canvas'), wfRelief = document.createElement('canvas');
+for (const c of [wfFlat, wfRelief]) { c.width = N; c.height = H; }
+const fctx = wfFlat.getContext('2d'), rctx = wfRelief.getContext('2d');
+const rowImgF = fctx.createImageData(N, 1), rowImgR = rctx.createImageData(N, 1);
+
+const state = { style: 'Prism', scene: 'split', spectrum: 'trace', waterfall: 'flat', paused: reduce,
+  ridgeSecs: 6, persistSecs: 1, relief: 1, height: 0.42 };
+let dirty = true;
+
+function colorRows(t, prev, imgF, imgR) {
+  const df = imgF.data, dr = imgR.data, k = state.relief;
+  for (let i = 0; i < N; i++) {
+    const li = Math.round(t[i] * 255) * 4;
+    df[i*4] = LUT[li]; df[i*4+1] = LUT[li+1]; df[i*4+2] = LUT[li+2]; df[i*4+3] = 255;
+    const dx = (t[Math.min(N-1, i+1)] - t[Math.max(0, i-1)]) * 0.5;
+    const dy = prev[i] - t[i];
+    let s = 0.82 + k * (3.2 * dx + 2.2 * dy);
+    s = Math.max(0.3, Math.min(1.55, s));
+    const hi = Math.max(0, s - 1.2) * 1.4;   // a glint on the lit flanks
+    for (let c = 0; c < 3; c++) dr[i*4+c] = Math.min(255, LUT[li+c] * s + 255 * hi * 0.35);
+    dr[i*4+3] = 255;
+  }
+}
+function push(row) {
+  head = (head + 1) % H; total++;
+  hist.set(row, head * N);
+  const sorted = Float32Array.from(row).sort();
+  const p15 = sorted[Math.floor(N * 0.15)];
+  floorEst = total === 1 ? p15 : floorEst + (p15 - floorEst) * 0.08;
+  const black = floorEst - 3;
+  prevT.set(curT);
+  for (let k = 0; k < N; k++) {
+    const t = Math.max(0, Math.min(1, (row[k] - black) / WF_RANGE));
+    curT[k] = t; tHist[head * N + k] = Math.round(t * 255);
+    peak[k] = Math.max(row[k], peak[k] - 0.35);
+  }
+  // waterfalls scroll down one row, newest at the top
+  colorRows(curT, prevT, rowImgF, rowImgR);
+  fctx.drawImage(wfFlat, 0, 0, N, H - 1, 0, 1, N, H - 1); fctx.putImageData(rowImgF, 0, 0);
+  rctx.drawImage(wfRelief, 0, 0, N, H - 1, 0, 1, N, H - 1); rctx.putImageData(rowImgR, 0, 0);
+  // persistence: decay, then the trace's path through (frequency, level) cells
+  const decay = Math.pow(0.5, 1 / (state.persistSecs * ROW_HZ));
+  for (let i = 0; i < dens.length; i++) dens[i] *= decay;
+  let yPrev = -1;
+  for (let c = 0; c < PC; c++) {
+    const db = Math.max(row[c*2], row[c*2+1]);
+    const y = Math.max(0, Math.min(PR - 1, Math.round((PMAX - db) / (PMAX - PMIN) * (PR - 1))));
+    const a = yPrev < 0 ? y : Math.min(y, yPrev), b = yPrev < 0 ? y : Math.max(y, yPrev);
+    for (let yy = a; yy <= b; yy++) dens[yy * PC + c] += 1;
+    yPrev = y;
+  }
+  if (glReady) uploadRow();
+  dirty = true;
+}
+function recolorAll() {
+  // newest at y = 0, going back in time; relief uses the row below (older)
+  const t = new Float32Array(N), p = new Float32Array(N);
+  for (let age = H - 1; age >= 0; age--) {
+    const r = ((head - age) % H + H) % H, rp = ((head - age - 1) % H + H) % H;
+    for (let k = 0; k < N; k++) { t[k] = tHist[r * N + k] / 255; p[k] = age === H - 1 ? t[k] : tHist[rp * N + k] / 255; }
+    colorRows(t, p, rowImgF, rowImgR);
+    fctx.putImageData(rowImgF, 0, age); rctx.putImageData(rowImgR, 0, age);
+  }
+  if (glReady) uploadLut();
+  dirty = true;
+}
+
+/* ---------------- 2D drawing ---------------- */
+const stage = document.getElementById('stage');
+const glc = document.getElementById('gl'), cv = document.getElementById('c2d');
+const ctx = cv.getContext('2d');
+let cssW = 0, cssH = 0, dpr = 1;
+function resize() {
+  const r = stage.getBoundingClientRect(); cssW = r.width; cssH = r.height; dpr = Math.min(devicePixelRatio || 1, 2);
+  for (const c of [glc, cv]) { c.width = Math.round(cssW * dpr); c.height = Math.round(cssH * dpr); }
+  dirty = true;
+}
+new ResizeObserver(resize).observe(stage);
+
+const RX = { f: 14.1550e6, lo: 300, hi: 2700, label: 'A  14.155.000  USB' };
+function layout() {
+  const g = 48, top = 8, right = 8, split = Math.round(cssH * 0.42);
+  const w = cssW - g - right;
+  return { pan: { x: g, y: top, w, h: split - top }, axis: { x: g, y: split, w, h: 22 }, wf: { x: g, y: split + 22, w, h: cssH - split - 22 - 6 } };
+}
+const xHz = (hz, r) => r.x + (hz - F0) / SPAN * r.w;
+const yDb = (db, r) => r.y + (PMAX - db) / (PMAX - PMIN) * r.h;
+const rowAt = age => ((head - age) % H + H) % H;
+const rgba = (h, a) => { const [r, g, b] = hexc(h); return `rgba(${r},${g},${b},${a})`; };
+
+function panGrid(r, yOf) {
+  ctx.font = '10.5px ui-monospace, Menlo, Consolas, monospace'; ctx.textAlign = 'right'; ctx.textBaseline = 'middle';
+  for (let db = -120; db <= -50; db += 10) {
+    const y = yOf(db); if (y > r.y + r.h - 4 || y < r.y + 4) continue; ctx.fillStyle = 'rgba(255,255,255,0.045)'; ctx.fillRect(r.x, Math.round(y), r.w, 1);
+    ctx.fillStyle = '#8f949b'; ctx.fillText(String(db), r.x - 7, y);
+  }
+  for (let f = 14.030e6; f < F0 + SPAN; f += 10e3) { ctx.fillStyle = 'rgba(255,255,255,0.035)'; ctx.fillRect(Math.round(xHz(f, r)), r.y, 1, r.h); }
+}
+function tracePath(r, row) {
+  const pts = new Float32Array(N * 2);
+  for (let k = 0; k < N; k++) { pts[k*2] = r.x + (k + 0.5) / N * r.w; pts[k*2+1] = Math.max(r.y, Math.min(r.y + r.h, yDb(row[k], r))); }
+  return pts;
+}
+function strokePts(pts, color, width, alpha) {
+  ctx.beginPath(); ctx.moveTo(pts[0], pts[1]); for (let i = 2; i < pts.length; i += 2) ctx.lineTo(pts[i], pts[i+1]);
+  ctx.globalAlpha = alpha; ctx.strokeStyle = color; ctx.lineWidth = width; ctx.lineJoin = 'round'; ctx.stroke(); ctx.globalAlpha = 1;
+}
+function levelGradient(y0, y1, dbAt, minT = 0) {   // vertical gradient whose color at each height is the waterfall's color for that level
+  const g = ctx.createLinearGradient(0, y0, 0, y1), black = floorEst - 3;
+  for (let i = 0; i <= 8; i++) { const p = i / 8; g.addColorStop(p, lutCss(Math.max(minT, (dbAt(p) - black) / WF_RANGE))); }
+  return g;
+}
+function drawTrace(r) {
+  const look = LOOKS[state.style], row = hist.subarray(head * N, head * N + N);
+  const pts = tracePath(r, row);
+  ctx.beginPath(); ctx.moveTo(r.x, r.y + r.h);
+  for (let i = 0; i < pts.length; i += 2) ctx.lineTo(pts[i], pts[i+1]);
+  ctx.lineTo(r.x + r.w, r.y + r.h); ctx.closePath();
+  if (look.ramp) { ctx.fillStyle = levelGradient(r.y + r.h, r.y, p => PMIN + p * (PMAX - PMIN)); ctx.globalAlpha = 0.62; }
+  else { const g = ctx.createLinearGradient(0, r.y, 0, r.y + r.h); g.addColorStop(0, rgba(look.fill, 0.75)); g.addColorStop(1, rgba(look.fill, 0.06)); ctx.fillStyle = g; }
+  ctx.fill(); ctx.globalAlpha = 1;
+  const pk = tracePath(r, peak); strokePts(pk, look.peak, 1, 0.45);
+  strokePts(pts, look.glow, 3.2, 0.28); strokePts(pts, look.core, 1.1, 0.95);
+}
+function ridgeGeom(r) {
+  // floor-anchored: each ridge stands on its own baseline; the front one is to scale
+  const K = 1.05, yH = r.y + r.h * 0.04, yF = r.y + r.h - 1, span = yF - yH;
+  const lo = floorEst - 4, hi = PMAX;
+  const amp = db => Math.max(0, Math.min(1, (db - lo) / (hi - lo)));
+  const sOf = d => 1 / (1 + d * K);
+  const X = (u, d) => { const s = sOf(d); return r.x + r.w * (0.5 + (u - 0.5) * (0.35 + 0.65 * s) + d * 0.07); };
+  const B = d => yH + span * sOf(d);
+  return { yH, yF, span, lo, hi, amp, sOf, X, B, y: db => yF - amp(db) * span * 0.97 };
+}
+function drawRidges(r) {
+  const look = LOOKS[state.style];
+  const step = 2, n = Math.min(Math.floor(H / step) - 1, Math.round(state.ridgeSecs * ROW_HZ / step));
+  const { yH, span, lo, hi, amp, sOf, X, B } = ridgeGeom(r);
+  ctx.save(); ctx.beginPath(); ctx.rect(r.x, r.y, r.w, r.h); ctx.clip();
+  // floor: frequency lines converge, second lines recede
+  ctx.strokeStyle = 'rgba(255,255,255,0.05)'; ctx.lineWidth = 1;
+  for (let f = 14.030e6; f < F0 + SPAN; f += 10e3) { const u = (f - F0) / SPAN; ctx.beginPath(); ctx.moveTo(X(u, 0), B(0)); ctx.lineTo(X(u, 1), B(1)); ctx.stroke(); }
+  ctx.font = '10.5px ui-monospace, Menlo, Consolas, monospace'; ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+  for (let s = 1; s <= state.ridgeSecs; s++) {
+    const d = s / state.ridgeSecs, y = B(d); ctx.beginPath(); ctx.moveTo(X(0, d), y); ctx.lineTo(X(1, d), y); ctx.stroke();
+  }
+  const M = 342, pool = 3;
+  for (let i = n; i >= 0; i--) {
+    const d = i / n, s = sOf(d), base = B(d), hgt = span * 0.97 * (0.35 + 0.65 * s) * s;
+    const row = hist.subarray(rowAt(i * step) * N, rowAt(i * step) * N + N);
+    const front = i === 0, cnt = front ? N : M;
+    const pts = new Float32Array(cnt * 2);
+    for (let j = 0; j < cnt; j++) {
+      let db;
+      if (front) db = row[j]; else { db = -200; for (let q = 0; q < pool; q++) db = Math.max(db, row[Math.min(N - 1, j * pool + q)]); }
+      const u = (j + 0.5) / cnt; pts[j*2] = X(u, d); pts[j*2+1] = base - amp(db) * hgt;
+    }
+    ctx.beginPath(); ctx.moveTo(X(0, d), base);
+    for (let j = 0; j < pts.length; j += 2) ctx.lineTo(pts[j], pts[j+1]);
+    ctx.lineTo(X(1, d), base); ctx.closePath();
+    ctx.fillStyle = look.bg[1]; ctx.globalAlpha = 0.94; ctx.fill();
+    const g = levelGradient(base, base - hgt, p => lo + p * (hi - lo));
+    ctx.fillStyle = g; ctx.globalAlpha = front ? 0.5 : 0.16 * (1 - d * 0.7); ctx.fill(); ctx.globalAlpha = 1;
+    const fog = Math.pow(1 - d, 1.3);
+    if (front) { strokePts(pts, look.glow, 3.2, 0.3); strokePts(pts, look.core, 1.1, 0.95); }
+    else strokePts(pts, levelGradient(base, base - hgt, p => lo + p * (hi - lo), 0.42), d < 0.3 ? 1.1 : 0.9, 0.2 + 0.65 * fog);
+  }
+  ctx.restore();
+}
+function drawPersist(r) {
+  const d = pimg.data, full = 1 / (1 - Math.pow(0.5, 1 / (state.persistSecs * ROW_HZ))), norm = 1 / Math.log1p(full);
+  for (let i = 0; i < dens.length; i++) {
+    const v = Math.min(1, Math.log1p(dens[i]) * norm);
+    if (v < 0.015) { d[i*4+3] = 0; continue; }
+    const li = Math.round((0.22 + 0.78 * v) * 255) * 4;
+    d[i*4] = LUT[li]; d[i*4+1] = LUT[li+1]; d[i*4+2] = LUT[li+2]; d[i*4+3] = Math.round(255 * Math.min(1, v * 2.2));
+  }
+  pctx.putImageData(pimg, 0, 0);
+  ctx.imageSmoothingEnabled = true; ctx.drawImage(persist, r.x, yDb(PMAX, r), r.w, yDb(PMIN, r) - yDb(PMAX, r));
+  const row = hist.subarray(head * N, head * N + N);
+  strokePts(tracePath(r, row), '#ffffff', 0.8, 0.55);
+}
+function drawRx(r, pan) {
+  const look = LOOKS[state.style], x0 = xHz(RX.f + RX.lo, r), x1 = xHz(RX.f + RX.hi, r), xc = xHz(RX.f, r);
+  ctx.fillStyle = rgba(look.glow, pan ? 0.12 : 0.07); ctx.fillRect(x0, r.y, x1 - x0, r.h);
+  ctx.fillStyle = rgba(look.glow, 0.7); ctx.fillRect(Math.round(x0), r.y, 1, r.h); ctx.fillRect(Math.round(x1), r.y, 1, r.h);
+  ctx.setLineDash([3, 3]); ctx.strokeStyle = rgba(look.core, 0.6); ctx.beginPath(); ctx.moveTo(Math.round(xc) + 0.5, r.y); ctx.lineTo(Math.round(xc) + 0.5, r.y + r.h); ctx.stroke(); ctx.setLineDash([]);
+  if (pan) flag(xc - 6, r.y + 6, 'right');
+}
+function flag(x, y, side) {
+  const look = LOOKS[state.style];
+  ctx.font = '11px ui-monospace, Menlo, Consolas, monospace'; const w = ctx.measureText(RX.label).width + 16, h = 20;
+  const bx = Math.max(4, Math.min(cssW - w - 4, side === 'right' ? x - w : x - w / 2));
+  ctx.fillStyle = 'rgba(17,19,23,0.82)'; ctx.strokeStyle = rgba(look.glow, 0.55); ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.roundRect(bx, y, w, h, 3); ctx.fill(); ctx.stroke();
+  ctx.fillStyle = '#e3e6e9'; ctx.textAlign = 'left'; ctx.textBaseline = 'middle'; ctx.fillText(RX.label, bx + 8, y + h / 2 + 0.5);
+}
+// labels every 10 kHz when there is room for them, else every 20 or 50, so no two touch
+function labelEvery(pxPer10k) { ctx.font = '10.5px ui-monospace, Menlo, Consolas, monospace'; const need = ctx.measureText('14.000').width + 14; return [1, 2, 5].find(m => m * pxPer10k >= need) || 10; }
+function axis(r) {
+  ctx.fillStyle = '#111317'; ctx.fillRect(r.x, r.y, r.w, r.h);
+  ctx.font = '10.5px ui-monospace, Menlo, Consolas, monospace'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  const every = labelEvery(r.w / (SPAN / 10e3));
+  for (let f = 14.025e6; f < F0 + SPAN; f += 5e3) {
+    const x = Math.round(xHz(f, r)), khz = Math.round(f / 1e3), major = khz % 10 === 0;
+    ctx.fillStyle = major ? '#8f949b' : '#2b3037'; ctx.fillRect(x, r.y, 1, major ? 5 : 3);
+    if (major && khz % (10 * every) === 0) { ctx.fillStyle = '#b9bdc3'; ctx.fillText((f / 1e6).toFixed(3), x, r.y + r.h / 2 + 2); }
+  }
+}
+function drawSplit() {
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.clearRect(0, 0, cssW, cssH);
+  ctx.fillStyle = '#0b0d10'; ctx.fillRect(0, 0, cssW, cssH);
+  const L = layout(), look = LOOKS[state.style];
+  const g = ctx.createLinearGradient(0, L.pan.y, 0, L.pan.y + L.pan.h); g.addColorStop(0, look.bg[0]); g.addColorStop(1, look.bg[1]);
+  ctx.fillStyle = g; ctx.fillRect(L.pan.x, L.pan.y, L.pan.w, L.pan.h);
+  panGrid(L.pan, state.spectrum === 'ridges' ? ridgeGeom(L.pan).y : db => yDb(db, L.pan));
+  ctx.save(); ctx.beginPath(); ctx.rect(L.pan.x, L.pan.y, L.pan.w, L.pan.h); ctx.clip();
+  if (state.spectrum === 'trace') drawTrace(L.pan);
+  else if (state.spectrum === 'ridges') drawRidges(L.pan);
+  else drawPersist(L.pan);
+  drawRx(L.pan, true);
+  ctx.restore();
+  axis(L.axis);
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(state.waterfall === 'relief' ? wfRelief : wfFlat, 0, 0, N, H, L.wf.x, L.wf.y, L.wf.w, L.wf.h);
+  drawRx(L.wf, false);
+  ctx.font = '10.5px ui-monospace, Menlo, Consolas, monospace'; ctx.textAlign = 'right'; ctx.textBaseline = 'middle'; ctx.fillStyle = '#8f949b';
+  for (let s = 0; s * ROW_HZ < H; s += 4) ctx.fillText(s === 0 ? 'now' : `−${s} s`, L.wf.x - 7, L.wf.y + (s * ROW_HZ + 0.5) / H * L.wf.h + (s === 0 ? 6 : 0));
+}
+
+/* ---------------- WebGL2 scenes: Terrain and Tilted ---------------- */
+const gl = glc.getContext('webgl2', { antialias: true });
+let glReady = false; const G = {};
+const GC = 512, GR = 200, W = 2.2, D = 1.7;
+const LVL = `
+uniform sampler2D uH; uniform int uHead; uniform int uHist; uniform int uBins; uniform float uGC; uniform float uHeight;
+float lvl(float col, float age) {
+  int a = int(clamp(age, 0.0, ${GR - 1}.0));
+  int row = (uHead - a + uHist * 4) % uHist;
+  int b0 = int(col) * (uBins / int(uGC));
+  float m = texelFetch(uH, ivec2(b0, row), 0).r;
+  m = max(m, texelFetch(uH, ivec2(min(b0 + 1, uBins - 1), row), 0).r);
+  return m;
+}
+float hgt(float t) { return uHeight * pow(max(t - 0.05, 0.0) / 0.95, 1.2); }`;
+const VS_T = `#version 300 es
+precision highp float; precision highp int;
+in vec2 aP; uniform mat4 uMVP; uniform float uFrac; uniform float uW; uniform float uD; uniform float uGrid;
+${LVL}
+out float vT; out vec3 vN; out float vAge; out vec2 vG;
+void main() {
+  float t = lvl(aP.x, aP.y);
+  float x = (aP.x / (uGC - 1.0) - 0.5) * uW;
+  float z = -((aP.y + uFrac) / ${GR - 1}.0) * uD;
+  float hl = hgt(lvl(max(aP.x - 1.0, 0.0), aP.y)), hr = hgt(lvl(min(aP.x + 1.0, uGC - 1.0), aP.y));
+  float hb = hgt(lvl(aP.x, aP.y + 1.0)), hf = hgt(lvl(aP.x, max(aP.y - 1.0, 0.0)));
+  float dx = 2.0 * uW / (uGC - 1.0), dz = 2.0 * uD / ${GR - 1}.0;
+  vN = normalize(vec3((hl - hr) / dx, 1.0, (hb - hf) / dz));
+  vT = t; vAge = (aP.y + uFrac) / ${GR - 1}.0;
+  vG = vec2(aP.x / 8.0, (uGrid - aP.y) / 10.0);
+  gl_Position = uMVP * vec4(x, hgt(t), z, 1.0);
+}`;
+const FS_T = `#version 300 es
+precision highp float;
+in float vT; in vec3 vN; in float vAge; in vec2 vG;
+uniform sampler2D uLut; uniform vec3 uFog; uniform float uFlat;
+out vec4 o;
+void main() {
+  vec3 base = texture(uLut, vec2(clamp(vT, 0.0, 1.0) * 255.0 / 256.0 + 0.5 / 256.0, 0.5)).rgb;
+  vec3 n = normalize(vN), L = normalize(vec3(-0.45, 0.8, 0.5));
+  float d = max(dot(n, L), 0.0);
+  vec3 c = base * mix(0.28 + 1.0 * d, 1.0, uFlat);
+  vec3 Hh = normalize(L + vec3(0.0, 0.5, 1.0));
+  c += pow(max(dot(n, Hh), 0.0), 48.0) * (1.0 - uFlat) * 0.3 * (base + 0.25);
+  vec2 g = abs(fract(vG - 0.5) - 0.5) / fwidth(vG);
+  float line = 1.0 - min(min(g.x, g.y), 1.0);
+  c += line * (0.085 + 0.45 * base) * (1.0 - 0.6 * uFlat);
+  c = mix(c, uFog, smoothstep(0.3, 1.0, vAge) * 0.82);
+  o = vec4(c, 1.0);
+}`;
+const VS_C = `#version 300 es
+precision highp float; precision highp int;
+in vec2 aC; uniform mat4 uMVP; uniform float uW; uniform float uZ; uniform float uCH; uniform int uMode;
+${LVL}
+out float vT; out float vTop;
+void main() {
+  float t = lvl(aC.x, 0.0);
+  float x = (aC.x / (uGC - 1.0) - 0.5) * uW;
+  float y = uMode == 0 ? aC.y * uCH * pow(max(t - 0.03, 0.0) / 0.97, 1.05) : hgt(t) + 0.003;
+  vT = t; vTop = aC.y;
+  gl_Position = uMVP * vec4(x, y, uZ, 1.0);
+}`;
+const FS_C = `#version 300 es
+precision highp float;
+in float vT; in float vTop; uniform sampler2D uLut; uniform int uLine; uniform vec3 uCore;
+out vec4 o;
+void main() {
+  vec3 c = texture(uLut, vec2(clamp(vT, 0.0, 1.0) * 255.0 / 256.0 + 0.5 / 256.0, 0.5)).rgb;
+  if (uLine == 1) o = vec4(mix(c, uCore, 0.6), 0.95);
+  else o = vec4(c, mix(0.06, 0.8, vTop * vTop));
+}`;
+const VS_S = `#version 300 es
+in vec3 aP; uniform mat4 uMVP; void main() { gl_Position = uMVP * vec4(aP, 1.0); }`;
+const FS_S = `#version 300 es
+precision highp float; uniform vec4 uCol; out vec4 o; void main() { o = uCol; }`;
+
+function prog(vs, fs) {
+  const mk = (t, s) => { const sh = gl.createShader(t); gl.shaderSource(sh, s); gl.compileShader(sh); if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(sh)); return sh; };
+  const p = gl.createProgram(); gl.attachShader(p, mk(gl.VERTEX_SHADER, vs)); gl.attachShader(p, mk(gl.FRAGMENT_SHADER, fs)); gl.linkProgram(p);
+  if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p));
+  const u = {}; const n = gl.getProgramParameter(p, gl.ACTIVE_UNIFORMS);
+  for (let i = 0; i < n; i++) { const nm = gl.getActiveUniform(p, i).name; u[nm] = gl.getUniformLocation(p, nm); }
+  return { p, u };
+}
+function initGL() {
+  if (!gl) return;
+  try {
+    G.t = prog(VS_T, FS_T); G.c = prog(VS_C, FS_C); G.s = prog(VS_S, FS_S);
+  } catch (e) { console.error(e); return; }
+  const pos = new Float32Array(GC * GR * 2); let i = 0;
+  for (let r = 0; r < GR; r++) for (let c = 0; c < GC; c++) { pos[i++] = c; pos[i++] = r; }
+  const idx = new Uint32Array((GC - 1) * (GR - 1) * 6); i = 0;
+  for (let r = 0; r < GR - 1; r++) for (let c = 0; c < GC - 1; c++) { const a = r * GC + c, b = a + 1, d = a + GC, e = d + 1; idx.set([a, d, b, b, d, e], i); i += 6; }
+  G.count = idx.length;
+  G.vaoT = gl.createVertexArray(); gl.bindVertexArray(G.vaoT);
+  gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer()); gl.bufferData(gl.ARRAY_BUFFER, pos, gl.STATIC_DRAW);
+  let loc = gl.getAttribLocation(G.t.p, 'aP'); gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
+  gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, gl.createBuffer()); gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, idx, gl.STATIC_DRAW);
+  const strip = new Float32Array(GC * 4), line = new Float32Array(GC * 2);
+  for (let c = 0; c < GC; c++) { strip.set([c, 0, c, 1], c * 4); line.set([c, 1], c * 2); }
+  loc = gl.getAttribLocation(G.c.p, 'aC');
+  for (const [k, data] of [['vaoStrip', strip], ['vaoLine', line]]) {
+    G[k] = gl.createVertexArray(); gl.bindVertexArray(G[k]);
+    gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer()); gl.bufferData(gl.ARRAY_BUFFER, data, gl.STATIC_DRAW);
+    gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
+  }
+  G.vaoS = gl.createVertexArray(); gl.bindVertexArray(G.vaoS);
+  G.slabBuf = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, G.slabBuf); gl.bufferData(gl.ARRAY_BUFFER, 64 * 3 * 4, gl.DYNAMIC_DRAW);
+  loc = gl.getAttribLocation(G.s.p, 'aP'); gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc, 3, gl.FLOAT, false, 0, 0);
+  gl.bindVertexArray(null);
+  gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+  G.hTex = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, G.hTex);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, N, H, 0, gl.RED, gl.UNSIGNED_BYTE, tHist);
+  for (const [p, v] of [[gl.TEXTURE_MIN_FILTER, gl.NEAREST], [gl.TEXTURE_MAG_FILTER, gl.NEAREST], [gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE], [gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE]]) gl.texParameteri(gl.TEXTURE_2D, p, v);
+  G.lTex = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, G.lTex);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, 256, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, LUT);
+  for (const [p, v] of [[gl.TEXTURE_MIN_FILTER, gl.LINEAR], [gl.TEXTURE_MAG_FILTER, gl.LINEAR], [gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE], [gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE]]) gl.texParameteri(gl.TEXTURE_2D, p, v);
+  glReady = true;
+}
+function uploadRow() { gl.bindTexture(gl.TEXTURE_2D, G.hTex); gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, head, N, 1, gl.RED, gl.UNSIGNED_BYTE, tHist.subarray(head * N, head * N + N)); }
+function uploadLut() { gl.bindTexture(gl.TEXTURE_2D, G.lTex); gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, 256, 1, gl.RGBA, gl.UNSIGNED_BYTE, LUT); }
+
+// column-major matrices
+function persp(fy, a, n, f) { const t = 1 / Math.tan(fy / 2); return [t / a, 0, 0, 0, 0, t, 0, 0, 0, 0, (f + n) / (n - f), -1, 0, 0, 2 * f * n / (n - f), 0]; }
+const sub3 = (a, b) => [a[0]-b[0], a[1]-b[1], a[2]-b[2]], dot3 = (a, b) => a[0]*b[0] + a[1]*b[1] + a[2]*b[2];
+const cross3 = (a, b) => [a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]];
+const norm3 = a => { const l = Math.hypot(a[0], a[1], a[2]); return [a[0]/l, a[1]/l, a[2]/l]; };
+function lookAt(e, c) { const z = norm3(sub3(e, c)), x = norm3(cross3([0, 1, 0], z)), y = cross3(z, x); return [x[0], y[0], z[0], 0, x[1], y[1], z[1], 0, x[2], y[2], z[2], 0, -dot3(x, e), -dot3(y, e), -dot3(z, e), 1]; }
+function mul(a, b) { const o = new Array(16); for (let c = 0; c < 4; c++) for (let r = 0; r < 4; r++) { let s = 0; for (let k = 0; k < 4; k++) s += a[k * 4 + r] * b[c * 4 + k]; o[c * 4 + r] = s; } return o; }
+function project(m, p) { const x = m[0]*p[0] + m[4]*p[1] + m[8]*p[2] + m[12], y = m[1]*p[0] + m[5]*p[1] + m[9]*p[2] + m[13], w = m[3]*p[0] + m[7]*p[1] + m[11]*p[2] + m[15]; return [(x / w * 0.5 + 0.5) * cssW, (1 - (y / w * 0.5 + 0.5)) * cssH, w]; }
+
+const CAM0 = { terrain: { yaw: -0.32, pitch: 0.42, dist: 2.75 }, tilted: { yaw: 0, pitch: 0.36, dist: 2.6 } };
+const cam = { terrain: { ...CAM0.terrain }, tilted: { ...CAM0.tilted } };
+const wx = f => ((f - F0) / SPAN - 0.5) * W;
+
+function drawGL(frac) {
+  const tilted = state.scene === 'tilted', look = LOOKS[state.style];
+  gl.viewport(0, 0, glc.width, glc.height);
+  const fog = hexc(look.bg[1]).map(v => v / 255), top = hexc(look.bg[0]).map(v => v / 255);
+  gl.clearColor(fog[0], fog[1], fog[2], 1); gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+  gl.enable(gl.DEPTH_TEST); gl.disable(gl.BLEND); gl.depthMask(true);
+  const c = cam[state.scene], tgt = tilted ? [0, 0.16, -0.62] : [0, 0.08, -0.8];
+  const eye = [tgt[0] + c.dist * Math.sin(c.yaw) * Math.cos(c.pitch), tgt[1] + c.dist * Math.sin(c.pitch), tgt[2] + c.dist * Math.cos(c.yaw) * Math.cos(c.pitch)];
+  const mvp = mul(persp(0.66, cssW / cssH, 0.05, 20), lookAt(eye, tgt));
+  const height = tilted ? 0 : state.height, ch = 0.62;
+  const common = (u) => {
+    gl.uniformMatrix4fv(u.uMVP, false, mvp);
+    gl.uniform1i(u.uHead, head); gl.uniform1i(u.uHist, H); gl.uniform1i(u.uBins, N);
+    gl.uniform1f(u.uGC, GC); gl.uniform1f(u.uHeight, height); gl.uniform1f(u.uW, W);
+    gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, G.hTex); gl.uniform1i(u.uH, 0);
+    gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, G.lTex); gl.uniform1i(u.uLut, 1);
+  };
+  // the surface
+  gl.useProgram(G.t.p); common(G.t.u);
+  gl.uniform1f(G.t.u.uFrac, frac); gl.uniform1f(G.t.u.uD, D); gl.uniform1f(G.t.u.uGrid, total % 10000);
+  gl.uniform3fv(G.t.u.uFog, tilted ? fog.map((v, i) => v * 0.6 + top[i] * 0.4) : fog); gl.uniform1f(G.t.u.uFlat, tilted ? 1 : 0);
+  gl.bindVertexArray(G.vaoT); gl.drawElements(gl.TRIANGLES, G.count, gl.UNSIGNED_INT, 0);
+  // the live trace: a curtain at the front edge (Tilted) or a bright line on the front row (Terrain)
+  gl.enable(gl.BLEND); gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA); gl.depthMask(false);
+  gl.useProgram(G.c.p); common(G.c.u);
+  const zFront = -(frac / (GR - 1)) * D;
+  gl.uniform1f(G.c.u.uZ, tilted ? 0.0 : zFront); gl.uniform1f(G.c.u.uCH, ch); gl.uniform1i(G.c.u.uMode, tilted ? 0 : 1);
+  gl.uniform3fv(G.c.u.uCore, hexc(look.core).map(v => v / 255));
+  if (tilted) { gl.uniform1i(G.c.u.uLine, 0); gl.bindVertexArray(G.vaoStrip); gl.drawArrays(gl.TRIANGLE_STRIP, 0, GC * 2); }
+  gl.uniform1i(G.c.u.uLine, 1); gl.bindVertexArray(G.vaoLine); gl.drawArrays(gl.LINE_STRIP, 0, GC);
+  // the receiver's passband: a glass slab through time
+  const x0 = wx(RX.f + RX.lo), x1 = wx(RX.f + RX.hi), y1 = tilted ? 0.012 : height * 1.08 + 0.02, z0 = 0.02, z1 = -D;
+  const v = (x, y, z) => [x, y, z];
+  const P = [v(x0,0,z0), v(x1,0,z0), v(x1,y1,z0), v(x0,y1,z0), v(x0,0,z1), v(x1,0,z1), v(x1,y1,z1), v(x0,y1,z1)];
+  const faces = [[0,1,2,0,2,3], [4,5,6,4,6,7], [0,3,7,0,7,4], [1,2,6,1,6,5], [3,2,6,3,6,7]].flat();
+  const edges = [0,1, 1,2, 2,3, 3,0, 3,7, 2,6, 0,4, 1,5, 4,5, 7,6];
+  const data = new Float32Array([...faces, ...edges].flatMap(i => P[i]));
+  gl.useProgram(G.s.p); gl.uniformMatrix4fv(G.s.u.uMVP, false, mvp);
+  gl.bindVertexArray(G.vaoS); gl.bindBuffer(gl.ARRAY_BUFFER, G.slabBuf); gl.bufferSubData(gl.ARRAY_BUFFER, 0, data);
+  const gc = hexc(look.glow).map(q => q / 255);
+  gl.disable(gl.CULL_FACE);
+  gl.uniform4f(G.s.u.uCol, gc[0], gc[1], gc[2], 0.07); gl.drawArrays(gl.TRIANGLES, 0, faces.length);
+  gl.uniform4f(G.s.u.uCol, gc[0], gc[1], gc[2], 0.5); gl.drawArrays(gl.LINES, faces.length, edges.length);
+  gl.depthMask(true); gl.disable(gl.BLEND); gl.bindVertexArray(null);
+  // labels on the 2D layer, placed on the ground in front of and beside the surface so they never sit on it
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.clearRect(0, 0, cssW, cssH);
+  ctx.font = '10.5px ui-monospace, Menlo, Consolas, monospace'; ctx.textBaseline = 'middle';
+  ctx.textAlign = 'center';
+  const e0 = project(mvp, [-W / 2, 0, 0.15]), e1 = project(mvp, [W / 2, 0, 0.15]);
+  const every = labelEvery(Math.hypot(e1[0] - e0[0], e1[1] - e0[1]) / (SPAN / 10e3));
+  for (let f = 14.030e6; f < F0 + SPAN; f += 10e3) {
+    if (Math.round(f / 1e4) % every !== 0) continue;
+    const a = project(mvp, [wx(f), 0, 0.03]), b = project(mvp, [wx(f), 0, 0.08]), p = project(mvp, [wx(f), 0, 0.15]);
+    if (p[2] <= 0) continue;
+    ctx.strokeStyle = 'rgba(185,189,195,0.5)'; ctx.beginPath(); ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); ctx.stroke();
+    ctx.fillStyle = '#b9bdc3'; ctx.fillText((f / 1e6).toFixed(3), p[0], p[1]);
+  }
+  // the live trace's screen footprint, so no label is drawn where it rises
+  const hgtJs = t => tilted ? ch * Math.pow(Math.max(t - 0.03, 0) / 0.97, 1.05) : height * Math.pow(Math.max(t - 0.05, 0) / 0.95, 1.2);
+  const tops = [];
+  for (let c = 0; c < GC; c += 2) {
+    const t = Math.max(tHist[head * N + c * 2], tHist[head * N + c * 2 + 1]) / 255, x = (c / (GC - 1) - 0.5) * W;
+    const top = project(mvp, [x, hgtJs(t), tilted ? 0 : zFront]), base = project(mvp, [x, 0, tilted ? 0 : zFront]);
+    tops.push([top[0], top[1], base[1]]);
+  }
+  const clear = (x0, x1, y0, y1) => !tops.some(([x, yt, yb]) => x >= x0 - 3 && x <= x1 + 3 && yt < y1 + 2 && yb > y0 - 2);
+  ctx.textAlign = 'right';
+  for (let s = 2; s * ROW_HZ < GR; s += 2) {
+    const z = -((s * ROW_HZ) / (GR - 1)) * D, a = project(mvp, [-W / 2 - 0.02, 0, z]), p = project(mvp, [-W / 2 - 0.07, 0, z]);
+    const tw = ctx.measureText(`−${s} s`).width;
+    if (p[2] <= 0 || !clear(p[0] - tw, a[0], p[1] - 7, p[1] + 7)) continue;
+    ctx.strokeStyle = 'rgba(143,148,155,0.5)'; ctx.beginPath(); ctx.moveTo(a[0], a[1]); ctx.lineTo(p[0] + 3, p[1]); ctx.stroke();
+    ctx.fillStyle = '#8f949b'; ctx.fillText(`−${s} s`, p[0], p[1]);
+  }
+  const fp = project(mvp, [wx(RX.f), tilted ? ch + 0.04 : y1, z0]);
+  if (fp[2] > 0) flag(fp[0], fp[1] - 28, 'center');
+}
+function glUnavailable() {
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.fillStyle = '#0b0d10'; ctx.fillRect(0, 0, cssW, cssH);
+  ctx.fillStyle = '#b9bdc3'; ctx.font = '14px Helvetica Neue, Helvetica, Arial, sans-serif'; ctx.textAlign = 'center';
+  ctx.fillText('This browser has no WebGL2, so the 3D scenes cannot be drawn here.', cssW / 2, cssH / 2);
+}
+
+/* ---------------- loop, controls, orbit ---------------- */
+function render(frac) {
+  if (!cssW) return;
+  const glScene = state.scene !== 'split';
+  stage.classList.toggle('gl', glScene && glReady); stage.classList.toggle('orbit', glScene && glReady);
+  if (!glScene) drawSplit(); else if (glReady) drawGL(frac); else glUnavailable();
+}
+const meta = document.getElementById('meta');
+let lastMeta = 0;
+function updateMeta(now) {
+  if (now - lastMeta < 400) return; lastMeta = now;
+  const s8 = simT % 15;
+  meta.textContent = `simulated · 14.020–14.170 MHz · 1024 bins of 146 Hz · 20 rows/s · noise floor ${floorEst.toFixed(1).replace('-', '−')} dBFS · FT8 slot 0:${String(Math.floor(s8)).padStart(2, '0')} of 0:15`;
+}
+let last = performance.now(), acc = 0;
+function frame(now) {
+  const dt = Math.min(0.25, (now - last) / 1000); last = now;
+  if (!state.paused) { acc += dt; while (acc >= DT) { push(simRow()); acc -= DT; } }
+  const frac = state.paused ? 0 : Math.min(1, acc / DT);
+  if (!state.paused || dirty) { render(frac); dirty = false; }
+  updateMeta(now);
+  requestAnimationFrame(frame);
+}
+
+const statusEl = document.getElementById('status'), hintEl = document.getElementById('hint');
+const NAMES = { split: 'Split', terrain: 'Terrain', tilted: 'Tilted', trace: 'Trace', ridges: 'Ridges', persist: 'Persistence', flat: 'Flat', relief: 'Relief' };
+function sync() {
+  for (const seg of document.querySelectorAll('.seg')) for (const b of seg.querySelectorAll('button')) b.setAttribute('aria-pressed', String(state[seg.dataset.group] === b.dataset.v));
+  const split = state.scene === 'split';
+  document.getElementById('fs-spec').disabled = !split; document.getElementById('fs-wf').disabled = !split;
+  const live = { ridges: split && state.spectrum === 'ridges', persist: split && state.spectrum === 'persist', relief: split && state.waterfall === 'relief', terrain: state.scene === 'terrain' };
+  for (const s of document.querySelectorAll('.slider')) s.classList.toggle('off', !live[s.dataset.for]);
+  for (const c of document.querySelectorAll('.card')) {
+    const k = c.dataset.key;
+    c.classList.toggle('on', split ? (k === state.spectrum || (k === 'relief' && state.waterfall === 'relief')) : k === state.scene);
+  }
+  document.getElementById('o-ridge').textContent = `${state.ridgeSecs} s`;
+  document.getElementById('o-decay').textContent = `${state.persistSecs} s half-life`;
+  document.getElementById('o-relief').textContent = `${Math.round(state.relief * 100)}%`;
+  document.getElementById('o-height').textContent = state.height.toFixed(2);
+  document.getElementById('play').textContent = state.paused ? 'Play' : 'Pause';
+  hintEl.textContent = split ? '' : 'drag to orbit · wheel to zoom · double-click to reset';
+  statusEl.textContent = split ? `Split scene: ${NAMES[state.spectrum]} spectrum over ${NAMES[state.waterfall]} waterfall, ${state.style} style.` : `${NAMES[state.scene]} scene, ${state.style} style.`;
+  dirty = true;
+}
+function set(k, v) {
+  state[k] = v;
+  if (k === 'style') { LUT = buildLut(STOPS[v]); recolorAll(); }
+  sync();
+}
+for (const seg of document.querySelectorAll('.seg')) seg.addEventListener('click', e => { const b = e.target.closest('button'); if (b) set(seg.dataset.group, b.dataset.v); });
+for (const b of document.querySelectorAll('[data-set]')) b.addEventListener('click', () => {
+  for (const kv of b.dataset.set.split(',')) { const [k, v] = kv.split('='); state[k] = v; }
+  sync(); stage.scrollIntoView({ behavior: reduce ? 'auto' : 'smooth', block: 'center' });
+});
+const bind = (id, key, after) => document.getElementById(id).addEventListener('input', e => { state[key] = parseFloat(e.target.value); if (after) after(); sync(); });
+bind('s-ridge', 'ridgeSecs'); bind('s-decay', 'persistSecs'); bind('s-relief', 'relief', recolorAll); bind('s-height', 'height');
+document.getElementById('play').addEventListener('click', () => { state.paused = !state.paused; last = performance.now(); sync(); });
+
+let drag = null;
+stage.addEventListener('pointerdown', e => { if (state.scene === 'split') return; drag = { x: e.clientX, y: e.clientY }; stage.setPointerCapture(e.pointerId); stage.classList.add('dragging'); });
+stage.addEventListener('pointermove', e => {
+  if (!drag) return; const c = cam[state.scene];
+  c.yaw = Math.max(-1.1, Math.min(1.1, c.yaw - (e.clientX - drag.x) * 0.005));
+  c.pitch = Math.max(0.14, Math.min(1.25, c.pitch + (e.clientY - drag.y) * 0.004));
+  drag = { x: e.clientX, y: e.clientY }; dirty = true;
+});
+const endDrag = () => { drag = null; stage.classList.remove('dragging'); };
+stage.addEventListener('pointerup', endDrag); stage.addEventListener('pointercancel', endDrag);
+stage.addEventListener('wheel', e => { if (state.scene === 'split') return; e.preventDefault(); const c = cam[state.scene]; c.dist = Math.max(1.3, Math.min(4.5, c.dist * Math.exp(e.deltaY * 0.001))); dirty = true; }, { passive: false });
+stage.addEventListener('dblclick', () => { if (state.scene !== 'split') { Object.assign(cam[state.scene], CAM0[state.scene]); dirty = true; } });
+stage.addEventListener('keydown', e => {
+  if (state.scene === 'split') return; const c = cam[state.scene];
+  const m = { ArrowLeft: () => c.yaw += 0.06, ArrowRight: () => c.yaw -= 0.06, ArrowUp: () => c.pitch = Math.min(1.25, c.pitch + 0.05), ArrowDown: () => c.pitch = Math.max(0.14, c.pitch - 0.05) }[e.key];
+  if (m) { e.preventDefault(); m(); dirty = true; }
+});
+
+initGL();
+for (let i = 0; i < H + 40; i++) push(simRow());   // start with a full history
+const q = new URLSearchParams(location.search);
+for (const k of ['scene', 'spectrum', 'waterfall', 'style']) if (q.get(k)) state[k] = q.get(k);
+if (state.style !== 'Prism') { LUT = buildLut(STOPS[state.style]); recolorAll(); }
+if (q.get('paused')) state.paused = true;
+if (q.get('shot')) document.body.classList.add('shot');
+sync(); resize();
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
