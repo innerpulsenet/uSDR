@@ -1543,7 +1543,7 @@ async fn ws_client(mut socket: WebSocket, st: Arc<AppState>, info: ClientInfo, s
                         // pre-encoded binary (layout documented in
                         // sdr::encode_fft_frame) — one encode per frame on
                         // the DSP thread, shared by every client.
-                        if socket.send(Message::Binary(frame.clone().into())).await.is_err() {
+                        if socket.send(Message::Binary(frame.clone())).await.is_err() {
                             return;
                         }
                     }

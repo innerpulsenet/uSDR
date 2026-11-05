@@ -41,6 +41,16 @@ fn main() {
     time("copy only", &mut |_w| {});
     let mut fe = FrontEnd::without_blanker(fs);
     time("front end (dc, iq image)", &mut |w| fe.process(w));
+    // A front end with a little gain and phase imbalance keeps the image
+    // corrector running, as a real tuner does: its two transforms per block
+    // never go idle.
+    let mut fe = FrontEnd::without_blanker(fs);
+    time("front end, corrector on", &mut |w| {
+        for s in w.iter_mut() {
+            *s = Complex32::new(s.re, s.im * 1.02 + s.re * 0.01);
+        }
+        fe.process(w)
+    });
     for size in [1024usize, 4096] {
         let mut sp = Spectrum::new(size);
         let mut avg = Vec::new();

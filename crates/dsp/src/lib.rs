@@ -738,7 +738,8 @@ impl Nco {
     }
 
     pub fn mix(&mut self, input: &[Complex32], out: &mut Vec<Complex32>) {
-        out.clear();
+        // Every element is written below, so only a length change needs
+        // filling: clearing first zeroed the whole block just to overwrite it.
         out.resize(input.len(), Complex32::new(0.0, 0.0));
         let head = ((4 - self.pos) % 4).min(input.len());
         for i in 0..head {
@@ -778,6 +779,8 @@ pub struct DecimFir {
     ifft: Option<Arc<dyn Fft<f32>>>,
     response: Vec<Complex32>,
     work: Vec<Complex32>,
+    /// Transform scratch, so a frame does not allocate one per transform.
+    scratch: Vec<Complex32>,
     overlap: Vec<Complex32>,
     fft_len: usize,
     /// Running phase of the kept-sample grid: increments once per filtered
@@ -803,6 +806,7 @@ impl DecimFir {
             ifft: None,
             response: Vec::new(),
             work: Vec::new(),
+            scratch: Vec::new(),
             overlap: Vec::new(),
             fft_len: 0,
             phase: 0,
@@ -912,6 +916,10 @@ impl DecimFir {
         }
         fft.process(&mut self.response);
         self.work.resize(self.fft_len, Complex32::new(0.0, 0.0));
+        self.scratch.resize(
+            fft.get_inplace_scratch_len().max(ifft.get_inplace_scratch_len()),
+            Complex32::new(0.0, 0.0),
+        );
         self.overlap
             .resize(self.taps.len() - 1, Complex32::new(0.0, 0.0));
         // The overlap is state of the OLD tap count: after a redesign its
@@ -935,16 +943,22 @@ impl DecimFir {
         self.buf.extend_from_slice(input);
         let discard = self.taps.len() - 1;
         let hop = self.fft_len - discard;
-        while self.buf.len() >= hop {
-            self.emit_frame(hop, out);
+        // Walk the buffer with a cursor and drain once at the end. Draining
+        // each hop moved the whole remaining buffer every time: a 20 ms block
+        // at 8 MS/s is 26 hops, so the copies grew with the square of the
+        // block and were most of the chain's memmove.
+        let mut at = 0usize;
+        while self.buf.len() - at >= hop {
+            self.emit_frame(at, hop, out);
             if discard <= hop {
-                self.overlap.copy_from_slice(&self.buf[hop - discard..hop]);
+                self.overlap.copy_from_slice(&self.buf[at + hop - discard..at + hop]);
             } else {
                 self.overlap.rotate_left(hop);
-                self.overlap[discard - hop..].copy_from_slice(&self.buf[..hop]);
+                self.overlap[discard - hop..].copy_from_slice(&self.buf[at..at + hop]);
             }
-            self.buf.drain(..hop);
+            at += hop;
         }
+        self.buf.drain(..at);
         // A short input burst can leave less than one FFT hop buffered, which
         // would return an empty output for this call and stall every consumer
         // that expects per-block continuity (APRS bit clocks, FT8 slots).
@@ -954,7 +968,7 @@ impl DecimFir {
         // those outputs arrives on later calls with the real samples.
         if !self.buf.is_empty() {
             let consumed = self.buf.len();
-            self.emit_frame(consumed, out);
+            self.emit_frame(0, consumed, out);
             // advance overlap over everything consumed
             if consumed >= discard {
                 self.overlap
@@ -980,16 +994,18 @@ impl DecimFir {
     /// emitted when its absolute index `g` (counting every filtered sample
     /// since startup) satisfies `g % decim == 0` and `g >= taps - 1` (the
     /// warm-up that swallows the FIR's transient).
-    fn emit_frame(&mut self, valid: usize, out: &mut Vec<Complex32>) {
+    fn emit_frame(&mut self, at: usize, valid: usize, out: &mut Vec<Complex32>) {
         let discard = self.taps.len() - 1;
-        self.work.fill(Complex32::new(0.0, 0.0));
+        // Only the zero padding past the valid samples needs clearing; the
+        // rest is overwritten just below.
         self.work[..discard].copy_from_slice(&self.overlap);
-        self.work[discard..discard + valid].copy_from_slice(&self.buf[..valid]);
-        self.fft.as_ref().unwrap().process(&mut self.work);
+        self.work[discard..discard + valid].copy_from_slice(&self.buf[at..at + valid]);
+        self.work[discard + valid..].fill(Complex32::new(0.0, 0.0));
+        self.fft.as_ref().unwrap().process_with_scratch(&mut self.work, &mut self.scratch);
         for (x, h) in self.work.iter_mut().zip(&self.response) {
             *x *= *h;
         }
-        self.ifft.as_ref().unwrap().process(&mut self.work);
+        self.ifft.as_ref().unwrap().process_with_scratch(&mut self.work, &mut self.scratch);
         // Kept-sample identity: emit when `(g - warmup) % decim == 0` past the
         // startup transient. The original walk's `continue` skipped warm
         // samples without advancing its phase counter, so its phase==0 grid
@@ -1943,10 +1959,74 @@ impl NoiseBlanker {
     }
 }
 
+/// Samples per step of the front end's DC tracker (see `FrontEnd::remove_dc`).
+const DC_CHUNK: usize = 32;
+
+/// A one-pole of coefficient `a` over one `DC_CHUNK`: the weight each sample
+/// of a chunk carries in the estimate at the chunk's end.
+fn dc_chunk_weights(a: f64) -> [f32; DC_CHUNK] {
+    std::array::from_fn(|j| (a * (1.0 - a).powi((DC_CHUNK - 1 - j) as i32)) as f32)
+}
+
+/// The image estimator's bands as runs of the 4096-bin transform: bin `k`
+/// (1..4096) sits in band `((k + 2048) % 4096) * 12 / 4096`, which only
+/// changes a dozen times along `k`.
+/// `buf[k] = orig[k] - a·conj(orig[4096 - k])` for every bin but DC, `a`
+/// being bin `k`'s band coefficient.
+fn apply_image(buf: &mut [Complex32], orig: &[Complex32], runs: &[(usize, usize, usize)], image: &[Complex32; 12]) {
+    let n = orig.len();
+    for &(first, end, band) in runs {
+        let a = image[band];
+        for k in first..end {
+            buf[k] = orig[k] - a * orig[n - k].conj();
+        }
+    }
+}
+
+/// Sum in four independent lanes, so the adds pipeline instead of each
+/// waiting on the last.
+fn lane_sum_c(v: &[Complex32]) -> Complex32 {
+    let mut acc = [Complex32::new(0.0, 0.0); 4];
+    let chunks = v.chunks_exact(4);
+    let rest = chunks.remainder();
+    for c in chunks {
+        for l in 0..4 {
+            acc[l] += c[l];
+        }
+    }
+    rest.iter().fold((acc[0] + acc[1]) + (acc[2] + acc[3]), |s, &x| s + x)
+}
+
+fn lane_sum(v: &[f32]) -> f32 {
+    let mut acc = [0.0f32; 8];
+    let chunks = v.chunks_exact(8);
+    let rest = chunks.remainder();
+    for c in chunks {
+        for l in 0..8 {
+            acc[l] += c[l];
+        }
+    }
+    let lanes = ((acc[0] + acc[1]) + (acc[2] + acc[3])) + ((acc[4] + acc[5]) + (acc[6] + acc[7]));
+    rest.iter().fold(lanes, |s, &x| s + x)
+}
+
+fn image_band_runs() -> Vec<(usize, usize, usize)> {
+    const N: usize = 4096;
+    let band = |k: usize| (((k + N / 2) % N) * 12 / N).min(11);
+    let mut runs = Vec::new();
+    let mut start = 1;
+    for k in 2..=N {
+        if k == N || band(k) != band(start) {
+            runs.push((start, k, band(start)));
+            start = k;
+        }
+    }
+    runs
+}
+
 pub struct FrontEnd {
     fs: f64,
     dc: Complex32,
-    dc_a: f32,
     /// The DC estimate has been seeded from real samples. After a reset (a
     /// retune, a reopen) the tuner's offset is a new value; tracking up to it
     /// from zero through a 2 Hz pole took a few hundred milliseconds, and the
@@ -1956,6 +2036,8 @@ pub struct FrontEnd {
     iq_ifft: Arc<dyn Fft<f32>>,
     iq_buf: Vec<Complex32>,
     iq_orig: Vec<Complex32>,
+    /// Transform scratch, so neither transform allocates one per block.
+    iq_scratch: Vec<Complex32>,
     /// Block staging for the image corrector: the radio delivers arbitrary
     /// block sizes, and `chunks_exact_mut(4096)` alone left a different
     /// remainder uncorrected on every call — whether a sample was corrected
@@ -1969,11 +2051,26 @@ pub struct FrontEnd {
     idle: u32,
     /// Consecutive probe blocks left in the current re-probe run.
     probe: u32,
-    /// Constant index tables for the image estimator: for FFT bin `k + 1`,
-    /// its conjugate-symmetric mirror bin and which of the 12 bands it falls
-    /// in. Recomputing them per block was two modulo chains over 4095 bins.
-    mirror_idx: Vec<usize>,
-    band_idx: Vec<usize>,
+    /// The image estimator's 12 bands as runs of FFT bins: `(first, end,
+    /// band)` over bins 1..4096, each bin's mirror being `4096 - k`. A band
+    /// is contiguous in bin order, so the loops walk plain ranges with the
+    /// band's sums in registers; looking each bin's band and mirror up in
+    /// tables made every accumulate wait on the last one through memory.
+    band_runs: Vec<(usize, usize, usize)>,
+    /// Per-pair estimator terms for bins 1..=2048: `X[k]·X[4096-k]` and
+    /// `|X[k]|² + |X[4096-k]|²` (index 0 unused).
+    pair_cross: Vec<Complex32>,
+    pair_power: Vec<f32>,
+    /// The uncorrected last 4096 samples of the staged input, for correcting
+    /// the remainder that does not fill a block (see `correct_images`).
+    tail: Vec<Complex32>,
+    /// DC tracker weights for one chunk of `DC_CHUNK` samples, see `process`.
+    dc_w: [f32; DC_CHUNK],
+    /// The DC estimate at the start of the current chunk, the chunk's
+    /// partial update, and how far into the chunk the stream is.
+    dc_start: Complex32,
+    dc_acc: [Complex32; 4],
+    dc_pos: usize,
     image: [Complex32; 12],
     /// Samples seen, against the number needed before correcting at all.
     warm: u32,
@@ -2005,33 +2102,38 @@ impl FrontEnd {
 
     /// `blanker_level`: 0 = off, 1 = gentle, 2 = normal, 3 = aggressive.
     pub fn with_blanker(fs: f64, blanker_level: u8) -> Self {
-        let fsf = fs as f32;
         let mut planner = FftPlanner::new();
         let mut blanker = NoiseBlanker::new(fs);
         blanker.set_level(blanker_level);
+        let iq_fft = planner.plan_fft_forward(4096);
+        let iq_ifft = planner.plan_fft_inverse(4096);
         Self {
             fs,
             dc: Complex32::new(0.0, 0.0),
             dc_seeded: false,
-            // ~2 Hz corner. Slow enough that it is a bias estimate rather
-            // than a filter, so it cannot touch a signal even a few tens of
-            // hertz off the LO — the region worth recovering in the first place.
-            dc_a: 1.0 - (-2.0 * PI * 2.0 / fsf).exp(),
-            iq_fft: planner.plan_fft_forward(4096),
-            iq_ifft: planner.plan_fft_inverse(4096),
+            iq_scratch: vec![
+                Complex32::new(0.0, 0.0);
+                iq_fft.get_inplace_scratch_len().max(iq_ifft.get_inplace_scratch_len())
+            ],
+            iq_fft,
+            iq_ifft,
             iq_buf: vec![Complex32::new(0.0, 0.0); 4096],
             iq_orig: vec![Complex32::new(0.0, 0.0); 4096],
             carry: Vec::with_capacity(4095),
             stage: Vec::new(),
             idle: 0,
             probe: 0,
-            mirror_idx: (0..4095).map(|k| (4096 - (k + 1)) % 4096).collect(),
-            band_idx: (0..4095)
-                .map(|k| {
-                    let shifted = (k + 1 + 2048) % 4096;
-                    (shifted * 12 / 4096).min(11)
-                })
-                .collect(),
+            band_runs: image_band_runs(),
+            tail: vec![Complex32::new(0.0, 0.0); 4096],
+            pair_cross: vec![Complex32::new(0.0, 0.0); 2049],
+            pair_power: vec![0.0; 2049],
+            // ~2 Hz corner. Slow enough that it is a bias estimate rather
+            // than a filter, so it cannot touch a signal even a few tens of
+            // hertz off the LO — the region worth recovering in the first place.
+            dc_w: dc_chunk_weights(1.0 - (-2.0 * std::f64::consts::PI * 2.0 / fs).exp()),
+            dc_start: Complex32::new(0.0, 0.0),
+            dc_acc: [Complex32::new(0.0, 0.0); 4],
+            dc_pos: 0,
             image: [Complex32::new(0.0, 0.0); 12],
             warm: 0,
             // Two time constants of the estimator above.
@@ -2081,19 +2183,69 @@ impl FrontEnd {
         if !self.dc_seeded && !iq.is_empty() {
             let sum = iq.iter().fold(Complex32::new(0.0, 0.0), |a, &s| a + s);
             self.dc = sum / iq.len() as f32;
+            self.dc_start = self.dc;
             self.dc_seeded = true;
         }
-        for s in iq.iter_mut() {
-            // --- DC offset: track the mean and subtract it.
-            self.dc += (*s - self.dc) * self.dc_a;
-            let v = *s - self.dc;
-
-            *s = v;
-        }
+        self.remove_dc(iq);
 
         self.warm = self.warm.saturating_add(iq.len() as u32);
         self.correct_images(iq);
         self.blanker.process(iq);
+    }
+
+    /// DC offset: track the mean with the ~2 Hz one-pole and subtract it.
+    ///
+    /// The pole is stepped once per `DC_CHUNK` samples rather than once per
+    /// sample: `dc_w` holds the one-pole's impulse response over a chunk, so
+    /// the estimate at each chunk boundary is the per-sample recursion's to
+    /// rounding, and each sample has the estimate from its chunk's start
+    /// taken off. Inside a chunk the per-sample estimate moves by about
+    /// `a * DC_CHUNK` of the signal (a ~1e-4 relative change even at
+    /// 250 kS/s), far under the noise. The per-sample recursion was a
+    /// dependency chain of three float operations per sample — the largest
+    /// single cost in the front end — where this vectorizes. The chunk grid
+    /// counts samples, not calls, and every path sums in the same lanes, so
+    /// the output does not depend on how the caller chunks its input.
+    fn remove_dc(&mut self, iq: &mut [Complex32]) {
+        let mut rest = &mut iq[..];
+        // Finish a chunk left open by the last call.
+        while self.dc_pos != 0 && !rest.is_empty() {
+            let (s, tail) = rest.split_first_mut().unwrap();
+            self.dc_one(s);
+            rest = tail;
+        }
+        let whole = rest.len() / DC_CHUNK * DC_CHUNK;
+        let (body, tail) = rest.split_at_mut(whole);
+        for chunk in body.chunks_exact_mut(DC_CHUNK) {
+            let d = self.dc_start;
+            let mut acc = [Complex32::new(0.0, 0.0); 4];
+            for (s4, w4) in chunk.chunks_exact_mut(4).zip(self.dc_w.chunks_exact(4)) {
+                for l in 0..4 {
+                    let v = s4[l] - d;
+                    s4[l] = v;
+                    acc[l] += v * w4[l];
+                }
+            }
+            self.dc_start = d + ((acc[0] + acc[1]) + (acc[2] + acc[3]));
+        }
+        for s in tail {
+            self.dc_one(s);
+        }
+        self.dc = self.dc_start;
+    }
+
+    #[inline]
+    fn dc_one(&mut self, s: &mut Complex32) {
+        let v = *s - self.dc_start;
+        *s = v;
+        self.dc_acc[self.dc_pos % 4] += v * self.dc_w[self.dc_pos];
+        self.dc_pos += 1;
+        if self.dc_pos == DC_CHUNK {
+            let acc = self.dc_acc;
+            self.dc_start += (acc[0] + acc[1]) + (acc[2] + acc[3]);
+            self.dc_acc = [Complex32::new(0.0, 0.0); 4];
+            self.dc_pos = 0;
+        }
     }
 
     fn correct_images(&mut self, iq: &mut [Complex32]) {
@@ -2114,19 +2266,25 @@ impl FrontEnd {
         const IDLE_PROBE_BLOCKS: u32 = 250;
         const PROBE_RUN_BLOCKS: u32 = 8;
         // Staging: process contiguous 4096-sample blocks out of a carry
-        // buffer, so every sample is corrected exactly once no matter how the
-        // radio chunks its deliveries. Before this, `chunks_exact_mut(N)`
-        // corrected only aligned blocks and silently skipped a
-        // block-sized remainder whose position depended on the caller's
-        // chunk sizes.
+        // buffer, so the estimator sees every sample in whole blocks no
+        // matter how the radio chunks its deliveries. The remainder past the
+        // last whole block goes out now, corrected through the transform of
+        // the 4096 samples ending with it (see below), and is carried into
+        // the next call's first block for the estimator.
         self.stage.clear();
         self.stage.extend_from_slice(&self.carry);
         let prev_carry = self.stage.len();
         self.stage.extend_from_slice(iq);
         let complete = self.stage.len() / N;
+        let remainder = self.stage.len() - complete * N;
         self.carry.clear();
         self.carry
             .extend_from_slice(&self.stage[complete * N..]);
+        if complete > 0 && remainder > 0 {
+            let len = self.stage.len();
+            self.tail.copy_from_slice(&self.stage[len - N..]);
+        }
+        let mut applied = false;
         for block in self.stage.chunks_exact_mut(N) {
             // Nothing worth correcting: skip both transforms. A dongle whose
             // driver already corrects the image reports ~100 dB of rejection,
@@ -2158,6 +2316,7 @@ impl FrontEnd {
                     self.idle = 0;
                     self.probe = PROBE_RUN_BLOCKS;
                 } else {
+                    applied = false;
                     continue;
                 }
             }
@@ -2170,18 +2329,24 @@ impl FrontEnd {
                 self.idle = 0;
             }
             self.iq_buf.copy_from_slice(block);
-            self.iq_fft.process(&mut self.iq_buf);
+            self.iq_fft.process_with_scratch(&mut self.iq_buf, &mut self.iq_scratch);
             self.iq_orig.copy_from_slice(&self.iq_buf);
             let mut cross = [Complex32::new(0.0, 0.0); K];
             let mut paired = [0.0f32; K];
-            // Index tables are constant: band and mirror are the same every
-            // block, so they are precomputed once instead of being re-derived
-            // from k with a modulo on each pass.
-            for (k, &mirror) in self.mirror_idx.iter().enumerate() {
-                let band = self.band_idx[k];
-                let k = k + 1;
-                cross[band] += self.iq_orig[k] * self.iq_orig[mirror];
-                paired[band] += self.iq_orig[k].norm_sqr() + self.iq_orig[mirror].norm_sqr();
+            // Bin k and its mirror N - k give the same product and the same
+            // pair power, so each pair is computed once, for k in 1..=N/2,
+            // and every band sums the pairs it holds over a plain range:
+            // bins below N/2 forward, bins above it through their mirrors.
+            let x = &self.iq_orig;
+            for k in 1..=N / 2 {
+                let (a, b) = (x[k], x[N - k]);
+                self.pair_cross[k] = a * b;
+                self.pair_power[k] = a.norm_sqr() + b.norm_sqr();
+            }
+            for &(first, end, band) in &self.band_runs {
+                let range = if first >= N / 2 { N + 1 - end..N + 1 - first } else { first..end };
+                cross[band] += lane_sum_c(&self.pair_cross[range.clone()]);
+                paired[band] += lane_sum(&self.pair_power[range]);
             }
             let alpha = (N as f32 / (self.fs as f32 * 2.0)).clamp(0.002, 0.2);
             let mut estimate = [None; K];
@@ -2210,17 +2375,33 @@ impl FrontEnd {
                     self.image[b] += (target - self.image[b]) * alpha;
                 }
             }
-            if self.warm >= self.settle {
-                for k in 1..N {
-                    let band = self.band_idx[k - 1];
-                    let a = self.image[band];
-                    let mirror = self.mirror_idx[k - 1];
-                    self.iq_buf[k] = self.iq_orig[k] - a * self.iq_orig[mirror].conj();
-                }
-                self.iq_ifft.process(&mut self.iq_buf);
+            applied = self.warm >= self.settle;
+            if applied {
+                apply_image(&mut self.iq_buf, &self.iq_orig, &self.band_runs, &self.image);
+                self.iq_ifft.process_with_scratch(&mut self.iq_buf, &mut self.iq_scratch);
                 for (dst, src) in block.iter_mut().zip(&self.iq_buf) {
                     *dst = *src / N as f32;
                 }
+            }
+        }
+        // The remainder: correct it now rather than send it out as it came.
+        // It used to leave uncorrected — up to 4095 samples at the end of
+        // every delivery whose length is not a multiple of 4096 (a 20 ms
+        // block at 8 MS/s leaves 256 more each time) — and only its carried
+        // copy was corrected, then thrown away. The transform of the 4096
+        // samples ending with it puts the remainder at the block's trailing
+        // edge, clear of the leading-edge seam, and uses the coefficients as
+        // they stand without updating them: the estimator meets these
+        // samples in the next call's first block.
+        if applied && remainder > 0 {
+            self.iq_buf.copy_from_slice(&self.tail);
+            self.iq_fft.process_with_scratch(&mut self.iq_buf, &mut self.iq_scratch);
+            self.iq_orig.copy_from_slice(&self.iq_buf);
+            apply_image(&mut self.iq_buf, &self.iq_orig, &self.band_runs, &self.image);
+            self.iq_ifft.process_with_scratch(&mut self.iq_buf, &mut self.iq_scratch);
+            let len = self.stage.len();
+            for (dst, src) in self.stage[len - remainder..].iter_mut().zip(&self.iq_buf[N - remainder..]) {
+                *dst = *src / N as f32;
             }
         }
         // Copy the corrected samples back over the caller's buffer. The
@@ -2454,6 +2635,79 @@ pub(crate) mod frontend_tests {
             "subbands gained only {:.1} dB ({scalar_rej:.1} -> {per_band:.1})",
             per_band - scalar_rej
         );
+    }
+
+    /// Deliveries that are not a multiple of the corrector's 4096-sample
+    /// block are corrected as fully as aligned ones. The remainder at the
+    /// end of each delivery used to go out uncorrected; at 10 000 samples a
+    /// delivery that was a fifth of the signal on average, enough to undo
+    /// most of the rejection.
+    #[test]
+    fn unaligned_deliveries_are_corrected_like_aligned_ones() {
+        let fs = 48_000.0;
+        let (iq, hz) = frequency_dependent_case(fs);
+        let aligned = worst_rejection(&run_subband_only(&iq, fs), fs, hz);
+        for size in [10_000usize, 4_097, 20_480 + 1_000] {
+            let mut fe = FrontEnd::new(fs as f64);
+            fe.blanker.level = 0;
+            let mut out = Vec::new();
+            for chunk in iq.chunks(size) {
+                let mut block = chunk.to_vec();
+                fe.process(&mut block);
+                out.extend(block);
+            }
+            let tail = out.split_off(out.len() * 3 / 4);
+            let got = worst_rejection(&tail, fs, hz);
+            assert!(
+                got > aligned - 3.0,
+                "{size}-sample deliveries: {got:.1} dB of rejection against {aligned:.1} dB aligned"
+            );
+        }
+    }
+
+    /// The chunked DC tracker gives the same output however the input is
+    /// split, and follows a step in the offset like the 2 Hz pole it is.
+    #[test]
+    fn dc_tracker_is_independent_of_chunking() {
+        let fs = 48_000.0f32;
+        let mut rng = 0x5eed_1234u32;
+        let iq: Vec<Complex32> = (0..(fs as usize * 2))
+            .map(|i| {
+                let dc = if i < fs as usize { Complex32::new(0.1, -0.05) } else { Complex32::new(-0.2, 0.08) };
+                dc + Complex32::new(noise(&mut rng), noise(&mut rng)) * 0.01
+            })
+            .collect();
+        let run = |size: usize| {
+            let mut fe = FrontEnd::without_blanker(fs as f64);
+            let mut out = Vec::new();
+            for chunk in iq.chunks(size) {
+                let mut b = chunk.to_vec();
+                fe.remove_dc(&mut b);
+                out.extend(b);
+            }
+            (out, fe.dc)
+        };
+        let (a, dc_a) = run(4096);
+        for size in [1usize, 31, 33, 1000, 7777] {
+            let (b, dc_b) = run(size);
+            assert_eq!(dc_a, dc_b, "{size}-sample calls");
+            assert!(a == b, "{size}-sample calls changed the output");
+        }
+        // Against the per-sample recursion it replaces.
+        let alpha = 1.0 - (-2.0 * std::f64::consts::PI * 2.0 / f64::from(fs)).exp();
+        let mut dc = Complex32::new(0.0, 0.0);
+        let mut worst = 0.0f32;
+        for (i, (&s, &got)) in iq.iter().zip(&a).enumerate() {
+            dc += (s - dc) * alpha as f32;
+            if i > 100 {
+                worst = worst.max((got - (s - dc)).norm());
+            }
+        }
+        // Inside a chunk the per-sample estimate moves by up to `a` per sample
+        // of the residual, which peaks at about 0.32 just after the step.
+        let bound = DC_CHUNK as f32 * alpha as f32 * 0.35;
+        assert!(worst < bound, "differs from the per-sample tracker by {worst} (bound {bound})");
+        assert!((dc_a - dc).norm() < 1e-4, "estimate {dc_a} against {dc}");
     }
 
     #[test]
