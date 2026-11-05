@@ -53,12 +53,12 @@ impl Colormap {
         match self {
             Colormap::Ember => "Ember",
             Colormap::Ham => "HAM",
-            Colormap::Phosphor => "Phosphor",
+            Colormap::Phosphor => "Amber",
             Colormap::Glacier => "Glacier",
             Colormap::Viridis => "Viridis",
             Colormap::Classic => "Classic",
             Colormap::Midnight => "Midnight",
-            Colormap::Green => "Green",
+            Colormap::Green => "Phosphor",
             Colormap::Inferno => "Inferno",
             Colormap::Prism => "Prism",
         }

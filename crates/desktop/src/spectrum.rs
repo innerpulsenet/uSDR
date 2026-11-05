@@ -2122,6 +2122,13 @@ impl Panafall {
             if ui.checkbox(&mut mark, "Squelch mark").changed() {
                 view.sql_mark = mark.then_some(self.floor_est + 10.0);
             }
+            let mut ridges = view.spectrum == SpecMode::Ridges;
+            if ui.checkbox(&mut ridges, "Ridges").changed() {
+                view.spectrum = if ridges { SpecMode::Ridges } else { SpecMode::Trace };
+            }
+            // The whole look: trace, fill, background and waterfall colors
+            // together. The waterfall's colors alone, apart from the style,
+            // are under WATERFALL in the toolbar.
             ui.menu_button("Style", |ui| {
                 ui.set_min_width(200.0);
                 for st in Style::ALL {
@@ -2129,15 +2136,6 @@ impl Panafall {
                     if crate::widgets::swatch_item(ui, st.label(), look.palette, Some(look.fill), view.style == st).clicked() {
                         view.style = st;
                         view.palette = look.palette;
-                        ui.close();
-                    }
-                }
-            });
-            ui.menu_button("Palette", |ui| {
-                ui.set_min_width(200.0);
-                for m in Colormap::ALL {
-                    if crate::widgets::swatch_item(ui, m.label(), m, None, view.palette == m).clicked() {
-                        view.palette = m;
                         ui.close();
                     }
                 }

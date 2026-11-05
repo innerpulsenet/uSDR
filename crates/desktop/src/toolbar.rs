@@ -197,7 +197,7 @@ fn waterfall(app: &mut App, ui: &mut Ui) {
     let floor = app.pan.floor_est;
     let v = &mut app.prefs.view;
     ui.horizontal(|ui| {
-        ui.label(small("palette"));
+        ui.label(small("colors")).on_hover_text("The waterfall's colors, apart from the style. Choosing a style sets them back to its own.");
         widgets::selector(ui, "palette", v.palette.label(), v.palette.accent(), 130.0, |ui| {
             for m in crate::colormap::Colormap::ALL {
                 if widgets::swatch_item(ui, m.label(), m, None, v.palette == m).clicked() {
