@@ -289,16 +289,19 @@ fn tuning(app: &mut App, ui: &mut Ui) {
             ui.spacing_mut().item_spacing.x = 3.0;
             let jog = |ui: &mut Ui, app: &mut App, lbl: &str, n: f64| {
                 if widgets::chip_key(ui, lbl, false, theme::AMBER).on_hover_text(format!("{n:+} step · Shift for a tenth")).clicked() {
-                    let fine = ui.input(|i| i.modifiers.shift);
-                    let st = if fine { (app.step_hz() / 10.0).round().max(100.0) } else { app.step_hz() };
-                    let target = app.active_hz() + n * st;
+                    // On the raster, as a click and the wheel land: a
+                    // receiver left between two points is back on one at
+                    // the first press.
+                    let st = crate::tuning::jog_step(app.step_hz(), ui.input(|i| i.modifiers.shift));
+                    let target = crate::tuning::step_from(app.active_hz(), n, st);
                     app.tune(target, true);
                 }
             };
             jog(ui, app, "«", -10.0);
             jog(ui, app, "‹", -1.0);
             if let Some(d) = crate::vfo::tune_strip(ui, hz, app.step_hz(), strip_w, 22.0) {
-                let target = app.active_hz() + d;
+                let st = crate::tuning::jog_step(app.step_hz(), ui.input(|i| i.modifiers.shift));
+                let target = crate::tuning::step_from(app.active_hz(), (d / st).round(), st);
                 app.tune(target, true);
             }
             jog(ui, app, "›", 1.0);

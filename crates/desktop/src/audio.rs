@@ -49,6 +49,8 @@ const GAP_KEEP: f64 = 0.9995;
 const PENALTY_KEEP: f64 = 0.9998;
 /// Each underrun adds this to the target, up to three of them.
 const PENALTY_S: f64 = 0.030;
+/// The time constant of the mean queue depth the ratio is steered by.
+const STEER_MEAN_S: f64 = 2.0;
 /// Past this the queue is cut back to the target.
 const CEILING_S: f64 = 0.5;
 /// The limiter's look-ahead, release time constant, and the level nothing
@@ -89,6 +91,9 @@ struct Shared {
     callback_s: f64,
     penalty_s: f64,
     target_s: f64,
+    /// The queue's depth as the ratio is steered by it: its mean over
+    /// `STEER_MEAN_S`, seconds. Zero while there is none (priming, a cut).
+    depth_s: f64,
     /// Smoothed ratio correction, for display.
     drift_ppm: f64,
     /// A recording being played back in place of the live audio.
@@ -553,6 +558,8 @@ impl Player {
                 let cut = s.queue.len() - target;
                 s.queue.drain(..cut);
                 s.trimmed += 1;
+                // The mean depth was of a queue that is no longer there.
+                s.depth_s = 0.0;
             }
         }
         // The recording, with the audio lock released: a disk write that
@@ -588,8 +595,27 @@ fn fill(shared: &Mutex<Shared>, out: &mut [f32], channels: usize) {
         let p = s.pan;
         (gain * (1.0 - p.max(0.0)), gain * (1.0 + p.min(0.0)))
     };
-    // Steer the ratio by how far the queue sits from its target.
-    let err = (s.queue.len() as f64 - target) / target.max(1.0);
+    // Steer the ratio by how far the queue sits from its target, read
+    // through a two-second mean. The depth at the instant of a callback
+    // swings by a frame's length with where the last arrival happened to
+    // fall, and steering by that swung the ratio at every callback: a tenth
+    // of a percent of pitch wobble, forty-odd times a second, which put
+    // everything that was not the tone only 35 dB under a 5 kHz tone (28 dB
+    // with the queue at 60 ms). The mean moves the ratio by parts per
+    // million. It is taken as read at once when there is none yet, and
+    // when the queue is far from where it should be, so a queue running
+    // dry or backing up is still answered straight away.
+    let depth = s.queue.len() as f64 / s.in_rate.max(1.0);
+    let target_s = target / s.in_rate.max(1.0);
+    if s.priming {
+        s.depth_s = 0.0;
+    } else if s.depth_s <= 0.0 || depth < 0.25 * target_s || depth > 2.5 * target_s {
+        s.depth_s = depth;
+    } else {
+        let dt = frames as f64 / s.out_rate.max(1.0);
+        s.depth_s += (depth - s.depth_s) * (1.0 - (-dt / STEER_MEAN_S).exp());
+    }
+    let err = if s.depth_s > 0.0 { (s.depth_s - target_s) / target_s.max(1e-3) } else { 0.0 };
     let correction = (err * 0.005).clamp(-0.005, 0.005);
     if !s.priming {
         s.drift_ppm = s.drift_ppm * 0.98 + correction * 1e6 * 0.02;
@@ -923,6 +949,80 @@ mod tests {
         assert_eq!(s.underruns, 1);
         s.arrived(0.020);
         assert!(s.target() >= target + 0.02, "target {} after an underrun, {target} before", s.target());
+    }
+
+    /// A pure tone through the live path as it really runs: frames of
+    /// 13.3 ms arriving with jitter, the card pulling 1024 frames at a time.
+    /// Returns how far everything that is not the tone sits under it, dB.
+    fn tone_purity(target_s: f64, tone_hz: f64) -> f64 {
+        let (in_rate, out_rate) = (51_613.0f64, 48_000.0f64);
+        let shared = Mutex::new(Shared { in_rate, out_rate, volume: 1.0, priming: true, target_s, ..Default::default() });
+        let mut seed = 0x1234_5678u32;
+        let mut rnd = || {
+            seed ^= seed << 13;
+            seed ^= seed >> 17;
+            seed ^= seed << 5;
+            seed as f64 / u32::MAX as f64
+        };
+        let frame = (in_rate * 106_496.0 / 8e6) as usize;
+        let period = 106_496.0 / 8e6;
+        let (mut k_arrive, mut t_arrive, mut t_card, mut n_in) = (0u64, 0.0f64, 0.0f64, 0u64);
+        let mut out_all: Vec<f32> = Vec::new();
+        let mut buf = vec![0f32; 1024];
+        while t_card < 12.0 {
+            // Arrivals due before this callback: on their 13.3 ms grid, each
+            // up to 9 ms late, now and then two together.
+            while t_arrive <= t_card {
+                let mut s = shared.lock().unwrap();
+                for _ in 0..frame {
+                    let v = 0.5 * (std::f64::consts::TAU * tone_hz * n_in as f64 / in_rate).sin() as f32;
+                    s.queue.push_back([v; 2]);
+                    n_in += 1;
+                }
+                k_arrive += 1;
+                t_arrive = k_arrive as f64 * period + rnd() * 0.009;
+            }
+            fill(&shared, &mut buf, 1);
+            out_all.extend_from_slice(&buf);
+            t_card += 1024.0 / out_rate;
+        }
+        assert_eq!(shared.lock().unwrap().underruns, 0);
+        // The last five seconds, Hann-windowed: the tone's power within
+        // 20 Hz of where it lands, against all the rest.
+        let x = &out_all[out_all.len() - 240_000..];
+        let n = x.len();
+        let w: Vec<f64> = (0..n).map(|i| 0.5 - 0.5 * (std::f64::consts::TAU * i as f64 / n as f64).cos()).collect();
+        let total: f64 = x.iter().zip(&w).map(|(&v, &w)| (v as f64 * w).powi(2)).sum::<f64>();
+        let mut tone = 0.0;
+        let df = out_rate / n as f64;
+        let k0 = (tone_hz / df).round() as i64;
+        for k in k0 - 100..=k0 + 100 {
+            let f = k as f64 * df;
+            let (mut re, mut im) = (0.0, 0.0);
+            for (i, (&v, &w)) in x.iter().zip(&w).enumerate() {
+                let ph = std::f64::consts::TAU * f * i as f64 / out_rate;
+                re += v as f64 * w * ph.cos();
+                im -= v as f64 * w * ph.sin();
+            }
+            // Twice: the other half of a real tone is at the negative frequency.
+            tone += 2.0 * (re * re + im * im) / n as f64;
+        }
+        10.0 * (tone / (total - tone).max(1e-30)).log10()
+    }
+
+    #[test]
+    fn steering_the_clock_does_not_wobble_the_pitch() {
+        // Steered by the depth at each callback, the ratio swung with the
+        // arrivals and the residue under a 10 kHz tone was 28 dB down at a
+        // 120 ms queue and 22 dB at 60 ms: broadcast treble with a rough
+        // edge. Whatever the queue's depth, it must be far under the tone.
+        for target in [0.12, 0.06] {
+            for (hz, least) in [(1_000.0, 70.0), (5_000.0, 60.0), (10_000.0, 55.0)] {
+                let db = tone_purity(target, hz);
+                println!("target {:>3.0} ms tone {:>5.0} Hz: residue {db:.1} dB under the tone", target * 1e3, hz);
+                assert!(db > least, "{hz} Hz at a {target} s queue: residue only {db:.1} dB down");
+            }
+        }
     }
 
     #[test]

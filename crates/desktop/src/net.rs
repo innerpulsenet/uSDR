@@ -101,6 +101,39 @@ pub struct Stats {
     pub decode_errors: AtomicU64,
     /// Round trip of the last REST call, microseconds.
     pub rtt_us: AtomicU64,
+    /// Spectrum frames handed to the UI and not yet taken by it, and how
+    /// many were let go because it had stopped taking them.
+    pub fft_waiting: AtomicU64,
+    pub fft_dropped: AtomicU64,
+}
+
+/// The most spectrum frames that wait for the UI: three seconds of them.
+///
+/// The UI only takes what the stream brings when it paints, and a window
+/// that is minimized, on another desktop or covered is not painted. The
+/// queue had no bound, so every frame of the stream waited in it for as
+/// long as the window was hidden: about a megabyte a second, a gigabyte
+/// after a quarter of an hour behind another window. Past this many the
+/// newest is let go instead; the audio never came this way.
+pub const FFT_BACKLOG: u64 = 75;
+
+impl Stats {
+    /// Whether the UI has room for another spectrum frame; counts it in if
+    /// so, and as dropped if not.
+    pub fn admit_fft(&self) -> bool {
+        if self.fft_waiting.load(Ordering::Relaxed) >= FFT_BACKLOG {
+            self.fft_dropped.fetch_add(1, Ordering::Relaxed);
+            false
+        } else {
+            self.fft_waiting.fetch_add(1, Ordering::Relaxed);
+            true
+        }
+    }
+
+    /// The UI took a spectrum frame.
+    pub fn took_fft(&self) {
+        let _ = self.fft_waiting.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| Some(n.saturating_sub(1)));
+    }
 }
 
 pub trait AudioSink: Send + Sync {
@@ -296,7 +329,9 @@ fn ws_loop(
                             match proto::decode_binary(&b) {
                                 Ok(proto::Binary::Fft(f)) => {
                                     stats.fft_frames.fetch_add(1, Ordering::Relaxed);
-                                    let _ = ev.send(NetEvent::Fft(f));
+                                    if stats.admit_fft() {
+                                        let _ = ev.send(NetEvent::Fft(f));
+                                    }
                                     crate::anim::frame(&ctx);
                                 }
                                 Ok(proto::Binary::Audio(a)) => {
@@ -660,6 +695,30 @@ mod tests {
 
     fn post(path: &str, body: Value) -> Req {
         Req::Post { path: path.into(), body, coalesce: true }
+    }
+
+    #[test]
+    fn spectrum_frames_do_not_pile_up_behind_a_ui_that_is_not_painting() {
+        // A quarter of an hour of frames with nobody taking them (a window
+        // behind another): no more than the backlog ever waits.
+        let stats = Stats::default();
+        let mut sent = 0u64;
+        for _ in 0..25 * 900 {
+            if stats.admit_fft() {
+                sent += 1;
+            }
+        }
+        assert_eq!(sent, FFT_BACKLOG);
+        assert_eq!(stats.fft_dropped.load(Ordering::Relaxed), 25 * 900 - FFT_BACKLOG);
+        // Shown again, the UI takes what waited and the stream flows.
+        for _ in 0..sent {
+            stats.took_fft();
+        }
+        assert!(stats.admit_fft());
+        // A frame taken that was never counted in (a test's own) is no debt.
+        let fresh = Stats::default();
+        fresh.took_fft();
+        assert_eq!(fresh.fft_waiting.load(Ordering::Relaxed), 0);
     }
 
     #[test]

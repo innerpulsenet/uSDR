@@ -33,6 +33,43 @@ pub fn snap(hz: f64, step: f64) -> f64 {
     (hz / step).round() * step
 }
 
+/// Where `n` steps from `hz` lands: on the step's raster, as a click does.
+///
+/// From a frequency on the raster that is `hz + n * step`. From one between
+/// two raster points the first step is the short one to the next point that
+/// way, so a receiver left off the raster (tuned in another mode, typed, set
+/// by a finer step) is back on it at the first press. Adding the step
+/// blindly kept it off by the same amount forever: 50 kHz beside every
+/// broadcast station, the passband half off the signal and the audio rough.
+pub fn step_from(hz: f64, n: f64, step: f64) -> f64 {
+    if step <= 1.0 {
+        return (hz + n * step.max(1.0)).round();
+    }
+    let pos = hz / step;
+    let near = pos.round();
+    if (pos - near).abs() * step < 0.5 {
+        (near + n) * step
+    } else if n > 0.0 {
+        (pos.ceil() + n - 1.0) * step
+    } else if n < 0.0 {
+        (pos.floor() + n + 1.0) * step
+    } else {
+        hz
+    }
+}
+
+/// The step a jog key or the dial takes: the tuning step, or with Shift a
+/// tenth of it (never under 100 Hz).
+pub fn jog_step(step: f64, fine: bool) -> f64 {
+    if fine { (step / 10.0).round().max(100.0) } else { step }
+}
+
+/// Whether going from one mode to another changes the raster signals sit
+/// on, so a step picked by hand for the first is wrong for the second.
+pub fn raster_changes(from: Mode, to: Mode, near_hz: f64) -> bool {
+    mode_raster_hz(from, near_hz) != mode_raster_hz(to, near_hz)
+}
+
 /// The two requests a retune makes: where the span center goes (if it must
 /// move) and the receive frequency.
 #[derive(Debug, PartialEq)]
@@ -155,6 +192,42 @@ mod tests {
         assert_eq!(mode_raster_hz(Mode::Am, 121.5e6), 8_333.333_333);
         assert_eq!(mode_raster_hz(Mode::Am, 1.0e6), 10_000.0);
         assert_eq!(snap(146_523_000.0, 6_250.0), 146_525_000.0);
+    }
+
+    #[test]
+    fn a_step_lands_on_the_raster() {
+        // On the raster: one step is one step.
+        assert_eq!(step_from(99.9e6, 1.0, 100e3), 100.0e6);
+        assert_eq!(step_from(99.9e6, -1.0, 100e3), 99.8e6);
+        assert_eq!(step_from(99.9e6, 10.0, 100e3), 100.9e6);
+        // Between two points (left there by 80 m's steps, or typed): the
+        // first step goes to the next point that way, not 100 kHz on to
+        // another frequency just as far off.
+        assert_eq!(step_from(99.95e6, 1.0, 100e3), 100.0e6);
+        assert_eq!(step_from(99.95e6, -1.0, 100e3), 99.9e6);
+        assert_eq!(step_from(99.9123e6, -1.0, 100e3), 99.9e6);
+        assert_eq!(step_from(99.9123e6, 10.0, 100e3), 100.9e6);
+        assert_eq!(step_from(3.7005e6, -10.0, 1e3), 3.691e6);
+        // And however many presses follow, it stays on it.
+        let mut hz = 3_750_437.0;
+        for _ in 0..7 {
+            hz = step_from(hz, 1.0, 100e3);
+            assert!((hz / 100e3 - (hz / 100e3).round()).abs() < 1e-9, "{hz}");
+        }
+        // A hertz of rounding is not "off the raster".
+        assert_eq!(step_from(145.5e6 + 0.2, 1.0, 12.5e3), 145.5125e6);
+        // No raster at one hertz.
+        assert_eq!(step_from(7_074_000.4, 1.0, 1.0), 7_074_001.0);
+        assert_eq!(jog_step(100e3, true), 10e3);
+        assert_eq!(jog_step(100.0, true), 100.0);
+    }
+
+    #[test]
+    fn sideband_and_broadcast_do_not_share_a_raster() {
+        assert!(raster_changes(Mode::Lsb, Mode::Wfm, 99.9e6));
+        assert!(raster_changes(Mode::Wfm, Mode::Nfm, 146e6));
+        assert!(!raster_changes(Mode::Lsb, Mode::Usb, 7.2e6));
+        assert!(!raster_changes(Mode::Usb, Mode::Ft8, 14.074e6));
     }
 
     #[test]

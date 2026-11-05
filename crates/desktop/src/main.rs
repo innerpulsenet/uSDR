@@ -96,6 +96,7 @@ fn probe(server: &str) -> anyhow::Result<()> {
                 }
             }
             Ok(net::NetEvent::Fft(f)) => {
+                link.stats.took_fft();
                 frames += 1;
                 last = Some(f);
             }

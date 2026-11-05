@@ -188,6 +188,8 @@ pub struct App {
     pub splash: brand::Splash,
     /// Optimistic receive frequency until the server confirms it.
     pub inspect_pending: Option<(f64, Instant)>,
+    /// The mode the operator just chose, until the server reports it.
+    pub mode_pending: Option<(Mode, Instant)>,
     pub gain_ui: f64,
     pub zoom_ui: f64,
     pub span_pending: Option<(f64, f64)>,
@@ -318,6 +320,7 @@ impl App {
             connect_input,
             splash: brand::Splash::default(),
             inspect_pending: None,
+            mode_pending: None,
             gain_ui: 0.0,
             zoom_ui: 1.0,
             span_pending: None,
@@ -519,10 +522,25 @@ impl App {
         self.post("/api/sdr/tune", json!({ "freq_hz": hz }));
     }
 
+    /// The mode is `to` now, by the operator or by another client: a step
+    /// picked by hand goes back to the mode's own when the two modes do not
+    /// share a raster. A 1 kHz step chosen on 80 m, kept in broadcast FM,
+    /// let a click land anywhere within a station instead of on it.
+    fn mode_became(&mut self, from: Mode, to: Mode) {
+        if from != to && self.prefs.step_hz.is_some() && crate::tuning::raster_changes(from, to, self.inspect_hz()) {
+            self.prefs.step_hz = None;
+        }
+    }
+
     pub fn set_mode(&mut self, m: Mode) {
         if m != Mode::Scan {
             self.prefs.last_voice_mode = m;
         }
+        self.mode_became(self.status.mode, m);
+        // Held against the statuses already on their way with the old mode
+        // (a memory's tune answers before its mode change does), which put
+        // the old mode's raster and keys back for a moment.
+        self.mode_pending = Some((m, Instant::now()));
         self.status.mode = m;
         if let Some(f) = crate::decoders::Family::for_mode(m) {
             self.decode_family = Some(f);
@@ -628,6 +646,9 @@ impl App {
                 }
             }
             NetEvent::Fft(f) => {
+                if let Some(l) = &self.link {
+                    l.stats.took_fft();
+                }
                 self.pan.push(&f, &self.prefs.view, now);
                 self.meter.feed(f.channel_dbfs, f.noise_dbfs, f.peak_iq);
                 self.level_b = self.status.rx2.as_ref().and_then(|b| proto::channel_level(&f.pwr, f.center_hz, f.rate_hz, b.freq_hz + b.passband_offset_hz, b.bandwidth_hz));
@@ -679,7 +700,16 @@ impl App {
         }
     }
 
-    fn apply_status(&mut self, s: Status) {
+    fn apply_status(&mut self, mut s: Status) {
+        match self.mode_pending {
+            Some((m, _)) if m == s.mode => self.mode_pending = None,
+            Some((m, at)) if at.elapsed() < Duration::from_millis(1200) => s.mode = m,
+            Some(_) => self.mode_pending = None,
+            None => {}
+        }
+        if self.have_status {
+            self.mode_became(self.status.mode, s.mode);
+        }
         if !self.have_status || (self.gain_ui - s.gain_db.unwrap_or(self.gain_ui)).abs() > 0.01 {
             if let Some(g) = s.gain_db {
                 self.gain_ui = g;
@@ -1615,10 +1645,12 @@ impl App {
             if start.elapsed() >= Duration::from_secs(2) {
                 let a = self.player.reading();
                 eprintln!(
-                    "ui frames/s {:.1} · audio queue {:.0} ms, {} underruns · motion asked by {:?} · repaint causes {:?}",
+                    "ui frames/s {:.1} · audio queue {:.0} ms, {} underruns · loop released {} times, {} spectrum frames let go · motion asked by {:?} · repaint causes {:?}",
                     n as f64 / start.elapsed().as_secs_f64(),
                     a.queue_ms,
                     a.underruns,
+                    crate::anim::releases(),
+                    self.link.as_ref().map_or(0, |l| l.stats.fft_dropped.load(std::sync::atomic::Ordering::Relaxed)),
                     crate::anim::asked(),
                     ctx.repaint_causes()
                 );
@@ -2027,6 +2059,81 @@ mod tests {
         assert_eq!(wx["freq_hz"], json!(146_520_000.0));
         assert_eq!(wx["mode"], json!("nfm"));
         assert_eq!(body["memories"].as_array().unwrap().len(), 8);
+    }
+
+    #[test]
+    fn a_step_picked_on_80_m_does_not_follow_into_broadcast_fm() {
+        // Sideband with a 1 kHz step chosen by hand, then back to WFM.
+        let mut h = harness();
+        h.state_mut().app.set_mode(Mode::Lsb);
+        h.state_mut().app.prefs.step_hz = Some(1_000.0);
+        // Another sideband shares the raster: the chosen step stays.
+        h.state_mut().app.set_mode(Mode::Usb);
+        assert_eq!(h.state().app.prefs.step_hz, Some(1_000.0));
+        h.state_mut().app.set_mode(Mode::Wfm);
+        assert_eq!(h.state().app.prefs.step_hz, None, "the step went back to the mode's own");
+        assert_eq!(h.state().app.step_hz(), 100_000.0);
+        // And when the mode is changed elsewhere (the page, another
+        // desktop), the same.
+        let mut st = rsp_status();
+        st.mode = Mode::Lsb;
+        h.state_mut().app.mode_pending = None;
+        h.state().wire.events.send(NetEvent::Status(Box::new(st.clone()))).unwrap();
+        h.run_steps(2);
+        h.state_mut().app.prefs.step_hz = Some(100.0);
+        st.mode = Mode::Wfm;
+        h.state().wire.events.send(NetEvent::Status(Box::new(st))).unwrap();
+        h.run_steps(2);
+        assert_eq!(h.state().app.prefs.step_hz, None);
+    }
+
+    #[test]
+    fn a_status_still_on_its_way_does_not_put_the_old_mode_back() {
+        // A memory's tune is answered before its mode change is: that
+        // status still says the old mode. It must not bring back the old
+        // mode's raster, or a click in that moment lands off the station.
+        let mut h = harness();
+        let mut old = rsp_status();
+        old.mode = Mode::Lsb;
+        h.state().wire.events.send(NetEvent::Status(Box::new(old.clone()))).unwrap();
+        h.run_steps(2);
+        assert_eq!(h.state().app.step_hz(), 100.0);
+        h.state_mut().app.set_mode(Mode::Wfm);
+        h.state().wire.events.send(NetEvent::Status(Box::new(old.clone()))).unwrap();
+        h.run_steps(2);
+        assert_eq!(h.state().app.status.mode, Mode::Wfm);
+        assert_eq!(h.state().app.step_hz(), 100_000.0);
+        // The server's answer settles it, and a later change made
+        // elsewhere is followed again.
+        let mut new = old.clone();
+        new.mode = Mode::Wfm;
+        h.state().wire.events.send(NetEvent::Status(Box::new(new))).unwrap();
+        h.run_steps(2);
+        assert!(h.state().app.mode_pending.is_none());
+        h.state().wire.events.send(NetEvent::Status(Box::new(old))).unwrap();
+        h.run_steps(2);
+        assert_eq!(h.state().app.status.mode, Mode::Lsb);
+    }
+
+    #[test]
+    fn the_jog_keys_put_an_off_raster_receiver_back_on_a_station() {
+        // In WFM, 50 kHz beside a station (where 80 m's steps or a typed
+        // frequency left it): one press of a jog key lands on the raster.
+        let mut h = harness();
+        let mut st = rsp_status();
+        st.mode = Mode::Wfm;
+        st.freq_hz = 99.1e6;
+        st.inspect_hz = 99.95e6;
+        st.rate_hz = 8e6;
+        st.min_freq_hz = 95.25e6;
+        st.max_freq_hz = 102.95e6;
+        h.state().wire.events.send(NetEvent::Status(Box::new(st))).unwrap();
+        h.run_steps(3);
+        drain(&h);
+        h.get_by_label("‹").click();
+        h.run_steps(2);
+        let posts = drain(&h);
+        assert!(posts.contains(&("/api/sdr/inspect".into(), json!({ "freq_hz": 99_900_000.0 }))), "{posts:?}");
     }
 
     #[test]

@@ -19,7 +19,10 @@
 //! from any repaint request until the compositor is ready for the frame,
 //! so a request that lands right behind a paint burns the wait: measured
 //! at 55 frames a second, a fifth of the UI thread went to that spin.
-//! That is the reason for the hold in [`frame`] and for [`drift`].
+//! That is the reason for the hold in [`frame`] and for [`drift`]. And a
+//! window that is not being shown is never given its frame at all, so the
+//! spin would go on for as long as it is hidden: the ticker notices a paint
+//! that is not coming and releases the loop (see [`release`]).
 
 use std::sync::Once;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -62,6 +65,64 @@ pub fn set_max_fps(fps: u32) {
 pub fn frame_begin() {
     WANT_US.store(u64::MAX, Ordering::Relaxed);
     LAST_PAINT_US.store(now_us(), Ordering::Relaxed);
+    ASKED_US.store(u64::MAX, Ordering::Relaxed);
+}
+
+/// The earliest paint asked for and not yet begun; none is MAX.
+static ASKED_US: AtomicU64 = AtomicU64::new(u64::MAX);
+/// When the event loop was last released, and how many times.
+static RELEASED_US: AtomicU64 = AtomicU64::new(0);
+static RELEASES: AtomicU64 = AtomicU64::new(0);
+/// A paint asked for and not begun in this long is not coming: the window
+/// is not being shown.
+const STUCK_US: u64 = 300_000;
+/// While that lasts, the loop is released again this often, in case
+/// something set it spinning again.
+const RELEASE_EVERY_US: u64 = 1_000_000;
+
+fn asked_now() {
+    ASKED_US.fetch_min(now_us(), Ordering::Relaxed);
+}
+
+/// When the loop is next due a release; MAX when no paint is outstanding.
+fn stuck_due() -> u64 {
+    if !cfg!(target_os = "linux") || std::env::var_os("USDR_NO_LOOP_RELEASE").is_some() {
+        return u64::MAX;
+    }
+    match ASKED_US.load(Ordering::Relaxed) {
+        u64::MAX => u64::MAX,
+        asked => (asked + STUCK_US).max(RELEASED_US.load(Ordering::Relaxed) + RELEASE_EVERY_US),
+    }
+}
+
+/// Stop eframe's event loop spinning for a frame the compositor will not
+/// take.
+///
+/// On Wayland a window that is minimized, on another desktop or wholly
+/// covered gets no frame callbacks, and winit cannot tell (it reports
+/// neither visibility nor occlusion there). eframe answers every repaint
+/// request by polling the event loop flat out until the redraw arrives,
+/// so with a spectrum frame asking 25 times a second a hidden window held
+/// a whole core, for as long as it was hidden. Measured: 101% CPU and not
+/// one frame painted.
+///
+/// The loop goes back to waiting when eframe handles a repaint request it
+/// has no window for, and a request for a viewport that does not exist is
+/// one. The redraw already asked for stays asked for: the compositor's
+/// next frame callback, when the window is shown again, wakes the loop
+/// and it is painted then. The delay comes down by a second each time
+/// because egui only passes on a request sooner than the last for the
+/// same viewport. `USDR_NO_LOOP_RELEASE` turns this off.
+fn release(ctx: &egui::Context) {
+    let n = RELEASES.fetch_add(1, Ordering::Relaxed);
+    let id = egui::ViewportId::from_hash_of(("usdr-loop-release", n / 3000));
+    ctx.request_repaint_after_for(Duration::from_secs(3600 - n % 3000), id);
+    RELEASED_US.store(now_us(), Ordering::Relaxed);
+}
+
+/// How many times the loop has been released: for the QA line and tests.
+pub fn releases() -> u64 {
+    RELEASES.load(Ordering::Relaxed)
 }
 
 /// One paint, and only one. egui answers a plain `request_repaint` with
@@ -70,6 +131,7 @@ pub fn frame_begin() {
 /// layout, and the second frame for each made a 25 fps picture cost 50
 /// paints a second.
 fn once(ctx: &egui::Context) {
+    asked_now();
     ctx.request_repaint_after(Duration::from_nanos(1));
 }
 
@@ -77,7 +139,9 @@ fn once(ctx: &egui::Context) {
 /// status, a decode, a connection). Painted twice, as egui does, so the
 /// layout settles even if nothing follows it.
 pub fn now(ctx: &egui::Context) {
+    asked_now();
     ctx.request_repaint();
+    start(ctx);
 }
 
 /// A spectrum frame arrived: paint it, once. Right behind another paint
@@ -86,6 +150,7 @@ pub fn frame(ctx: &egui::Context) {
     let since = now_us().saturating_sub(LAST_PAINT_US.load(Ordering::Relaxed));
     if since >= DATA_GAP_US || !STARTED.load(Ordering::Relaxed) {
         once(ctx);
+        start(ctx);
     } else {
         after(ctx, Duration::from_micros(DATA_GAP_US - since));
     }
@@ -173,13 +238,20 @@ fn start(ctx: &egui::Context) {
             let motion = if want != u64::MAX { LAST_PAINT_US.load(Ordering::Relaxed) + want } else { u64::MAX };
             let deadline = DEADLINE_US.load(Ordering::Relaxed);
             let due = motion.min(deadline);
+            // A paint asked for that is not coming: the window is hidden.
+            let stuck = stuck_due();
+            if stuck <= now {
+                release(&ctx);
+                continue;
+            }
             if due == u64::MAX {
-                // Nothing wanted: asleep until something is.
-                std::thread::park_timeout(Duration::from_secs(1));
+                // Nothing wanted: asleep until something is, or until an
+                // outstanding paint has had its time.
+                std::thread::park_timeout(Duration::from_micros(stuck.saturating_sub(now).min(1_000_000)));
                 continue;
             }
             if now < due {
-                std::thread::park_timeout(Duration::from_micros(due - now));
+                std::thread::park_timeout(Duration::from_micros((due - now).min(stuck.saturating_sub(now))));
                 continue;
             }
             if deadline <= now {
