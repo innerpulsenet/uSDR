@@ -21,7 +21,6 @@ serde_json = "1.0.151"
 tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros", "sync", "signal"] }
 toml.workspace = true
 zeroize.workspace = true
-
-[dev-dependencies]
-# The wire format the clients read, to check the frames written here against it.
+# The wire format both sides share: the station, the decoders' settings and
+# the fax rows are written here with the clients' own types.
 usdr-proto = { path = "../proto" }

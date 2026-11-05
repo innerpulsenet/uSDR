@@ -477,7 +477,7 @@ fn scope(app: &mut App, ui: &mut Ui) {
     let kind = app.frame.as_ref().map(|f| f.scope_kind).unwrap_or_default();
     let (title, note) = app.scope.title(mode, kind);
     // Sideband says the filter it is listening through, as set.
-    let edges = (app.status.filter_high_hz > app.status.filter_low_hz && matches!(mode, Mode::Usb | Mode::Lsb | Mode::Ft8 | Mode::Ft4))
+    let edges = (app.status.filter_high_hz > app.status.filter_low_hz && matches!(mode, Mode::Usb | Mode::Lsb | Mode::Ft8 | Mode::Ft4 | Mode::Wefax | Mode::Rtty | Mode::Navtex | Mode::Psk31))
         .then(|| format!("{:.0}–{:.0} Hz", app.status.filter_low_hz.abs().min(app.status.filter_high_hz.abs()), app.status.filter_low_hz.abs().max(app.status.filter_high_hz.abs())));
     let note = note.map(str::to_string).or(edges);
     ui.horizontal(|ui| {
@@ -938,6 +938,7 @@ fn family_color(f: Family) -> egui::Color32 {
 /// and tunes the carrier there.
 fn hf_bands(app: &mut App, ui: &mut Ui) {
     widgets::menu_chip(ui, "BANDS", theme::text_2(), |ui| {
+        ui.label(mono("FT8 · FT4", theme::text_3()));
         egui::Grid::new("hf-dials").num_columns(3).spacing(vec2(8.0, 2.0)).show(ui, |ui| {
             for &(band, ft8, ft4) in crate::decoders::HF_DIALS {
                 ui.label(mono(band, theme::text_3()));
@@ -955,6 +956,36 @@ fn hf_bands(app: &mut App, ui: &mut Ui) {
                 ui.end_row();
             }
         });
+        // The text modes: a dial each, the decoder finding its signal in
+        // the passband above it.
+        for (mode, dials) in [(Mode::Psk31, crate::decoders::PSK31_DIALS), (Mode::Rtty, crate::decoders::RTTY_DIALS), (Mode::Navtex, crate::decoders::NAVTEX_DIALS)] {
+            ui.add_space(6.0);
+            ui.label(mono(mode.label(), theme::text_3()));
+            ui.horizontal_wrapped(|ui| {
+                ui.set_max_width(420.0);
+                for &(band, hz) in dials {
+                    let on = app.status.mode == mode && (app.status.freq_hz - hz).abs() < 50.0;
+                    if widgets::chip_key(ui, &format!("{band} {}", crate::tuning::fmt_mhz(hz, 4)), on, widgets::protocol_color(mode.label())).clicked() {
+                        if app.status.mode != mode {
+                            app.set_mode(mode);
+                        }
+                        // DWD's weather RTTY is 50 baud and 450 Hz.
+                        if mode == Mode::Rtty {
+                            let dwd = band.starts_with("DWD");
+                            app.post("/api/sdr/digital", serde_json::json!({ "rtty_baud": if dwd { 50.0 } else { 45.45 }, "rtty_shift_hz": if dwd { 450.0 } else { 170.0 } }));
+                        }
+                        app.tune(hz, false);
+                        ui.close();
+                    }
+                }
+            });
+        }
+        ui.add_space(6.0);
+        ui.label(mono("WEFAX", theme::text_3()));
+        if widgets::chip_key(ui, "RADIOFAX STATIONS…", app.fax.open, widgets::protocol_color("WEFAX")).clicked() {
+            app.fax.open = true;
+            ui.close();
+        }
     });
 }
 
@@ -982,6 +1013,16 @@ fn hf_row(app: &App, i: usize) -> HfRow {
 /// The HF data view: where the current slot is, the band's activity slot
 /// by slot across the audio passband, and the decodes as an operator's log.
 fn hf_data(app: &mut App, ui: &mut Ui, visible: &[usize]) {
+    match crate::hfviews::view_for(app) {
+        crate::hfviews::HfView::Slots => {}
+        v => {
+            crate::hfviews::show(app, ui, v);
+            return;
+        }
+    }
+    // The slot table holds FT8 and FT4 alone; the text modes have their own.
+    let visible: Vec<usize> = visible.iter().copied().filter(|&i| matches!(app.decodes[i].ev.protocol.as_str(), "FT8" | "FT4")).collect();
+    let visible = &visible[..];
     let rows: Vec<HfRow> = visible.iter().map(|&i| hf_row(app, i)).collect();
     hf_clock(app, ui);
     ui.add_space(4.0);

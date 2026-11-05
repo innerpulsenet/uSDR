@@ -183,6 +183,12 @@ pub struct App {
     pub scan_touched: bool,
     pub p25: crate::panels::P25Form,
     pub settings_open: bool,
+    /// The radiofax viewer and the session's pictures.
+    pub fax: crate::fax::Fax,
+    pub settings_page: crate::settings::Page,
+    /// The server's station and its spot reporter (servers with `station`).
+    pub station: Option<(proto::Station, proto::ReporterStatus)>,
+    pub station_form: crate::settings::StationForm,
     pub help_open: bool,
     pub connect_input: String,
     pub splash: brand::Splash,
@@ -316,6 +322,10 @@ impl App {
             scan_touched: false,
             p25: Default::default(),
             settings_open: false,
+            fax: crate::fax::Fax::new(),
+            settings_page: Default::default(),
+            station: None,
+            station_form: Default::default(),
             help_open: false,
             connect_input,
             splash: brand::Splash::default(),
@@ -527,6 +537,13 @@ impl App {
     /// share a raster. A 1 kHz step chosen on 80 m, kept in broadcast FM,
     /// let a click land anywhere within a station instead of on it.
     fn mode_became(&mut self, from: Mode, to: Mode) {
+        self.fax.mode_became(to);
+        if from != to && to == Mode::Wefax {
+            // The picture so far, for a viewer opened mid-fax.
+            if let Some(l) = &self.link {
+                l.fetch("/api/sdr/fax", Fetch::Fax);
+            }
+        }
         if from != to && self.prefs.step_hz.is_some() && crate::tuning::raster_changes(from, to, self.inspect_hz()) {
             self.prefs.step_hz = None;
         }
@@ -623,7 +640,14 @@ impl App {
                     self.toast(ctx, Tone::Warn, "This server is older than the app: presence, the web page setting, shared memories and the filter are unavailable until it is updated.");
                 }
                 self.server = info;
+                let fax_mode = s.mode == Mode::Wefax;
                 self.apply_status(*s);
+                if fax_mode {
+                    self.fax.mode_became(Mode::Wefax);
+                    if let Some(l) = &self.link {
+                        l.fetch("/api/sdr/fax", Fetch::Fax);
+                    }
+                }
                 self.display_bins_sent = 0;
                 if !self.prefs.hinted_shortcuts {
                     self.prefs.hinted_shortcuts = true;
@@ -673,10 +697,21 @@ impl App {
             NetEvent::Status(s) => self.apply_status(*s),
             NetEvent::Decode { inspect_hz, event, at } => {
                 let call = event.kind == "call";
+                if event.protocol == "WEFAX"
+                    && let Some(i) = self.fax.event(&event)
+                    && self.prefs.fax_autosave
+                {
+                    crate::fax::save(self, ctx, i);
+                }
                 self.push_decode(DecodeRow::new(at, inspect_hz, event));
                 if call && let Some(l) = &self.link {
                     l.get("/api/sdr/calls", Get::Calls);
                 }
+            }
+            NetEvent::Station(st, rep) => self.station = Some((st, rep)),
+            NetEvent::FaxLine(l) => {
+                let hz = self.status.freq_hz;
+                self.fax.line(l, hz);
             }
             NetEvent::Presence(p) => {
                 let before = self.presence.web_count();
@@ -822,6 +857,14 @@ impl App {
                         self.playing = None;
                         self.toast(ctx, Tone::Warn, "Nothing to play: the audio buffer is empty on this channel.");
                     }
+                }
+            }
+            Fetch::Fax => {
+                let id = header("x-usdr-fax-image").and_then(|v| v.parse().ok());
+                let width = header("x-usdr-fax-width").and_then(|v| v.parse().ok()).unwrap_or(0);
+                if let Some(id) = id {
+                    let hz = self.status.freq_hz;
+                    self.fax.backfill(id, width, hz, &bytes);
                 }
             }
             Fetch::ReplayCapture => {
@@ -1373,11 +1416,90 @@ impl App {
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 brand::credit(ui);
+                self.reporter_readout(ui);
                 if let Some((path, secs)) = &a.recording {
                     small(ui, format!("● recording {secs:.1} s → {}", path.file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or_default()), theme::EMBER);
                 }
             });
         });
+    }
+
+    /// The spot reporter on the status bar, while it is on: a lamp, the
+    /// spots sent, the stations this hour and when the next upload goes.
+    /// The count rolls as it climbs and the lamp flares at each upload.
+    /// Hover for the whole of it; click for its settings.
+    fn reporter_readout(&mut self, ui: &mut Ui) {
+        let Some((st, rep)) = &self.station else { return };
+        if rep.state == proto::ReporterState::Off {
+            return;
+        }
+        let (lamp, word) = match rep.state {
+            proto::ReporterState::Waiting => (theme::OK, "PSKREPORTER"),
+            proto::ReporterState::Incomplete => (theme::WARN, "PSKREPORTER · NEEDS CALLSIGN"),
+            _ => (theme::ERR, "PSKREPORTER · NOT SENDING"),
+        };
+        let now = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+        let next = match rep.next_send {
+            Some(t) if rep.queued > 0 => {
+                let s = t.saturating_sub(now);
+                format!("next {}:{:02}", s / 60, s % 60)
+            }
+            _ => "next when heard".into(),
+        };
+        let count = format!("{}", rep.spots_sent);
+        let tail = format!(" spots · {}/h · {next}", rep.heard_hour);
+        let font = theme::mono(10.5);
+        let p = ui.painter().clone();
+        let w_word = p.layout_no_wrap(word.into(), font.clone(), theme::text_2()).size().x;
+        // The count's width is held to its digits plus one, so a new digit
+        // does not shove the readout along.
+        let w_count = p.layout_no_wrap("0".repeat(count.len() + 1), font.clone(), theme::text()).size().x;
+        let w_tail = p.layout_no_wrap(tail.clone(), font.clone(), theme::text_3()).size().x;
+        let lamp_w = 12.0;
+        let (rect, resp) = ui.allocate_exact_size(vec2(lamp_w + w_word + 8.0 + w_count + w_tail + 8.0, 18.0), Sense::click());
+        if resp.hovered() {
+            p.rect_filled(rect, CornerRadius::same(3), alpha(theme::surface_4(), 0.6));
+        }
+        // A flare when the count goes up: an upload just left.
+        let flare_id = egui::Id::new("pskr-flare");
+        let (seen, since): (u64, f64) = ui.data(|d| d.get_temp(flare_id)).unwrap_or((rep.spots_sent, f64::NEG_INFINITY));
+        let t = ui.input(|i| i.time);
+        let since = if rep.spots_sent > seen { t } else { since };
+        ui.data_mut(|d| d.insert_temp(flare_id, (rep.spots_sent, since)));
+        let flare = if self.reduce_motion() { 0.0 } else { (1.0 - ((t - since) / 1.6) as f32).clamp(0.0, 1.0) };
+        if flare > 0.0 {
+            crate::anim::more(ui.ctx());
+        }
+        let c = rect.left_center() + vec2(6.0, 0.0);
+        if flare > 0.0 {
+            p.circle_filled(c, 4.0 + 5.0 * flare, alpha(lamp, 0.25 * flare));
+        }
+        theme::lamp(&p, c, 3.2, lamp, 0.75 + 0.25 * flare, theme::LampShape::Round);
+        let mut x = rect.left() + lamp_w;
+        p.text(egui::pos2(x, rect.center().y), Align2::LEFT_CENTER, word, font.clone(), theme::text_2());
+        x += w_word + 8.0;
+        crate::widgets::rolling_text(&p, egui::Id::new("pskr-count"), egui::pos2(x + w_count, rect.center().y), Align2::RIGHT_CENTER, &count, theme::mono_bold(10.5), theme::text());
+        x += w_count;
+        p.text(egui::pos2(x, rect.center().y), Align2::LEFT_CENTER, &tail, font, theme::text_3());
+        let utc = |t: u64| format!("{:02}:{:02} UTC", (t / 3600) % 24, (t / 60) % 60);
+        let last = rep.last_sent.map_or("none yet".into(), utc);
+        let err = rep.last_error.clone().map(|e| format!("\n{e}")).unwrap_or_default();
+        let tip = format!(
+            "FT8 and FT4 spots reported to PSKReporter as {} in {}.\n{} spots in {} uploads since the server started · {} stations this hour · {} waiting · last upload {last}{err}\nClick for the station settings.",
+            if st.callsign.is_empty() { "—" } else { &st.callsign },
+            if st.grid.is_empty() { "—" } else { &st.grid },
+            rep.spots_sent,
+            rep.datagrams,
+            rep.heard_hour,
+            rep.queued
+        );
+        let resp = resp.on_hover_text(tip);
+        if resp.clicked() {
+            self.settings_page = crate::settings::Page::Station;
+            self.settings_open = true;
+        }
+        // The countdown moves once a second.
+        ui.ctx().request_repaint_after(std::time::Duration::from_secs(1));
     }
 
     fn toasts_ui(&mut self, ctx: &egui::Context) {
@@ -1551,8 +1673,29 @@ pub fn mode_idle_text(m: Mode) -> &'static str {
         Mode::Packet => "packet and paging decoders",
         Mode::Ft8 => "FT8 · decoding each 15 s slot",
         Mode::Ft4 => "FT4 · decoding each 7.5 s slot",
+        Mode::Wefax => "radiofax · waiting for a start tone",
+        Mode::Rtty => "RTTY · finding the tone pair",
+        Mode::Navtex => "NAVTEX · SITOR-B, 100 baud",
+        Mode::Psk31 => "PSK31 · every signal in the passband",
         Mode::Nfm => "listening · classifier on",
     }
+}
+
+/// A Unix time as UTC `YYYYMMDD` and `HHMMSS`, for file names.
+pub fn utc_date_time(secs: u64) -> (String, String) {
+    // Civil from days (Howard Hinnant's algorithm), so no time crate is needed.
+    let days = (secs / 86_400) as i64;
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = yoe + era * 400 + i64::from(m <= 2);
+    let s = secs % 86_400;
+    (format!("{y:04}{m:02}{d:02}"), format!("{:02}{:02}{:02}", s / 3600, (s / 60) % 60, s % 60))
 }
 
 pub fn utc_hms() -> String {
@@ -1803,6 +1946,7 @@ impl App {
             });
         crate::screens::settings_window(self, &ctx);
         crate::screens::help_window(self, &ctx);
+        crate::fax::window(self, &ctx);
         crate::screens::diagnostics_window(self, &ctx);
         self.toasts_ui(&ctx);
         if !matches!(self.conn, Conn::Live) {
@@ -2487,5 +2631,84 @@ mod tests {
         h.get_by_label("2.7k").click();
         h.run_steps(2);
         assert!(drain(&h).contains(&("/api/sdr/filter".into(), json!({ "low_hz": 300.0, "high_hz": 3000.0 }))));
+    }
+
+    /// Renders the HF windows and views to PNGs for a look by eye, with a
+    /// station, a radiofax picture and PSK31 traffic fed in as the server
+    /// would send them. `USDR_QA_DIR=<dir>`; `USDR_QA_FAX=<a .pgm>` draws a
+    /// real picture instead of a test pattern.
+    #[test]
+    #[ignore]
+    fn qa_renders_the_hf_windows() {
+        let Some(dir) = std::env::var_os("USDR_QA_DIR").map(std::path::PathBuf::from) else { return };
+        let mut h = harness_wh(1600.0, 980.0);
+        let save = |h: &mut Harness<'static, T>, name: &str| {
+            h.run_steps(4);
+            h.render().expect("render").save(dir.join(name)).expect("save");
+        };
+        let st = proto::Station { callsign: "N0CALL".into(), grid: "FM19la".into(), antenna: "40 m end-fed wire".into(), report_spots: true };
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+        let rep = proto::ReporterStatus { state: proto::ReporterState::Waiting, spots_sent: 214, datagrams: 9, queued: 17, heard_hour: 48, last_sent: Some(now - 140), next_send: Some(now + 162), last_error: None };
+        h.state().wire.events.send(NetEvent::Station(st, rep)).unwrap();
+        h.state_mut().app.settings_open = true;
+        save(&mut h, "settings-station.png");
+        h.state_mut().app.settings_page = crate::settings::Page::Interface;
+        save(&mut h, "settings-interface.png");
+        h.state_mut().app.settings_open = false;
+
+        // A radiofax picture arriving.
+        {
+            let app = &mut h.state_mut().app;
+            app.status.mode = Mode::Wefax;
+            app.status.freq_hz = 13_880_600.0;
+            app.status.digital = Some(proto::DigitalReading { locked: true, snr_db: Some(14.0), fax_state: Some("receiving".into()), fax_image: 3, fax_lines: 641, fax_width: 1809, ..Default::default() });
+            app.status.digital_cfg = Some(proto::DigitalCfg::default());
+        }
+        let (w, rows): (usize, Vec<Vec<u8>>) = match std::env::var_os("USDR_QA_FAX").and_then(|p| std::fs::read(p).ok()) {
+            Some(b) => {
+                let header_end = b.iter().position(|&c| c == b'\n').unwrap() + 1;
+                let head = String::from_utf8_lossy(&b[..header_end]).to_string();
+                let w: usize = head.split_whitespace().nth(1).unwrap().parse().unwrap();
+                (w, b[header_end..].chunks(w).map(|r| r.to_vec()).collect())
+            }
+            None => (1809, (0..400).map(|r| (0..1809).map(|c| (((c / 40 + r / 40) % 2) * 200 + 30) as u8).collect()).collect()),
+        };
+        for (i, row) in rows.into_iter().enumerate() {
+            h.state().wire.events.send(NetEvent::FaxLine(proto::FaxLine { rx: 0, image: 3, line: i as u32, pixels: row })).unwrap();
+        }
+        let _ = w;
+        h.state_mut().app.fax.open = true;
+        save(&mut h, "fax-viewer.png");
+        if let Some(p) = h.state_mut().app.fax.pictures.back_mut() {
+            p.shift = p.margin_shift().unwrap_or(0);
+            eprintln!("margin at column {}", p.shift);
+        }
+        save(&mut h, "fax-aligned.png");
+        h.state_mut().app.fax.open = false;
+
+        // PSK31 traffic in the dock.
+        {
+            let app = &mut h.state_mut().app;
+            app.status.mode = Mode::Psk31;
+            app.status.digital = Some(proto::DigitalReading {
+                locked: true,
+                channels: vec![
+                    proto::PskChannel { id: 1, audio_hz: 875.0, snr_db: 6.0, active: true },
+                    proto::PskChannel { id: 8, audio_hz: 1004.0, snr_db: -10.0, active: true },
+                    proto::PskChannel { id: 2, audio_hz: 1746.0, snr_db: 0.0, active: false },
+                ],
+                ..Default::default()
+            });
+            app.decode_family = Some(crate::decoders::Family::HfData);
+            app.dock_tab = DockTab::Decodes;
+        }
+        for (ch, hz, text) in [(2, "1746", "CQ de PE1FTV PE1FTV pse k"), (1, "875", "cq de F4JTM F4JTM pse k"), (8, "1004", "QRZ de TA3/HB9FIH kn"), (2, "1746", "btu Robert KF3AA de PE1FTV k")] {
+            let mut fields = std::collections::BTreeMap::new();
+            fields.insert("channel".to_string(), ch.to_string());
+            fields.insert("df".to_string(), hz.to_string());
+            let ev = proto::DecodeEvent { protocol: "PSK31".into(), kind: "text".into(), summary: text.into(), valid: true, fields };
+            h.state().wire.events.send(NetEvent::Decode { inspect_hz: 14_070_000.0, event: ev, at: std::time::SystemTime::now() }).unwrap();
+        }
+        save(&mut h, "dock-psk31.png");
     }
 }

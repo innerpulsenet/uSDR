@@ -231,7 +231,7 @@ fn annotations(status: &Status, sub: Sub, from_pass: bool) -> (Vec<Band>, Vec<Ma
             ],
             vec![mark(19_000.0, "PILOT")],
         ),
-        (Mode::Usb | Mode::Lsb | Mode::Ft8 | Mode::Ft4, _) if fhi > flo => {
+        (Mode::Usb | Mode::Lsb | Mode::Ft8 | Mode::Ft4 | Mode::Wefax | Mode::Rtty | Mode::Navtex | Mode::Psk31, _) if fhi > flo => {
             let (a, b) = (flo.abs().min(fhi.abs()), flo.abs().max(fhi.abs()));
             (vec![band(a, b, "PASSBAND", theme::AMBER)], vec![])
         }
@@ -270,7 +270,7 @@ impl Scope {
         }
         match mode {
             Mode::Wfm => &[Sub::Passband, Sub::Mpx],
-            Mode::Nfm | Mode::Am | Mode::Packet | Mode::Ft8 | Mode::Ft4 => &[Sub::Passband, Sub::Audio],
+            Mode::Nfm | Mode::Am | Mode::Packet | Mode::Ft8 | Mode::Ft4 | Mode::Wefax | Mode::Rtty | Mode::Navtex | Mode::Psk31 => &[Sub::Passband, Sub::Audio],
             Mode::Pager => &[Sub::Passband, Sub::Disc],
             _ => &[],
         }
@@ -296,6 +296,10 @@ impl Scope {
             (Mode::Packet, _, _) => ("AFSK audio", None),
             (Mode::Ft8, _, _) => ("FT8 audio", None),
             (Mode::Ft4, _, _) => ("FT4 audio", None),
+            (Mode::Wefax, _, _) => ("Radiofax audio", None),
+            (Mode::Rtty, _, _) => ("RTTY audio", None),
+            (Mode::Navtex, _, _) => ("NAVTEX audio", None),
+            (Mode::Psk31, _, _) => ("PSK31 audio", None),
             _ => ("Audio", None),
         }
     }

@@ -5,8 +5,6 @@ use crate::brand;
 use crate::theme::{self, alpha};
 use crate::widgets::{self, Tone};
 use egui::{Align2, RichText, Ui, pos2, vec2};
-use serde_json::json;
-use usdr_proto::WebPolicy;
 
 pub fn connect_screen(app: &mut App, ui: &mut Ui) {
     let ctx = ui.ctx().clone();
@@ -126,123 +124,7 @@ pub fn reconnect_veil(app: &mut App, ctx: &egui::Context) {
 }
 
 pub fn settings_window(app: &mut App, ctx: &egui::Context) {
-    if !app.settings_open {
-        return;
-    }
-    let mut open = true;
-    egui::Window::new(RichText::new("Settings").font(theme::headline(16.0)))
-        .open(&mut open)
-        .resizable(false)
-        .collapsible(false)
-        .default_width(460.0)
-        .anchor(Align2::CENTER_CENTER, vec2(0.0, 0.0))
-        .show(ctx, |ui| {
-            egui::ScrollArea::vertical().max_height(560.0).show(ui, |ui| {
-                section(ui, "Connection");
-                if let Some(l) = &app.link {
-                    ui.label(RichText::new(&l.base).font(theme::mono(12.0)).color(theme::text()));
-                    if widgets::action(ui, "DISCONNECT").clicked() {
-                        app.disconnect();
-                    }
-                }
-                ui.checkbox(&mut app.prefs.auto_connect, "Connect to the last server on start");
-
-                section(ui, "Web page on this server");
-                ui.label(RichText::new("What the browser page may do while this app is connected. Receiver state is shared either way: a change made in one shows in the other.").color(theme::text_3()));
-                let cur = app.presence.web;
-                for p in [WebPolicy::Shared, WebPolicy::Yield, WebPolicy::Off] {
-                    let desc = match p {
-                        WebPolicy::Shared => "Shared — the page and this app both drive the receiver",
-                        WebPolicy::Yield => "View-only — the page follows along but cannot change anything while an app is connected",
-                        WebPolicy::Off => "Off — the server stops serving the page; the app keeps working",
-                    };
-                    if ui.radio(cur == p, desc).clicked() && cur != p {
-                        app.post("/api/web", json!({ "policy": p }));
-                        app.presence.web = p;
-                    }
-                }
-                let web = app.presence.web_count();
-                ui.label(RichText::new(format!("{web} web page(s) connected now")).font(theme::mono(11.0)).color(theme::text_3()));
-
-                section(ui, "Audio");
-                ui.horizontal(|ui| {
-                    let cur = app.prefs.audio_device.clone().unwrap_or_else(|| "System default".into());
-                    widgets::selector(ui, "audiodev", &cur, theme::text(), 320.0, |ui| {
-                        if ui.selectable_label(app.prefs.audio_device.is_none(), "System default").clicked() {
-                            app.prefs.audio_device = None;
-                            app.player.open(None);
-                            app.player_b.open(None);
-                            ui.close();
-                        }
-                        for d in app.audio_devices.get_or_insert_with(crate::audio::Player::devices).clone() {
-                            if ui.selectable_label(app.prefs.audio_device.as_deref() == Some(&d), &d).clicked() {
-                                app.player.open(Some(&d));
-                                app.player_b.open(Some(&d));
-                                app.prefs.audio_device = Some(d);
-                                ui.close();
-                            }
-                        }
-                    });
-                    if crate::app::icon_button(ui, "↻", "Look for audio devices again").clicked() {
-                        app.audio_devices = Some(crate::audio::Player::devices());
-                    }
-                });
-                ui.label(RichText::new(format!("playing on {}", app.player.device_name.lock().unwrap())).font(theme::mono(11.0)).color(theme::text_3()));
-
-                section(ui, "Recordings");
-                ui.horizontal(|ui| {
-                    let mut dir = app.prefs.record_dir().display().to_string();
-                    if ui.add(egui::TextEdit::singleline(&mut dir).font(theme::mono(11.5)).desired_width(340.0)).changed() {
-                        app.prefs.record_dir = Some(dir.into());
-                    }
-                    if widgets::action(ui, "CHOOSE…").clicked() {
-                        crate::app::pick(app, "folder");
-                    }
-                });
-
-                section(ui, "Interface");
-                ui.horizontal_top(|ui| {
-                    ui.label("Ground");
-                    use crate::theme::Ground;
-                    ui.vertical(|ui| for g in Ground::ALL {
-                        if ui.radio(app.prefs.ground == g, g.label()).clicked() && app.prefs.ground != g {
-                            app.prefs.ground = g;
-                            crate::theme::set_ground(ctx, g);
-                        }
-                    });
-                });
-                ui.checkbox(&mut app.prefs.own_titlebar, "Integrated title bar: the masthead moves and sizes the window (on the next start)")
-                    .on_hover_text("Replaces the system's title bar and frame. On Windows 11 this gives up the snap-layout menu on the maximize key.");
-                if cfg!(windows) {
-                    ui.checkbox(&mut app.prefs.mica, "Mica backdrop behind the chrome, Windows 11 (on the next start)");
-                }
-                ui.checkbox(&mut app.prefs.shortcuts, "Keyboard tuning shortcuts (arrows, PgUp/PgDn, M, C, R, digits)");
-                ui.checkbox(&mut app.prefs.show_scope, "Show the scope in the dock");
-                ui.horizontal(|ui| {
-                    ui.label("Motion");
-                    use crate::prefs::Motion;
-                    for (m, l) in [(Motion::System, "Follow the desktop"), (Motion::Full, "Full"), (Motion::Reduced, "Reduced")] {
-                        ui.radio_value(&mut app.prefs.motion, m, l);
-                    }
-                });
-
-                section(ui, "About");
-                ui.horizontal(|ui| {
-                    ui.label(RichText::new(format!("uSDR desktop {}", env!("CARGO_PKG_VERSION"))).font(theme::mono(11.5)).color(theme::text_2()));
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), brand::credit);
-                });
-            });
-        });
-    if !open {
-        app.settings_open = false;
-        app.prefs.save();
-    }
-}
-
-fn section(ui: &mut Ui, title: &str) {
-    ui.add_space(10.0);
-    theme::engraved(ui, &title.to_uppercase(), theme::mono(10.5), theme::text_3(), 1.2, egui::Sense::hover());
-    ui.separator();
+    crate::settings::window(app, ctx);
 }
 
 pub fn help_window(app: &mut App, ctx: &egui::Context) {

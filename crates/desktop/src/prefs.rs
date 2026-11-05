@@ -86,6 +86,8 @@ pub struct Prefs {
     pub own_titlebar: bool,
     /// Windows 11's Mica backdrop through the chrome. Read at startup.
     pub mica: bool,
+    /// Each finished radiofax picture is saved as a PNG in the record folder.
+    pub fax_autosave: bool,
 }
 
 impl Default for Prefs {
@@ -122,6 +124,7 @@ impl Default for Prefs {
             hinted_shortcuts: false,
             own_titlebar: false,
             mica: false,
+            fax_autosave: true,
         }
     }
 }

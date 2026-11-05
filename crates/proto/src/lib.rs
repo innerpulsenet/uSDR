@@ -11,6 +11,9 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
+pub mod station;
+pub use station::{ReporterState, ReporterStatus, Station, grid_center, normalize_callsign, normalize_grid};
+
 /// Leading byte of a binary FFT frame. v4 is v3 with an optional waterfall
 /// peak array after the classification block; a v3 reader stops before it.
 pub const FFT_FRAME_MAGIC: u8 = 0x03;
@@ -38,6 +41,17 @@ pub const TAGGED_AUDIO_MAGIC: u8 = 0x04;
 /// pilot. Readers older than this skip it as an unknown frame, which is why
 /// the server sends it only to clients that ask (API feature `stereo`).
 pub const STEREO_AUDIO_MAGIC: u8 = 0x05;
+/// Leading byte of one radiofax image row, sent only to desktop clients:
+///
+/// ```text
+/// [0x06][u8 receiver][u32 image][u32 line][u16 width][u8 pixels…]
+/// ```
+///
+/// All little-endian. `image` counts the pictures the server has started,
+/// so a row from a new picture is never drawn into the last one. `line` is
+/// the row's place in its picture, from 0. Each pixel is 0 (black) to 255
+/// (white), `width` of them.
+pub const FAX_LINE_MAGIC: u8 = 0x06;
 
 // ---------- binary frames ----------
 
@@ -169,6 +183,38 @@ pub fn encode_stereo_audio(rx: u8, rate_hz: u32, st: &StereoReading, samples: &[
 pub enum Binary {
     Fft(Box<FftFrame>),
     Audio(AudioFrame),
+    FaxLine(FaxLine),
+}
+
+/// One radiofax row (see [`FAX_LINE_MAGIC`]).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct FaxLine {
+    pub rx: u8,
+    pub image: u32,
+    pub line: u32,
+    pub pixels: Vec<u8>,
+}
+
+pub fn encode_fax_line(rx: u8, image: u32, line: u32, pixels: &[u8]) -> Vec<u8> {
+    let width = pixels.len().min(u16::MAX as usize);
+    let mut b = Vec::with_capacity(12 + width);
+    b.push(FAX_LINE_MAGIC);
+    b.push(rx);
+    b.extend_from_slice(&image.to_le_bytes());
+    b.extend_from_slice(&line.to_le_bytes());
+    b.extend_from_slice(&(width as u16).to_le_bytes());
+    b.extend_from_slice(&pixels[..width]);
+    b
+}
+
+pub fn decode_fax_line(buf: &[u8]) -> Result<FaxLine, DecodeError> {
+    let mut r = Reader { buf, at: 1 };
+    let rx = r.u8()?;
+    let image = r.u32()?;
+    let line = r.u32()?;
+    let width = r.u16()? as usize;
+    let pixels = r.take(width)?.to_vec();
+    Ok(FaxLine { rx, image, line, pixels })
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -245,6 +291,7 @@ pub fn decode_binary(buf: &[u8]) -> Result<Binary, DecodeError> {
             Ok(Binary::Audio(a))
         }
         Some(&STEREO_AUDIO_MAGIC) => decode_stereo_audio(buf).map(Binary::Audio),
+        Some(&FAX_LINE_MAGIC) => decode_fax_line(buf).map(Binary::FaxLine),
         Some(_) => Err(DecodeError("unknown frame type")),
         None => Err(DecodeError("empty frame")),
     }
@@ -484,6 +531,69 @@ pub struct Status {
     pub rds: Option<Rds>,
     /// The stereo decoder on receiver A (WFM only).
     pub stereo: Option<Stereo>,
+    /// How the HF text and picture decoders are set, and what the one
+    /// running on receiver A hears (WEFAX, RTTY, NAVTEX, PSK31 only).
+    pub digital_cfg: Option<DigitalCfg>,
+    pub digital: Option<DigitalReading>,
+}
+
+/// The HF text and picture decoders' settings, server-wide and saved. Posted
+/// whole or in part to `/api/sdr/digital`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DigitalCfg {
+    pub rtty_baud: f32,
+    pub rtty_shift_hz: f32,
+    /// `None` finds the polarity from the signal; `Some(true)` is reversed
+    /// (mark the lower tone).
+    pub rtty_reverse: Option<bool>,
+    pub psk_baud: f32,
+    pub fax_lpm: u16,
+    pub fax_ioc: u16,
+    /// A picture begins on the station's start tone.
+    pub fax_auto_start: bool,
+    /// Line-period trim for a sample clock that runs fast or slow.
+    pub fax_slant_ppm: f32,
+}
+
+impl Default for DigitalCfg {
+    fn default() -> Self {
+        Self { rtty_baud: 45.45, rtty_shift_hz: 170.0, rtty_reverse: None, psk_baud: 31.25, fax_lpm: 120, fax_ioc: 576, fax_auto_start: true, fax_slant_ppm: 0.0 }
+    }
+}
+
+/// The running decoder's reading, about once a second.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DigitalReading {
+    /// A signal is being copied.
+    pub locked: bool,
+    /// Audio frequency above the dial of the signal being copied.
+    pub center_hz: Option<f32>,
+    pub snr_db: Option<f32>,
+    /// RTTY: the polarity found or forced.
+    pub reverse: Option<bool>,
+    /// NAVTEX: inside a message, between ZCZC and NNNN.
+    pub in_message: bool,
+    /// Characters received with an error, 0 to 1 (NAVTEX).
+    pub error_rate: Option<f32>,
+    /// WEFAX: `idle`, `starting`, `phasing` or `receiving`, the picture's
+    /// number (as in the 0x06 rows), its rows so far and its width.
+    pub fax_state: Option<String>,
+    pub fax_image: u32,
+    pub fax_lines: u32,
+    pub fax_width: u32,
+    /// PSK31: the signals being copied across the passband.
+    pub channels: Vec<PskChannel>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PskChannel {
+    pub id: u32,
+    pub audio_hz: f32,
+    pub snr_db: f32,
+    pub active: bool,
 }
 
 /// The stereo decoder's reading as the status carries it; the audio frames
@@ -605,12 +715,18 @@ pub enum Mode {
     /// 15 s for FT8, 7.5 s for FT4.
     Ft8,
     Ft4,
+    /// HF text and pictures on upper sideband: radiofax (weather charts),
+    /// RTTY, NAVTEX and PSK31.
+    Wefax,
+    Rtty,
+    Navtex,
+    Psk31,
     Auto,
     Scan,
 }
 
 impl Mode {
-    pub const ALL: [Mode; 15] = [
+    pub const ALL: [Mode; 19] = [
         Mode::Nfm,
         Mode::Am,
         Mode::Usb,
@@ -624,6 +740,10 @@ impl Mode {
         Mode::Flex,
         Mode::Ft8,
         Mode::Ft4,
+        Mode::Wefax,
+        Mode::Rtty,
+        Mode::Navtex,
+        Mode::Psk31,
         Mode::Auto,
         Mode::Scan,
     ];
@@ -642,9 +762,18 @@ impl Mode {
             Mode::Flex => "FLEX",
             Mode::Ft8 => "FT8",
             Mode::Ft4 => "FT4",
+            Mode::Wefax => "WEFAX",
+            Mode::Rtty => "RTTY",
+            Mode::Navtex => "NAVTEX",
+            Mode::Psk31 => "PSK31",
             Mode::Auto => "AUTO",
             Mode::Scan => "SCAN",
         }
+    }
+    /// The HF data modes: sideband audio handed to a decoder, the tuned
+    /// frequency the dial (the suppressed carrier).
+    pub fn is_hf_data(self) -> bool {
+        matches!(self, Mode::Ft8 | Mode::Ft4 | Mode::Wefax | Mode::Rtty | Mode::Navtex | Mode::Psk31)
     }
     pub fn wire(self) -> &'static str {
         match self {
@@ -661,6 +790,10 @@ impl Mode {
             Mode::Flex => "flex",
             Mode::Ft8 => "ft8",
             Mode::Ft4 => "ft4",
+            Mode::Wefax => "wefax",
+            Mode::Rtty => "rtty",
+            Mode::Navtex => "navtex",
+            Mode::Psk31 => "psk31",
             Mode::Auto => "auto",
             Mode::Scan => "scan",
         }
@@ -892,6 +1025,8 @@ pub enum Event {
     Status(Box<Status>),
     Decode { inspect_hz: f64, event: DecodeEvent },
     Presence(Presence),
+    /// The station and the spot reporter's state (servers with `station`).
+    Station(Station, ReporterStatus),
     Other(String),
 }
 
@@ -910,6 +1045,10 @@ pub fn decode_text(text: &str) -> Result<Event, serde_json::Error> {
             event: serde_json::from_value(v.get("event").cloned().unwrap_or_default())?,
         },
         "presence" => Event::Presence(serde_json::from_value(v)?),
+        "station" => Event::Station(
+            serde_json::from_value(v.get("station").cloned().unwrap_or_default())?,
+            serde_json::from_value(v.get("reporter").cloned().unwrap_or_default())?,
+        ),
         _ => Event::Other(kind),
     })
 }
@@ -1089,6 +1228,28 @@ mod tests {
         assert_eq!(r.pty_name.as_deref(), Some("Top 40"));
         assert_eq!(r.artist, None);
         assert!(r.locked && r.pilot);
+    }
+
+    #[test]
+    fn fax_lines_round_trip() {
+        let px: Vec<u8> = (0..1809).map(|i| (i % 256) as u8).collect();
+        let b = encode_fax_line(1, 7, 42, &px);
+        let Binary::FaxLine(l) = decode_binary(&b).unwrap() else { panic!() };
+        assert_eq!((l.rx, l.image, l.line, l.pixels.len()), (1, 7, 42, 1809));
+        assert_eq!(l.pixels, px);
+        assert!(decode_binary(&b[..b.len() - 1]).is_err(), "a short row is refused");
+    }
+
+    #[test]
+    fn decodes_station() {
+        let t = r#"{"type":"station","station":{"callsign":"K1ABC","grid":"FN31pr","antenna":"","report_spots":true},"reporter":{"state":"waiting","spots_sent":12,"queued":3}}"#;
+        let Event::Station(st, rep) = decode_text(t).unwrap() else { panic!() };
+        assert!(st.complete() && st.report_spots);
+        assert_eq!((rep.state, rep.spots_sent, rep.queued), (ReporterState::Waiting, 12, 3));
+        for m in Mode::ALL {
+            let back: Mode = serde_json::from_value(serde_json::json!(m.wire())).unwrap();
+            assert_eq!(back, m);
+        }
     }
 
     #[test]

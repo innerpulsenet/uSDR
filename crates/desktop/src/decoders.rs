@@ -40,7 +40,7 @@ impl Family {
             Family::Paging => "POCSAG and FLEX pages appear here. PAGER walks the paging channels around the tuned frequency; FLEX and PACKET decode the tuned channel.",
             Family::Packet => "AX.25 packets, APRS positions and messages among them, appear here. PACKET decodes the tuned channel.",
             Family::Broadcast => "A broadcast station's RDS (its name, RadioText, clock) and NOAA SAME alerts appear here. Tune WFM to a station for RDS.",
-            Family::HfData => "FT8 and FT4 decodes appear here at the end of each slot. Pick FT8 or FT4 and tune a dial frequency; BANDS lists them.",
+            Family::HfData => "HF data appears here: FT8 and FT4 at the end of each slot, RTTY, PSK31 and NAVTEX text as it is copied, and radiofax pictures in their viewer. Pick a mode and tune a dial frequency; BANDS lists them.",
         }
     }
 
@@ -50,7 +50,7 @@ impl Family {
             Mode::P25 | Mode::Dmr | Mode::Nxdn => Some(Family::Voice),
             Mode::Pager | Mode::Flex => Some(Family::Paging),
             Mode::Wfm => Some(Family::Broadcast),
-            Mode::Ft8 | Mode::Ft4 => Some(Family::HfData),
+            Mode::Ft8 | Mode::Ft4 | Mode::Wefax | Mode::Rtty | Mode::Navtex | Mode::Psk31 => Some(Family::HfData),
             _ => None,
         }
     }
@@ -77,6 +77,10 @@ pub const DECODERS: &[Decoder] = &[
     Decoder { chip: "SAME", family: Family::Broadcast, matches: &["SAME"] },
     Decoder { chip: "FT8", family: Family::HfData, matches: &["FT8"] },
     Decoder { chip: "FT4", family: Family::HfData, matches: &["FT4"] },
+    Decoder { chip: "PSK31", family: Family::HfData, matches: &["PSK"] },
+    Decoder { chip: "RTTY", family: Family::HfData, matches: &["RTTY"] },
+    Decoder { chip: "NAVTEX", family: Family::HfData, matches: &["NAVTEX"] },
+    Decoder { chip: "WEFAX", family: Family::HfData, matches: &["WEFAX"] },
 ];
 
 impl Decoder {
@@ -116,6 +120,37 @@ pub const HF_DIALS: &[(&str, f64, f64)] = &[
     ("2 m", 144_174_000.0, 144_170_000.0),
 ];
 
+/// Where the text modes are found, as (where, dial Hz): the dial is the
+/// suppressed carrier, the signals a few hundred hertz to 3 kHz above it.
+pub const PSK31_DIALS: &[(&str, f64)] = &[
+    ("80 m", 3_580_000.0),
+    ("40 m", 7_070_000.0),
+    ("30 m", 10_142_000.0),
+    ("20 m", 14_070_000.0),
+    // Below FT8's 18.100, which took the old PSK31 spot.
+    ("17 m", 18_097_000.0),
+    ("15 m", 21_070_000.0),
+    ("10 m", 28_120_000.0),
+];
+
+pub const RTTY_DIALS: &[(&str, f64)] = &[
+    ("80 m", 3_580_000.0),
+    ("40 m", 7_040_000.0),
+    ("20 m", 14_080_000.0),
+    ("15 m", 21_080_000.0),
+    // Deutscher Wetterdienst's weather broadcasts, 50 baud and 450 Hz.
+    ("DWD 10.1", 10_099_300.0),
+    ("DWD 7.6", 7_644_500.0),
+];
+
+pub const NAVTEX_DIALS: &[(&str, f64)] = &[
+    // The international channel and the national one, and the HF one;
+    // the dial goes 1 kHz below so the tones sit at 1 kHz.
+    ("518 kHz", 517_000.0),
+    ("490 kHz", 489_000.0),
+    ("4209.5 kHz", 4_208_500.0),
+];
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -133,6 +168,10 @@ mod tests {
             ("NOAA SAME Weather", Family::Broadcast),
             ("FT8", Family::HfData),
             ("FT4", Family::HfData),
+            ("RTTY", Family::HfData),
+            ("PSK31", Family::HfData),
+            ("NAVTEX", Family::HfData),
+            ("WEFAX", Family::HfData),
         ] {
             assert_eq!(family_of(p), Some(f), "{p}");
         }

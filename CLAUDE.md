@@ -29,6 +29,12 @@ several ways and checks the broadcast stations still sit on their raster. The
 radio and the driver are what strand a tune, so no unit test sees it. It
 retunes the receiver and leaves it on 100.5 MHz WFM.
 
+After touching an HF data decoder (`ft8`, `wefax`, `rtty`, `navtex`, `psk`
+in the engine, or `crates/server/src/hfdata.rs`), run
+`tools/hf-live-check.py MODE DIAL_HZ SECONDS` against the deployed daemon on
+a station that is on the air: synthetic tests have passed while real fading
+broke the copy. It retunes the receiver.
+
 ## After changing the desktop app
 `sh crates/desktop/packaging/linux/install.sh` rebuilds it and installs it in
 `~/.local/bin`. Don't restart a desktop window Patrick has open; tell him to

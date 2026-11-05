@@ -8,8 +8,10 @@
 //! and find out what it is.
 
 mod devices;
+mod hfdata;
 mod keys;
 mod p25_keys;
+mod pskreporter;
 mod scan;
 mod sdr;
 mod sub_rx;
@@ -185,6 +187,13 @@ struct Settings {
     /// client can offer its own defaults until then.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     memories: Option<Vec<Memory>>,
+    /// The operator's callsign and locator, and whether FT8/FT4 spots are
+    /// reported under them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    station: Option<usdr_proto::Station>,
+    /// The HF text and picture decoders' settings.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    digital: Option<usdr_proto::DigitalCfg>,
 }
 
 fn settings_path(explicit: Option<PathBuf>) -> Result<PathBuf> {
@@ -235,8 +244,9 @@ struct AppState {
     /// Who is connected, by connection number.
     clients: Mutex<std::collections::BTreeMap<u64, ClientInfo>>,
     next_client: std::sync::atomic::AtomicU64,
-    /// Pre-serialized JSON for every socket: presence and memories.
+    /// Pre-serialized JSON for every socket: presence, memories, station.
     meta: tokio::sync::broadcast::Sender<String>,
+    reporter: Arc<pskreporter::Reporter>,
 }
 
 /// Minimum spacing between settings-file writes.
@@ -250,6 +260,20 @@ impl AppState {
     fn presence_json(&self) -> String {
         let clients: Vec<ClientInfo> = self.clients.lock().expect("clients").values().cloned().collect();
         serde_json::json!({ "type": "presence", "clients": clients, "web": self.web_policy() }).to_string()
+    }
+
+    fn station_json(&self) -> String {
+        serde_json::json!({ "type": "station", "station": self.reporter.station(), "reporter": self.reporter.status() }).to_string()
+    }
+
+    /// Write the settings now, past the debounce: for a change made once
+    /// and then left, which the next debounced write might never follow.
+    fn save_now(&self) {
+        let s = self.settings.lock().expect("settings").clone();
+        *self.last_settings_write.lock().expect("settings debounce") = Some(std::time::Instant::now());
+        if let Err(e) = save_settings(&self.config_path, &s) {
+            eprintln!("could not save settings: {e:#}");
+        }
     }
 
     fn memories_json(&self) -> String {
@@ -395,6 +419,10 @@ async fn main() -> Result<()> {
         }
     }
 
+    if let Some(d) = settings.digital.clone() {
+        hfdata::set_config(hfdata::sanitize(d));
+    }
+    let reporter = Arc::new(pskreporter::Reporter::new(settings.station.clone().unwrap_or_default()));
     let state = Arc::new(AppState {
         sdr: Mutex::new(Some(runtime)),
         calls,
@@ -408,7 +436,17 @@ async fn main() -> Result<()> {
         clients: Mutex::new(std::collections::BTreeMap::new()),
         next_client: std::sync::atomic::AtomicU64::new(1),
         meta: tokio::sync::broadcast::channel(16).0,
+        reporter,
     });
+    {
+        // The reporter hears every decode the receiver broadcasts, whether
+        // or not a client is connected, and tells the clients what it did.
+        let st = Arc::clone(&state);
+        let events = state.sdr_events.subscribe();
+        tokio::spawn(Arc::clone(&state.reporter).run(events, move || {
+            let _ = st.meta.send(st.station_json());
+        }));
+    }
 
     let app = Router::new()
         .route("/", get(index))
@@ -447,6 +485,9 @@ async fn main() -> Result<()> {
         .route("/api/sdr/filter", post(post_sdr_filter))
         .route("/api/sdr/rx2", post(post_sdr_rx2))
         .route("/api/memories", get(get_memories).post(post_memories))
+        .route("/api/station", get(get_station).post(post_station))
+        .route("/api/sdr/digital", post(post_sdr_digital))
+        .route("/api/sdr/fax", get(get_sdr_fax))
         .route("/ws", get(ws_upgrade))
         .layer(axum::middleware::from_fn_with_state(Arc::clone(&state), yield_guard))
         .with_state(Arc::clone(&state));
@@ -531,7 +572,7 @@ async fn yield_guard(
 /// What this server is and which API revision it speaks, so a client can say
 /// plainly when it needs a newer one rather than failing on a missing route.
 const API_REVISION: u32 = 2;
-const API_FEATURES: &[&str] = &["presence", "web-policy", "memories", "avg-status", "filter", "rx2", "stereo"];
+const API_FEATURES: &[&str] = &["presence", "web-policy", "memories", "avg-status", "filter", "rx2", "stereo", "station", "digital", "fax"];
 
 fn version_json() -> serde_json::Value {
     serde_json::json!({
@@ -653,6 +694,94 @@ async fn post_web(
     st.update_settings(|s| s.web = Some(req.policy));
     let _ = st.meta.send(st.presence_json());
     Json(serde_json::json!({ "ok": true, "policy": req.policy }))
+}
+
+#[derive(Deserialize, Default)]
+#[serde(default)]
+struct DigitalReq {
+    rtty_baud: Option<f32>,
+    rtty_shift_hz: Option<f32>,
+    /// `"auto"`, or a forced polarity.
+    rtty_reverse: Option<serde_json::Value>,
+    psk_baud: Option<f32>,
+    fax_lpm: Option<u16>,
+    fax_ioc: Option<u16>,
+    fax_auto_start: Option<bool>,
+    fax_slant_ppm: Option<f32>,
+    fax_start: bool,
+    fax_stop: bool,
+}
+
+/// Change some of the HF text and picture decoders' settings, or start or
+/// stop a radiofax picture. Saved; applied to the running decoder at once.
+async fn post_sdr_digital(
+    State(st): State<Arc<AppState>>,
+    Json(req): Json<DigitalReq>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let mut c = hfdata::config();
+    if let Some(v) = req.rtty_baud { c.rtty_baud = v; }
+    if let Some(v) = req.rtty_shift_hz { c.rtty_shift_hz = v; }
+    if let Some(v) = req.rtty_reverse {
+        c.rtty_reverse = v.as_bool();
+    }
+    if let Some(v) = req.psk_baud { c.psk_baud = v; }
+    if let Some(v) = req.fax_lpm { c.fax_lpm = v; }
+    if let Some(v) = req.fax_ioc { c.fax_ioc = v; }
+    if let Some(v) = req.fax_auto_start { c.fax_auto_start = v; }
+    if let Some(v) = req.fax_slant_ppm { c.fax_slant_ppm = v; }
+    let c = hfdata::sanitize(c);
+    hfdata::set_config(c.clone());
+    st.update_settings(|s| s.digital = Some(c.clone()));
+    if let Some(rt) = st.sdr.lock().expect("sdr").as_ref() {
+        rt.digital(req.fax_start, req.fax_stop)?;
+    }
+    Ok(Json(serde_json::json!({ "ok": true, "digital": c })))
+}
+
+/// The radiofax picture being received, or the last one: its rows so far
+/// as gray bytes, with its number and width in headers.
+async fn get_sdr_fax() -> Response {
+    let (id, width, body) = {
+        let f = hfdata::FAX.lock().expect("fax");
+        (f.id, f.width, f.pixels.clone())
+    };
+    (
+        [
+            (header::CONTENT_TYPE, "application/octet-stream".to_string()),
+            (header::HeaderName::from_static("x-usdr-fax-image"), id.to_string()),
+            (header::HeaderName::from_static("x-usdr-fax-width"), width.to_string()),
+        ],
+        body,
+    )
+        .into_response()
+}
+
+async fn get_station(State(st): State<Arc<AppState>>) -> Json<serde_json::Value> {
+    Json(serde_json::json!({ "station": st.reporter.station(), "reporter": st.reporter.status() }))
+}
+
+/// Set the station. The callsign and locator are checked and written the
+/// standard way; reporting can be asked for before they are complete, and
+/// then waits for them.
+async fn post_station(
+    State(st): State<Arc<AppState>>,
+    Json(req): Json<usdr_proto::Station>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let callsign = match req.callsign.trim() {
+        "" => String::new(),
+        c => usdr_proto::normalize_callsign(c).map_err(|e| ApiError::BadRequest(format!("callsign: {e}")))?,
+    };
+    let grid = match req.grid.trim() {
+        "" => String::new(),
+        g => usdr_proto::normalize_grid(g).map_err(|e| ApiError::BadRequest(format!("locator: {e}")))?,
+    };
+    let antenna: String = req.antenna.chars().filter(|c| !c.is_control()).take(64).collect::<String>().trim().to_string();
+    let station = usdr_proto::Station { callsign, grid, antenna, report_spots: req.report_spots };
+    st.reporter.set_station(station.clone());
+    st.update_settings(|s| s.station = Some(station.clone()));
+    st.save_now();
+    let _ = st.meta.send(st.station_json());
+    Ok(Json(serde_json::json!({ "ok": true, "station": station, "reporter": st.reporter.status() })))
 }
 
 async fn get_memories(State(st): State<Arc<AppState>>) -> Json<serde_json::Value> {
@@ -1487,7 +1616,7 @@ async fn ws_upgrade(
             .map(|d| d.as_secs())
             .unwrap_or(0),
     };
-    ws.on_upgrade(move |socket| ws_client(socket, st, info, stereo))
+    ws.on_upgrade(move |socket| ws_client(socket, st, info, stereo, desktop))
 }
 
 /// Takes a client off the presence list however its socket ends.
@@ -1503,7 +1632,7 @@ impl Drop for Registered {
     }
 }
 
-async fn ws_client(mut socket: WebSocket, st: Arc<AppState>, info: ClientInfo, stereo: bool) {
+async fn ws_client(mut socket: WebSocket, st: Arc<AppState>, info: ClientInfo, stereo: bool, desktop: bool) {
     let mut sdr_ev = st.sdr_events.subscribe();
     let mut audio = st.audio.subscribe();
     let mut meta = st.meta.subscribe();
@@ -1528,7 +1657,7 @@ async fn ws_client(mut socket: WebSocket, st: Arc<AppState>, info: ClientInfo, s
     {
         return;
     }
-    for text in [st.presence_json(), st.memories_json()] {
+    for text in [st.presence_json(), st.memories_json(), st.station_json()] {
         if socket.send(Message::Text(text.into())).await.is_err() {
             return;
         }
@@ -1544,6 +1673,12 @@ async fn ws_client(mut socket: WebSocket, st: Arc<AppState>, info: ClientInfo, s
                         // sdr::encode_fft_frame) — one encode per frame on
                         // the DSP thread, shared by every client.
                         if socket.send(Message::Binary(frame.clone())).await.is_err() {
+                            return;
+                        }
+                    }
+                    SdrEvent::FaxRow { frame } => {
+                        // The page has no fax viewer; only the app gets rows.
+                        if desktop && socket.send(Message::Binary(frame.clone())).await.is_err() {
                             return;
                         }
                     }

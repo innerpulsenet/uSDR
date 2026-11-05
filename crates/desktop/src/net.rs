@@ -30,6 +30,8 @@ pub enum NetEvent {
     Status(Box<proto::Status>),
     Decode { inspect_hz: f64, event: proto::DecodeEvent, at: std::time::SystemTime },
     Presence(proto::Presence),
+    Station(proto::Station, proto::ReporterStatus),
+    FaxLine(proto::FaxLine),
     Reply { what: Get, result: Result<Value, String> },
     Saved { path: PathBuf, bytes: u64 },
     Bytes { what: Fetch, bytes: Vec<u8>, headers: Vec<(String, String)> },
@@ -58,6 +60,8 @@ pub enum Fetch {
     /// The rolling I/Q capture, to send back for a replay decode.
     ReplayCapture,
     CallAudio(u64),
+    /// The radiofax picture the server is receiving, as rows so far.
+    Fax,
     /// A rolling capture to write as .iq + .json, or as a WAV.
     SaveCapture { kind: String, stem: PathBuf },
 }
@@ -338,6 +342,10 @@ fn ws_loop(
                                     stats.audio_frames.fetch_add(1, Ordering::Relaxed);
                                     audio.push(&a);
                                 }
+                                Ok(proto::Binary::FaxLine(l)) => {
+                                    let _ = ev.send(NetEvent::FaxLine(l));
+                                    crate::anim::now(&ctx);
+                                }
                                 Err(_) => {
                                     stats.decode_errors.fetch_add(1, Ordering::Relaxed);
                                 }
@@ -363,6 +371,9 @@ fn ws_loop(
                                 }
                                 Ok(proto::Event::Presence(p)) => {
                                     let _ = ev.send(NetEvent::Presence(p));
+                                }
+                                Ok(proto::Event::Station(s, r)) => {
+                                    let _ = ev.send(NetEvent::Station(s, r));
                                 }
                                 Ok(proto::Event::Other(_)) => {}
                                 Err(_) => {

@@ -23,6 +23,7 @@ pub mod leveler;
 pub mod autonotch;
 pub mod ltr;
 pub mod mdc;
+pub mod navtex;
 pub mod nbfm;
 pub mod noisegate;
 pub mod nxdn;
@@ -32,8 +33,10 @@ pub mod pager_parser;
 pub mod passport;
 pub mod pager_bank;
 pub mod pocsag;
+pub mod psk;
 pub mod rds;
 pub mod rs;
+pub mod rtty;
 pub mod same;
 pub mod smartnet;
 pub mod squelch;
@@ -41,6 +44,7 @@ pub mod stereo;
 pub mod ssb;
 pub mod timing;
 pub mod uat;
+pub mod wefax;
 
 pub use afc::Afc;
 pub use channel::{

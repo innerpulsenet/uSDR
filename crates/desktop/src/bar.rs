@@ -313,7 +313,7 @@ fn tuning(app: &mut App, ui: &mut Ui) {
 fn mode_tally(m: Mode) -> egui::Color32 {
     match m {
         Mode::Nfm | Mode::Am | Mode::Usb | Mode::Lsb => theme::AMBER,
-        Mode::Wfm | Mode::Pager | Mode::Flex | Mode::Ft8 | Mode::Ft4 => theme::CYAN,
+        Mode::Wfm | Mode::Pager | Mode::Flex | Mode::Ft8 | Mode::Ft4 | Mode::Wefax | Mode::Rtty | Mode::Navtex | Mode::Psk31 => theme::CYAN,
         Mode::P25 | Mode::Dmr | Mode::Nxdn | Mode::Packet => theme::OK,
         _ => theme::VIOLET,
     }
@@ -331,8 +331,9 @@ fn modes_width(ui: &Ui) -> f32 {
         ws.iter().sum::<f32>() + 3.0 * ws.len().saturating_sub(1) as f32
     };
     let note = ui.painter().layout_no_wrap(B_NOTE.into(), theme::mono(10.5), egui::Color32::PLACEHOLDER).size().x;
+    let hf = ui.painter().layout_no_wrap("NAVTEX ▾".into(), theme::mono_bold(10.5), egui::Color32::PLACEHOLDER).size().x + 14.0 + 3.0;
     row(&mut LISTEN.into_iter())
-        .max(row(&mut Mode::ALL.into_iter().filter(|m| !LISTEN.contains(m))))
+        .max(row(&mut Mode::ALL.into_iter().filter(|m| !LISTEN.contains(m) && !m.is_hf_data())) + hf)
         .max(row(&mut B_MODES.into_iter()))
         .max(note)
 }
@@ -366,8 +367,9 @@ fn modes_inner(app: &mut App, ui: &mut Ui, b: Option<usdr_proto::SubRx>) {
             // row, the decoders on the second: those the server offers, so
             // an older one is never asked for a mode it does not have.
             let offered = |m: &Mode| app.modes.is_empty() || app.modes.iter().any(|c| c.mode == *m);
-            let decode: Vec<Mode> = Mode::ALL.iter().copied().filter(|m| !LISTEN.contains(m) && offered(m)).collect();
-            for row in [&LISTEN[..], &decode[..]] {
+            let decode: Vec<Mode> = Mode::ALL.iter().copied().filter(|m| !LISTEN.contains(m) && !m.is_hf_data() && offered(m)).collect();
+            let hf: Vec<Mode> = Mode::ALL.iter().copied().filter(|m| m.is_hf_data() && offered(m)).collect();
+            for (k, row) in [&LISTEN[..], &decode[..]].into_iter().enumerate() {
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = 3.0;
                     for m in row {
@@ -378,6 +380,26 @@ fn modes_inner(app: &mut App, ui: &mut Ui, b: Option<usdr_proto::SubRx>) {
                         if r.clicked() && !on {
                             app.set_mode(*m);
                         }
+                    }
+                    // The HF data modes share one key on the decoder row: it
+                    // names the one in use and lists them all.
+                    if k == 1 && !hf.is_empty() {
+                        let cur = app.status.mode;
+                        let lit = cur.is_hf_data();
+                        let labels: Vec<&str> = hf.iter().map(|m| m.label()).chain(["HF"]).collect();
+                        widgets::menu_chip_lit(ui, if lit { cur.label() } else { "HF" }, &labels, mode_tally(Mode::Ft8), lit, |ui| {
+                            for m in &hf {
+                                let desc = app.modes.iter().find(|c| c.mode == *m).map(|c| c.description.clone()).unwrap_or_default();
+                                let r = ui.selectable_label(cur == *m, RichText::new(m.label()).font(theme::mono_bold(11.0)));
+                                let r = if desc.is_empty() { r } else { r.on_hover_text(desc) };
+                                if r.clicked() {
+                                    if cur != *m {
+                                        app.set_mode(*m);
+                                    }
+                                    ui.close();
+                                }
+                            }
+                        });
                     }
                 });
             }
