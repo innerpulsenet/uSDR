@@ -3115,4 +3115,102 @@ mod tests {
         assert_eq!(pan.wf_pan, pan.wf_row_pan[pan.wf_head]);
     }
 
+
+    /// Where one carrier is drawn, in the trace and in the waterfall, read
+    /// off the rendered pixels: the trace's highest point, and the waterfall
+    /// column brightest over its lower rows. Frames go through `push` as
+    /// they arrive, the window moving from `first` to `then` (center, span)
+    /// halfway, as a zoomed pan does.
+    fn carrier_columns(first: (f64, f64), then: (f64, f64), zoom: f64, carrier_hz: f64) -> (f32, f32, f32) {
+        let frame_at = |(c, r): (f64, f64)| {
+            let n = 2048;
+            let mut pwr = vec![-110.0f32; n];
+            let k = ((carrier_hz - (c - r / 2.0)) / r * (n - 1) as f64).round() as usize;
+            pwr[k] = -30.0;
+            FftFrame { center_hz: c, rate_hz: r, inspect_hz: 100e6, wf_row: pwr.clone(), pwr, ..Default::default() }
+        };
+        let status = Status { freq_hz: 100e6, rate_hz: 8e6, inspect_hz: 100e6, bandwidth_hz: 200_000.0, zoom, mode: usdr_proto::Mode::Wfm, ..Default::default() };
+        let view = View { auto_range: false, floor_db: -120.0, ceiling_db: -20.0, wf_auto_black: false, wf_black: -115.0, wf_range: 60.0, band_plan: false, show_peaks: false, ..View::default() };
+        struct S {
+            pan: Panafall,
+            view: View,
+            status: Status,
+            frames: Vec<FftFrame>,
+            at: usize,
+            acts: Vec<Act>,
+            ready: bool,
+        }
+        let frames: Vec<FftFrame> = (0..120).map(|i| frame_at(if i < 60 { first } else { then })).collect();
+        let state = S { pan: Panafall::default(), view, status, frames, at: 0, acts: Vec::new(), ready: false };
+        let mut h = Harness::builder().with_size(egui::vec2(1000.0, 700.0)).build_ui_state(
+            |ui, t: &mut S| {
+                if !t.ready {
+                    crate::theme::install(ui.ctx(), crate::theme::Ground::Carbon);
+                    t.ready = true;
+                    return;
+                }
+                let i = t.at.min(t.frames.len() - 1);
+                t.pan.push(&t.frames[i], &t.view, i as f64 * 0.04);
+                t.at += 1;
+                let f = t.frames[i].clone();
+                t.pan.ui(ui, &t.status, Some(&f), &mut t.view, &SliceFlag::default(), 100_000.0, true, &mut t.acts);
+            },
+            state,
+        );
+        h.run_steps(125);
+        let img = h.render().expect("render");
+        if let Some(d) = std::env::var_os("USDR_QA_DIR") {
+            let _ = img.save(std::path::Path::new(&d).join(format!("align-{}-{}.png", first.0, zoom)));
+        }
+        let (w, ht) = (img.width(), img.height());
+        let lum = |x: u32, y: u32| {
+            let p = img.get_pixel(x, y).0;
+            0.3 * p[0] as f32 + 0.59 * p[1] as f32 + 0.11 * p[2] as f32
+        };
+        // The trace: the column whose bright pixels reach highest in the
+        // top part, away from the edges where the scales are drawn.
+        let (x0, x1) = (60, w - 60);
+        let mut best = (u32::MAX, 0u32);
+        for x in x0..x1 {
+            // Below the receiver's card, which sits along the top.
+            // White, so not the receiver's amber passband lines.
+            let white = |x: u32, y: u32| img.get_pixel(x, y).0[..3].iter().all(|&c| c > 160);
+            if let Some(y) = (ht * 3 / 20..ht * 2 / 5).find(|&y| white(x, y))
+                && y < best.0
+            {
+                best = (y, x);
+            }
+        }
+        // The waterfall: 120 frames fill its top 120 rows, newest first, so
+        // the second window's rows run from its top and the first's below
+        // them. Its top is the first row below the axis that is not the
+        // axis's own fill.
+        let column = |y0: u32, y1: u32| {
+            (x0..x1).max_by(|&a, &b| {
+                let s = |x: u32| (y0..y1).map(|y| lum(x, y)).sum::<f32>();
+                s(a).total_cmp(&s(b))
+            }).unwrap() as f32
+        };
+        let carrier_x = best.1;
+        let wf_top = (ht * 2 / 5..ht).find(|&y| lum(carrier_x, y) > 180.0).expect("a waterfall line under the carrier");
+        (best.1 as f32, column(wf_top + 80, wf_top + 110), column(wf_top + 5, wf_top + 40))
+    }
+
+    #[test]
+    fn a_carrier_lines_up_in_the_trace_and_the_waterfall_at_every_zoom() {
+        let carrier = 101.3e6;
+        for (name, first, then, zoom) in [
+            ("full span", (100e6, 8e6), (100e6, 8e6), 1.0),
+            ("zoom 8", (101.2e6, 1e6), (101.2e6, 1e6), 8.0),
+            ("zoom 32", (101.29e6, 0.25e6), (101.29e6, 0.25e6), 32.0),
+            ("zoom 8, panned", (101.1e6, 1e6), (101.35e6, 1e6), 8.0),
+        ] {
+            let (trace, wf_old, wf_new) = carrier_columns(first, then, zoom, carrier);
+            println!("{name}: trace x {trace}, waterfall x {wf_new} (newest rows), {wf_old} (oldest)");
+            assert!((trace - wf_new).abs() <= 2.0, "{name}: trace at {trace}, newest waterfall rows at {wf_new}");
+            // Rows from before a pan are moved with it, so they still sit
+            // under the carrier.
+            assert!((trace - wf_old).abs() <= 2.0, "{name}: trace at {trace}, older waterfall rows at {wf_old}");
+        }
+    }
 }
