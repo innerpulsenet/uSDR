@@ -483,6 +483,10 @@ fn shots() {
                         prefs.view.style = st;
                         prefs.view.palette = st.look().palette;
                     }
+                    // USDR_SHOTS_SPECTRUM=ridges draws the ridges.
+                    if std::env::var("USDR_SHOTS_SPECTRUM").is_ok_and(|v| v.eq_ignore_ascii_case("ridges")) {
+                        prefs.view.spectrum = crate::spectrum::SpecMode::Ridges;
+                    }
                     let mut app = App::build(&ctx, prefs, Player::silent(), Player::silent(), None);
                     app.chrome.own_titlebar = s.title;
                     let (link, wire) = Link::wire();

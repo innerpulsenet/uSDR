@@ -3,7 +3,7 @@
 //! popovers from the bar.
 
 use crate::app::App;
-use crate::spectrum::Style;
+use crate::spectrum::{SpecMode, Style};
 use crate::theme;
 use crate::widgets::{self, Fader};
 use egui::{RichText, Ui, vec2};
@@ -118,6 +118,24 @@ pub fn toolbar(app: &mut App, ui: &mut Ui) {
 fn style(app: &mut App, ui: &mut Ui) {
     ui.set_min_width(210.0);
     let v = &mut app.prefs.view;
+    ui.label(small("SPECTRUM"));
+    let cur = match v.spectrum {
+        SpecMode::Trace => 0,
+        SpecMode::Ridges => 1,
+    };
+    if let Some(i) = widgets::segmented(ui, "spec-mode", &["TRACE", "RIDGES"], Some(cur), theme::AMBER) {
+        v.spectrum = if i == 1 { SpecMode::Ridges } else { SpecMode::Trace };
+    }
+    if v.spectrum == SpecMode::Ridges {
+        let mut secs = v.ridge_secs as f64;
+        let ticks = [2.0, 6.0, 10.0].iter().map(|&s: &f64| (((s - 2.0) / 8.0) as f32, format!("{s:.0} s"))).collect();
+        let (ch, _) = Fader { value: &mut secs, min: 2.0, max: 10.0, step: 1.0, fine: 0.5, label: "DEPTH", text: |v| format!("{v:.1} s"), color: theme::AMBER, enabled: true, ticks }.show(ui);
+        if ch {
+            v.ridge_secs = secs as f32;
+        }
+    }
+    ui.separator();
+    ui.label(small("STYLE"));
     for st in Style::ALL {
         let look = st.look();
         if widgets::swatch_item(ui, st.label(), look.palette, Some(look.fill), v.style == st).clicked() {

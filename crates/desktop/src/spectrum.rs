@@ -81,6 +81,18 @@ pub enum Style {
     Prism,
 }
 
+/// What the panadapter draws above the waterfall.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum SpecMode {
+    /// The live trace alone.
+    #[default]
+    Trace,
+    /// The last few seconds of frames standing in perspective behind the
+    /// live trace, each filled to its own floor, so a signal's recent past
+    /// reads as a ridge. The waterfall below is unchanged.
+    Ridges,
+}
+
 pub struct Look {
     /// Background top and bottom; `None` takes the theme's surfaces.
     pub bg: Option<(Color32, Color32)>,
@@ -191,6 +203,9 @@ pub struct View {
     pub show_peaks: bool,
     /// The allocation strip along the frequency axis.
     pub band_plan: bool,
+    pub spectrum: SpecMode,
+    /// Seconds of history the ridges reach back.
+    pub ridge_secs: f32,
 }
 
 impl Default for View {
@@ -211,11 +226,40 @@ impl Default for View {
             sql_mark: None,
             show_peaks: true,
             band_plan: true,
+            spectrum: SpecMode::Trace,
+            ridge_secs: 6.0,
         }
     }
 }
 
 const WF_ROWS: usize = 768;
+/// The most ridges drawn, however deep they reach.
+const RIDGES_MAX: usize = 48;
+
+/// Where a ridge `d` deep (0 the live trace, 1 the farthest) stands in the
+/// panadapter: its baseline, the scale of its heights, and the left end and
+/// width of its span. Farther ridges stand higher, narrower and shorter,
+/// and lean a little to the right, as if seen from the left; at 0 it is
+/// the live trace's own place, so that trace is unmoved.
+#[derive(Clone, Copy, Debug)]
+struct RidgeAt {
+    base: f32,
+    scale: f32,
+    x0: f32,
+    w: f32,
+}
+
+fn ridge_at(pan: Rect, d: f32) -> RidgeAt {
+    let s = 1.0 / (1.0 + d * 1.05);
+    let horizon = pan.top() + pan.height() * 0.04;
+    let width = 0.35 + 0.65 * s;
+    RidgeAt {
+        base: horizon + (pan.bottom() - horizon) * s,
+        scale: width * s,
+        x0: pan.left() + pan.width() * (0.5 - 0.5 * width + d * 0.07),
+        w: pan.width() * width,
+    }
+}
 /// The replay history: five minutes of rows at the server's 25 fps, each
 /// kept as 1024 columns of 0.75 dB steps from −160 dBFS (about 8 MB).
 const ARCH_ROWS: usize = 7_500;
@@ -812,6 +856,96 @@ impl Panafall {
     }
 
     /// Black and white points of the waterfall, dB.
+    /// The ridges: rows of the waterfall's history from `view.ridge_secs`
+    /// back to just behind the live trace, drawn far to near so each one's
+    /// fill hides what stands behind it. Heights are on the panadapter's
+    /// scale, shrunk with distance; colors are the waterfall's for each
+    /// level, never darker than `dim_db`'s, so the far noise still reads.
+    fn draw_ridges(&self, painter: &egui::Painter, pan: Rect, view: &View, bg: (Color32, Color32), dim_db: f32, glow: Color32) {
+        let cols = self.wf_cols;
+        if cols < 2 || self.wf_count < 4 || self.wf_q.len() < cols * WF_ROWS {
+            return;
+        }
+        let per_s = 1.0 / self.row_interval.max(0.005);
+        let rows_back = ((view.ridge_secs.clamp(1.0, 20.0) as f64 * per_s).round() as usize)
+            .min(self.wf_count - 1)
+            .min(WF_ROWS - 1);
+        if rows_back < 2 {
+            return;
+        }
+        let count = rows_back.min(RIDGES_MAX);
+        let pts = ((pan.width() / 3.0).round() as usize).clamp(32, cols);
+        let range = (self.max_db - self.min_db).max(1.0);
+        let level = |db: f32| if self.wf_lut.is_empty() { glow } else { self.wf_lut[wf_quantize(db) as usize] };
+        // The color at each height up the scale, in 64 steps.
+        let tint: std::sync::Arc<Vec<Color32>> =
+            std::sync::Arc::new((0..64).map(|k| level((self.min_db + range * k as f32 / 63.0).max(dim_db))).collect());
+        let bg_at = |y: f32| theme::lerp(bg.0, bg.1, ((y - pan.top()) / pan.height()).clamp(0.0, 1.0));
+        // The floor: a faint line at each second back.
+        let mut sec = 1.0f32;
+        while sec < view.ridge_secs {
+            let g = ridge_at(pan, sec / view.ridge_secs);
+            painter.line_segment([pos2(g.x0, g.base), pos2(g.x0 + g.w, g.base)], Stroke::new(1.0, alpha(theme::line_2(), 0.6)));
+            sec += 1.0;
+        }
+        for i in (1..=count).rev() {
+            let age = (i * rows_back + count / 2) / count;
+            let r = (self.wf_head + age) % WF_ROWS;
+            if self.wf_time[r] <= 0.0 {
+                continue;
+            }
+            // The row as it lies on today's span: a retune since moves it.
+            let moved = self.wf_pan - self.wf_row_pan[r];
+            if moved.abs() >= cols as f64 {
+                continue;
+            }
+            let row = &self.wf_q[r * cols..(r + 1) * cols];
+            let d = i as f32 / count as f32;
+            let g = ridge_at(pan, d);
+            let hs = pan.height() * g.scale;
+            let drag = self.drag_offset_px * g.w / pan.width();
+            let mut line = Vec::with_capacity(pts);
+            for p in 0..pts {
+                let a0 = p * cols / pts;
+                let b0 = ((p + 1) * cols / pts).max(a0 + 1);
+                let a = (a0 as f64 + moved).round().max(0.0) as usize;
+                let b = ((b0 as f64 + moved).round().max(0.0) as usize).min(cols);
+                // Each point the strongest column under it, so a one-bin
+                // carrier stands in every ridge.
+                let q = if a < b { row[a..b].iter().copied().max().unwrap_or(0) } else { 0 };
+                let db = if q == 0 { self.min_db } else { q as f32 / WF_Q_PER_DB + WF_Q_FLOOR_DB };
+                let frac = ((db - self.min_db) / range).clamp(0.0, 1.0);
+                line.push(pos2(g.x0 + (p as f32 + 0.5) / pts as f32 * g.w + drag, g.base - frac * hs));
+            }
+            // The fill: the background, so it hides the ridges behind, with
+            // a little of the level's color toward the crest.
+            let mut mesh = Mesh::default();
+            let foot = alpha(bg_at(g.base), 0.94);
+            let warm = 0.2 * (1.0 - 0.7 * d);
+            for (k, p) in line.iter().enumerate() {
+                let lift = ((g.base - p.y) / hs.max(1.0)).clamp(0.0, 1.0);
+                let c = theme::lerp(bg_at(p.y), tint[(lift * 63.0).round() as usize], warm * lift.sqrt());
+                mesh.colored_vertex(*p, alpha(c, 0.94));
+                mesh.colored_vertex(pos2(p.x, g.base), foot);
+                if k > 0 {
+                    let v = mesh.vertices.len() as u32;
+                    mesh.add_triangle(v - 4, v - 3, v - 2);
+                    mesh.add_triangle(v - 3, v - 1, v - 2);
+                }
+            }
+            painter.add(Shape::mesh(mesh));
+            // The line, fading with distance, and quieter along the floor
+            // than on a signal, so the noise is a texture, not a wall.
+            let a = 0.2 + 0.65 * (1.0 - d).powf(1.3);
+            let (tint, base) = (tint.clone(), g.base);
+            let stroke = egui::epaint::PathStroke::new_uv(if d < 0.3 { 1.1 } else { 0.9 }, move |_, pt| {
+                let lift = ((base - pt.y) / hs.max(1.0)).clamp(0.0, 1.0);
+                alpha(tint[(lift * 63.0).round() as usize], a * (0.3 + 0.7 * (lift * 2.5).min(1.0)))
+            });
+            painter.add(Shape::line(line, stroke));
+        }
+    }
+
     fn wf_levels(&mut self, view: &View) -> (f32, f32) {
         let black = if view.wf_auto_black {
             let want = self.floor_est + view.wf_black;
@@ -1308,6 +1442,24 @@ impl Panafall {
                 line.push(pos2(x, self.y_for(*v, pan)));
             }
             let pan_painter = ui.painter_at(pan);
+            if view.spectrum == SpecMode::Ridges {
+                let (black, top) = self.wf_levels(view);
+                self.draw_ridges(&pan_painter, pan, view, (bg_top, bg_bottom), black + 0.42 * (top - black), look.glow);
+                // The live trace hides the ridges behind it, as each ridge
+                // hides the ones behind it.
+                let mut mesh = Mesh::default();
+                let bg_at = |y: f32| alpha(theme::lerp(bg_top, bg_bottom, ((y - pan.top()) / pan.height()).clamp(0.0, 1.0)), 0.94);
+                for (k, p) in line.iter().enumerate() {
+                    mesh.colored_vertex(*p, bg_at(p.y));
+                    mesh.colored_vertex(pos2(p.x, pan.bottom()), bg_at(pan.bottom()));
+                    if k > 0 {
+                        let v = mesh.vertices.len() as u32;
+                        mesh.add_triangle(v - 4, v - 3, v - 2);
+                        mesh.add_triangle(v - 3, v - 1, v - 2);
+                    }
+                }
+                pan_painter.add(Shape::mesh(mesh));
+            }
             if view.fill {
                 // Heat: the fill brightens with level and warms toward the
                 // trace's core, so strong signals glow white-hot at their
@@ -2508,6 +2660,39 @@ mod tests {
         wheel(&mut h, pos2(x_of(r, 146.2e6), r.center().y), 4.0, Modifiers::COMMAND);
         wheel(&mut h, r.center(), -4.0, Modifiers::COMMAND);
         assert_eq!(h.state().acts, vec![Act::Zoom(2.0), Act::Zoom(1.0)]);
+    }
+
+    #[test]
+    fn the_nearest_ridge_is_the_live_trace_and_the_far_ones_recede() {
+        let pan = Rect::from_min_size(pos2(10.0, 20.0), egui::vec2(800.0, 300.0));
+        let near = ridge_at(pan, 0.0);
+        assert!((near.base - pan.bottom()).abs() < 1e-3 && (near.scale - 1.0).abs() < 1e-6);
+        assert!((near.x0 - pan.left()).abs() < 1e-3 && (near.w - pan.width()).abs() < 1e-3);
+        let (mid, far) = (ridge_at(pan, 0.5), ridge_at(pan, 1.0));
+        assert!(far.base < mid.base && mid.base < near.base, "farther ridges stand higher");
+        assert!(far.scale < mid.scale && far.w < mid.w, "and shorter and narrower");
+        assert!(far.x0 >= pan.left() && far.x0 + far.w <= pan.right(), "and stay inside the panadapter");
+    }
+
+    #[test]
+    fn ridges_draw_over_a_history_with_a_retune_and_tuning_is_unchanged() {
+        let mut h = harness();
+        h.state_mut().view.spectrum = SpecMode::Ridges;
+        // A few seconds of history, the span moving partway through.
+        for i in 0..200 {
+            let mut f = h.state().frame.clone();
+            if i >= 120 {
+                f.center_hz += 100e3;
+            }
+            let view = h.state().view.clone();
+            h.state_mut().pan.push(&f, &view, 1.0 + i as f64 * 0.04);
+        }
+        h.run_steps(2);
+        let r = pan_rect(&h);
+        let p = pos2(x_of(r, 145.501e6), r.center().y);
+        h.state_mut().acts.clear();
+        click(&mut h, p, Modifiers::NONE);
+        assert!(matches!(h.state().acts.first(), Some(Act::Tune { .. })), "{:?}", h.state().acts);
     }
 
     #[test]
