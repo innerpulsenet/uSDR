@@ -579,15 +579,21 @@ impl Panafall {
 
         // Auto range: floor just under the 15th percentile, ceiling over the
         // strongest signals, eased so the scale glides instead of jumping.
+        // The percentiles come from a sample of the bins; the ceiling also
+        // clears the strongest bin of the trace as drawn, which a sample of
+        // every 64th bin steps over whenever a strong station is narrower
+        // than the gap between samples, as most broadcast stations are on a
+        // wide span.
         let stride = (n / 64).max(1);
         let mut s: Vec<f32> = f.pwr.iter().step_by(stride).copied().collect();
         s.sort_by(|a, b| a.total_cmp(b));
         let p15 = percentile(&s, 0.15);
         let p98 = percentile(&s, 0.98);
+        let strongest = self.smooth.iter().copied().filter(|v| v.is_finite()).fold(f32::MIN, f32::max);
         self.floor_est += (p15 - self.floor_est) * 0.08;
         if view.auto_range {
             self.target_min = (p15 - 6.0).clamp(-140.0, -30.0);
-            self.target_max = (self.target_min + 30.0).max((p98 + 14.0).max(p15 + 45.0).min(5.0));
+            self.target_max = (self.target_min + 30.0).max((p98 + 14.0).max(p15 + 45.0).max(strongest + 5.0).min(5.0));
         } else {
             self.target_min = view.floor_db;
             self.target_max = view.ceiling_db.max(view.floor_db + 10.0);
@@ -2502,6 +2508,27 @@ mod tests {
         wheel(&mut h, pos2(x_of(r, 146.2e6), r.center().y), 4.0, Modifiers::COMMAND);
         wheel(&mut h, r.center(), -4.0, Modifiers::COMMAND);
         assert_eq!(h.state().acts, vec![Act::Zoom(2.0), Act::Zoom(1.0)]);
+    }
+
+    #[test]
+    fn auto_range_keeps_a_narrow_strong_station_on_the_scale() {
+        // A crowded broadcast band: stations everywhere at -70, one local
+        // at -32 two bins wide, between the bins the percentiles sample.
+        let mut pan = Panafall::default();
+        let view = View::default();
+        let mut pwr = vec![-105.0f32; 4096];
+        for k in (40..4096).step_by(100) {
+            pwr[k] = -70.0;
+            pwr[k + 1] = -72.0;
+        }
+        pwr[2081] = -32.0;
+        pwr[2082] = -33.0;
+        for i in 0..40 {
+            pan.push(&FftFrame { center_hz: 100e6, rate_hz: 8e6, pwr: pwr.clone(), ..Default::default() }, &view, i as f64 * 0.04);
+        }
+        assert!(pan.target_max >= -32.0 + 4.0, "ceiling {} under the station", pan.target_max);
+        // And the floor is still set by the noise, not dragged up.
+        assert!(pan.target_min < -100.0, "floor {}", pan.target_min);
     }
 
     #[test]
