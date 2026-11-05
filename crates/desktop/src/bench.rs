@@ -474,7 +474,15 @@ fn shots() {
                 let ctx = ui.ctx().clone();
                 if s.app.is_none() {
                     let ground = if s.night { crate::theme::Ground::Night } else { crate::theme::Ground::Carbon };
-                    let prefs = Prefs { auto_connect: false, ground, ..Default::default() };
+                    let mut prefs = Prefs { auto_connect: false, ground, ..Default::default() };
+                    // USDR_SHOTS_STYLE=ember (any style's name) draws in that look.
+                    if let Some(st) = std::env::var("USDR_SHOTS_STYLE")
+                        .ok()
+                        .and_then(|n| crate::spectrum::Style::ALL.into_iter().find(|st| st.label().eq_ignore_ascii_case(&n)))
+                    {
+                        prefs.view.style = st;
+                        prefs.view.palette = st.look().palette;
+                    }
                     let mut app = App::build(&ctx, prefs, Player::silent(), Player::silent(), None);
                     app.chrome.own_titlebar = s.title;
                     let (link, wire) = Link::wire();

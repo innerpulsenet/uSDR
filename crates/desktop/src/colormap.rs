@@ -6,14 +6,15 @@ use std::sync::OnceLock;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Colormap {
-    /// Ink through deep red, ember and amber to paper: the house ramp.
+    /// A flame: ink, violet, wine and crimson, ember, orange, amber, gold
+    /// and paper. The house ramp.
     #[default]
     Ember,
     /// The web page's ramp: black, navy, blue, cyan, white.
     Ham,
     /// One amber phosphor, dark to bright.
     Phosphor,
-    /// The brand's cyan sequential chart ramp, from ink.
+    /// Ice and aurora: violet and glacier blue, cyan, mint, ice white.
     Glacier,
     /// Perceptually even, for reading levels rather than spotting signals.
     Viridis,
@@ -24,10 +25,10 @@ pub enum Colormap {
     /// of noise, signals rising through blue and ice into yellow, orange
     /// and a white-hot red.
     Midnight,
-    /// A green CRT phosphor.
+    /// A radar phosphor: teal, green and lime to a yellow-white burn.
     Green,
-    /// Black through plum, magenta and orange to a cream white: the heat
-    /// map, perceptually ordered and the most colorful of the quiet ones.
+    /// Black through indigo, violet, magenta, red and orange to a cream
+    /// white: the heat map, ordered by brightness.
     Inferno,
     /// The whole rainbow, violet to red, over a black floor: every level
     /// its own hue, for picking signals apart by strength at a glance.
@@ -71,18 +72,24 @@ impl Colormap {
 
     fn stops(self) -> &'static [(f32, [u8; 3])] {
         match self {
-            // The floor stays ink for the first third, so a busy span is
-            // not a wall of red; the red, ember and amber are kept for
-            // what stands above it.
+            // A flame from its root. The floor stays ink for its first fifth,
+            // so a busy span is not a wall of color; then a new hue every
+            // few steps through the levels signals sit at, as Prism does:
+            // blue, violet, wine, crimson, ember, orange, amber, gold, and
+            // white only for what pins the scale.
             Colormap::Ember => &[
                 (0.00, [0x0a, 0x09, 0x08]),
-                (0.30, [0x1a, 0x0c, 0x0a]),
-                (0.48, [0x5a, 0x12, 0x10]),
-                (0.62, [0xb0, 0x22, 0x1a]),
-                (0.74, [0xf4, 0x3a, 0x2a]),
-                (0.86, [0xff, 0x9a, 0x3c]),
-                (0.95, [0xff, 0xd5, 0x8a]),
-                (1.00, [0xf4, 0xf1, 0xec]),
+                (0.22, [0x0c, 0x0a, 0x20]),
+                (0.32, [0x18, 0x20, 0x6a]),
+                (0.40, [0x4a, 0x1a, 0x8a]),
+                (0.48, [0x8a, 0x14, 0x58]),
+                (0.56, [0xc8, 0x1e, 0x2a]),
+                (0.64, [0xf4, 0x3a, 0x2a]),
+                (0.72, [0xff, 0x70, 0x20]),
+                (0.80, [0xff, 0xb3, 0x47]),
+                (0.88, [0xff, 0xd8, 0x70]),
+                (0.95, [0xff, 0xf2, 0xc0]),
+                (1.00, [0xff, 0xf8, 0xf0]),
             ],
             Colormap::Ham => &[
                 (0.00, [0x00, 0x00, 0x00]),
@@ -98,14 +105,22 @@ impl Colormap {
                 (0.85, [0xff, 0xb3, 0x47]),
                 (1.00, [0xff, 0xec, 0xc4]),
             ],
+            // Ice and aurora: from ink through violet, indigo and glacier
+            // blue to cerulean and cyan, then aqua and the aurora's green,
+            // and lavender ice white.
             Colormap::Glacier => &[
                 (0.00, [0x0a, 0x09, 0x08]),
-                (0.20, [0x0b, 0x22, 0x2b]),
-                (0.40, [0x10, 0x55, 0x69]),
-                (0.60, [0x26, 0x9a, 0xbb]),
-                (0.80, [0x31, 0xbf, 0xe7]),
-                (0.92, [0x8c, 0xdf, 0xfb]),
-                (1.00, [0xf0, 0xfb, 0xff]),
+                (0.20, [0x0a, 0x10, 0x28]),
+                (0.30, [0x20, 0x1a, 0x68]),
+                (0.38, [0x2a, 0x3a, 0xa8]),
+                (0.46, [0x1a, 0x6a, 0xd0]),
+                (0.54, [0x10, 0xa0, 0xe0]),
+                (0.62, [0x20, 0xd0, 0xe0]),
+                (0.70, [0x40, 0xf0, 0xc0]),
+                (0.78, [0x90, 0xf8, 0xa0]),
+                (0.86, [0xd0, 0xf0, 0xff]),
+                (0.93, [0xf0, 0xe8, 0xff]),
+                (1.00, [0xff, 0xff, 0xff]),
             ],
             Colormap::Classic => &[
                 (0.00, [0x00, 0x00, 0x04]),
@@ -117,28 +132,41 @@ impl Colormap {
                 (0.90, [0xff, 0x70, 0x00]),
                 (1.00, [0xff, 0x24, 0x24]),
             ],
-            // Black for the first third, so the noise reads as a few navy
-            // grains rather than a blue wash; blue only for the weak, and
-            // no green: past ice blue a signal turns straight to yellow.
+            // Near black for the first third, so the noise reads as a few
+            // navy grains rather than a blue wash; then blue, azure, cyan,
+            // mint and lime for the weak to middling, the contest radio's
+            // yellow, orange and red for the strong, and magenta for the
+            // loudest before white.
             Colormap::Midnight => &[
                 (0.00, [0x00, 0x00, 0x00]),
-                (0.34, [0x00, 0x03, 0x10]),
-                (0.46, [0x00, 0x18, 0x5a]),
-                (0.56, [0x0a, 0x3c, 0xc0]),
-                (0.64, [0x2a, 0x7c, 0xf0]),
-                (0.71, [0x8a, 0xc8, 0xff]),
-                (0.78, [0xff, 0xe8, 0x5a]),
-                (0.87, [0xff, 0xa0, 0x20]),
-                (0.94, [0xff, 0x3a, 0x18]),
-                (1.00, [0xff, 0xf0, 0xe6]),
+                (0.30, [0x00, 0x04, 0x0f]),
+                (0.38, [0x00, 0x1a, 0x6a]),
+                (0.45, [0x0a, 0x40, 0xd0]),
+                (0.52, [0x1a, 0x80, 0xf8]),
+                (0.58, [0x18, 0xc0, 0xf0]),
+                (0.64, [0x40, 0xf0, 0xb0]),
+                (0.70, [0xc0, 0xf0, 0x50]),
+                (0.76, [0xff, 0xe0, 0x50]),
+                (0.82, [0xff, 0xa0, 0x20]),
+                (0.88, [0xff, 0x4a, 0x2a]),
+                (0.94, [0xff, 0x4a, 0xb8]),
+                (1.00, [0xff, 0xf0, 0xfa]),
             ],
+            // A radar scope's phosphor as it is driven harder: teal at the
+            // floor, then sea green, green, lime and chartreuse, and the
+            // yellow and warm white of a burned-in trace.
             Colormap::Green => &[
                 (0.00, [0x01, 0x05, 0x02]),
-                (0.25, [0x03, 0x26, 0x10]),
-                (0.50, [0x08, 0x70, 0x2e]),
-                (0.75, [0x28, 0xe0, 0x68]),
-                (0.92, [0xa8, 0xff, 0xc8]),
-                (1.00, [0xf2, 0xff, 0xf6]),
+                (0.22, [0x02, 0x1a, 0x1a]),
+                (0.32, [0x06, 0x3c, 0x48]),
+                (0.40, [0x0a, 0x6a, 0x5a]),
+                (0.48, [0x10, 0x9a, 0x50]),
+                (0.56, [0x30, 0xc8, 0x40]),
+                (0.64, [0x80, 0xe0, 0x30]),
+                (0.72, [0xc8, 0xec, 0x30]),
+                (0.82, [0xf8, 0xf0, 0x60]),
+                (0.92, [0xff, 0xf8, 0xb0]),
+                (1.00, [0xff, 0xff, 0xff]),
             ],
             Colormap::Viridis => &[
                 (0.00, [0x44, 0x01, 0x54]),
@@ -148,20 +176,22 @@ impl Colormap {
                 (1.00, [0xfd, 0xe7, 0x25]),
             ],
             // The floor stays near black for the first fifth, so the noise
-            // is a dark plum grain; signals climb through magenta into
-            // orange and gold, and only the strongest go cream.
+            // is a dark indigo grain; signals climb through violet, purple
+            // and magenta into red, orange and gold, and only the strongest
+            // go cream.
             Colormap::Inferno => &[
                 (0.00, [0x00, 0x00, 0x04]),
-                (0.20, [0x0d, 0x05, 0x23]),
-                (0.34, [0x2f, 0x0a, 0x5a]),
-                (0.46, [0x5c, 0x12, 0x6e]),
-                (0.56, [0x87, 0x21, 0x6b]),
-                (0.66, [0xb2, 0x32, 0x5a]),
-                (0.75, [0xd9, 0x45, 0x3c]),
-                (0.84, [0xf2, 0x6b, 0x1d]),
-                (0.91, [0xfb, 0x9d, 0x0a]),
-                (0.96, [0xf8, 0xd3, 0x3b]),
-                (1.00, [0xfc, 0xff, 0xa4]),
+                (0.20, [0x0a, 0x06, 0x28]),
+                (0.30, [0x2a, 0x0c, 0x78]),
+                (0.38, [0x5a, 0x10, 0xa0]),
+                (0.46, [0x8c, 0x18, 0x98]),
+                (0.54, [0xc0, 0x20, 0x78]),
+                (0.62, [0xe8, 0x38, 0x50]),
+                (0.70, [0xf8, 0x5a, 0x28]),
+                (0.78, [0xfc, 0x8a, 0x10]),
+                (0.86, [0xfc, 0xb8, 0x20]),
+                (0.93, [0xf8, 0xe0, 0x50]),
+                (1.00, [0xfc, 0xff, 0xc0]),
             ],
             // Black, then the spectrum in order: violet for the weakest,
             // blue and cyan for the modest, green and yellow for the

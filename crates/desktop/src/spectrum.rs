@@ -57,20 +57,23 @@ pub struct RxB {
 /// waterfall palette that goes with them.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Style {
-    /// The house look: an amber trace on the ground, ember waterfall.
+    /// The house look: an amber trace on the ground over a flame-colored
+    /// fill, and the ember waterfall, blue through crimson to gold.
     Ember,
     /// The classic panadapter: a white trace over a blue fill on deep navy,
     /// and the blue-to-red waterfall.
     Classic,
     /// A pale ice-blue trace over a night-blue pan, and the midnight
-    /// waterfall: the contest-radio look.
+    /// waterfall, blue and cyan to yellow and red: the contest-radio look.
     Midnight,
-    /// Cyan on the ground, the glacier waterfall.
+    /// Cyan on the ground, and the glacier waterfall: violet and blue
+    /// through cyan to the aurora's green.
     Glacier,
-    /// A green CRT phosphor.
+    /// A radar phosphor: teal and green climbing to lime and yellow.
     Phosphor,
     /// An orange trace with a gold core over a plum pan, and the inferno
-    /// waterfall: the heat-map look.
+    /// waterfall, indigo and magenta to orange and gold: the heat-map look.
+    /// These five color the fill by level, as the waterfall does.
     Inferno,
     /// A violet trace over an indigo pan, and the prism waterfall: the
     /// rainbow look.
@@ -87,6 +90,9 @@ pub struct Look {
     pub peak: Color32,
     pub max_hold: Color32,
     pub palette: Colormap,
+    /// The fill and the glow take the waterfall's color at each level, so
+    /// a signal is the same color above the axis as below it.
+    pub ramp: bool,
 }
 
 impl Style {
@@ -107,7 +113,7 @@ impl Style {
     pub fn look(self) -> Look {
         let rgb = |h: u32| Color32::from_rgb((h >> 16) as u8, (h >> 8) as u8, h as u8);
         match self {
-            Style::Ember => Look { bg: None, fill: theme::AMBER, glow: theme::AMBER, core: rgb(0xffe4bd), peak: theme::CYAN, max_hold: theme::VIOLET, palette: Colormap::Ember },
+            Style::Ember => Look { bg: None, fill: theme::AMBER, glow: theme::AMBER, core: rgb(0xffe4bd), peak: theme::CYAN, max_hold: theme::VIOLET, palette: Colormap::Ember, ramp: true },
             Style::Classic => Look {
                 bg: Some((rgb(0x0d1a2e), rgb(0x02050b))),
                 fill: rgb(0x2f7dff),
@@ -116,6 +122,7 @@ impl Style {
                 peak: rgb(0xffe14a),
                 max_hold: rgb(0xff8ad8),
                 palette: Colormap::Classic,
+                ramp: false,
             },
             Style::Midnight => Look {
                 bg: Some((rgb(0x0b1830), rgb(0x000104))),
@@ -125,8 +132,9 @@ impl Style {
                 peak: rgb(0xffe85a),
                 max_hold: rgb(0xff7a3c),
                 palette: Colormap::Midnight,
+                ramp: true,
             },
-            Style::Glacier => Look { bg: None, fill: theme::CYAN, glow: theme::CYAN, core: rgb(0xe6fbff), peak: theme::AMBER, max_hold: theme::VIOLET, palette: Colormap::Glacier },
+            Style::Glacier => Look { bg: None, fill: theme::CYAN, glow: theme::CYAN, core: rgb(0xe6fbff), peak: theme::AMBER, max_hold: theme::VIOLET, palette: Colormap::Glacier, ramp: true },
             Style::Phosphor => Look {
                 bg: Some((rgb(0x07120a), rgb(0x010402))),
                 fill: rgb(0x39ff8a),
@@ -135,6 +143,7 @@ impl Style {
                 peak: rgb(0xffe14a),
                 max_hold: rgb(0x52e3ff),
                 palette: Colormap::Green,
+                ramp: true,
             },
             Style::Inferno => Look {
                 bg: Some((rgb(0x1c0a26), rgb(0x06020a))),
@@ -144,6 +153,7 @@ impl Style {
                 peak: rgb(0xf2a0ff),
                 max_hold: rgb(0x8a6cff),
                 palette: Colormap::Inferno,
+                ramp: true,
             },
             Style::Prism => Look {
                 bg: Some((rgb(0x0c0b2a), rgb(0x020208))),
@@ -153,6 +163,7 @@ impl Style {
                 peak: rgb(0x7dffb0),
                 max_hold: rgb(0xffb347),
                 palette: Colormap::Prism,
+                ramp: false,
             },
         }
     }
@@ -1295,14 +1306,22 @@ impl Panafall {
                 // Heat: the fill brightens with level and warms toward the
                 // trace's core, so strong signals glow white-hot at their
                 // crest and the floor stays a quiet wash.
+                // A ramp look colors each column instead by the waterfall's
+                // color for its level.
                 let hot = theme::lerp(look.fill, look.core, 0.45);
+                let ramp = look.ramp && !self.wf_lut.is_empty();
                 let mut mesh = Mesh::default();
-                for p in &line {
+                for (p, v) in line.iter().zip(&raw) {
                     let i = mesh.vertices.len() as u32;
                     let h = ((pan.bottom() - p.y) / pan.height()).clamp(0.0, 1.0);
-                    let top_c = theme::lerp(theme::alpha(look.fill, 0.08), theme::alpha(hot, 0.60), h.powf(1.35));
+                    let top_c = if ramp {
+                        let c = self.wf_lut[wf_quantize(*v) as usize];
+                        alpha(c, 0.10 + 0.55 * h.powf(1.1))
+                    } else {
+                        theme::lerp(theme::alpha(look.fill, 0.08), theme::alpha(hot, 0.60), h.powf(1.35))
+                    };
                     mesh.colored_vertex(*p, top_c);
-                    mesh.colored_vertex(pos2(p.x, pan.bottom()), alpha(look.fill, 0.0));
+                    mesh.colored_vertex(pos2(p.x, pan.bottom()), if ramp { Color32::TRANSPARENT } else { alpha(look.fill, 0.0) });
                     if i >= 2 {
                         mesh.add_triangle(i - 2, i - 1, i);
                         mesh.add_triangle(i - 1, i + 1, i);
@@ -1331,11 +1350,25 @@ impl Panafall {
                 // haze on the floor and a halo on a strong carrier's crest.
                 // Drawn under the line, which itself is untouched.
                 let (top, h) = (pan.top(), pan.height().max(1.0));
+                // A ramp look's glow takes the waterfall's color for the
+                // level at its height, in 64 steps up the panadapter.
+                let tint: Option<std::sync::Arc<Vec<Color32>>> = (look.ramp && !self.wf_lut.is_empty()).then(|| {
+                    std::sync::Arc::new(
+                        (0..64)
+                            .map(|k| {
+                                let db = self.min_db + (self.max_db - self.min_db) * k as f32 / 63.0;
+                                self.wf_lut[wf_quantize(db) as usize]
+                            })
+                            .collect(),
+                    )
+                });
                 for (width, lo, hi) in [(16.0, 0.0, 0.16), (7.0, 0.07, 0.30)] {
                     let glow = look.glow;
+                    let tint = tint.clone();
                     let stroke = egui::epaint::PathStroke::new_uv(width, move |_, p| {
                         let lift = (1.0 - (p.y - top) / h).clamp(0.0, 1.0);
-                        alpha(glow, lo + (hi - lo) * lift.powf(1.6))
+                        let c = tint.as_ref().map_or(glow, |t| t[(lift * 63.0).round() as usize]);
+                        alpha(c, lo + (hi - lo) * lift.powf(1.6))
                     });
                     pan_painter.add(Shape::line(line.clone(), stroke));
                 }
