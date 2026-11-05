@@ -22,10 +22,25 @@ the daemon's settings (`/var/lib/usdr/.config/usdr/`). Then check it:
 Server-side means anything under `crates/server`, `engine`, `radio`, `dsp`, or
 `proto`. A `proto` change also means rebuilding the desktop app.
 
+After touching anything that moves the tuner (the LO offset, the mode, rate or
+tune handling in `crates/server/src/sdr.rs`, `crates/radio/src/device.rs`), run
+`tools/tune-roundtrip.py` against the deployed daemon: it hops to 80 m and back
+several ways and checks the broadcast stations still sit on their raster. The
+radio and the driver are what strand a tune, so no unit test sees it. It
+retunes the receiver and leaves it on 100.5 MHz WFM.
+
 ## After changing the desktop app
 `sh crates/desktop/packaging/linux/install.sh` rebuilds it and installs it in
 `~/.local/bin`. Don't restart a desktop window Patrick has open; tell him to
 reopen it.
+
+To look at the running app without touching his: a copy of
+`~/.config/usdr-desktop/desktop.toml` with `muted = true`, then
+`USDR_DESKTOP_PREFS=<copy> USDR_QA_SIZE=1600x980 USDR_QA_FPS=1 usdr-desktop
+172.16.0.216:8073`. `USDR_QA_FPS` prints, every two seconds it paints, the
+frame rate, the audio queue and underruns, what asked for motion, and how often
+the hidden-window loop release ran. A window that opens under a fullscreen
+window gets no frames from the compositor and prints nothing.
 
 ## Running a server from this checkout
 Only one process can hold the RSP. Stop the daemon first
