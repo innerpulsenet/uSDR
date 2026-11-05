@@ -736,7 +736,9 @@ impl Text {
                             kept = out.chars().count();
                             break 'pairs;
                         }
-                        out.push(rds_char(c));
+                        // A column each, so the text keeps its place as
+                        // it fills in: a control code holds its as a space.
+                        out.push(rds_text_char(c).unwrap_or(' '));
                     }
                     kept = out.chars().count();
                 }
@@ -757,7 +759,7 @@ impl Text {
             .iter()
             .take(len)
             .map(|p| match p.conf {
-                Some(v) if self.current(p) => format!("{}{}", rds_char(v[0]), rds_char(v[1])),
+                Some(v) if self.current(p) => format!("{}{}", trace_char(v[0]), trace_char(v[1])),
                 Some(v) => format!("[{}{}]", rds_char(v[0]), rds_char(v[1])),
                 None => "??".into(),
             })
@@ -809,8 +811,31 @@ fn rds_char(c: u8) -> char {
     }
 }
 
+/// A character of running text. The control codes are not characters: a
+/// line feed (0x0A) and an end of headline (0x0B) separate words, so they
+/// read as a space, and the rest (a soft hyphen 0x1F, an encoder's padding)
+/// print nothing. Through [`rds_char`] they came out as U+FFFD, and a text
+/// padded past its last word showed a box after it.
+fn rds_text_char(c: u8) -> Option<char> {
+    match c {
+        0x0A | 0x0B => Some(' '),
+        0x00..=0x1F => None,
+        _ => Some(rds_char(c)),
+    }
+}
+
+/// A character for the trace: a code outside the table by its number, so
+/// the log says what the station sent where the text shows U+FFFD or
+/// nothing.
+fn trace_char(c: u8) -> String {
+    match rds_char(c) {
+        '\u{FFFD}' => format!("\\x{c:02X}"),
+        ch => ch.to_string(),
+    }
+}
+
 fn to_string(bytes: &[u8]) -> String {
-    bytes.iter().map(|&c| rds_char(c)).collect::<String>().trim().to_string()
+    bytes.iter().filter_map(|&c| rds_text_char(c)).collect::<String>().trim().to_string()
 }
 
 /// The North American (RBDS) program type names.
@@ -1627,6 +1652,19 @@ fn mjd_to_date(mjd: u32) -> (i32, u32, u32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn control_codes_in_text_print_nothing() {
+        // A line feed and an end of headline separate words; padding and a
+        // soft hyphen are not characters. None of them is U+FFFD.
+        assert_eq!(to_string(b"NOW PLAYING\x0AON 98Q \x00\x00"), "NOW PLAYING ON 98Q");
+        assert_eq!(to_string(b"HEAD\x0BLINE"), "HEAD LINE");
+        assert_eq!(to_string(b"SOFT\x1FHYPHEN"), "SOFTHYPHEN");
+        // A code outside the table that is a character still says so.
+        assert_eq!(to_string(&[b'A', 0xF0, b'B']), "A\u{FFFD}B");
+        assert_eq!(trace_char(0x00), "\\x00");
+        assert_eq!(trace_char(b'Q'), "Q");
+    }
     use crate::pilot::PILOT_HZ;
 
     #[test]

@@ -580,6 +580,44 @@ impl Drop for Device {
 
 const MAX_BLOCK: usize = 131072;
 
+/// The largest of |I| and |Q| over a block, and how many samples have
+/// either at 0.98 of full scale or over.
+///
+/// Eight samples abreast, each lane with its own running peak and count:
+/// one peak carried sample to sample is a chain every compare waits on,
+/// and at 8 MS/s that scan was a twentieth of this thread.
+fn peak_and_clips(iq: &[Complex32]) -> (f32, u64) {
+    let mut peak = [0.0f32; 8];
+    let mut clips = [0u32; 8];
+    let mut total = 0u64;
+    // Counted in u32 lanes, emptied well before one could overflow.
+    for run in iq.chunks(8 << 20) {
+        let chunks = run.chunks_exact(8);
+        let rest = chunks.remainder();
+        for c in chunks {
+            for l in 0..8 {
+                let (re, im) = (c[l].re.abs(), c[l].im.abs());
+                let m = if re > im { re } else { im };
+                if m > peak[l] {
+                    peak[l] = m;
+                }
+                clips[l] += u32::from(m > 0.98);
+            }
+        }
+        for c in rest {
+            let (re, im) = (c.re.abs(), c.im.abs());
+            let m = if re > im { re } else { im };
+            if m > peak[0] {
+                peak[0] = m;
+            }
+            clips[0] += u32::from(m > 0.98);
+        }
+        total += clips.iter().map(|&c| u64::from(c)).sum::<u64>();
+        clips = [0; 8];
+    }
+    (peak.iter().copied().fold(0.0, f32::max), total)
+}
+
 /// Delivery interval every block is gathered to. The RTL path gets it from
 /// the driver's USB buffer size; anything else is accumulated to it, because
 /// SoapySDRPlay3 hands over one ~1000-sample packet per read and SoapyRemote
@@ -587,6 +625,27 @@ const MAX_BLOCK: usize = 131072;
 /// thousand blocks a second, and a 32-deep subscriber queue sized for 20 ms
 /// blocks would then hold 16 ms — one scheduling hiccup from dropping.
 const BLOCK_SECONDS: f64 = 0.020;
+
+/// Samples per delivery: `BLOCK_SECONDS` of them, so two deliveries are the
+/// 40 ms a display frame spans.
+///
+/// Past `MAX_BLOCK` that no longer fits, and a delivery capped there cut
+/// the frame's time unevenly: at 8 MS/s the cap is 16.4 ms, so spectrum
+/// frames went out after two deliveries and after three by turns, 33 and
+/// 49 ms apart, each averaged over half as much signal again as the last,
+/// with the spectrum's segment budget planned for the wrong one every
+/// time. There a delivery is a whole fraction of the 40 ms instead (a
+/// third at 8 MS/s, a quarter at 10), in whole 4096-sample blocks so the
+/// image corrector's blocks still fall on its edges.
+fn block_for(rate: f64) -> usize {
+    let want = (rate * BLOCK_SECONDS).round() as usize;
+    if want <= MAX_BLOCK {
+        return want.max(1024);
+    }
+    let frame = rate * BLOCK_SECONDS * 2.0;
+    let parts = (frame / MAX_BLOCK as f64).ceil();
+    (((frame / parts / 4096.0).round() as usize).max(1) * 4096).min(MAX_BLOCK)
+}
 
 /// Opens the stream and returns it with the block size to gather per
 /// delivery.
@@ -598,7 +657,7 @@ fn rx_stream(
     log_tx: Option<&SyncSender<String>>,
 ) -> Result<(soapysdr::RxStream<Complex32>, usize)> {
     let mut args = soapysdr::Args::new();
-    let mut block = ((rate * BLOCK_SECONDS).round() as usize).clamp(1024, MAX_BLOCK);
+    let mut block = block_for(rate);
     if remote {
         // Over the wire as the RSP's own 16-bit samples, converted to float
         // here: half the bytes of CF32 and none of the 14-bit ADC's range
@@ -1289,15 +1348,9 @@ fn run(
         }
         if n > 0 {
             usb_fails = 0;
-            for c in &buf[..n] {
-                let m = c.re.abs().max(c.im.abs());
-                if m > 0.98 {
-                    clipped += 1;
-                }
-                if f64::from(m) > peak {
-                    peak = f64::from(m);
-                }
-            }
+            let (block_peak, block_clipped) = peak_and_clips(&buf[..n]);
+            clipped += block_clipped;
+            peak = peak.max(f64::from(block_peak));
             counted += n as u64;
 
             let block = IqBlock {
@@ -1998,6 +2051,42 @@ fn set_bandwidth(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn deliveries_divide_a_display_frame() {
+        // 20 ms wherever it fits.
+        assert_eq!(block_for(2e6), 40_000);
+        assert_eq!(block_for(6e6), 120_000);
+        assert_eq!(block_for(250e3), 5_000);
+        // Past the cap, a whole fraction of 40 ms in 4096-sample blocks.
+        for (rate, parts) in [(8e6, 3.0), (10e6, 4.0)] {
+            let b = block_for(rate);
+            assert!(b <= MAX_BLOCK && b % 4096 == 0, "{b}");
+            let ms = b as f64 * parts / rate * 1e3;
+            assert!((ms - 40.0).abs() < 1.0, "{rate}: {parts} deliveries are {ms} ms");
+        }
+    }
+
+    #[test]
+    fn the_peak_scan_matches_one_sample_at_a_time() {
+        let mut seed = 0x9e37_79b9u32;
+        let mut rnd = || {
+            seed ^= seed << 13;
+            seed ^= seed >> 17;
+            seed ^= seed << 5;
+            seed as f32 / u32::MAX as f32 * 2.2 - 1.1
+        };
+        for n in [0usize, 1, 7, 8, 9, 1000, 4099] {
+            let iq: Vec<Complex32> = (0..n).map(|_| Complex32::new(rnd(), rnd())).collect();
+            let (mut peak, mut clips) = (0.0f32, 0u64);
+            for c in &iq {
+                let m = c.re.abs().max(c.im.abs());
+                peak = peak.max(m);
+                clips += u64::from(m > 0.98);
+            }
+            assert_eq!(peak_and_clips(&iq), (peak, clips), "{n} samples");
+        }
+    }
 
     /// SoapySDRPlay3 skips a write whose `(uint32_t)` Hz matches what it
     /// stored; every re-assert must differ from the write before it, or it

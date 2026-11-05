@@ -2024,9 +2024,19 @@ enum LoMove {
 }
 
 fn lo_move(rate_hz: f64, on: bool, from: SdrMode, to: SdrMode) -> LoMove {
-    if lo_active(rate_hz, on, from) != lo_active(rate_hz, on, to) {
+    lo_move_between((rate_hz, from), (rate_hz, to), on)
+}
+
+/// What going from one span and mode to another does to the LO. The span
+/// counts as much as the mode: under 1 MS/s the zero-IF offset is capped at
+/// 15% of the span (and WFM's no longer fits at all), and the other plan's
+/// is a fraction of the span at every rate. A span change that left the
+/// tuner where the old offset had put it had the same fault a mode change
+/// used to: the channel mixed for one distance, the tuner at another.
+fn lo_move_between(from: (f64, SdrMode), to: (f64, SdrMode), on: bool) -> LoMove {
+    if lo_active(from.0, on, from.1) != lo_active(to.0, on, to.1) {
         LoMove::Reopen
-    } else if lo_offset_for(rate_hz, on, from) != lo_offset_for(rate_hz, on, to) {
+    } else if lo_offset_for(from.0, on, from.1) != lo_offset_for(to.0, on, to.1) {
         LoMove::Retune
     } else {
         LoMove::Stay
@@ -4072,6 +4082,13 @@ fn run_sdr(
                 }
                 SdrCmd::Rate(r) => {
                     if (current_rate - r).abs() >= 1.0 {
+                        // The LO offset depends on the span too: the tuner
+                        // follows it, as it does on a mode change.
+                        match lo_move_between((current_rate, current_mode), (r, current_mode), lo_offset) {
+                            LoMove::Reopen => force_reopen_now = true,
+                            LoMove::Retune => pending_tune = Some(current_freq),
+                            LoMove::Stay => {}
+                        }
                         current_rate = r;
                         if let Some(ref dev) = dev_opt {
                             let _ = dev.cmd.send(Cmd::Rate(r));
@@ -4896,6 +4913,11 @@ fn run_sdr(
             classifier.reset();
             demod.reset_timeline(inspect_chain.fs_out());
             scope_fm.reset();
+            // Receiver B listens to the same span: its filters hold the
+            // run that just ended too.
+            if let Some(sub) = sub_rx.as_mut() {
+                sub.invalidate();
+            }
             let fs_now = inspect_chain.fs_out();
             mon_gate = NoiseGate::new(fs_now);
             mon_leveler = Leveler::new(fs_now);
@@ -4938,11 +4960,28 @@ fn run_sdr(
             .expect("SDR capture")
             .append_span(current_rate, &block, discontinuous);
 
-        for c in block.iter() {
-            let mag = c.re.abs().max(c.im.abs());
-            if mag > peak_iq {
-                peak_iq = mag;
+        // Eight lanes, each with its own running peak: one peak carried
+        // from sample to sample is a chain every compare waits on.
+        {
+            let mut lanes = [peak_iq; 8];
+            let chunks = block.chunks_exact(8);
+            let rest = chunks.remainder();
+            for c in chunks {
+                for l in 0..8 {
+                    let (re, im) = (c[l].re.abs(), c[l].im.abs());
+                    let m = if re > im { re } else { im };
+                    if m > lanes[l] {
+                        lanes[l] = m;
+                    }
+                }
             }
+            for c in rest {
+                let m = c.re.abs().max(c.im.abs());
+                if m > lanes[0] {
+                    lanes[0] = m;
+                }
+            }
+            peak_iq = lanes.iter().copied().fold(peak_iq, f32::max);
         }
 
         // DC offset, LO leakage and the IQ image are removed here, before the
@@ -4956,7 +4995,13 @@ fn run_sdr(
         // pending window stays current; FFT only when a frame is due.
         let frame_quantum = (current_rate / f64::from(DEFAULT_FPS)).round().max(1.0) as u64;
         frame_pending_samples += block.len() as u64;
-        let frame_due = frame_pending_samples >= frame_quantum;
+        // Due at the delivery that ends nearest the frame's time. Waiting
+        // for the quantum to be passed made a delivery that falls a few
+        // samples short of dividing it (a USB buffer's rounding, whole
+        // 4096 blocks at 8 MS/s) run one delivery long, then catch up
+        // with a short frame.
+        let block_samples = block.len() as u64;
+        let frame_due = frame_pending_samples + block_samples / 2 >= frame_quantum;
         // The window this block's frame will show. Decided here, before the
         // samples are mixed, so the zoom path and the frame that reads it
         // agree on where the window is.
@@ -6597,14 +6642,14 @@ fn run_sdr(
         }
 
         if frame_due && !pwr.is_empty() {
-            // Carry the remainder so the long-run rate is exact, but never
+            // Carry the remainder so the long-run rate holds, but never
             // owe more than one frame: after a stall (reopen, rate change)
-            // the display resumes rather than bursting to catch up.
-            frame_pending_samples = if frame_pending_samples >= 2 * frame_quantum {
-                0
-            } else {
-                frame_pending_samples - frame_quantum
-            };
+            // the display resumes rather than bursting to catch up. A
+            // remainder that is a sliver of a delivery is dropped: carried,
+            // it added up to a frame one delivery short every few seconds,
+            // and an even cadence is worth more than the last 0.3% of rate.
+            let rem = frame_pending_samples.saturating_sub(frame_quantum);
+            frame_pending_samples = if frame_pending_samples >= 2 * frame_quantum || rem < block_samples / 8 { 0 } else { rem };
             if let Ok(mut s) = status.lock() {
                 s.inspect_rate_hz = inspect_chain.fs_out();
                 s.fft_size = zoom.as_ref().map_or(fft_size, |z| z.plan.fft_size);
@@ -7437,6 +7482,12 @@ mod tests {
         }
         assert_eq!(display_rate_for(5e6, true, SdrMode::Nfm), 4.8e6);
         assert_eq!(display_rate_for(5e6, true, SdrMode::Wfm), 4.7e6);
+        // A span change moves it too once the 15% cap binds: 100 kHz at
+        // 2 MS/s is 75 kHz at 500 kS/s, and WFM's 150 kHz no longer fits.
+        assert_eq!(lo_move_between((2e6, SdrMode::Nfm), (8e6, SdrMode::Nfm), true), LoMove::Stay);
+        assert_eq!(lo_move_between((2e6, SdrMode::Nfm), (500e3, SdrMode::Nfm), true), LoMove::Retune);
+        assert_eq!(lo_move_between((2e6, SdrMode::Wfm), (500e3, SdrMode::Wfm), true), LoMove::Reopen);
+        assert_eq!(lo_move_between((2e6, SdrMode::Nfm), (500e3, SdrMode::Nfm), false), LoMove::Stay);
         // NFM parks the LO 100 kHz out and WFM 150 kHz: a switch between
         // them moves the tuner, or the channel is mixed 50 kHz off.
         assert_eq!(lo_move(8e6, true, SdrMode::Nfm, SdrMode::Wfm), LoMove::Retune);
@@ -7447,6 +7498,7 @@ mod tests {
         LO_PLAN_ZERO_IF.store(false, Ordering::Relaxed);
         // The RTL plan's offset is a fraction of the span, whatever the mode.
         assert_eq!(lo_move(2.4e6, true, SdrMode::Nfm, SdrMode::Usb), LoMove::Stay);
+        assert_eq!(lo_move_between((2.4e6, SdrMode::Nfm), (1.2e6, SdrMode::Nfm), true), LoMove::Retune);
         // The RTL plan is unchanged: fs/8 offset, 20% of the span shown.
         assert_eq!(lo_offset_for(2.4e6, true, SdrMode::Nfm), 300e3);
         assert!((display_rate_for(2.4e6, true, SdrMode::Nfm) - 480e3).abs() < 1.0);
