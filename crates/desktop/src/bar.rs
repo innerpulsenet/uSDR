@@ -819,7 +819,8 @@ fn meter(app: &mut App, ui: &mut Ui, min_w: f32, max_w: f32) {
             if s.mode == Mode::Wfm
                 && let Some(st) = app.player.reading().stereo
             {
-                stereo_badge(ui, &st, rm);
+                let mp = s.stereo.as_ref().and_then(|x| x.multipath_pct.map(|p| (p, x.equalizer)));
+                stereo_badge(ui, &st, mp, rm);
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.label(small(format!("SNR {snr}")));
@@ -855,7 +856,7 @@ fn meter(app: &mut App, ui: &mut Ui, min_w: f32, max_w: f32) {
 /// rings that sit on top of each other for mono and part as the blend opens
 /// to full separation, lit while a pilot is locked. Shown only when the
 /// server measured it.
-fn stereo_badge(ui: &mut Ui, st: &usdr_proto::StereoReading, reduce_motion: bool) {
+fn stereo_badge(ui: &mut Ui, st: &usdr_proto::StereoReading, mp: Option<(f32, bool)>, reduce_motion: bool) {
     let id = ui.id().with("stereo-badge");
     // The rings' parting follows the blend eased on the motion clock, with
     // a dead zone: the reading wanders a percent or two frame to frame,
@@ -902,9 +903,16 @@ fn stereo_badge(ui: &mut Ui, st: &usdr_proto::StereoReading, reduce_motion: bool
         p.circle_stroke(egui::pos2(cx + dx, cy), r, Stroke::new(1.3, c));
     }
     p.galley(egui::pos2(rect.left() + 20.0, cy - g.size().y / 2.0), g, col);
+    // The multipath reading rides in the status, not the audio frames.
+    let mp_line = match mp {
+        Some((p, true)) => format!("\nMultipath ripples the signal {p:.0}%; the equalizer is undoing it"),
+        Some((p, false)) if p >= 3.0 => format!("\nMultipath ripples the signal {p:.0}%"),
+        Some((p, false)) => format!("\nMultipath {p:.1}%: a clean channel"),
+        None => String::new(),
+    };
     resp.on_hover_text(if st.pilot {
         format!(
-            "19 kHz pilot locked{}\nSeparation in use: {:.0}%, blended toward mono as the S/N falls\nStereo S/N {}, from the noise beside the pilot",
+            "19 kHz pilot locked{}\nSeparation in use: {:.0}%, blended toward mono as the S/N falls\nStereo S/N {}{mp_line}",
             st.pilot_dev_hz.map(|h| format!(" at {:.2} kHz deviation", h / 1000.0)).unwrap_or_default(),
             st.blend * 100.0,
             st.snr_db.map_or("not measured".into(), |d| format!("{d:.0} dB")),

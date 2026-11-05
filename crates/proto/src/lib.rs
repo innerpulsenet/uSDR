@@ -605,6 +605,10 @@ pub struct Stereo {
     pub blend: f32,
     pub snr_db: Option<f32>,
     pub pilot_dev_hz: Option<f32>,
+    /// The channel's multipath, its envelope's spread in percent, and
+    /// whether the equalizer is undoing it.
+    pub multipath_pct: Option<f32>,
+    pub equalizer: bool,
 }
 
 /// What a broadcast FM station is sending over RDS. Every text here passed

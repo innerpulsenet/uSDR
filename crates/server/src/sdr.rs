@@ -2304,6 +2304,9 @@ enum Demod {
     Nfm,
     Wfm {
         fm: NbfmDemod,
+        /// The multipath equalizer ahead of the discriminator, and its output.
+        eq: Option<Box<scannerd_engine::cma::Cma>>,
+        eq_iq: Vec<num_complex::Complex32>,
         disc: Vec<f32>,
         /// De-emphasis, the 15 kHz audio band and decimation to ~51 kHz for
         /// the mono sum, and the stereo difference from the 38 kHz
@@ -2481,6 +2484,12 @@ impl Demod {
                     fm: NbfmDemod::with_deviation(fs_out, WFM_DEVIATION_HZ),
                     disc: Vec::new(),
                     audio: Box::new(WfmAudio::new(fs_out, decim, WFM_DEVIATION_HZ, WFM_DEEMPHASIS_TAU)),
+                    // The equalizer's taps were laid out for 3.9 µs at 256
+                    // kHz; the chain lands within a few percent of that at
+                    // every span, which only stretches the taps a little.
+                    // USDR_WFM_NO_EQ=1 leaves it out, for comparing.
+                    eq: ((200_000.0..=320_000.0).contains(&fs_out) && std::env::var_os("USDR_WFM_NO_EQ").is_none()).then(|| Box::new(scannerd_engine::cma::Cma::new())),
+                    eq_iq: Vec::new(),
                     stereo: Vec::new(),
                     pilot_seen: false,
                     rds: Box::new({
@@ -2920,6 +2929,16 @@ fn packet_event(packet: &scannerd_engine::aprs::AprsPacket) -> DecodeEvent {
         valid: true,
         fields,
     }
+}
+
+/// The stereo decoder's reading with the multipath equalizer's beside it.
+fn with_equalizer(mut st: StereoStatus, eq: Option<&scannerd_engine::cma::Cma>) -> StereoStatus {
+    if let Some(eq) = eq {
+        let (r_in, _) = eq.ripple_now();
+        st.multipath_pct = Some((r_in * 1000.0).round() / 10.0);
+        st.equalizer = eq.engaged();
+    }
+    st
 }
 
 /// An FT8/FT4 decode as the log carries it: the message as the operator
@@ -6332,11 +6351,47 @@ fn run_sdr(
                     rds,
                     rds_seen,
                     rds_pushed,
+                    eq,
+                    eq_iq,
                 } = &mut demod
                 {
+                    // Multipath undone first, where the equalizer finds any:
+                    // reflections ripple FM's flat envelope with the program,
+                    // and the discriminator turns that into distortion worst
+                    // in the stereo difference.
+                    let iq: &[num_complex::Complex32] = match eq {
+                        Some(eq) => {
+                            eq_iq.clear();
+                            eq_iq.extend_from_slice(&inspect_iq);
+                            eq.process(eq_iq);
+                            eq_iq
+                        }
+                        None => &inspect_iq,
+                    };
                     // Instantaneous frequency in Hz, then the broadcast audio:
                     // mono always, stereo too while a pilot is locked.
-                    fm.discriminator_hz(&inspect_iq, disc);
+                    fm.discriminator_hz(iq, disc);
+                    // USDR_STEREO_TRACE=1: the channel's envelope ripple
+                    // beside the stereo decoder's readings. FM's envelope is
+                    // flat; noise ripples it a little, multipath a lot.
+                    static TRACE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+                    if *TRACE.get_or_init(|| std::env::var_os("USDR_STEREO_TRACE").is_some()) {
+                        static ENV: std::sync::Mutex<(f64, f64, usize)> = std::sync::Mutex::new((0.0, 0.0, 0));
+                        let mut e = ENV.lock().unwrap();
+                        for z in &inspect_iq {
+                            let a = z.norm() as f64;
+                            e.0 += a;
+                            e.1 += a * a;
+                            e.2 += 1;
+                        }
+                        if e.2 >= 512_000 {
+                            let n = e.2 as f64;
+                            let mean = e.0 / n;
+                            let sd = (e.1 / n - mean * mean).max(0.0).sqrt();
+                            eprintln!("ENVELOPE ripple {:.2}% of the mean over {:.1} s", 100.0 * sd / mean.max(1e-12), n / fs_chain);
+                            *e = (0.0, 0.0, 0);
+                        }
+                    }
                     audio.process(disc, &mut audio_buf, stereo);
                     let st = audio.status();
                     if st.pilot != *pilot_seen {
@@ -6742,12 +6797,12 @@ fn run_sdr(
                     None
                 };
                 match &demod {
-                    Demod::Wfm { rds, audio, .. } => {
+                    Demod::Wfm { rds, audio, eq, .. } => {
                         s.rds = rds.station().map(|mut st| {
                             st.updated_ms = s.rds.as_ref().map_or(0, |o| o.updated_ms);
                             st
                         });
-                        s.stereo = Some(audio.status());
+                        s.stereo = Some(with_equalizer(audio.status(), eq.as_deref()));
                     }
                     // Out of WFM: the station's RDS and stereo go, and
                     // clients hear so.
@@ -7182,7 +7237,7 @@ mod tests {
             other => panic!("{other:?}"),
         };
         let lr = vec![i16::MIN, i16::MAX, -7, 7, 28_000, -28_000];
-        let status = StereoStatus { pilot: true, blend: 1.0, snr_db: Some(52.4), pilot_dev_hz: Some(7_502.0) };
+        let status = StereoStatus { pilot: true, blend: 1.0, snr_db: Some(52.4), pilot_dev_hz: Some(7_502.0), ..Default::default() };
         let f = AudioFrame {
             rx: 0,
             rate_hz: 51_200,

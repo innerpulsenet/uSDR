@@ -9,6 +9,7 @@ pub mod aprs;
 pub mod biquad;
 pub mod channel;
 pub mod classifier;
+pub mod cma;
 pub mod cqpsk;
 pub mod crypto;
 pub mod ctcss;

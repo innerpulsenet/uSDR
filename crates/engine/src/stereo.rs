@@ -90,6 +90,13 @@ const PILOT_MAX_HZ: f64 = 12_000.0;
 /// readings are averaged.
 const PROBE_HZ: f64 = 400.0;
 const PROBE_SMOOTH_S: f64 = 0.05;
+/// How long the subcarrier's skew is averaged over. A station's subcarrier
+/// sits at a fixed phase to its pilot, so this can be slow; slower than the
+/// noise reading, so a loud passage does not swing it.
+const SKEW_SMOOTH_S: f64 = 1.0;
+/// The most skew believed: a few degrees is common, more is a measurement
+/// thrown by a passage with no stereo in it.
+const SKEW_MAX: f64 = 0.2;
 /// The blend is reconsidered this often (samples at the MPX rate).
 const BLEND_EVERY: usize = 64;
 
@@ -107,6 +114,13 @@ pub struct StereoStatus {
     /// The pilot's injection, as deviation in Hz; only while locked.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pilot_dev_hz: Option<f32>,
+    /// The channel's multipath, as its envelope's spread in percent of the
+    /// mean, and whether the equalizer is undoing it; filled by the
+    /// receiver, which runs the equalizer ahead of this decoder.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub multipath_pct: Option<f32>,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub equalizer: bool,
 }
 
 /// The WFM receiver's audio chain, from discriminator hertz to mono and
@@ -128,6 +142,16 @@ pub struct WfmAudio {
     deemph_q: OnePole,
     lp_q: Cascade,
     sq_pow: f64,
+    /// The station's subcarrier skew against the pilot-derived reference,
+    /// as the regression of the quadrature on the in-phase difference: the
+    /// cross power and the difference's power, slowly averaged, and their
+    /// ratio (tan of the skew).
+    cross: f64,
+    s_pow: f64,
+    skew: f64,
+    skew_k: f64,
+    /// Each reading, for `USDR_STEREO_TRACE`.
+    trace: Option<(usize, f64)>,
     decim: usize,
     phase: usize,
     pilot: PilotPll,
@@ -170,6 +194,11 @@ impl WfmAudio {
             deemph_q: OnePole::new(tau_s * fs as f32),
             lp_q: wfm_audio_filter(fs),
             sq_pow: 0.0,
+            cross: 0.0,
+            s_pow: 0.0,
+            skew: 0.0,
+            skew_k: 1.0 / (SKEW_SMOOTH_S * fs),
+            trace: std::env::var_os("USDR_STEREO_TRACE").map(|_| (0, 0.0)),
             decim: decim.max(1),
             phase: 0,
             pilot: PilotPll::new(fs),
@@ -220,6 +249,8 @@ impl WfmAudio {
             self.lp_s.reset();
             self.deemph_q.reset();
             self.lp_q.reset();
+            self.cross = 0.0;
+            self.s_pow = 0.0;
             self.blend = 0.0;
             self.status.blend = 0.0;
         }
@@ -258,9 +289,25 @@ impl WfmAudio {
             let sd = if active {
                 let quad = (c * c - s * s) as f32;
                 let sq = self.lp_q.process(self.deemph_q.process(2.0 * x * quad)) as f64;
-                self.sq_pow += (sq * sq - self.sq_pow) * self.smooth_k;
                 let sub = -2.0 * s * c;
-                self.lp_s.process(self.deemph_s.process(2.0 * x * sub as f32))
+                let si = self.lp_s.process(self.deemph_s.process(2.0 * x * sub as f32)) as f64;
+                // A subcarrier a degree or two off the pilot puts sin(skew)
+                // of the program into the quadrature, which then reads as
+                // noise and holds a strong station short of full stereo.
+                // The leak is coherent with S, so its share is measured and
+                // taken out: what is left is the noise and the multipath.
+                self.cross += (sq * si - self.cross) * self.skew_k;
+                self.s_pow += (si * si - self.s_pow) * self.skew_k;
+                // Only while there is stereo to measure it on: in a mono
+                // passage both are noise and the ratio is no skew at all.
+                if self.s_pow > 1e-9 && self.s_pow > 4.0 * self.sq_pow {
+                    self.skew = (self.cross / self.s_pow).clamp(-SKEW_MAX, SKEW_MAX);
+                }
+                let resid = sq - self.skew * si;
+                self.sq_pow += (resid * resid - self.sq_pow) * self.smooth_k;
+                // And S on the station's own phase: the two readings rotated
+                // by the skew, so none of S is left in the quadrature.
+                ((si + self.skew * sq) / (1.0 + self.skew * self.skew).sqrt()) as f32
             } else {
                 0.0
             };
@@ -300,11 +347,26 @@ impl WfmAudio {
         } else {
             self.blend = (self.blend + self.recover_step).min(target);
         }
+        if let Some((n, _)) = &mut self.trace {
+            *n += BLEND_EVERY;
+            if *n as f64 >= 2.0 * self.fs {
+                *n = 0;
+                let db = |noise: f64| 10.0 * (0.5 / noise.max(1e-15)).log10();
+                eprintln!(
+                    "STEREO pilot {pilot} dev {dev_hz:.0} Hz · S/N beside the pilot {:.1} dB · in the quadrature {:.1} dB · skew {:.2}° · blend {:.2}",
+                    db(self.pilot_side_noise()),
+                    db(self.sq_pow * (1.0 + self.mono_share)),
+                    self.skew.atan().to_degrees(),
+                    self.blend
+                );
+            }
+        }
         self.status = StereoStatus {
             pilot,
             blend: self.blend as f32,
             snr_db: snr_db.map(|d| d as f32),
             pilot_dev_hz: pilot.then_some(dev_hz as f32),
+            ..Default::default()
         };
     }
 
@@ -578,6 +640,44 @@ mod tests {
         let (l, r) = (channel(&stereo, 0, 1.0), channel(&stereo, 1, 1.0));
         let sep = 20.0 * (tone(&l, 700.0) / tone(&r, 700.0)).log10();
         assert!(sep >= 30.0, "separation {sep:.1} dB");
+    }
+
+    /// A processed commercial station: loud wide stereo on a subcarrier 2°
+    /// off the pilot, and the composite clipper's products spread around
+    /// 19 kHz. Both readings used to see program, not noise, and held the
+    /// blend short of full stereo on a station with 55 dB of real S/N.
+    #[test]
+    fn a_processed_station_with_a_skewed_subcarrier_gets_full_stereo() {
+        let n = (5.0 * FS) as usize;
+        let skew = 2f64.to_radians();
+        let mut rng = Rng(77);
+        // Clipper products: tones scattered ±300 Hz about the pilot, each
+        // with its own phase, none on it.
+        let spurs: Vec<(f64, f64)> = (0..24).map(|i| (PILOT_HZ + (i as f64 - 11.5) * 25.0, rng.next() * TAU)).collect();
+        let x: Vec<f64> = (0..n)
+            .map(|k| {
+                let t = k as f64 / FS;
+                let w = TAU * PILOT_HZ * t;
+                let (l, r) = (0.7 * (TAU * 700.0 * t).sin(), 0.7 * (TAU * 2_300.0 * t).sin());
+                let clip: f64 = spurs.iter().map(|(f, ph)| (TAU * f * t + ph).sin()).sum::<f64>() * 0.0004;
+                0.9 * ((l + r) / 2.0 + (l - r) / 2.0 * (2.0 * w + skew).sin()) + 0.1 * w.sin() + clip
+            })
+            .collect();
+        let mut dec = WfmAudio::new(FS, DECIM, DEV, TAU_S);
+        let (_, stereo, st) = run(&mut dec, &on_air(&x, sigma_for(55.0), 12));
+        println!("{st:?} skew {:.2}° beside the pilot {:.1} dB", dec.skew.atan().to_degrees(), 10.0 * (0.5 / dec.pilot_side_noise()).log10());
+        // The skew measured is the station's plus the pilot loop's own small
+        // error, which is what the decoder has to undo.
+        assert!((1.5..3.5).contains(&dec.skew.atan().to_degrees().abs()), "skew {:.2}°", dec.skew.atan().to_degrees());
+        assert!(10.0 * (0.5 / dec.pilot_side_noise()).log10() < 44.0, "the clipper products should spoil the probe in this test");
+        assert_eq!(st.blend, 1.0, "{st:?}");
+        // The clipper's products that reach the stereo band count; the
+        // program that leaked into the quadrature no longer does.
+        assert!(st.snr_db.unwrap() > BLEND_FULL_DB, "{st:?}");
+        let (l, r) = (channel(&stereo, 0, 1.0), channel(&stereo, 1, 1.0));
+        let sep = 20.0 * (tone(&l, 700.0) / tone(&r, 700.0)).log10();
+        println!("separation {sep:.1} dB");
+        assert!(sep >= 40.0, "separation {sep:.1} dB");
     }
 
     #[test]
