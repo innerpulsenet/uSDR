@@ -10,7 +10,9 @@ use usdr_proto::Mode;
 /// The channel raster a mode's signals are allocated on.
 pub fn mode_raster_hz(mode: Mode, near_hz: f64) -> f64 {
     match mode {
-        Mode::Usb | Mode::Lsb | Mode::Ft8 | Mode::Ft4 | Mode::Wefax | Mode::Rtty | Mode::Navtex | Mode::Psk31 => 100.0,
+        m if m.is_sideband() => 100.0,
+        // The time stations sit on whole megahertz, broadcasters on 5 kHz.
+        Mode::Wwv | Mode::Drm => 1_000.0,
         Mode::Wfm => 100_000.0,
         Mode::Packet | Mode::Flex => 2_500.0,
         Mode::Pager => 25_000.0,

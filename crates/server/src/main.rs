@@ -8,6 +8,7 @@
 //! and find out what it is.
 
 mod devices;
+mod drm_audio;
 mod hfdata;
 mod keys;
 mod p25_keys;

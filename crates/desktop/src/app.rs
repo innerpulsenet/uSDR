@@ -764,7 +764,8 @@ impl App {
             }
             NetEvent::Station(st, rep) => self.station = Some((st, rep)),
             NetEvent::FaxLine(l) => {
-                let hz = self.status.freq_hz;
+                // The receiver's dial, not the span's center.
+                let hz = self.status.inspect_hz;
                 self.fax.line(l, hz);
             }
             NetEvent::Presence(p) => {
@@ -917,7 +918,7 @@ impl App {
                 let id = header("x-usdr-fax-image").and_then(|v| v.parse().ok());
                 let width = header("x-usdr-fax-width").and_then(|v| v.parse().ok()).unwrap_or(0);
                 if let Some(id) = id {
-                    let hz = self.status.freq_hz;
+                    let hz = self.status.inspect_hz;
                     self.fax.backfill(id, width, hz, &bytes);
                 }
             }
@@ -1676,7 +1677,12 @@ impl App {
                 Some("starting") => "WEFAX · start tone".into(),
                 _ => "WEFAX · waiting".into(),
             },
-            _ => return None,
+            // The rest say what the decoder found the signal to be.
+            m => match (r.locked, r.variant.as_deref()) {
+                (true, Some(v)) => format!("{} · {v}", m.label()),
+                (true, None) => format!("{} · copying", m.label()),
+                (false, _) => format!("{} · listening", m.label()),
+            },
         })
     }
 
@@ -1798,6 +1804,13 @@ pub fn mode_idle_text(m: Mode) -> &'static str {
         Mode::Rtty => "RTTY · finding the tone pair",
         Mode::Navtex => "NAVTEX · SITOR-B, 100 baud",
         Mode::Psk31 => "PSK31 · every signal in the passband",
+        Mode::Sitor => "SITOR · ARQ or FEC, 100 baud",
+        Mode::Dsc => "DSC · listening for calls",
+        Mode::Hfdl => "HFDL · listening for bursts",
+        Mode::Pactor => "PACTOR-I · listening",
+        Mode::Stanag => "STANAG · looking for a serial tone",
+        Mode::Wwv => "WWV · reading the time code",
+        Mode::Drm => "DRM · finding the multiplex",
         Mode::Nfm => "listening · classifier on",
     }
 }
@@ -2700,7 +2713,7 @@ mod tests {
         h.run_steps(3);
         let (a, b) = (h.get_by_label("K1ABC W9XYZ -11").rect(), h.get_by_label("CQ K1ABC FN42").rect());
         assert!(b.top() >= a.bottom() - 1.0, "{a:?} {b:?}");
-        assert!(h.query_by_label("2 decodes").is_some());
+        assert!(h.query_by_label("2 heard").is_some());
         // Another family hides them.
         h.state_mut().app.decode_family = Some(crate::decoders::Family::Paging);
         h.run_steps(2);
@@ -2874,6 +2887,133 @@ mod tests {
                     h.run_steps(4);
                     h.render().expect("render").save(dir.join("shape-menu.png")).expect("save");
                 }
+            }
+        }
+    }
+
+    /// A station list lights the frequency the receiver is on, not the one
+    /// the span happens to be centered on: zoomed out, the receiver moves
+    /// inside the span and the tuner stays put.
+    #[test]
+    fn the_station_list_follows_the_receiver_not_the_span() {
+        let mut h = harness();
+        h.run_steps(2);
+        let app = &mut h.state_mut().app;
+        app.status.mode = Mode::Wefax;
+        app.status.freq_hz = 9_108_100.0;
+        app.status.inspect_hz = 6_338_600.0;
+        let (st, khz) = crate::stations::WEFAX.tuned(app).expect("on a station");
+        assert_eq!((st.call, khz), ("NMF", 6_340.5));
+        app.status.inspect_hz = 6_338_000.0;
+        assert!(crate::stations::WEFAX.tuned(app).is_none());
+    }
+
+    /// The HF station directories and data views, rendered for a look by
+    /// eye. `USDR_QA_DIR=<dir>`.
+    #[test]
+    #[ignore]
+    fn qa_renders_the_hf_directory() {
+        let Some(dir) = std::env::var_os("USDR_QA_DIR").map(std::path::PathBuf::from) else { return };
+        let mut h = harness_wh(1600.0, 980.0);
+        {
+            let app = &mut h.state_mut().app;
+            app.status.mode = Mode::Wefax;
+            app.status.freq_hz = 9_108_100.0;
+            app.status.inspect_hz = 6_338_600.0;
+            app.status.digital_cfg = Some(proto::DigitalCfg::default());
+            app.fax.open = true;
+        }
+        h.run_steps(4);
+        h.get_by_label("STATIONS").click();
+        h.run_steps(4);
+        h.render().expect("render").save(dir.join("fax-stations.png")).expect("save");
+        h.state_mut().app.fax.open = false;
+        h.get_by_label("STATIONS").click();
+        h.run_steps(2);
+        h.state_mut().app.fax.open = true;
+        h.run_steps(3);
+        h.get_by_label("SCHEDULE").click();
+        h.run_steps(4);
+        h.render().expect("render").save(dir.join("fax-schedule.png")).expect("save");
+        h.get_by_label("SCHEDULE").click();
+        h.run_steps(2);
+        h.state_mut().app.fax.open = false;
+
+        // Each mode's own view, with its station list open.
+        for (mode, hz) in [(Mode::Navtex, 517_000.0), (Mode::Hfdl, 8_912_000.0), (Mode::Drm, 9_570_000.0), (Mode::Wwv, 10_000_000.0), (Mode::Dsc, 8_412_800.0), (Mode::Sitor, 8_414_800.0)] {
+            {
+                let app = &mut h.state_mut().app;
+                app.status.mode = mode;
+                app.status.inspect_hz = hz;
+                app.status.digital = None;
+                app.decode_family = Some(crate::decoders::Family::HfData);
+                app.decode_chip = None;
+                app.dock_tab = DockTab::Decodes;
+            }
+            h.run_steps(3);
+            let name = mode.wire();
+            h.render().expect("render").save(dir.join(format!("view-{name}.png"))).expect("save");
+            h.get_by_label("STATIONS").click();
+            h.run_steps(4);
+            h.render().expect("render").save(dir.join(format!("stations-{name}.png"))).expect("save");
+            h.get_by_label("STATIONS").click();
+            h.run_steps(2);
+        }
+
+        // A mode's view as it was on the air: `USDR_QA_VIEWS=<dir>` holding
+        // view-<mode>.json, the decodes and last reading a client saw.
+        if let Some(vdir) = std::env::var_os("USDR_QA_VIEWS").map(std::path::PathBuf::from) {
+            for (mode, hz) in [(Mode::Drm, 9_570_000.0), (Mode::Hfdl, 11_387_000.0), (Mode::Wwv, 10_000_000.0)] {
+                let Ok(b) = std::fs::read(vdir.join(format!("view-{}.json", mode.wire()))) else { continue };
+                let v: serde_json::Value = serde_json::from_slice(&b).expect("json");
+                let mut h = harness_with(Prefs { auto_connect: false, dock_height: 420.0, ..Default::default() }, 1600.0, 1100.0);
+                h.run_steps(2);
+                {
+                    let app = &mut h.state_mut().app;
+                    app.status.mode = mode;
+                    app.status.inspect_hz = hz;
+                    app.status.freq_hz = hz;
+                    app.status.digital = serde_json::from_value(v["digital"].clone()).ok();
+                    app.decode_family = Some(crate::decoders::Family::HfData);
+                    app.dock_tab = DockTab::Decodes;
+                }
+                for m in v["decodes"].as_array().into_iter().flatten() {
+                    let ev: proto::DecodeEvent = serde_json::from_value(m["event"].clone()).expect("event");
+                    h.state().wire.events.send(NetEvent::Decode { inspect_hz: hz, event: ev, at: std::time::SystemTime::now() }).unwrap();
+                }
+                h.run_steps(4);
+                h.render().expect("render").save(dir.join(format!("live-{}.png", mode.wire()))).expect("save");
+            }
+        }
+
+        // FT8 as it was heard: `USDR_QA_FT8=<json>`, the decode messages a
+        // web client saw on /ws; drawn in the default dock and a tall one.
+        if let Some(b) = std::env::var_os("USDR_QA_FT8").and_then(|p| std::fs::read(p).ok()) {
+            let msgs: Vec<serde_json::Value> = serde_json::from_slice(&b).expect("json");
+            for (name, dock, ht) in [("dock-ft8.png", 230.0, 980.0), ("dock-ft8-tall.png", 520.0, 1150.0)] {
+                let mut h = harness_with(Prefs { auto_connect: false, dock_height: dock, ..Default::default() }, 1600.0, ht);
+                h.run_steps(2);
+                // `USDR_QA_CALL` stands in for the station's callsign, to
+                // see the calls sent to it picked out.
+                let call = std::env::var("USDR_QA_CALL").unwrap_or_else(|_| "N0CALL".into());
+                let st = proto::Station { callsign: call, grid: "FN31pr".into(), antenna: String::new(), report_spots: false };
+                h.state().wire.events.send(NetEvent::Station(st, proto::ReporterStatus::default())).unwrap();
+                {
+                    let app = &mut h.state_mut().app;
+                    app.status.mode = Mode::Ft8;
+                    app.status.freq_hz = 14_074_000.0;
+                    app.status.inspect_hz = 14_074_000.0;
+                    app.status.filter_low_hz = 100.0;
+                    app.status.filter_high_hz = 3_100.0;
+                    app.decode_family = Some(crate::decoders::Family::HfData);
+                    app.dock_tab = DockTab::Decodes;
+                }
+                for m in &msgs {
+                    let ev: proto::DecodeEvent = serde_json::from_value(m["event"].clone()).expect("event");
+                    h.state().wire.events.send(NetEvent::Decode { inspect_hz: 14_074_000.0, event: ev, at: std::time::SystemTime::now() }).unwrap();
+                }
+                h.run_steps(4);
+                h.render().expect("render").save(dir.join(name)).expect("save");
             }
         }
     }

@@ -152,13 +152,19 @@ fn decodes(app: &mut App, ui: &mut Ui) {
                 }
             }
             if let Some(f) = app.decode_family {
-                let list: Vec<&crate::decoders::Decoder> = crate::decoders::in_family(f).collect();
+                // HF data has a decoder for every mode under the HF key; its
+                // row keeps those in the log, the mode's own and the one
+                // chosen, so it stays one short row.
+                let current = app.status.mode.label();
+                let list: Vec<&crate::decoders::Decoder> = crate::decoders::in_family(f)
+                    .filter(|d| f != Family::HfData || d.chip == current || app.decode_chip == Some(d.chip) || app.decodes.iter().any(|r| r.family == Some(f) && d.takes(&r.ev.protocol.to_ascii_uppercase())))
+                    .collect();
                 if list.len() > 1 || f == Family::HfData {
                     // A rule between the families and this one's decoders.
                     let (r, _) = ui.allocate_exact_size(vec2(9.0, 18.0), egui::Sense::hover());
                     ui.painter().line_segment([r.center_top(), r.center_bottom()], egui::Stroke::new(1.0, theme::line()));
                 }
-                if list.len() > 1 {
+                if list.len() > 1 || (f == Family::HfData && !list.is_empty()) {
                     if widgets::chip_key(ui, "ANY", app.decode_chip.is_none(), family_color(f)).clicked() {
                         app.decode_chip = None;
                     }
@@ -477,7 +483,7 @@ fn scope(app: &mut App, ui: &mut Ui) {
     let kind = app.frame.as_ref().map(|f| f.scope_kind).unwrap_or_default();
     let (title, note) = app.scope.title(mode, kind);
     // Sideband says the filter it is listening through, as set.
-    let edges = (app.status.filter_high_hz > app.status.filter_low_hz && matches!(mode, Mode::Usb | Mode::Lsb | Mode::Ft8 | Mode::Ft4 | Mode::Wefax | Mode::Rtty | Mode::Navtex | Mode::Psk31))
+    let edges = (app.status.filter_high_hz > app.status.filter_low_hz && mode.is_sideband())
         .then(|| format!("{:.0}–{:.0} Hz", app.status.filter_low_hz.abs().min(app.status.filter_high_hz.abs()), app.status.filter_low_hz.abs().max(app.status.filter_high_hz.abs())));
     let note = note.map(str::to_string).or(edges);
     ui.horizontal(|ui| {
@@ -944,7 +950,7 @@ fn hf_bands(app: &mut App, ui: &mut Ui) {
                 ui.label(mono(band, theme::text_3()));
                 for (mode, hz) in [(Mode::Ft8, ft8), (Mode::Ft4, ft4)] {
                     let text = format!("{} {}", mode.label(), crate::tuning::fmt_mhz(hz, 4));
-                    let on = app.status.mode == mode && (app.status.freq_hz - hz).abs() < 50.0;
+                    let on = app.status.mode == mode && (app.inspect_hz() - hz).abs() < 50.0;
                     if widgets::chip_key(ui, &text, on, widgets::protocol_color(mode.label())).clicked() {
                         if app.status.mode != mode {
                             app.set_mode(mode);
@@ -958,13 +964,13 @@ fn hf_bands(app: &mut App, ui: &mut Ui) {
         });
         // The text modes: a dial each, the decoder finding its signal in
         // the passband above it.
-        for (mode, dials) in [(Mode::Psk31, crate::decoders::PSK31_DIALS), (Mode::Rtty, crate::decoders::RTTY_DIALS), (Mode::Navtex, crate::decoders::NAVTEX_DIALS)] {
+        for (mode, dials) in [(Mode::Psk31, crate::decoders::PSK31_DIALS), (Mode::Rtty, crate::decoders::RTTY_DIALS), (Mode::Navtex, crate::decoders::NAVTEX_DIALS), (Mode::Pactor, crate::decoders::PACTOR_DIALS)] {
             ui.add_space(6.0);
             ui.label(mono(mode.label(), theme::text_3()));
             ui.horizontal_wrapped(|ui| {
                 ui.set_max_width(420.0);
                 for &(band, hz) in dials {
-                    let on = app.status.mode == mode && (app.status.freq_hz - hz).abs() < 50.0;
+                    let on = app.status.mode == mode && (app.inspect_hz() - hz).abs() < 50.0;
                     if widgets::chip_key(ui, &format!("{band} {}", crate::tuning::fmt_mhz(hz, 4)), on, widgets::protocol_color(mode.label())).clicked() {
                         if app.status.mode != mode {
                             app.set_mode(mode);
@@ -986,210 +992,15 @@ fn hf_bands(app: &mut App, ui: &mut Ui) {
             app.fax.open = true;
             ui.close();
         }
+        ui.add_space(6.0);
+        ui.add(egui::Label::new(mono("SITOR, DSC, HFDL, WWV and DRM keep fixed stations: their STATIONS lists are in each mode's view.", theme::text_3())).wrap());
     });
 }
 
-/// One FT8/FT4 decode as the HF view reads it from the event's fields.
-struct HfRow {
-    i: usize,
-    slot: String,
-    slot_ms: u64,
-    snr: Option<f32>,
-    dt: Option<f32>,
-    df: Option<f32>,
-    cq: bool,
-}
-
-fn hf_row(app: &App, i: usize) -> HfRow {
-    let d = &app.decodes[i];
-    let f = |k: &str| d.ev.fields.get(k).and_then(|v| v.trim().parse::<f32>().ok());
-    let slot_ms = d.ev.fields.get("slotMs").and_then(|v| v.parse::<u64>().ok()).unwrap_or_else(|| {
-        d.at.duration_since(std::time::SystemTime::UNIX_EPOCH).map(|t| t.as_millis() as u64).unwrap_or(0)
-    });
-    let slot = d.ev.fields.get("slot").cloned().unwrap_or_else(|| local_hms(d.at).replace(':', ""));
-    HfRow { i, slot, slot_ms, snr: f("snr"), dt: f("dt"), df: f("df"), cq: d.ev.fields.get("cq").is_some_and(|v| v == "yes") || d.ev.summary.starts_with("CQ ") }
-}
-
-/// The HF data view: where the current slot is, the band's activity slot
-/// by slot across the audio passband, and the decodes as an operator's log.
+/// The HF data view: a text mode's own view, or FT8's slot table.
 fn hf_data(app: &mut App, ui: &mut Ui, visible: &[usize]) {
     match crate::hfviews::view_for(app) {
-        crate::hfviews::HfView::Slots => {}
-        v => {
-            crate::hfviews::show(app, ui, v);
-            return;
-        }
-    }
-    // The slot table holds FT8 and FT4 alone; the text modes have their own.
-    let visible: Vec<usize> = visible.iter().copied().filter(|&i| matches!(app.decodes[i].ev.protocol.as_str(), "FT8" | "FT4")).collect();
-    let visible = &visible[..];
-    let rows: Vec<HfRow> = visible.iter().map(|&i| hf_row(app, i)).collect();
-    hf_clock(app, ui);
-    ui.add_space(4.0);
-    hf_activity(app, ui, &rows);
-    ui.add_space(4.0);
-    let char_w = 6.7;
-    let cols = [("UTC", 7.5), ("dB", 4.5), ("DT", 5.0), ("FREQ", 6.0), ("MODE", 5.0)];
-    let head = |t: &str| RichText::new(t).font(theme::mono(10.0)).color(theme::text_3()).extra_letter_spacing(0.6);
-    let r = ui.horizontal(|ui| {
-        ui.set_min_height(18.0);
-        for (t, w) in cols {
-            cell(ui, w * char_w, head(t), egui::Sense::hover());
-        }
-        ui.label(head("MESSAGE"));
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| ui.label(mono(format!("{} decodes", rows.len()), theme::text_3())));
-    });
-    let y = r.response.rect.bottom() + 1.0;
-    ui.painter().line_segment([egui::pos2(r.response.rect.left(), y), egui::pos2(r.response.rect.right(), y)], egui::Stroke::new(1.0, theme::line()));
-    if rows.is_empty() {
-        empty_state(ui, Family::HfData.empty_text());
-        return;
-    }
-    let mut select = None;
-    egui::ScrollArea::vertical().id_salt("hf-decodes").auto_shrink([false, false]).min_scrolled_height(0.0).show_rows(ui, 20.0, rows.len(), |ui, range| {
-        for k in range {
-            let row = &rows[k];
-            let d = &app.decodes[row.i];
-            // A rule where a slot begins, so each slot's decodes read as one.
-            let new_slot = k == 0 || rows[k - 1].slot_ms != row.slot_ms;
-            let resp = ui
-                .horizontal(|ui| {
-                    ui.set_min_height(18.0);
-                    let slot_text = if new_slot { format!("{}:{}:{}", &row.slot[..2.min(row.slot.len())], row.slot.get(2..4).unwrap_or(""), row.slot.get(4..).unwrap_or("")) } else { String::new() };
-                    cell(ui, 7.5 * char_w, mono(slot_text, theme::text_3()), egui::Sense::hover());
-                    let snr_c = row.snr.map_or(theme::text_3(), snr_color);
-                    cell(ui, 4.5 * char_w, mono(row.snr.map_or("—".into(), |v| format!("{v:+.0}")), snr_c), egui::Sense::hover());
-                    cell(ui, 5.0 * char_w, mono(row.dt.map_or("—".into(), |v| format!("{v:+.1}")), theme::text_2()), egui::Sense::hover());
-                    cell(ui, 6.0 * char_w, mono(row.df.map_or("—".into(), |v| format!("{v:.0}")), theme::AMBER), egui::Sense::hover());
-                    cell(ui, 5.0 * char_w, mono(&d.ev.protocol, widgets::protocol_color(&d.ev.protocol)), egui::Sense::hover());
-                    let msg = RichText::new(&d.ev.summary).font(theme::mono(11.5));
-                    let msg = if row.cq { msg.color(theme::OK).strong() } else { msg.color(theme::text()) };
-                    ui.add(egui::Label::new(msg).truncate());
-                })
-                .response
-                .interact(egui::Sense::click());
-            if new_slot && k > 0 {
-                let y = resp.rect.top() - 1.0;
-                ui.painter().line_segment([egui::pos2(resp.rect.left(), y), egui::pos2(resp.rect.right(), y)], egui::Stroke::new(1.0, theme::line()));
-            }
-            if app.selected_decode == Some(row.i) {
-                ui.painter().rect_filled(resp.rect, egui::CornerRadius::same(3), alpha(theme::AMBER, 0.1));
-            }
-            let resp = resp.on_hover_ui(|ui| {
-                egui::Grid::new(("hf-fields", row.i)).num_columns(2).spacing(vec2(10.0, 1.0)).show(ui, |ui| {
-                    for (k, v) in &d.ev.fields {
-                        ui.label(mono(k, theme::text_3()));
-                        ui.label(mono(v, theme::text()));
-                        ui.end_row();
-                    }
-                });
-            });
-            if resp.clicked() {
-                select = Some(if app.selected_decode == Some(row.i) { None } else { Some(row.i) });
-            }
-        }
-    });
-    if let Some(s) = select {
-        app.selected_decode = s;
-    }
-}
-
-/// Weak to strong: the color a decode's SNR is drawn in.
-fn snr_color(snr: f32) -> egui::Color32 {
-    let t = ((snr + 22.0) / 24.0).clamp(0.0, 1.0);
-    if t < 0.5 { theme::lerp(theme::ERR, theme::AMBER, t * 2.0) } else { theme::lerp(theme::AMBER, theme::OK, (t - 0.5) * 2.0) }
-}
-
-/// Where the receiver is in the UTC slot: a bar across the slot, and when
-/// the next decode lands.
-fn hf_clock(app: &App, ui: &mut Ui) {
-    let slot = match app.status.mode {
-        Mode::Ft8 => 15.0,
-        Mode::Ft4 => 7.5,
-        _ => {
-            ui.label(mono("Not decoding: pick FT8 or FT4 (BANDS tunes a dial frequency).", theme::text_3()));
-            return;
-        }
-    };
-    let now = std::time::SystemTime::now().duration_since(std::time::SystemTime::UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or(0.0);
-    let into = now.rem_euclid(slot);
-    let start = now - into;
-    let secs = start as u64;
-    ui.horizontal(|ui| {
-        ui.label(mono(format!("{} · slot {:02}:{:02}:{:04.1}", app.status.mode.label(), (secs / 3600) % 24, (secs / 60) % 60, start.rem_euclid(60.0)), theme::text_2()));
-        let w = (ui.available_width() - 150.0).clamp(80.0, 420.0);
-        let (r, _) = ui.allocate_exact_size(vec2(w, 6.0), egui::Sense::hover());
-        let p = ui.painter();
-        p.rect_filled(r, egui::CornerRadius::same(3), theme::ink());
-        let done = egui::Rect::from_min_size(r.min, vec2(r.width() * (into / slot) as f32, r.height()));
-        p.rect_filled(done, egui::CornerRadius::same(3), alpha(widgets::protocol_color(app.status.mode.label()), 0.8));
-        ui.label(mono(format!("decode in {:.1} s", slot - into), theme::text_3()));
-    });
-    // The bar moves on its own; a few frames a second is plenty.
-    ui.ctx().request_repaint_after(std::time::Duration::from_millis(200));
-}
-
-/// The band's activity: the last few slots, newest on top, each decode a
-/// tile at its audio frequency colored by its SNR. Hover for the message,
-/// click to find it in the log.
-fn hf_activity(app: &mut App, ui: &mut Ui, rows: &[HfRow]) {
-    let mut slots: Vec<u64> = rows.iter().map(|r| r.slot_ms).collect();
-    slots.dedup();
-    slots.truncate(8);
-    let lanes = 8usize;
-    // About a third of the view, so the log under it keeps the rest.
-    let (axis_h, max_hz) = (13.0f32, 3_200.0f32);
-    let lane_h = ((ui.available_height() * 0.32 - axis_h) / lanes as f32).clamp(4.0, 9.0);
-    let w = ui.available_width();
-    let (outer, _) = ui.allocate_exact_size(vec2(w, lanes as f32 * lane_h + axis_h + 2.0), egui::Sense::hover());
-    let plot = egui::Rect::from_min_max(egui::pos2(outer.left() + 44.0, outer.top()), egui::pos2(outer.right() - 4.0, outer.bottom() - axis_h));
-    let p = ui.painter().clone();
-    p.rect(plot, egui::CornerRadius::same(3), theme::ink(), egui::Stroke::new(1.0, theme::line()), egui::StrokeKind::Inside);
-    let x_of = |hz: f32| plot.left() + hz / max_hz * plot.width();
-    for k in 1..(max_hz / 500.0) as usize + 1 {
-        let hz = k as f32 * 500.0;
-        let x = x_of(hz);
-        if x < plot.right() - 1.0 {
-            p.line_segment([egui::pos2(x, plot.top() + 1.0), egui::pos2(x, plot.bottom() - 1.0)], egui::Stroke::new(1.0, theme::line()));
-        }
-        let align = if x > plot.right() - 16.0 { egui::Align2::RIGHT_TOP } else { egui::Align2::CENTER_TOP };
-        p.text(egui::pos2(x.min(plot.right()), plot.bottom() + 1.0), align, format!("{:.1}k", hz / 1000.0), theme::mono(10.0), theme::text_3());
-    }
-    p.text(egui::pos2(plot.left() - 4.0, plot.top()), egui::Align2::RIGHT_TOP, "newest", theme::mono(10.0), theme::text_3());
-    p.text(egui::pos2(plot.left() - 4.0, plot.bottom()), egui::Align2::RIGHT_BOTTOM, format!("{} slots", slots.len()), theme::mono(10.0), theme::text_3());
-    // The filter's edges, where the decoder can hear.
-    let (flo, fhi) = (app.status.filter_low_hz.abs().min(app.status.filter_high_hz.abs()) as f32, app.status.filter_low_hz.abs().max(app.status.filter_high_hz.abs()) as f32);
-    if matches!(app.status.mode, Mode::Ft8 | Mode::Ft4) && fhi > flo {
-        for hz in [flo, fhi] {
-            crate::spectrum::dashed_v(&p, x_of(hz), plot.top() + 1.0, plot.bottom() - 1.0, alpha(theme::AMBER, 0.4));
-        }
-    }
-    let hover = ui.input(|i| i.pointer.hover_pos()).filter(|h| plot.contains(*h));
-    let mut tip: Option<usize> = None;
-    let clicked = ui.input(|i| i.pointer.primary_clicked());
-    for r in rows {
-        let Some(lane) = slots.iter().position(|s| *s == r.slot_ms) else { continue };
-        let Some(df) = r.df else { continue };
-        // FT8 spans 50 Hz of audio, FT4 83.
-        let width_hz = if app.decodes[r.i].ev.protocol.contains("FT4") { 83.3 } else { 50.0 };
-        let y = plot.top() + 1.0 + lane as f32 * lane_h;
-        let tile = egui::Rect::from_min_max(egui::pos2(x_of(df), y + 1.0), egui::pos2(x_of(df + width_hz).max(x_of(df) + 3.0), y + lane_h - 1.0));
-        let c = r.snr.map_or(theme::text_3(), snr_color);
-        let sel = app.selected_decode == Some(r.i);
-        p.rect_filled(tile, egui::CornerRadius::same(2), alpha(c, if lane == 0 { 0.95 } else { 0.75 - lane as f32 * 0.06 }));
-        if r.cq || sel {
-            p.rect_stroke(tile.expand(1.0), egui::CornerRadius::same(2), egui::Stroke::new(1.0, if sel { theme::text() } else { theme::OK }), egui::StrokeKind::Outside);
-        }
-        if hover.is_some_and(|h| tile.expand(1.5).contains(h)) {
-            tip = Some(r.i);
-        }
-    }
-    if let Some(i) = tip {
-        let d = &app.decodes[i];
-        let text = format!("{}  {}", d.ev.summary, d.ev.fields.get("snr").map(|s| format!("{s} dB")).unwrap_or_default());
-        egui::Tooltip::always_open(ui.ctx().clone(), ui.layer_id(), egui::Id::new("hf-tile"), egui::PopupAnchor::Pointer).show(|ui| ui.add(egui::Label::new(mono(text, theme::text())).extend()));
-        if clicked {
-            app.selected_decode = Some(i);
-        }
+        crate::hfviews::HfView::Slots => crate::ft8view::show(app, ui, visible, Family::HfData.empty_text()),
+        v => crate::hfviews::show(app, ui, v),
     }
 }

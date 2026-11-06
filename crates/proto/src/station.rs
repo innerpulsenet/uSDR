@@ -130,6 +130,20 @@ pub fn grid_center(grid: &str) -> Option<(f64, f64)> {
     Some((lat + h / 2.0, lon + w / 2.0))
 }
 
+/// The great-circle path between two points (latitude, longitude in
+/// degrees): its length in kilometers and the initial bearing from the
+/// first, degrees clockwise from true north.
+pub fn path(from: (f64, f64), to: (f64, f64)) -> (f64, f64) {
+    let (p1, l1) = (from.0.to_radians(), from.1.to_radians());
+    let (p2, l2) = (to.0.to_radians(), to.1.to_radians());
+    let dl = l2 - l1;
+    let a = ((p2 - p1) / 2.0).sin().powi(2) + p1.cos() * p2.cos() * (dl / 2.0).sin().powi(2);
+    let km = 2.0 * 6_371.0 * a.sqrt().min(1.0).asin();
+    let y = dl.sin() * p2.cos();
+    let x = p1.cos() * p2.sin() - p1.sin() * p2.cos() * dl.cos();
+    (km, y.atan2(x).to_degrees().rem_euclid(360.0))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -157,5 +171,16 @@ mod tests {
         assert!((lat - 41.729).abs() < 0.03 && (lon + 72.708).abs() < 0.05, "{lat} {lon}");
         let (lat, lon) = grid_center("JJ00").unwrap();
         assert_eq!((lat, lon), (0.5, 1.0));
+    }
+
+    #[test]
+    fn paths() {
+        // Connecticut to London: about 5,400 km, setting out to the
+        // northeast.
+        let (km, az) = path(grid_center("FN31pr").unwrap(), grid_center("IO91wm").unwrap());
+        assert!((km - 5_430.0).abs() < 60.0, "{km}");
+        assert!((az - 51.0).abs() < 3.0, "{az}");
+        let (km, _) = path((10.0, 20.0), (10.0, 20.0));
+        assert!(km.abs() < 1e-6);
     }
 }

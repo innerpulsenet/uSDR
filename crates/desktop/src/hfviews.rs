@@ -18,23 +18,38 @@ pub enum HfView {
     Psk,
     Navtex,
     Fax,
+    Sitor,
+    Dsc,
+    Hfdl,
+    Pactor,
+    Stanag,
+    Wwv,
+    Drm,
+}
+
+/// The view each mode under the HF key has, by its label.
+fn view_of(label: &str) -> HfView {
+    match label {
+        "RTTY" => HfView::Rtty,
+        "PSK31" => HfView::Psk,
+        "NAVTEX" => HfView::Navtex,
+        "WEFAX" => HfView::Fax,
+        "SITOR" => HfView::Sitor,
+        "DSC" => HfView::Dsc,
+        "HFDL" => HfView::Hfdl,
+        "PACTOR" => HfView::Pactor,
+        "STANAG" => HfView::Stanag,
+        "WWV" => HfView::Wwv,
+        "DRM" => HfView::Drm,
+        _ => HfView::Slots,
+    }
 }
 
 /// The view a chip asks for, or else the one the mode decodes.
 pub fn view_for(app: &App) -> HfView {
     match app.decode_chip {
-        Some("RTTY") => HfView::Rtty,
-        Some("PSK31") => HfView::Psk,
-        Some("NAVTEX") => HfView::Navtex,
-        Some("WEFAX") => HfView::Fax,
-        Some(_) => HfView::Slots,
-        None => match app.status.mode {
-            Mode::Rtty => HfView::Rtty,
-            Mode::Psk31 => HfView::Psk,
-            Mode::Navtex => HfView::Navtex,
-            Mode::Wefax => HfView::Fax,
-            _ => HfView::Slots,
-        },
+        Some(chip) => view_of(chip),
+        None => view_of(app.status.mode.label()),
     }
 }
 
@@ -44,6 +59,13 @@ pub fn show(app: &mut App, ui: &mut Ui, v: HfView) {
         HfView::Psk => psk(app, ui),
         HfView::Navtex => navtex(app, ui),
         HfView::Fax => fax(app, ui),
+        HfView::Sitor => crate::utilviews::sitor(app, ui),
+        HfView::Dsc => crate::utilviews::dsc(app, ui),
+        HfView::Hfdl => crate::utilviews::hfdl(app, ui),
+        HfView::Pactor => crate::utilviews::pactor(app, ui),
+        HfView::Stanag => crate::utilviews::stanag(app, ui),
+        HfView::Wwv => crate::utilviews::wwv(app, ui),
+        HfView::Drm => crate::utilviews::drm(app, ui),
         HfView::Slots => {}
     }
 }
@@ -140,6 +162,7 @@ fn navtex(app: &mut App, ui: &mut Ui) {
         if let Some(e) = r.error_rate {
             ui.label(mono(format!("{:.0}% errors", e * 100.0), theme::text_3()));
         }
+        crate::directory::menu(app, ui, &crate::stations::NAVTEX, widgets::protocol_color("NAVTEX"));
     });
     ui.add_space(4.0);
     let messages: Vec<usize> = app.decodes.iter().enumerate().filter(|(_, d)| d.ev.protocol == "NAVTEX" && d.ev.kind.starts_with("message")).map(|(i, _)| i).collect();

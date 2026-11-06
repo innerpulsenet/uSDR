@@ -37,40 +37,40 @@ const SHIFT_HZ: f32 = 170.0;
 
 /// Phasing signal 1 (idle signal alpha), BBBBYYY: sent in RX slots while
 /// phasing, and in DX slots three times to end an emission.
-const PHASING1: u8 = 0x0f;
+pub(crate) const PHASING1: u8 = 0x0f;
 /// Phasing signal 2 (signal repetition in ARQ), YBBYYBB: sent in DX slots
 /// while phasing.
-const PHASING2: u8 = 0x66;
+pub(crate) const PHASING2: u8 = 0x66;
 /// Idle signal beta, BBYYBBY.
-const IDLE_BETA: u8 = 0x33;
+pub(crate) const IDLE_BETA: u8 = 0x33;
 
 /// Words averaged for each alignment's validity score, and the scores to
 /// take and to lose an alignment. Random bits score about 0.27.
-const SYNC_LEN: f32 = 12.0;
-const SYNC_TAKE: f32 = 0.8;
+pub(crate) const SYNC_LEN: f32 = 12.0;
+pub(crate) const SYNC_TAKE: f32 = 0.8;
 /// Or this much, when it leads every other alignment by `SYNC_LEAD`.
-const SYNC_TAKE_WEAK: f32 = 0.55;
-const SYNC_LEAD: f32 = 0.3;
-const SYNC_LOSE: f32 = 0.45;
+pub(crate) const SYNC_TAKE_WEAK: f32 = 0.55;
+pub(crate) const SYNC_LEAD: f32 = 0.3;
+pub(crate) const SYNC_LOSE: f32 = 0.45;
 /// Words an alignment must have been scored on before it can be taken.
-const SYNC_MIN_WORDS: u32 = 12;
+pub(crate) const SYNC_MIN_WORDS: u32 = 12;
 /// Bit clock loop gains while hunting and while in sync.
-const CLOCK_GAIN_HUNT: f32 = 0.08;
-const CLOCK_GAIN_SYNC: f32 = 0.03;
+pub(crate) const CLOCK_GAIN_HUNT: f32 = 0.08;
+pub(crate) const CLOCK_GAIN_SYNC: f32 = 0.03;
 /// A message with no character for this long has been lost.
 const MESSAGE_TIMEOUT_S: f32 = 20.0;
 /// Bits (about three seconds) of a failing alignment before it is given up
 /// with nothing better in sight.
-const SYNC_LOSE_BITS: u32 = 300;
+pub(crate) const SYNC_LOSE_BITS: u32 = 300;
 /// Soft bits are capped here, so one very clean copy cannot drown a
 /// confident disagreement from the other.
-const LLR_MAX: f32 = 30.0;
+pub(crate) const LLR_MAX: f32 = 30.0;
 /// The best word must beat the next by this much (twice the difference of
 /// their log-likelihoods) to be read.
-const ML_MARGIN: f32 = 2.0;
+pub(crate) const ML_MARGIN: f32 = 2.0;
 /// Text held through a fade, and for how long.
-const FADE_HOLD_S: f32 = 8.0;
-const HELD_MAX: usize = 200;
+pub(crate) const FADE_HOLD_S: f32 = 8.0;
+pub(crate) const HELD_MAX: usize = 200;
 
 pub struct NavtexDecoder {
     fs: f32,
@@ -121,12 +121,12 @@ pub struct NavtexDecoder {
 }
 
 #[derive(Clone, Copy, Debug, Default)]
-struct Word {
-    code: u8,
-    valid: bool,
+pub(crate) struct Word {
+    pub(crate) code: u8,
+    pub(crate) valid: bool,
     /// Soft bits as log-likelihood ratios, first sent first, positive
     /// for B.
-    soft: [f32; 7],
+    pub(crate) soft: [f32; 7],
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -206,9 +206,9 @@ const fn ccir_index() -> [u8; 128] {
 
 /// Row of [`SYMS`] for each CCIR 476 code; 255 for the service signals
 /// and invalid words.
-const CCIR_INDEX: [u8; 128] = ccir_index();
+pub(crate) const CCIR_INDEX: [u8; 128] = ccir_index();
 
-fn valid(code: u8) -> bool {
+pub(crate) fn valid(code: u8) -> bool {
     code.count_ones() == 4
 }
 
@@ -754,7 +754,7 @@ const fn valid_codes() -> [u8; 35] {
     t
 }
 
-const VALID: [u8; 35] = valid_codes();
+pub(crate) const VALID: [u8; 35] = valid_codes();
 
 /// One character from its DX and RX copies: the most likely of the 35
 /// valid words given both copies' soft bits.
@@ -767,7 +767,7 @@ const VALID: [u8; 35] = valid_codes();
 /// copies whose sum is invalid too, and a clean copy outvoted by a
 /// confident one. A character none stands out for, by less than
 /// [`ML_MARGIN`], is unreadable.
-fn combine(dx: &Word, rx: &Word) -> Option<u8> {
+pub(crate) fn combine(dx: &Word, rx: &Word) -> Option<u8> {
     if dx.valid && rx.valid && dx.code == rx.code {
         return Some(dx.code);
     }

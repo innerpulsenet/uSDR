@@ -231,12 +231,12 @@ fn annotations(status: &Status, sub: Sub, from_pass: bool) -> (Vec<Band>, Vec<Ma
             ],
             vec![mark(19_000.0, "PILOT")],
         ),
-        (Mode::Usb | Mode::Lsb | Mode::Ft8 | Mode::Ft4 | Mode::Wefax | Mode::Rtty | Mode::Navtex | Mode::Psk31, _) if fhi > flo => {
+        (m, _) if m.is_sideband() && fhi > flo => {
             let (a, b) = (flo.abs().min(fhi.abs()), flo.abs().max(fhi.abs()));
             (vec![band(a, b, "PASSBAND", theme::AMBER)], vec![])
         }
         (Mode::Nfm, _) => (vec![band(300.0, 3_000.0, "VOICE", theme::AMBER), band(67.0, 254.0, "CTCSS", theme::VIOLET)], vec![]),
-        (Mode::Am, _) if fhi > flo => (vec![band(50.0, (fhi - flo) / 2.0, "AUDIO", theme::AMBER)], vec![]),
+        (Mode::Am | Mode::Wwv, _) if fhi > flo => (vec![band(50.0, (fhi - flo) / 2.0, "AUDIO", theme::AMBER)], vec![]),
         (Mode::Packet, _) => (vec![band(900.0, 2_500.0, "AFSK", theme::AMBER)], vec![mark(1_200.0, "MARK"), mark(2_200.0, "SPACE")]),
         // FLEX's deviation levels, seen as tones in the discriminator.
         (Mode::Pager, Sub::Disc) => (vec![], vec![mark(1_600.0, "±1.6k"), mark(4_800.0, "±4.8k")]),
@@ -270,7 +270,8 @@ impl Scope {
         }
         match mode {
             Mode::Wfm => &[Sub::Passband, Sub::Mpx],
-            Mode::Nfm | Mode::Am | Mode::Packet | Mode::Ft8 | Mode::Ft4 | Mode::Wefax | Mode::Rtty | Mode::Navtex | Mode::Psk31 => &[Sub::Passband, Sub::Audio],
+            Mode::Nfm | Mode::Am | Mode::Packet | Mode::Wwv | Mode::Drm => &[Sub::Passband, Sub::Audio],
+            m if m.is_sideband_data() => &[Sub::Passband, Sub::Audio],
             Mode::Pager => &[Sub::Passband, Sub::Disc],
             _ => &[],
         }
@@ -300,6 +301,13 @@ impl Scope {
             (Mode::Rtty, _, _) => ("RTTY audio", None),
             (Mode::Navtex, _, _) => ("NAVTEX audio", None),
             (Mode::Psk31, _, _) => ("PSK31 audio", None),
+            (Mode::Sitor, _, _) => ("SITOR audio", None),
+            (Mode::Dsc, _, _) => ("DSC audio", None),
+            (Mode::Hfdl, _, _) => ("HFDL audio", None),
+            (Mode::Pactor, _, _) => ("PACTOR audio", None),
+            (Mode::Stanag, _, _) => ("Serial-tone audio", None),
+            (Mode::Wwv, _, _) => ("Time station audio", None),
+            (Mode::Drm, _, _) => ("DRM audio", None),
             _ => ("Audio", None),
         }
     }

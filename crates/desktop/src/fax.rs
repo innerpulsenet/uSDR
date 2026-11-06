@@ -265,19 +265,6 @@ pub fn save(app: &mut App, ctx: &egui::Context, i: usize) {
     app.toast(ctx, Tone::Ok, format!("Saved {shown}"));
 }
 
-/// Radiofax stations: (who, where, assigned frequency in kHz). The dial
-/// sits 1.9 kHz below, where the fax's 1900 Hz subcarrier lands on it.
-pub const STATIONS: &[(&str, &str, &[f64])] = &[
-    ("NMF", "Boston, US Coast Guard", &[4_235.0, 6_340.5, 9_110.0, 12_750.0]),
-    ("NMG", "New Orleans, US Coast Guard", &[4_317.9, 8_503.9, 12_789.9, 17_146.4]),
-    ("NMC", "Point Reyes, US Coast Guard", &[4_346.0, 8_682.0, 12_786.0, 17_151.2, 22_527.0]),
-    ("NOJ", "Kodiak, US Coast Guard", &[2_054.0, 4_298.0, 8_459.0, 12_412.5]),
-    ("KVM70", "Honolulu, US Coast Guard", &[9_982.5, 11_090.0, 16_135.0]),
-    ("CFH", "Halifax, Canadian Forces", &[4_271.0, 6_496.4, 10_536.0, 13_510.0]),
-    ("DDH/DDK", "Hamburg, Deutscher Wetterdienst", &[3_855.0, 7_880.0, 13_882.5]),
-    ("GYA", "Northwood, UK Met Office", &[2_618.5, 4_610.0, 8_040.0, 11_086.5]),
-];
-
 pub const SUBCARRIER_HZ: f64 = 1_900.0;
 
 pub fn window(app: &mut App, ctx: &egui::Context) {
@@ -354,7 +341,8 @@ fn controls(app: &mut App, ui: &mut Ui) {
                 app.post("/api/sdr/digital", json!({ "fax_stop": true }));
             }
         });
-        stations_menu(app, ui);
+        crate::directory::menu(app, ui, &crate::stations::WEFAX, theme::CYAN);
+        crate::directory::schedule_menu(app, ui, &crate::stations::WEFAX, theme::CYAN);
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             let idx = shown_index(app);
             if let Some(i) = idx
@@ -393,34 +381,6 @@ fn controls(app: &mut App, ui: &mut Ui) {
                 pic.shift = 0;
             }
         }
-    });
-}
-
-fn stations_menu(app: &mut App, ui: &mut Ui) {
-    widgets::menu_chip(ui, "STATIONS", theme::text_2(), |ui| {
-        ui.label(RichText::new("Assigned frequencies; the dial goes 1.9 kHz below.").font(theme::sans(11.0)).color(theme::text_3()));
-        egui::Grid::new("fax-stations").num_columns(2).spacing(vec2(10.0, 3.0)).show(ui, |ui| {
-            for (call, place, freqs) in STATIONS {
-                ui.vertical(|ui| {
-                    ui.label(RichText::new(*call).font(theme::mono_bold(11.5)).color(theme::text()));
-                    ui.label(RichText::new(*place).font(theme::sans(10.5)).color(theme::text_3()));
-                });
-                ui.horizontal(|ui| {
-                    for khz in *freqs {
-                        let dial = khz * 1e3 - SUBCARRIER_HZ;
-                        let on = app.status.mode == Mode::Wefax && (app.status.freq_hz - dial).abs() < 50.0;
-                        if widgets::chip_key(ui, &format!("{khz:.1}"), on, theme::CYAN).clicked() {
-                            if app.status.mode != Mode::Wefax {
-                                app.set_mode(Mode::Wefax);
-                            }
-                            app.tune(dial, false);
-                            ui.close();
-                        }
-                    }
-                });
-                ui.end_row();
-            }
-        });
     });
 }
 

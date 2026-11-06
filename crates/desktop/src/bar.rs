@@ -313,11 +313,22 @@ fn tuning(app: &mut App, ui: &mut Ui) {
 fn mode_tally(m: Mode) -> egui::Color32 {
     match m {
         Mode::Nfm | Mode::Am | Mode::Usb | Mode::Lsb => theme::AMBER,
-        Mode::Wfm | Mode::Pager | Mode::Flex | Mode::Ft8 | Mode::Ft4 | Mode::Wefax | Mode::Rtty | Mode::Navtex | Mode::Psk31 => theme::CYAN,
+        Mode::Wfm | Mode::Pager | Mode::Flex => theme::CYAN,
+        m if m.is_hf_data() => theme::CYAN,
         Mode::P25 | Mode::Dmr | Mode::Nxdn | Mode::Packet => theme::OK,
         _ => theme::VIOLET,
     }
 }
+
+/// The HF data modes as the HF key's menu groups them, by who sends them.
+const HF_GROUPS: &[(&str, &[Mode])] = &[
+    ("AMATEUR", &[Mode::Ft8, Mode::Ft4, Mode::Psk31, Mode::Rtty]),
+    ("MARITIME", &[Mode::Wefax, Mode::Navtex, Mode::Sitor, Mode::Dsc]),
+    ("AVIATION", &[Mode::Hfdl]),
+    ("DATA LINKS", &[Mode::Pactor, Mode::Stanag]),
+    ("TIME", &[Mode::Wwv]),
+    ("BROADCAST", &[Mode::Drm]),
+];
 
 /// One key on the mode board: a mode, or the key that lists the HF data
 /// modes.
@@ -509,19 +520,33 @@ fn mode_board(app: &App, ui: &mut Ui, id: &str, rows: &[Vec<Vec<Key>>], current:
                 }
             }
             Key::Hf => {
-                let hf: Vec<Mode> = Mode::ALL.iter().copied().filter(|m| m.is_hf_data() && (app.modes.is_empty() || app.modes.iter().any(|c| c.mode == *m))).collect();
+                let offered = |m: Mode| app.modes.is_empty() || app.modes.iter().any(|c| c.mode == m);
                 egui::Popup::menu(&resp).show(|ui| {
-                    for m in &hf {
-                        let r = ui.selectable_label(current == *m, RichText::new(m.label()).font(theme::mono_bold(11.0)));
-                        let r = match desc(*m) {
-                            Some(d) => r.on_hover_text(d),
-                            None => r,
-                        };
-                        if r.clicked() {
-                            out = Some(Key::Mode(*m));
-                            ui.close();
+                    // By who sends it, a row of keys each.
+                    egui::Grid::new("hf-modes").num_columns(2).spacing(vec2(10.0, 4.0)).show(ui, |ui| {
+                        for (group, modes) in HF_GROUPS {
+                            let modes: Vec<Mode> = modes.iter().copied().filter(|m| offered(*m)).collect();
+                            if modes.is_empty() {
+                                continue;
+                            }
+                            ui.label(RichText::new(*group).font(theme::mono(9.5)).color(theme::text_3()).extra_letter_spacing(0.6));
+                            ui.horizontal(|ui| {
+                                ui.spacing_mut().item_spacing.x = 4.0;
+                                for m in modes {
+                                    let r = widgets::chip_key_w(ui, m.label(), current == m, mode_tally(m), 58.0);
+                                    let r = match desc(m) {
+                                        Some(d) => r.on_hover_text(d),
+                                        None => r,
+                                    };
+                                    if r.clicked() {
+                                        out = Some(Key::Mode(m));
+                                        ui.close();
+                                    }
+                                }
+                            });
+                            ui.end_row();
                         }
-                    }
+                    });
                 });
             }
         }

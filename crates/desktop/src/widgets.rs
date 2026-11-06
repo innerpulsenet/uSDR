@@ -595,6 +595,20 @@ pub fn protocol_color(p: &str) -> Color32 {
         rgb(0x93c5fd)
     } else if u.contains("NAVTEX") {
         rgb(0xfdba74)
+    } else if u.contains("SITOR") {
+        rgb(0xfda4af)
+    } else if u.contains("DSC") {
+        rgb(0xf87171)
+    } else if u.contains("HFDL") {
+        rgb(0x7dd3fc)
+    } else if u.contains("PACTOR") {
+        rgb(0x6ee7b7)
+    } else if u.contains("STANAG") || u.contains("188-110") || u.contains("2G ALE") {
+        rgb(0x94a3b8)
+    } else if u.contains("WWV") {
+        rgb(0xfef08a)
+    } else if u.contains("DRM") {
+        rgb(0xf9a8d4)
     } else if u.contains("PSK") {
         rgb(0xbef264)
     } else if u.contains("RDS") {

@@ -1,0 +1,6604 @@
+{
+ "fetched": "2026-11-06",
+ "receiver": "Connecticut, USA (FN31)",
+ "conventions": "Times UTC as HHMM. Frequencies in kHz as published (assigned frequency). US radiofax: carrier/USB dial = assigned - 1.9 kHz; USCG SITOR: carrier = assigned - 1.7 kHz.",
+ "wefax": [
+  {
+   "call": "NMF",
+   "name": "Boston, Massachusetts",
+   "operator": "US Coast Guard (transmitter) / NWS Ocean Prediction Center (charts)",
+   "freqs_khz": [
+    4235.0,
+    6340.5,
+    9110.0,
+    12750.0
+   ],
+   "freq_windows_utc": [
+    {
+     "khz": 4235.0,
+     "utc": "0230-1039"
+    },
+    {
+     "khz": 6340.5,
+     "utc": "all broadcast times"
+    },
+    {
+     "khz": 9110.0,
+     "utc": "all broadcast times"
+    },
+    {
+     "khz": 12750.0,
+     "utc": "1400-2239"
+    }
+   ],
+   "freq_notes": "4235 kHz 0230-1039Z only; 12750 kHz 1400-2239Z only; 6340.5 and 9110 kHz at all broadcast times. 4 kW F3C. Tropical Cyclone Danger Area chart is replaced by the 48HR High Wind/Wave Warning chart Dec 01 - May 14.",
+   "lpm": 120,
+   "ioc": 576,
+   "tuning": "Listed frequencies are assigned frequencies; carrier (USB dial) is 1.9 kHz below (source note).",
+   "map_areas": {
+    "1": "28N-52N, 45W-85W",
+    "2": "18N-65N, 10E-45W",
+    "3": "18N-65N, 40W-95W",
+    "4": "18N-65N, 10E-95W",
+    "5": "20N-55N, 55W-95W",
+    "6": "EQ-60N, 40W-130W",
+    "7": "05N-60N, 0W-100W",
+    "8": "22N-51N, 40W-98W"
+   },
+   "source": "https://tgftp.nws.noaa.gov/fax/hfmarsh.txt",
+   "source_also": [
+    "https://www.weather.gov/media/marine/rfax.pdf",
+    "https://www.weather.gov/marine/uscg_broadcasts"
+   ],
+   "source_dated": "Schedule effective Sep 04, 2018 Information dated March 16, 2023",
+   "schedule": [
+    {
+     "utc": "0230",
+     "title": "TEST PATTERN",
+     "lpm": 120,
+     "ioc": 576
+    },
+    {
+     "utc": "0233",
+     "title": "PRELIMINARY SURFACE ANALYSIS",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "0000",
+     "map_area": "1"
+    },
+    {
+     "utc": "0243",
+     "title": "BROADCAST SCHEDULE (PART 1)",
+     "lpm": 120,
+     "ioc": 576
+    },
+    {
+     "utc": "0254",
+     "title": "BROADCAST SCHEDULE (PART 2)",
+     "lpm": 120,
+     "ioc": 576
+    },
+    {
+     "utc": "0305",
+     "title": "REQUEST FOR COMMENTS",
+     "lpm": 120,
+     "ioc": 576
+    },
+    {
+     "utc": "0315",
+     "title": "WIND/WAVE ANALYSIS",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "0000",
+     "map_area": "8"
+    },
+    {
+     "utc": "0325",
+     "title": "SURFACE ANALYSIS (PART 1 NE ATLANTIC)",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "0000",
+     "map_area": "2"
+    },
+    {
+     "utc": "0338",
+     "title": "SURFACE ANALYSIS (PART 2 NW ATLANTIC)",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "0000",
+     "map_area": "3"
+    },
+    {
+     "utc": "0351",
+     "title": "SATELLITE IMAGE",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "0000",
+     "map_area": "5"
+    },
+    {
+     "utc": "0402",
+     "title": "(REBROADCAST OF 0325/1525 NE ATLANTIC)",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "0000",
+     "map_area": "2"
+    },
+    {
+     "utc": "0415",
+     "title": "(REBROADCAST OF 0338/1538 NW ATLANTIC)",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "0000",
+     "map_area": "3"
+    },
+    {
+     "utc": "0428",
+     "title": "500MB ANALYSIS",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "0000",
+     "map_area": "4"
+    },
+    {
+     "utc": "0438",
+     "title": "ICE CHART (REBROADCAST)",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "2100"
+    },
+    {
+     "utc": "0452",
+     "title": "CYCLONE DANGER AREA* or HIGH WIND/WAVES",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "0300",
+     "map_area": "7"
+    },
+    {
+     "utc": "0745",
+     "title": "TEST PATTERN",
+     "lpm": 120,
+     "ioc": 576
+    },
+    {
+     "utc": "0755",
+     "title": "PRELIMINARY SURFACE ANALYSIS",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "0600",
+     "map_area": "1"
+    },
+    {
+     "utc": "0805",
+     "title": "24HR SURFACE FORECAST",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "0000",
+     "map_area": "8"
+    },
+    {
+     "utc": "0815",
+     "title": "24HR WIND/WAVE FORECAST",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "0000",
+     "map_area": "8"
+    },
+    {
+     "utc": "0825",
+     "title": "24HR 500MB FORECAST",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "0000",
+     "map_area": "4"
+    },
+    {
+     "utc": "0835",
+     "title": "36HR 500MB FORECAST",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1200",
+     "map_area": "4"
+    },
+    {
+     "utc": "0845",
+     "title": "48HR SURFACE FORECAST",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "0000",
+     "map_area": "4"
+    },
+    {
+     "utc": "0855",
+     "title": "48HR WIND/WAVE FORECAST",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "0000",
+     "map_area": "4"
+    },
+    {
+     "utc": "0905",
+     "title": "48HR 500MB FORECAST",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "0000",
+     "map_area": "4"
+    },
+    {
+     "utc": "0915",
+     "title": "48HR WAVE PERIOD FORECAST",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "0000",
+     "map_area": "4"
+    },
+    {
+     "utc": "0925",
+     "title": "SURFACE ANALYSIS (PART 1 NE ATLANTIC)",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "0600",
+     "map_area": "2"
+    },
+    {
+     "utc": "0938",
+     "title": "SURFACE ANALYSIS (PART 2 NW ATLANTIC)",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "0600",
+     "map_area": "3"
+    },
+    {
+     "utc": "0951",
+     "title": "SATELLITE IMAGE",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "0600",
+     "map_area": "6"
+    },
+    {
+     "utc": "1002",
+     "title": "(REBROADCAST OF 0925/2125 NE ATLANTIC)",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "0600",
+     "map_area": "2"
+    },
+    {
+     "utc": "1015",
+     "title": "(REBROADCAST OF 0938/2138 NW ATLANTIC)",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "0600",
+     "map_area": "3"
+    },
+    {
+     "utc": "1028",
+     "title": "CYCLONE DANGER AREA* or HIGH WIND/WAVES",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "0900",
+     "map_area": "7"
+    },
+    {
+     "utc": "1039",
+     "title": "REBROADCAST/N American Ice Service Chart",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "2100"
+    },
+    {
+     "utc": "1400",
+     "title": "TEST PATTERN",
+     "lpm": 120,
+     "ioc": 576
+    },
+    {
+     "utc": "1405",
+     "title": "BROADCAST SCHEDULE (PART 1)",
+     "lpm": 120,
+     "ioc": 576
+    },
+    {
+     "utc": "1420",
+     "title": "BROADCAST SCHEDULE (PART 2)",
+     "lpm": 120,
+     "ioc": 576
+    },
+    {
+     "utc": "1433",
+     "title": "REQUEST FOR COMMENTS",
+     "lpm": 120,
+     "ioc": 576
+    },
+    {
+     "utc": "1443",
+     "title": "PRODUCT NOTICE BULLETIN",
+     "lpm": 120,
+     "ioc": 576
+    },
+    {
+     "utc": "1453",
+     "title": "PRELIMINARY SURFACE ANALYSIS",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1200",
+     "map_area": "1"
+    },
+    {
+     "utc": "1503",
+     "title": "SATELLITE IMAGE",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1200",
+     "map_area": "5"
+    },
+    {
+     "utc": "1515",
+     "title": "WIND/WAVE ANALYSIS",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1200",
+     "map_area": "8"
+    },
+    {
+     "utc": "1525",
+     "title": "SURFACE ANALYSIS (PART 1 NE ATLANTIC)",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1200",
+     "map_area": "2"
+    },
+    {
+     "utc": "1538",
+     "title": "SURFACE ANALYSIS (PART 2 NW ATLANTIC)",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1200",
+     "map_area": "3"
+    },
+    {
+     "utc": "1600",
+     "title": "ICE CHART (REBROADCAST)",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "2100"
+    },
+    {
+     "utc": "1720",
+     "title": "TEST PATTERN",
+     "lpm": 120,
+     "ioc": 576
+    },
+    {
+     "utc": "1723",
+     "title": "(REBROADCAST OF 0325/1525 NE ATLANTIC)",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1200",
+     "map_area": "2"
+    },
+    {
+     "utc": "1736",
+     "title": "(REBROADCAST OF 0338/1538 NW ATLANTIC)",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1200",
+     "map_area": "3"
+    },
+    {
+     "utc": "1749",
+     "title": "500MB ANALYSIS",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1200",
+     "map_area": "4"
+    },
+    {
+     "utc": "1759",
+     "title": "SEA STATE ANALYSIS",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1200",
+     "map_area": "4"
+    },
+    {
+     "utc": "1810",
+     "title": "24HR SURFACE FORECAST",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1200",
+     "map_area": "8"
+    },
+    {
+     "utc": "1824",
+     "title": "CYCLONE DANGER AREA* or HIGH WIND/WAVES",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1500",
+     "map_area": "7"
+    },
+    {
+     "utc": "1835",
+     "title": "24HR WIND/WAVE FORECAST",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1200",
+     "map_area": "8"
+    },
+    {
+     "utc": "1855",
+     "title": "24HR 500MB FORECAST",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1200",
+     "map_area": "4"
+    },
+    {
+     "utc": "1905",
+     "title": "36HR 500MB FORECAST",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "0000",
+     "map_area": "4"
+    },
+    {
+     "utc": "1915",
+     "title": "96HR SURFACE FORECAST",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1200",
+     "map_area": "4"
+    },
+    {
+     "utc": "1925",
+     "title": "96HR WIND/WAVE FORECAST",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1200",
+     "map_area": "4"
+    },
+    {
+     "utc": "1935",
+     "title": "96HR 500MB FORECAST",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1200",
+     "map_area": "4"
+    },
+    {
+     "utc": "1945",
+     "title": "96HR WAVE PERIOD FORECAST",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1200",
+     "map_area": "4"
+    },
+    {
+     "utc": "1955",
+     "title": "48HR SURFACE FORECAST",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1200",
+     "map_area": "4"
+    },
+    {
+     "utc": "2005",
+     "title": "48HR WIND/WAVE FORECAST",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1200",
+     "map_area": "4"
+    },
+    {
+     "utc": "2015",
+     "title": "48HR 500MB FORECAST",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1200",
+     "map_area": "4"
+    },
+    {
+     "utc": "2025",
+     "title": "48HR WAVE PERIOD FORECAST",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1200",
+     "map_area": "4"
+    },
+    {
+     "utc": "2035",
+     "title": "PRELIMINARY SURFACE ANALYSIS",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1800",
+     "map_area": "1"
+    },
+    {
+     "utc": "2045",
+     "title": "72HR SURFACE FORECAST",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1200",
+     "map_area": "4"
+    },
+    {
+     "utc": "2055",
+     "title": "72HR WIND/WAVE FORECAST",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1200",
+     "map_area": "4"
+    },
+    {
+     "utc": "2105",
+     "title": "72HR 500MB FORECAST",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1200",
+     "map_area": "4"
+    },
+    {
+     "utc": "2115",
+     "title": "72HR WAVE PERIOD FORECAST",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1200",
+     "map_area": "4"
+    },
+    {
+     "utc": "2125",
+     "title": "SURFACE ANALYSIS (PART 1 NE ATLANTIC)",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1800",
+     "map_area": "2"
+    },
+    {
+     "utc": "2138",
+     "title": "SURFACE ANALYSIS (PART 2 NW ATLANTIC)",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1800",
+     "map_area": "3"
+    },
+    {
+     "utc": "2151",
+     "title": "SATELLITE IMAGE",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1800",
+     "map_area": "6"
+    },
+    {
+     "utc": "2202",
+     "title": "(REBROADCAST OF 0925/2125 NE ATLANTIC)",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1800",
+     "map_area": "2"
+    },
+    {
+     "utc": "2215",
+     "title": "(REBROADCAST OF 0938/2138 NW ATLANTIC)",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1800",
+     "map_area": "3"
+    },
+    {
+     "utc": "2228",
+     "title": "CYCLONE DANGER AREA* or HIGH WIND/WAVES",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "2100",
+     "map_area": "7"
+    },
+    {
+     "utc": "2239",
+     "title": "REBROADCAST/N American Ice Service Chart",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "2100"
+    }
+   ],
+   "also_broadcasts": {
+    "what": "International Ice Patrol (call letters NIK), seasonal ~Feb-Sep, on the NMF transmitters",
+    "utc": [
+     "0438",
+     "1039",
+     "1600",
+     "2239"
+    ],
+    "source": "https://www.weather.gov/marine/uscg_broadcasts"
+   },
+   "broadcast_blocks_utc": [
+    "0230",
+    "0745",
+    "1400",
+    "1720",
+    "1900"
+   ]
+  },
+  {
+   "call": "NMG",
+   "name": "New Orleans, Louisiana",
+   "operator": "US Coast Guard (transmitter) / NWS National Hurricane Center TAFB (charts)",
+   "freqs_khz": [
+    4317.9,
+    8503.9,
+    12789.9,
+    17146.4
+   ],
+   "freq_windows_utc": [
+    {
+     "khz": 4317.9,
+     "utc": "all broadcast times"
+    },
+    {
+     "khz": 8503.9,
+     "utc": "all broadcast times"
+    },
+    {
+     "khz": 12789.9,
+     "utc": "all broadcast times"
+    },
+    {
+     "khz": 17146.4,
+     "utc": "1200-2045"
+    }
+   ],
+   "freq_notes": "17146.4 kHz 1200-2045Z only; others at all broadcast times. 4 kW F3C. Transmitters are shared with USCG HF voice (weather.gov notes radiofax may be preempted). Cyclone Danger Area chart replaced by 48HR High Wind/Wave Warning Dec 01 - May 14.",
+   "lpm": 120,
+   "ioc": 576,
+   "tuning": "Listed frequencies are assigned frequencies; carrier (USB dial) is 1.9 kHz below (source note).",
+   "map_areas": {
+    "1": "5S-50N, 55W-125W",
+    "2": "5S-50N, 0W-70W",
+    "3": "0N-31N, 35W-100W",
+    "4": "12S-44N, 28W-112W",
+    "5": "7N-31N, 35W-98W (area covered by text forecast)",
+    "6": "05N-60N, 0W-100W"
+   },
+   "source": "https://tgftp.nws.noaa.gov/fax/hfgulf.txt",
+   "source_also": [
+    "https://www.weather.gov/media/marine/rfax.pdf",
+    "https://www.weather.gov/marine/uscg_broadcasts"
+   ],
+   "source_dated": "Schedule effective Apr 03, 2012 Information dated December 12, 2024",
+   "schedule": [
+    {
+     "utc": "0000",
+     "title": "TEST PATTERN",
+     "lpm": 120,
+     "ioc": 576
+    },
+    {
+     "utc": "0005",
+     "title": "U.S./TROPICAL SURFACE ANALYSIS (W HALF)",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1800",
+     "map_area": "1"
+    },
+    {
+     "utc": "0020",
+     "title": "TROPICAL SURFACE ANALYSIS (E HALF)",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1800",
+     "map_area": "2"
+    },
+    {
+     "utc": "0035",
+     "title": "REBROADCAST OF 1925/0725 (24 HR WIND/WAVE)",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1200",
+     "map_area": "3"
+    },
+    {
+     "utc": "0045",
+     "title": "REBROADCAST OF 1950/0750 (48 HR WIND/WAVE)",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1200",
+     "map_area": "3"
+    },
+    {
+     "utc": "0055",
+     "title": "REBROADCAST OF 2015/0815 (72 HR WIND/WAVE)",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1200",
+     "map_area": "3"
+    },
+    {
+     "utc": "0105",
+     "title": "REBROADCAST OF 1855/0655 (24 HR SURFACE)",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1200",
+     "map_area": "3"
+    },
+    {
+     "utc": "0115",
+     "title": "REBROADCAST OF 1905/0705 (48 HR SURFACE)",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1200",
+     "map_area": "3"
+    },
+    {
+     "utc": "0125",
+     "title": "REBROADCAST OF 1915/0715 (72 HR SURFACE)",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1200",
+     "map_area": "3"
+    },
+    {
+     "utc": "0135",
+     "title": "CYCLONE DANGER AREA* or HIGH WIND/WAVES",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "2100",
+     "map_area": "6"
+    },
+    {
+     "utc": "0150",
+     "title": "REBROADCAST OF 0825 (72 HR WAVE PD/SWELL)",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "0000",
+     "map_area": "3"
+    },
+    {
+     "utc": "0200",
+     "title": "GOES IR TROPICAL SATELLITE IMAGE",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "0000",
+     "map_area": "4"
+    },
+    {
+     "utc": "0215",
+     "title": "SEA STATE ANALYSIS",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "0000",
+     "map_area": "3"
+    },
+    {
+     "utc": "0225",
+     "title": "REQUEST FOR COMMENTS/PRODUCT NOTICE",
+     "lpm": 120,
+     "ioc": 576
+    },
+    {
+     "utc": "0245",
+     "title": "HIGH SEAS FORECAST (IN ENGLISH)",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "2200",
+     "map_area": "5"
+    },
+    {
+     "utc": "0600",
+     "title": "TEST PATTERN",
+     "lpm": 120,
+     "ioc": 576
+    },
+    {
+     "utc": "0605",
+     "title": "U.S./TROPICAL SURFACE ANALYSIS (W HALF)",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "0000",
+     "map_area": "1"
+    },
+    {
+     "utc": "0620",
+     "title": "TROPICAL SURFACE ANALYSIS (E HALF)",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "0000",
+     "map_area": "2"
+    },
+    {
+     "utc": "0635",
+     "title": "48 HR WAVE PERIOD/SWELL DIRECTION",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "0000",
+     "map_area": "3"
+    },
+    {
+     "utc": "0645",
+     "title": "REBROADCAST OF 0215/1415 (SEA STATE ANAL')",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "0000",
+     "map_area": "3"
+    },
+    {
+     "utc": "0655",
+     "title": "24 HR SURFACE FORECAST",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "0000",
+     "map_area": "3"
+    },
+    {
+     "utc": "0705",
+     "title": "48 HR SURFACE FORECAST",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "0000",
+     "map_area": "3"
+    },
+    {
+     "utc": "0715",
+     "title": "72 HR SURFACE FORECAST",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "0000",
+     "map_area": "3"
+    },
+    {
+     "utc": "0725",
+     "title": "24 HR WIND/WAVE FORECAST",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "0000",
+     "map_area": "3"
+    },
+    {
+     "utc": "0735",
+     "title": "CYCLONE DANGER AREA* or HIGH WIND/WAVES",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "0300",
+     "map_area": "6"
+    },
+    {
+     "utc": "0750",
+     "title": "48 HR WIND/WAVE FORECAST",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "0000",
+     "map_area": "3"
+    },
+    {
+     "utc": "0800",
+     "title": "GOES IR TROPICAL SATELLITE IMAGE",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "0700",
+     "map_area": "4"
+    },
+    {
+     "utc": "0815",
+     "title": "72 HR WIND/WAVE FORECAST",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "0000",
+     "map_area": "3"
+    },
+    {
+     "utc": "0825",
+     "title": "72 HR WAVE PERIOD/SWELL DIRECTION",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "0000",
+     "map_area": "3"
+    },
+    {
+     "utc": "0835",
+     "title": "REBROADCAST OF 0215 (SEA STATE ANALYSIS)",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "0000",
+     "map_area": "3"
+    },
+    {
+     "utc": "0845",
+     "title": "HIGH SEAS FORECAST (IN ENGLISH)",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "0400",
+     "map_area": "5"
+    },
+    {
+     "utc": "1200",
+     "title": "TEST PATTERN",
+     "lpm": 120,
+     "ioc": 576
+    },
+    {
+     "utc": "1205",
+     "title": "U.S./TROPICAL SURFACE ANALYSIS (W HALF)",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "0600",
+     "map_area": "1"
+    },
+    {
+     "utc": "1220",
+     "title": "TROPICAL SURFACE ANALYSIS (E HALF)",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "0600",
+     "map_area": "2"
+    },
+    {
+     "utc": "1235",
+     "title": "REBROADCAST OF 1925/0725 (24 HR WIND/WAVE)",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "0000",
+     "map_area": "3"
+    },
+    {
+     "utc": "1245",
+     "title": "REBROADCAST OF 1950/0750 (48 HR WIND/WAVE)",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "0000",
+     "map_area": "3"
+    },
+    {
+     "utc": "1255",
+     "title": "REBROADCAST OF 2015/0815 (72 HR WIND/WAVE)",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "0000",
+     "map_area": "3"
+    },
+    {
+     "utc": "1305",
+     "title": "REBROADCAST OF 1855/0655 (24 HR SURFACE)",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "0000",
+     "map_area": "3"
+    },
+    {
+     "utc": "1315",
+     "title": "REBROADCAST OF 1905/0705 (48 HR SURFACE)",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "0000",
+     "map_area": "3"
+    },
+    {
+     "utc": "1325",
+     "title": "REBROADCAST OF 1915/0715 (72 HR SURFACE)",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "0000",
+     "map_area": "3"
+    },
+    {
+     "utc": "1335",
+     "title": "CYCLONE DANGER AREA* or HIGH WIND/WAVES",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "0900",
+     "map_area": "6"
+    },
+    {
+     "utc": "1350",
+     "title": "36 HR WIND/WAVE FORECAST",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1200",
+     "map_area": "3"
+    },
+    {
+     "utc": "1400",
+     "title": "GOES IR TROPICAL SATELLITE IMAGE",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1200",
+     "map_area": "4"
+    },
+    {
+     "utc": "1415",
+     "title": "SEA STATE ANALYSIS",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1200",
+     "map_area": "3"
+    },
+    {
+     "utc": "1425",
+     "title": "REQUEST FOR COMMENTS/PRODUCT NOTICE",
+     "lpm": 120,
+     "ioc": 576
+    },
+    {
+     "utc": "1445",
+     "title": "HIGH SEAS FORECAST (IN ENGLISH)",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1000",
+     "map_area": "5"
+    },
+    {
+     "utc": "1800",
+     "title": "TEST PATTERN",
+     "lpm": 120,
+     "ioc": 576
+    },
+    {
+     "utc": "1805",
+     "title": "U.S./TROPICAL SURFACE ANALYSIS (W HALF)",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1200",
+     "map_area": "1"
+    },
+    {
+     "utc": "1820",
+     "title": "TROPICAL SURFACE ANALYSIS (E HALF)",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1200",
+     "map_area": "2"
+    },
+    {
+     "utc": "1835",
+     "title": "48 HR WAVE PERIOD/SWELL DIRECTION",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1200",
+     "map_area": "3"
+    },
+    {
+     "utc": "1845",
+     "title": "REBROADCAST OF 0215/1415 (SEA STATE ANAL')",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1200",
+     "map_area": "3"
+    },
+    {
+     "utc": "1855",
+     "title": "24 HR SURFACE FORECAST",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1200",
+     "map_area": "3"
+    },
+    {
+     "utc": "1905",
+     "title": "48 HR SURFACE FORECAST",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1200",
+     "map_area": "3"
+    },
+    {
+     "utc": "1915",
+     "title": "72 HR SURFACE FORECAST",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1200",
+     "map_area": "3"
+    },
+    {
+     "utc": "1925",
+     "title": "24 HR WIND/WAVE FORECAST",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1200",
+     "map_area": "3"
+    },
+    {
+     "utc": "1935",
+     "title": "CYCLONE DANGER AREA* or HIGH WIND/WAVES",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1500",
+     "map_area": "6"
+    },
+    {
+     "utc": "1950",
+     "title": "48 HR WIND/WAVE FORECAST",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1200",
+     "map_area": "3"
+    },
+    {
+     "utc": "2000",
+     "title": "GOES IR TROPICAL SATELLITE IMAGE",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1800",
+     "map_area": "4"
+    },
+    {
+     "utc": "2015",
+     "title": "72 HR WIND/WAVE FORECAST",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1200",
+     "map_area": "3"
+    },
+    {
+     "utc": "2025",
+     "title": "BROADCAST SCHEDULE",
+     "lpm": 120,
+     "ioc": 576
+    },
+    {
+     "utc": "2045",
+     "title": "HIGH SEAS FORECAST (IN ENGLISH)",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1600",
+     "map_area": "5"
+    }
+   ],
+   "broadcast_blocks_utc": [
+    "0000",
+    "0600",
+    "1200",
+    "1800"
+   ]
+  },
+  {
+   "call": "NMC",
+   "name": "Point Reyes, California",
+   "operator": "US Coast Guard (transmitter) / NWS OPC, NHC (charts)",
+   "freqs_khz": [
+    4346.0,
+    8682.0,
+    12786.0,
+    17151.2,
+    22527.0
+   ],
+   "freq_windows_utc": [
+    {
+     "khz": 4346.0,
+     "utc": "0140-1608"
+    },
+    {
+     "khz": 8682.0,
+     "utc": "all broadcast times"
+    },
+    {
+     "khz": 12786.0,
+     "utc": "all broadcast times"
+    },
+    {
+     "khz": 17151.2,
+     "utc": "all broadcast times"
+    },
+    {
+     "khz": 22527.0,
+     "utc": "1840-2356"
+    }
+   ],
+   "freq_notes": "4346 kHz 0140-1608Z only; 22527 kHz 1840-2356Z only; 8682, 12786, 17151.2 kHz at all broadcast times. 4 kW F3C.",
+   "lpm": 120,
+   "ioc": 576,
+   "tuning": "Listed frequencies are assigned frequencies; carrier (USB dial) is 1.9 kHz below (source note).",
+   "map_areas": {
+    "1": "20N-70N, 115W-135E",
+    "2": "20N-70N, 115W-175W",
+    "3": "20N-70N, 175W-135E",
+    "4": "20S-30N, east of 145W",
+    "5": "05N-55N, east of 180W",
+    "6": "23N-42N, east of 150W",
+    "7": "05N-32N, east of 130W",
+    "8": "18N-62N, east of 157W",
+    "9": "40N-53N, east of 136W",
+    "10": "0N-40N, 80W-180W"
+   },
+   "source": "https://tgftp.nws.noaa.gov/fax/hfreyes.txt",
+   "source_also": [
+    "https://www.weather.gov/media/marine/rfax.pdf",
+    "https://www.weather.gov/marine/uscg_broadcasts"
+   ],
+   "source_dated": "Schedule effective Sep 04, 2018 Information dated March 16, 2023",
+   "schedule": [
+    {
+     "utc": "0140",
+     "title": "TEST PATTERN",
+     "lpm": 120,
+     "ioc": 576
+    },
+    {
+     "utc": "0143",
+     "title": "NE PACIFIC GOES IR SATELLITE IMAGE",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "0000",
+     "map_area": "6"
+    },
+    {
+     "utc": "0154",
+     "title": "PACIFIC GOES IR SATELLITE IMAGE",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "0000",
+     "map_area": "5"
+    },
+    {
+     "utc": "0205",
+     "title": "TROPICAL SEA STATE ANALYSIS",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "0000",
+     "map_area": "4"
+    },
+    {
+     "utc": "0215",
+     "title": "TROPICAL 48HR SURFACE FORECAST",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1200",
+     "map_area": "4"
+    },
+    {
+     "utc": "0225",
+     "title": "TROPICAL 48HR WIND/WAVE FORECAST",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1200",
+     "map_area": "4"
+    },
+    {
+     "utc": "0235",
+     "title": "TROPICAL 72HR WIND/WAVE FORECAST",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1200",
+     "map_area": "4"
+    },
+    {
+     "utc": "0245",
+     "title": "500MB ANALYSIS",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "0000",
+     "map_area": "1"
+    },
+    {
+     "utc": "0255",
+     "title": "SEA STATE ANALYSIS, WIND/WAVE ANALYSIS",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "0000",
+     "map_area": "1/8"
+    },
+    {
+     "utc": "0305",
+     "title": "PRELIM SURFACE ANALYSIS(PART 1 NE PAC)",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "0000",
+     "map_area": "2"
+    },
+    {
+     "utc": "0318",
+     "title": "PRELIM SURFACE ANALYSIS(PART 2 NW PAC)",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "0000",
+     "map_area": "3"
+    },
+    {
+     "utc": "0331",
+     "title": "FINAL SURFACE ANALYSIS(PART 1 NE PAC)",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "0000",
+     "map_area": "2"
+    },
+    {
+     "utc": "0344",
+     "title": "FINAL SURFACE ANALYSIS(PART 2 NW PAC)",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "0000",
+     "map_area": "3"
+    },
+    {
+     "utc": "0357",
+     "title": "CYCLONE DANGER AREA* or HIGH WIND/WAVES",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "0300",
+     "map_area": "10"
+    },
+    {
+     "utc": "0408",
+     "title": "TROPICAL SURFACE ANALYSIS",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "0000",
+     "map_area": "4"
+    },
+    {
+     "utc": "0655",
+     "title": "TEST PATTERN"
+    },
+    {
+     "utc": "0657",
+     "title": "2033Z REBROADCAST (96HR 500MB)",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1200",
+     "map_area": "1"
+    },
+    {
+     "utc": "0707",
+     "title": "2043Z REBROADCAST (96HR SURFACE)",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1200",
+     "map_area": "1"
+    },
+    {
+     "utc": "0717",
+     "title": "2053Z REBROADCAST (96HR WIND/WAVE)",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1200",
+     "map_area": "1"
+    },
+    {
+     "utc": "0727",
+     "title": "2103Z REBROADCAST (96HR WAVE PERIOD)",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1200",
+     "map_area": "1"
+    },
+    {
+     "utc": "0737",
+     "title": "TROPICAL GOES IR SATELLITE IMAGE",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "0600",
+     "map_area": "7"
+    },
+    {
+     "utc": "0748",
+     "title": "WIND/WAVE ANALYSIS",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "0600",
+     "map_area": "8"
+    },
+    {
+     "utc": "0758",
+     "title": "24HR SURFACE FORECAST",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "0000",
+     "map_area": "8"
+    },
+    {
+     "utc": "0808",
+     "title": "24HR WIND/WAVE FORECAST",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "0000",
+     "map_area": "8"
+    },
+    {
+     "utc": "0818",
+     "title": "24HR 500MB FORECAST",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "0000",
+     "map_area": "1"
+    },
+    {
+     "utc": "0828",
+     "title": "48HR SURFACE FORECAST",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "0000",
+     "map_area": "1"
+    },
+    {
+     "utc": "0838",
+     "title": "48HR WIND/WAVE FORECAST",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "0000",
+     "map_area": "1"
+    },
+    {
+     "utc": "0848",
+     "title": "48HR 500MB FORECAST",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "0000",
+     "map_area": "1"
+    },
+    {
+     "utc": "0858",
+     "title": "48HR WAVE PERIOD/SWELL DIRECTION",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "0000",
+     "map_area": "1"
+    },
+    {
+     "utc": "0908",
+     "title": "PACIFIC GOES IR SATELLITE IMAGE",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "0600",
+     "map_area": "5"
+    },
+    {
+     "utc": "0919",
+     "title": "SURFACE ANALYSIS (PART 1 NE PACIFIC)",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "0600",
+     "map_area": "2"
+    },
+    {
+     "utc": "0932",
+     "title": "SURFACE ANALYSIS (PART 2 NW PACIFIC)",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "0600",
+     "map_area": "3"
+    },
+    {
+     "utc": "0945",
+     "title": "TROPICAL SURFACE ANALYSIS",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "0600",
+     "map_area": "4"
+    },
+    {
+     "utc": "0959",
+     "title": "TROPICAL 24HR WIND/WAVE FORECAST",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "0000",
+     "map_area": "4"
+    },
+    {
+     "utc": "1009",
+     "title": "CYCLONE DANGER AREA* or HIGH WIND/WAVES",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "0900",
+     "map_area": "10"
+    },
+    {
+     "utc": "1120",
+     "title": "TEST PATTERN",
+     "lpm": 120,
+     "ioc": 576
+    },
+    {
+     "utc": "1124",
+     "title": "BROADCAST SCHEDULE (PART 1)",
+     "lpm": 120,
+     "ioc": 576
+    },
+    {
+     "utc": "1135",
+     "title": "BROADCAST SCHEDULE (PART 2)",
+     "lpm": 120,
+     "ioc": 576
+    },
+    {
+     "utc": "1146",
+     "title": "REQUEST FOR COMMENTS",
+     "lpm": 120,
+     "ioc": 576
+    },
+    {
+     "utc": "1157",
+     "title": "PRODUCT NOTICE BULLETIN",
+     "lpm": 120,
+     "ioc": 576
+    },
+    {
+     "utc": "1208",
+     "title": "TROPICAL 48HR WIND/WAVE FORECAST",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "0000",
+     "map_area": "4"
+    },
+    {
+     "utc": "1218",
+     "title": "TROPICAL 72HR WIND/WAVE FORECAST",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "0000",
+     "map_area": "4"
+    },
+    {
+     "utc": "1228",
+     "title": "TROPICAL 48HR WAVE PERIOD/SWELL DIR",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "0000",
+     "map_area": "4"
+    },
+    {
+     "utc": "1400",
+     "title": "TEST PATTERN",
+     "lpm": 120,
+     "ioc": 576
+    },
+    {
+     "utc": "1403",
+     "title": "NE PACIFIC GOES IR SATELLITE IMAGE",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1200",
+     "map_area": "6"
+    },
+    {
+     "utc": "1414",
+     "title": "PACIFIC GOES IR SATELLITE IMAGE",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1200",
+     "map_area": "5"
+    },
+    {
+     "utc": "1425",
+     "title": "TROPICAL SEA STATE ANALYSIS",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1200",
+     "map_area": "4"
+    },
+    {
+     "utc": "1435",
+     "title": "TROPICAL 48HR SURFACE FORECAST",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "0000",
+     "map_area": "4"
+    },
+    {
+     "utc": "1445",
+     "title": "500MB ANALYSIS",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1200",
+     "map_area": "1"
+    },
+    {
+     "utc": "1455",
+     "title": "SEA STATE ANALYSIS, WIND/WAVE ANALYSIS",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1200",
+     "map_area": "1/8"
+    },
+    {
+     "utc": "1505",
+     "title": "PRELIM SURFACE ANALYSIS(PART 1 NE PAC)",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1200",
+     "map_area": "2"
+    },
+    {
+     "utc": "1518",
+     "title": "PRELIM SURFACE ANALYSIS(PART 2 NW PAC)",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1200",
+     "map_area": "3"
+    },
+    {
+     "utc": "1531",
+     "title": "FINAL SURFACE ANALYSIS(PART 1 NE PAC)",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1200",
+     "map_area": "2"
+    },
+    {
+     "utc": "1544",
+     "title": "FINAL SURFACE ANALYSIS(PART 2 NW PAC)",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1200",
+     "map_area": "3"
+    },
+    {
+     "utc": "1557",
+     "title": "CYCLONE DANGER AREA* or HIGH WIND/WAVES",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1500",
+     "map_area": "10"
+    },
+    {
+     "utc": "1608",
+     "title": "TROPICAL SURFACE ANALYSIS",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1200",
+     "map_area": "4"
+    },
+    {
+     "utc": "1820",
+     "title": "TEST PATTERN"
+    },
+    {
+     "utc": "1822",
+     "title": "24HR SURFACE FORECAST",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1200",
+     "map_area": "8"
+    },
+    {
+     "utc": "1832",
+     "title": "24HR WIND/WAVE FORECAST",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1200",
+     "map_area": "8"
+    },
+    {
+     "utc": "1842",
+     "title": "24HR 500MB FORECAST",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1200",
+     "map_area": "1"
+    },
+    {
+     "utc": "1852",
+     "title": "SST ANALYSIS",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "LATEST",
+     "map_area": "9"
+    },
+    {
+     "utc": "1902",
+     "title": "SST ANALYSIS",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "LATEST",
+     "map_area": "6"
+    },
+    {
+     "utc": "1913",
+     "title": "TROPICAL GOES IR SATELLITE IMAGE",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1800",
+     "map_area": "7"
+    },
+    {
+     "utc": "1923",
+     "title": "WIND/WAVE ANALYSIS",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1800",
+     "map_area": "8"
+    },
+    {
+     "utc": "1933",
+     "title": "96HR SURFACE FORECAST",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1200",
+     "map_area": "1"
+    },
+    {
+     "utc": "1943",
+     "title": "96HR WIND/WAVE FORECAST",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1200",
+     "map_area": "1"
+    },
+    {
+     "utc": "1953",
+     "title": "96HR 500MB FORECAST",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1200",
+     "map_area": "1"
+    },
+    {
+     "utc": "2003",
+     "title": "96HR WAVE PERIOD/SWELL DIRECTION",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1200",
+     "map_area": "1"
+    },
+    {
+     "utc": "2013",
+     "title": "48HR SURFACE FORECAST",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1200",
+     "map_area": "1"
+    },
+    {
+     "utc": "2023",
+     "title": "48HR WIND/WAVE FORECAST",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1200",
+     "map_area": "1"
+    },
+    {
+     "utc": "2033",
+     "title": "48HR 500MB FORECAST",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1200",
+     "map_area": "1"
+    },
+    {
+     "utc": "2043",
+     "title": "48HR WAVE PERIOD/SWELL DIRECTION",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1200",
+     "map_area": "1"
+    },
+    {
+     "utc": "2053",
+     "title": "72HR SURFACE FORECAST",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1200",
+     "map_area": "1"
+    },
+    {
+     "utc": "2103",
+     "title": "72HR WIND/WAVE FORECAST",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1200",
+     "map_area": "1"
+    },
+    {
+     "utc": "2113",
+     "title": "PACIFIC GOES IR SATELLITE IMAGE",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1800",
+     "map_area": "5"
+    },
+    {
+     "utc": "2124",
+     "title": "SURFACE ANALYSIS (PART 1 NE PACIFIC)",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1800",
+     "map_area": "2"
+    },
+    {
+     "utc": "2137",
+     "title": "SURFACE ANALYSIS (PART 2 NW PACIFIC)",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1800",
+     "map_area": "3"
+    },
+    {
+     "utc": "2150",
+     "title": "TROPICAL SURFACE ANALYSIS",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1800",
+     "map_area": "4"
+    },
+    {
+     "utc": "2204",
+     "title": "TROPICAL 24HR WIND/WAVE FORECAST",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1200",
+     "map_area": "4"
+    },
+    {
+     "utc": "2214",
+     "title": "CYCLONE DANGER AREA* or HIGH WIND/WAVES",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "2100",
+     "map_area": "10"
+    },
+    {
+     "utc": "2320",
+     "title": "TEST PATTERN",
+     "lpm": 120,
+     "ioc": 576
+    },
+    {
+     "utc": "2324",
+     "title": "BROADCAST SCHEDULE (PART 1)",
+     "lpm": 120,
+     "ioc": 576
+    },
+    {
+     "utc": "2335",
+     "title": "BROADCAST SCHEDULE (PART 2)",
+     "lpm": 120,
+     "ioc": 576
+    },
+    {
+     "utc": "2346",
+     "title": "TROPICAL 48HR WAVE PERIOD/SWELL DIR",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1200",
+     "map_area": "4"
+    },
+    {
+     "utc": "2356",
+     "title": "TROPICAL 72HR WAVE PERIOD/SWELL DIR",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "0000",
+     "map_area": "4"
+    }
+   ],
+   "broadcast_blocks_utc": [
+    "0140",
+    "0655",
+    "1120",
+    "1400",
+    "1840",
+    "2320"
+   ]
+  },
+  {
+   "call": "NOJ",
+   "name": "Kodiak, Alaska",
+   "operator": "US Coast Guard (transmitter) / NWS Alaska Region (charts)",
+   "freqs_khz": [
+    2054.0,
+    4298.0,
+    8459.0,
+    12412.5
+   ],
+   "freq_windows_utc": [
+    {
+     "khz": 2054.0,
+     "utc": "all broadcast times"
+    },
+    {
+     "khz": 4298.0,
+     "utc": "all broadcast times"
+    },
+    {
+     "khz": 8459.0,
+     "utc": "all broadcast times"
+    },
+    {
+     "khz": 12412.5,
+     "utc": "all broadcast times"
+    }
+   ],
+   "freq_notes": "All four frequencies at all broadcast times (hfak.txt and rfax.pdf). 4 kW. NOTE: weather.gov/marine/uscg_broadcasts lists the top channel as 12410.6 kHz, which is 12412.5 minus the 1.9 kHz carrier offset (i.e. a carrier/dial figure). USCG page also notes all frequencies may be broadcast simultaneously at times.",
+   "lpm": 120,
+   "ioc": 576,
+   "tuning": "Listed frequencies are assigned frequencies; carrier (USB dial) is 1.9 kHz below (source note).",
+   "map_areas": {
+    "1": "20N-70N, 115W-135E",
+    "2": "40N-70N, 125W-150E",
+    "3": "40N-70N, 115W-170E",
+    "4": "40N-60N, 125W-160E",
+    "5": "05N-60N, 110W-160W",
+    "6": "Ice covered AK waters",
+    "7": "Cook Inlet"
+   },
+   "source": "https://tgftp.nws.noaa.gov/fax/hfak.txt",
+   "source_also": [
+    "https://www.weather.gov/media/marine/rfax.pdf",
+    "https://www.weather.gov/marine/uscg_broadcasts"
+   ],
+   "source_dated": "Schedule effective Sep 04, 2018 Information dated March 16, 2023",
+   "schedule": [
+    {
+     "utc": "0008",
+     "title": "96HR WAVE PERIOD, SWELL DIRECTION",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1200",
+     "map_area": "1"
+    },
+    {
+     "utc": "0018",
+     "title": "96HR 500 MB FORECAST",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1200",
+     "map_area": "1"
+    },
+    {
+     "utc": "0340",
+     "title": "TEST PATTERN",
+     "lpm": 120,
+     "ioc": 576
+    },
+    {
+     "utc": "0343",
+     "title": "SEA ICE ANALYSIS/REBROADCAST 1057",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "LATEST",
+     "map_area": "6"
+    },
+    {
+     "utc": "0403",
+     "title": "SURFACE ANALYSIS",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "0000",
+     "map_area": "2"
+    },
+    {
+     "utc": "0427",
+     "title": "REBROADCAST 24HR SURFACE F'CAST 2227/1027",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1200",
+     "map_area": "3"
+    },
+    {
+     "utc": "0437",
+     "title": "REBROADCAST 48HR SURFACE F'CAST 2237/1037",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1200",
+     "map_area": "1"
+    },
+    {
+     "utc": "0447",
+     "title": "REBROADCAST 96HR SURFACE F'CAST 2348",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1200",
+     "map_area": "1"
+    },
+    {
+     "utc": "0456",
+     "title": "SEA STATE ANALYSIS/REBROADCAST",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "0000",
+     "map_area": "1"
+    },
+    {
+     "utc": "0506",
+     "title": "GOES IR SATELLITE IMAGE",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "0000",
+     "map_area": "5"
+    },
+    {
+     "utc": "0517",
+     "title": "500 MB ANALYSIS",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "0000",
+     "map_area": "1"
+    },
+    {
+     "utc": "0527",
+     "title": "SYMBOLS AND CONTRACTIONS/SCHEDULE",
+     "lpm": 120,
+     "ioc": 576
+    },
+    {
+     "utc": "0548",
+     "title": "REQUEST FOR COMMENTS/PRODUCT NOTICE",
+     "lpm": 120,
+     "ioc": 576
+    },
+    {
+     "utc": "0558",
+     "title": "24HR 500 MB FORECAST",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "0000",
+     "map_area": "1"
+    },
+    {
+     "utc": "0950",
+     "title": "TEST PATTERN",
+     "lpm": 120,
+     "ioc": 576
+    },
+    {
+     "utc": "0953",
+     "title": "SURFACE ANALYSIS",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "0600",
+     "map_area": "2"
+    },
+    {
+     "utc": "1017",
+     "title": "24HR SURFACE FORECAST",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "0000",
+     "map_area": "3"
+    },
+    {
+     "utc": "1027",
+     "title": "24HR WIND/WAVE FORECAST",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "0000",
+     "map_area": "3"
+    },
+    {
+     "utc": "1037",
+     "title": "48HR SURFACE FORECAST",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "0000",
+     "map_area": "1"
+    },
+    {
+     "utc": "1047",
+     "title": "48HR WIND/WAVE FORECAST",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "0000",
+     "map_area": "1"
+    },
+    {
+     "utc": "1057",
+     "title": "5-DAY SEA ICE FORECAST/REBROADCAST 0343",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "LATEST",
+     "map_area": "6"
+    },
+    {
+     "utc": "1117",
+     "title": "GOES IR SATELLITE IMAGE",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "0600",
+     "map_area": "5"
+    },
+    {
+     "utc": "1128",
+     "title": "48HR WAVE PERIOD, SWELL DIRECTION",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "00/12",
+     "map_area": "1"
+    },
+    {
+     "utc": "1138",
+     "title": "48HR 500 MB FORECAST",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "0000",
+     "map_area": "1"
+    },
+    {
+     "utc": "1148",
+     "title": "SEA SURFACE TEMPERATURE ANALYSIS",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "LATEST",
+     "map_area": "4"
+    },
+    {
+     "utc": "1159",
+     "title": "COOK INLET SEA ICE FORECAST",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "LATEST",
+     "map_area": "7"
+    },
+    {
+     "utc": "1540",
+     "title": "TEST PATTERN",
+     "lpm": 120,
+     "ioc": 576
+    },
+    {
+     "utc": "1543",
+     "title": "SEA ICE ANALYSIS/REBROADCAST 1057",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "LATEST",
+     "map_area": "6"
+    },
+    {
+     "utc": "1603",
+     "title": "SURFACE ANALYSIS",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1200",
+     "map_area": "2"
+    },
+    {
+     "utc": "1627",
+     "title": "REBROADCAST 24HR SURFACE F'CAST 2227/1027",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "0000",
+     "map_area": "3"
+    },
+    {
+     "utc": "1637",
+     "title": "REBROADCAST 48HR SURFACE F'CAST 2237/1037",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "0000",
+     "map_area": "1"
+    },
+    {
+     "utc": "1647",
+     "title": "REBROADCAST 96HR SURFACE F'CAST 2348",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1200",
+     "map_area": "1"
+    },
+    {
+     "utc": "1656",
+     "title": "SEA STATE ANALYSIS/REBROADCAST",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "0000",
+     "map_area": "1"
+    },
+    {
+     "utc": "1706",
+     "title": "GOES IR SATELLITE IMAGE",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1200",
+     "map_area": "5"
+    },
+    {
+     "utc": "1717",
+     "title": "500 MB ANALYSIS",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1200",
+     "map_area": "1"
+    },
+    {
+     "utc": "1727",
+     "title": "SYMBOLS AND CONTRACTIONS/SCHEDULE",
+     "lpm": 120,
+     "ioc": 576
+    },
+    {
+     "utc": "1748",
+     "title": "REQUEST FOR COMMENTS/PRODUCT NOTICE",
+     "lpm": 120,
+     "ioc": 576
+    },
+    {
+     "utc": "1758",
+     "title": "24HR 500 MB FORECAST",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1200",
+     "map_area": "1"
+    },
+    {
+     "utc": "1808",
+     "title": "48HR 500 MB FORECAST",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1200"
+    },
+    {
+     "utc": "2150",
+     "title": "TEST PATTERN",
+     "lpm": 120,
+     "ioc": 576
+    },
+    {
+     "utc": "2153",
+     "title": "SURFACE ANALYSIS",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1800",
+     "map_area": "2"
+    },
+    {
+     "utc": "2203",
+     "title": "24HR SURFACE FORECAST",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1200",
+     "map_area": "3"
+    },
+    {
+     "utc": "2217",
+     "title": "24HR WIND/WAVE FORECAST",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1200",
+     "map_area": "3"
+    },
+    {
+     "utc": "2227",
+     "title": "48HR SURFACE FORECAST",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1200",
+     "map_area": "1"
+    },
+    {
+     "utc": "2237",
+     "title": "48HR WIND/WAVE FORECAST",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1200",
+     "map_area": "1"
+    },
+    {
+     "utc": "2247",
+     "title": "48HR WAVE PERIOD, SWELL DIRECTION",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1200",
+     "map_area": "1"
+    },
+    {
+     "utc": "2257",
+     "title": "5-DAY SEA ICE FORECAST/REBROADCAST 0343",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "LATEST",
+     "map_area": "6"
+    },
+    {
+     "utc": "2307",
+     "title": "GOES IR SATELLITE IMAGE",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1800",
+     "map_area": "5"
+    },
+    {
+     "utc": "2317",
+     "title": "72HR SURFACE FORECAST",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1200",
+     "map_area": "1"
+    },
+    {
+     "utc": "2328",
+     "title": "72HR WIND/WAVE FORECAST",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1200",
+     "map_area": "1"
+    },
+    {
+     "utc": "2338",
+     "title": "72HR WAVE PERIOD, SWELL DIRECTION",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1200",
+     "map_area": "1"
+    },
+    {
+     "utc": "2348",
+     "title": "96HR SURFACE FORECAST",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1200",
+     "map_area": "1"
+    },
+    {
+     "utc": "2358",
+     "title": "96HR WIND/WAVE FORECAST",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1200",
+     "map_area": "1"
+    }
+   ],
+   "broadcast_blocks_utc": [
+    "0340",
+    "0950",
+    "1540",
+    "2150"
+   ]
+  },
+  {
+   "call": "KVM70",
+   "name": "Honolulu, Hawaii",
+   "operator": "US Department of Defense transmitter (not USCG) / NWS Honolulu Forecast Office, OPC, NHC (charts)",
+   "freqs_khz": [
+    9982.5,
+    11090.0,
+    16135.0
+   ],
+   "freq_windows_utc": [
+    {
+     "khz": 9982.5,
+     "utc": "0519-1556"
+    },
+    {
+     "khz": 11090.0,
+     "utc": "all broadcast times"
+    },
+    {
+     "khz": 16135.0,
+     "utc": "1719-0356"
+    }
+   ],
+   "freq_notes": "9982.5 kHz 0519-1556Z only; 16135 kHz 1719-0356Z only; 11090 kHz at all broadcast times. 4 kW F3C. Assigned frequencies; subtract 1.9 kHz for carrier.",
+   "lpm": 120,
+   "ioc": 576,
+   "tuning": "Listed frequencies are assigned frequencies; carrier (USB dial) is 1.9 kHz below (source note).",
+   "map_areas": {
+    "A": "30S-50N, 110W-130E",
+    "B": "30S-30N, 110W-130E",
+    "C": "EQ-50N, 110W-130E",
+    "D": "30S-50N, 110W-160E",
+    "E": "EQ-40N, 80W-170E",
+    "F": "EQ-55N, 110W-160E",
+    "G": "05S-55N, 110W-155E",
+    "H": "40S-05N, 130W-165E",
+    "1": "20N-70N, 115W-135E",
+    "2": "20N-70N, 115W-175W",
+    "3": "20N-70N, 175W-135E",
+    "4": "18N-62N, east of 157W",
+    "5": "05N-55N, east of 180W",
+    "Y": "05N-32N, east of 130W",
+    "Z": "20S-30N, east of 145W"
+   },
+   "source": "https://tgftp.nws.noaa.gov/fax/hfhi.txt",
+   "source_also": [
+    "https://www.weather.gov/media/marine/rfax.pdf",
+    "https://www.weather.gov/marine/uscg_broadcasts"
+   ],
+   "source_dated": "Schedule effective February 11, 2020 Information dated March 16, 2023",
+   "schedule": [
+    {
+     "utc": "0014",
+     "title": "SURFACE ANALYSIS",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1800",
+     "map_area": "C"
+    },
+    {
+     "utc": "0034",
+     "title": "EAST PACIFIC GOES IR SATELLITE IMAGE",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "0000",
+     "map_area": "G"
+    },
+    {
+     "utc": "0048",
+     "title": "SW PACIFIC GOES IR SATELLITE IMAGE",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "0000",
+     "map_area": "H"
+    },
+    {
+     "utc": "0100",
+     "title": "SCHEDULE PART I",
+     "lpm": 120,
+     "ioc": 576
+    },
+    {
+     "utc": "0120",
+     "title": "SCHEDULE PART II",
+     "lpm": 120,
+     "ioc": 576
+    },
+    {
+     "utc": "0140",
+     "title": "SYMBOLS OR PRODUCT NOTICE BULLETIN",
+     "lpm": 120,
+     "ioc": 576
+    },
+    {
+     "utc": "0200",
+     "title": "24HR TROPICAL SURFACE FORECAST",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1200",
+     "map_area": "Z"
+    },
+    {
+     "utc": "0210",
+     "title": "48HR TROPICAL SURFACE FORECAST",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1200",
+     "map_area": "Z"
+    },
+    {
+     "utc": "0220",
+     "title": "72HR TROPICAL SURFACE FORECAST",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1200",
+     "map_area": "Z"
+    },
+    {
+     "utc": "0230",
+     "title": "48/72HR TROPICAL WAVE PERIOD,SWELL DIR",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "0000",
+     "map_area": "Z"
+    },
+    {
+     "utc": "0240",
+     "title": "TROPICAL SEA STATE ANALYSIS",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "0000",
+     "map_area": "Z"
+    },
+    {
+     "utc": "0250",
+     "title": "rebroadcast 24HR WIND/WAVE FORECASTS",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1200",
+     "map_area": "Z"
+    },
+    {
+     "utc": "0300",
+     "title": "48HR TROPICAL WIND/WAVE FORECAST",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1200",
+     "map_area": "Z"
+    },
+    {
+     "utc": "0310",
+     "title": "72HR TROPICAL WIND/WAVE FORECAST",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1200",
+     "map_area": "Z"
+    },
+    {
+     "utc": "0320",
+     "title": "rebroadcast/SEA STATE ANALYSIS",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "0000",
+     "map_area": "1"
+    },
+    {
+     "utc": "0330",
+     "title": "SURFACE ANALYSIS(PART 1 NE PAC)",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "0000",
+     "map_area": "2"
+    },
+    {
+     "utc": "0343",
+     "title": "SURFACE ANALYSIS(PART 2 NW PAC)",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "0000",
+     "map_area": "3"
+    },
+    {
+     "utc": "0356",
+     "title": "TROPICAL SURFACE ANALYSIS",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "0000",
+     "map_area": "Z"
+    },
+    {
+     "utc": "0519",
+     "title": "TEST PATTERN",
+     "lpm": 120,
+     "ioc": 576
+    },
+    {
+     "utc": "0535",
+     "title": "CYCLONE DANGER AREA",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "0300",
+     "map_area": "E"
+    },
+    {
+     "utc": "0555",
+     "title": "STREAMLINE ANALYSIS",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "0000",
+     "map_area": "B"
+    },
+    {
+     "utc": "0615",
+     "title": "SURFACE ANALYSIS",
+     "lpm": 120,
+     "ioc": 570,
+     "valid_utc": "0000",
+     "map_area": "C"
+    },
+    {
+     "utc": "0635",
+     "title": "EAST PACIFIC GOES IR SATELLITE IMAGE",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "0600",
+     "map_area": "G"
+    },
+    {
+     "utc": "0649",
+     "title": "SW PACIFIC GOES IR SATELLITE IMAGE",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "0600",
+     "map_area": "H"
+    },
+    {
+     "utc": "0701",
+     "title": "24HR SURFACE FORECAST",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "0000",
+     "map_area": "A"
+    },
+    {
+     "utc": "0714",
+     "title": "48HR SURFACE FORECAST",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "0000",
+     "map_area": "A"
+    },
+    {
+     "utc": "0727",
+     "title": "72HR SURFACE FORECAST",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "0000",
+     "map_area": "A"
+    },
+    {
+     "utc": "0740",
+     "title": "WIND/WAVE ANALYSIS",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "0000",
+     "map_area": "B"
+    },
+    {
+     "utc": "0753",
+     "title": "24HR WIND/WAVE FORECAST",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "0000",
+     "map_area": "B"
+    },
+    {
+     "utc": "0806",
+     "title": "24HR WIND/WAVE FORECAST",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "0000",
+     "map_area": "4"
+    },
+    {
+     "utc": "0816",
+     "title": "48HR SURFACE FORECAST",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "0000",
+     "map_area": "1"
+    },
+    {
+     "utc": "0826",
+     "title": "48HR WIND/WAVE FORECAST",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "0000",
+     "map_area": "1"
+    },
+    {
+     "utc": "0836",
+     "title": "48/96HR WAVE PERIOD,SWELL DIRECTION",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "0000",
+     "map_area": "1"
+    },
+    {
+     "utc": "0846",
+     "title": "rebroadcast/ 96HR SURFACE FORECAST",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1200",
+     "map_area": "1"
+    },
+    {
+     "utc": "0856",
+     "title": "rebroadcast/ 96HR WIND/WAVE FORECAST",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1200",
+     "map_area": "1"
+    },
+    {
+     "utc": "0906",
+     "title": "PACIFIC GOES IR SATELLITE IMAGE",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "0600",
+     "map_area": "5"
+    },
+    {
+     "utc": "0917",
+     "title": "SURFACE ANALYSIS (PART 1 NE PACIFIC)",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "0600",
+     "map_area": "2"
+    },
+    {
+     "utc": "0930",
+     "title": "SURFACE ANALYSIS (PART 2 NW PACIFIC)",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "0600",
+     "map_area": "3"
+    },
+    {
+     "utc": "0943",
+     "title": "TROPICAL GOES IR SATELLITE IMAGE",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "0600",
+     "map_area": "Y"
+    },
+    {
+     "utc": "0954",
+     "title": "TROPICAL SURFACE ANALYSIS",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "0600",
+     "map_area": "Z"
+    },
+    {
+     "utc": "1008",
+     "title": "24HR TROPICAL WIND/WAVE FORECAST",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "0000",
+     "map_area": "Z"
+    },
+    {
+     "utc": "1042",
+     "title": "CYCLONE DANGER AREA",
+     "lpm": 120,
+     "ioc": 570,
+     "valid_utc": "0900",
+     "map_area": "E"
+    },
+    {
+     "utc": "1102",
+     "title": "48HR WIND/WAVE FORECAST",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "0000",
+     "map_area": "B"
+    },
+    {
+     "utc": "1115",
+     "title": "72HR WIND/WAVE FORECAST",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "0000",
+     "map_area": "B"
+    },
+    {
+     "utc": "1128",
+     "title": "SEA SURFACE TEMPS",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "LATEST",
+     "map_area": "F"
+    },
+    {
+     "utc": "1141",
+     "title": "rebroadcast 24HR WIND/WAVE FORECASTS",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "0000",
+     "map_area": "B"
+    },
+    {
+     "utc": "1154",
+     "title": "STREAMLINE ANALYSIS",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "0600",
+     "map_area": "B"
+    },
+    {
+     "utc": "1214",
+     "title": "SURFACE ANALYSIS",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "0600",
+     "map_area": "C"
+    },
+    {
+     "utc": "1234",
+     "title": "EAST PACIFIC GOES IR SATELLITE IMAGE",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1200",
+     "map_area": "G"
+    },
+    {
+     "utc": "1248",
+     "title": "SW PACIFIC GOES IR SATELLITE IMAGE",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1200",
+     "map_area": "H"
+    },
+    {
+     "utc": "1300",
+     "title": "SCHEDULE PART I",
+     "lpm": 120,
+     "ioc": 576
+    },
+    {
+     "utc": "1320",
+     "title": "SCHEDULE PART II",
+     "lpm": 120,
+     "ioc": 576
+    },
+    {
+     "utc": "1340",
+     "title": "SYMBOLS OR PRODUCT NOTICE BULLETIN",
+     "lpm": 120,
+     "ioc": 576
+    },
+    {
+     "utc": "1400",
+     "title": "24HR TROPICAL SURFACE FORECAST",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "0000",
+     "map_area": "Z"
+    },
+    {
+     "utc": "1410",
+     "title": "48HR TROPICAL SURFACE FORECAST",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "0000",
+     "map_area": "Z"
+    },
+    {
+     "utc": "1420",
+     "title": "72HR TROPICAL SURFACE FORECAST",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "0000",
+     "map_area": "Z"
+    },
+    {
+     "utc": "1430",
+     "title": "48/72HR TROPICAL WAVE PERIOD,SWELL DIR",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "0000",
+     "map_area": "Z"
+    },
+    {
+     "utc": "1440",
+     "title": "TROPICAL SEA STATE ANALYSIS",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1200",
+     "map_area": "Z"
+    },
+    {
+     "utc": "1450",
+     "title": "rebroadcast 24HR WIND/WAVE FORECASTS",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "0000",
+     "map_area": "Z"
+    },
+    {
+     "utc": "1500",
+     "title": "48HR TROPICAL WIND/WAVE FORECAST",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "0000",
+     "map_area": "Z"
+    },
+    {
+     "utc": "1510",
+     "title": "72HR TROPICAL WIND/WAVE FORECAST",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "0000",
+     "map_area": "Z"
+    },
+    {
+     "utc": "1520",
+     "title": "rebroadcast/SEA STATE ANALYSIS",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "0000",
+     "map_area": "1"
+    },
+    {
+     "utc": "1530",
+     "title": "SURFACE ANALYSIS(PART 1 NE PAC)",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1200",
+     "map_area": "2"
+    },
+    {
+     "utc": "1543",
+     "title": "SURFACE ANALYSIS(PART 2 NW PAC)",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1200",
+     "map_area": "3"
+    },
+    {
+     "utc": "1556",
+     "title": "TROPICAL SURFACE ANALYSIS",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1200",
+     "map_area": "Z"
+    },
+    {
+     "utc": "1719",
+     "title": "TEST PATTERN",
+     "lpm": 120,
+     "ioc": 576
+    },
+    {
+     "utc": "1735",
+     "title": "CYCLONE DANGER AREA",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1500",
+     "map_area": "E"
+    },
+    {
+     "utc": "1755",
+     "title": "STREAMLINE ANALYSIS",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1200",
+     "map_area": "B"
+    },
+    {
+     "utc": "1815",
+     "title": "SURFACE ANALYSIS",
+     "lpm": 120,
+     "ioc": 570,
+     "valid_utc": "1200",
+     "map_area": "C"
+    },
+    {
+     "utc": "1835",
+     "title": "EAST PACIFIC GOES IR SATELLITE IMAGE",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1800",
+     "map_area": "G"
+    },
+    {
+     "utc": "1849",
+     "title": "SW PACIFIC GOES IR SATELLITE IMAGE",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1800",
+     "map_area": "H"
+    },
+    {
+     "utc": "1901",
+     "title": "24HR SURFACE FORECAST",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1200",
+     "map_area": "A"
+    },
+    {
+     "utc": "1914",
+     "title": "48HR SURFACE FORECAST",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1200",
+     "map_area": "A"
+    },
+    {
+     "utc": "1927",
+     "title": "72HR SURFACE FORECAST",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1200",
+     "map_area": "A"
+    },
+    {
+     "utc": "1940",
+     "title": "WIND/WAVE ANALYSIS",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1200",
+     "map_area": "B"
+    },
+    {
+     "utc": "1953",
+     "title": "24HR WIND/WAVE FORECAST",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1200",
+     "map_area": "B"
+    },
+    {
+     "utc": "2006",
+     "title": "24HR WIND/WAVE FORECAST",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1200",
+     "map_area": "4"
+    },
+    {
+     "utc": "2016",
+     "title": "48HR SURFACE FORECAST",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1200",
+     "map_area": "1"
+    },
+    {
+     "utc": "2026",
+     "title": "48HR WIND/WAVE FORECAST",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1200",
+     "map_area": "1"
+    },
+    {
+     "utc": "2036",
+     "title": "48/96HR WAVE PERIOD,SWELL DIRECTION",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1200",
+     "map_area": "1"
+    },
+    {
+     "utc": "2046",
+     "title": "rebroadcast/ 96HR SURFACE FORECAST",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1200",
+     "map_area": "1"
+    },
+    {
+     "utc": "2056",
+     "title": "rebroadcast/ 96HR WIND/WAVE FORECAST",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1200",
+     "map_area": "1"
+    },
+    {
+     "utc": "2106",
+     "title": "PACIFIC GOES IR SATELLITE IMAGE",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1800",
+     "map_area": "5"
+    },
+    {
+     "utc": "2117",
+     "title": "SURFACE ANALYSIS (PART 1 NE PACIFIC)",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1800",
+     "map_area": "2"
+    },
+    {
+     "utc": "2130",
+     "title": "SURFACE ANALYSIS (PART 2 NW PACIFIC)",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1800",
+     "map_area": "3"
+    },
+    {
+     "utc": "2143",
+     "title": "TROPICAL GOES IR SATELLITE IMAGE",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1800",
+     "map_area": "Y"
+    },
+    {
+     "utc": "2154",
+     "title": "TROPICAL SURFACE ANALYSIS",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1800",
+     "map_area": "Z"
+    },
+    {
+     "utc": "2208",
+     "title": "24HR TROPICAL WIND/WAVE FORECAST",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1200",
+     "map_area": "Z"
+    },
+    {
+     "utc": "2242",
+     "title": "CYCLONE DANGER AREA",
+     "lpm": 120,
+     "ioc": 570,
+     "valid_utc": "2100",
+     "map_area": "E"
+    },
+    {
+     "utc": "2302",
+     "title": "48HR WIND/WAVE FORECAST",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1200",
+     "map_area": "B"
+    },
+    {
+     "utc": "2315",
+     "title": "72HR WIND/WAVE FORECAST",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1200",
+     "map_area": "B"
+    },
+    {
+     "utc": "2328",
+     "title": "SEA SURFACE TEMPS",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "LATEST",
+     "map_area": "F"
+    },
+    {
+     "utc": "2341",
+     "title": "rebroadcast 24HR WIND/WAVE FORECASTS",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1200",
+     "map_area": "B"
+    },
+    {
+     "utc": "2354",
+     "title": "STREAMLINE ANALYSIS",
+     "lpm": 120,
+     "ioc": 576,
+     "valid_utc": "1800",
+     "map_area": "B"
+    }
+   ],
+   "ioc_anomalies_in_source": [
+    "0615 SURFACE ANALYSIS (120/570)",
+    "1042 CYCLONE DANGER AREA (120/570)",
+    "1815 SURFACE ANALYSIS (120/570)",
+    "2242 CYCLONE DANGER AREA (120/570)"
+   ],
+   "broadcast_blocks_utc": [
+    "0519",
+    "1719"
+   ]
+  },
+  {
+   "call": "DDH3 / DDK3 / DDK6",
+   "name": "Hamburg/Pinneberg, Germany",
+   "operator": "Deutscher Wetterdienst (DWD)",
+   "freqs_khz": [
+    3855.0,
+    7880.0,
+    13882.5
+   ],
+   "freq_windows_utc": [
+    {
+     "khz": 3855.0,
+     "call": "DDH3",
+     "utc": "all broadcast times"
+    },
+    {
+     "khz": 7880.0,
+     "call": "DDK3",
+     "utc": "all broadcast times"
+    },
+    {
+     "khz": 13882.5,
+     "call": "DDK6",
+     "utc": "all broadcast times"
+    }
+   ],
+   "freq_notes": "10 kW each, F1C, white +425 Hz / black -425 Hz. The schedule lists no per-frequency hours. Fax pauses for DWD voice broadcasts on 5905/6180 kHz (see pauses_utc).",
+   "lpm": 120,
+   "ioc": 576,
+   "pauses_utc": [
+    {
+     "utc": "0555-0635",
+     "what": "Fax pause for voice transmission on 5905 kHz and 6180 kHz"
+    },
+    {
+     "utc": "1155-1235",
+     "what": "Fax pause for voice transmission on 5905 kHz and 6180 kHz"
+    },
+    {
+     "utc": "1555-1635",
+     "what": "Fax pause for voice transmission on 5905 kHz and 6180 kHz"
+    },
+    {
+     "utc": "1955-2035",
+     "what": "Fax pause for voice transmission on 5905 kHz and 6180 kHz"
+    }
+   ],
+   "minutes_note": "'minutes' is the DWD 'Laufzeit' (running time) column; English PDF labels it 'DD-time'.",
+   "source": "https://www.dwd.de/EN/specialusers/shipping/broadcast_en/broadcast_fax_092023.pdf?__blob=publicationFile&v=1",
+   "source_also": [
+    "https://www.dwd.de/DE/fachnutzer/schifffahrt/funkausstrahlung/sendeplan_fax_092023.pdf?__blob=publicationFile&v=1",
+    "https://www.dwd.de/EN/specialusers/shipping/broadcast_en/_node.html",
+    "https://www.weather.gov/media/marine/rfax.pdf"
+   ],
+   "source_dated": "File name 092023 (Sept 2023); linked from the live DWD broadcast page on 2026-11-06",
+   "schedule": [
+    {
+     "utc": "0430",
+     "title": "Surface Analysis North Atlantic, Europe",
+     "minutes": 19,
+     "valid_utc": "0000",
+     "lpm": 120,
+     "ioc": 576
+    },
+    {
+     "utc": "0512",
+     "title": "36HR-forecast surface pressure",
+     "minutes": 11,
+     "valid_utc": "0000",
+     "lpm": 120,
+     "ioc": 576
+    },
+    {
+     "utc": "0525",
+     "title": "Surface pressure analysis, arrows showing the movement of pressure systems, significant weather, ice",
+     "minutes": 19,
+     "valid_utc": "0000",
+     "lpm": 120,
+     "ioc": 576
+    },
+    {
+     "utc": "0638",
+     "title": "Information of tropical storms, North Atlantic (during season only)",
+     "minutes": 11,
+     "valid_utc": "0300",
+     "lpm": 120,
+     "ioc": 576
+    },
+    {
+     "utc": "0651",
+     "title": "12HR, 24HR 500 hPa H+T, surface pressure",
+     "minutes": 11,
+     "valid_utc": "0000",
+     "lpm": 120,
+     "ioc": 576
+    },
+    {
+     "utc": "0704",
+     "title": "12HR, 24HR 850 hPa H+T, 700 hPa relative humidity",
+     "minutes": 11,
+     "valid_utc": "0000",
+     "lpm": 120,
+     "ioc": 576
+    },
+    {
+     "utc": "0717",
+     "title": "Repetition chart 05.12 UTC",
+     "minutes": 11,
+     "valid_utc": "0000",
+     "lpm": 120,
+     "ioc": 576
+    },
+    {
+     "utc": "0730",
+     "title": "48HR-forecast surface pressure",
+     "minutes": 11,
+     "valid_utc": "0000",
+     "lpm": 120,
+     "ioc": 576
+    },
+    {
+     "utc": "0743",
+     "title": "60HR-forecast surface pressure",
+     "minutes": 11,
+     "valid_utc": "0000",
+     "lpm": 120,
+     "ioc": 576
+    },
+    {
+     "utc": "0804",
+     "title": "84HR-forecast surface pressure",
+     "minutes": 11,
+     "valid_utc": "0000",
+     "lpm": 120,
+     "ioc": 576
+    },
+    {
+     "utc": "0817",
+     "title": "108HR-forecast surface pressure",
+     "minutes": 11,
+     "valid_utc": "0000",
+     "lpm": 120,
+     "ioc": 576
+    },
+    {
+     "utc": "0830",
+     "title": "24HR-forecast significant height of combined wind waves and swell, wind 10m",
+     "minutes": 11,
+     "valid_utc": "0000",
+     "lpm": 120,
+     "ioc": 576
+    },
+    {
+     "utc": "0842",
+     "title": "48HR-forecast significant height of combined wind waves and swell, wind 10m",
+     "minutes": 11,
+     "valid_utc": "0000",
+     "lpm": 120,
+     "ioc": 576
+    },
+    {
+     "utc": "0854",
+     "title": "72HR-forecast significant height of combined wind waves and swell, wind 10m",
+     "minutes": 11,
+     "valid_utc": "0000",
+     "lpm": 120,
+     "ioc": 576
+    },
+    {
+     "utc": "0906",
+     "title": "96HR-forecast significant height of combined wind waves and swell, wind 10m",
+     "minutes": 11,
+     "valid_utc": "0000",
+     "lpm": 120,
+     "ioc": 576
+    },
+    {
+     "utc": "0930",
+     "title": "36HR, 48HR 500 hPa H+T, surface pressure",
+     "minutes": 11,
+     "valid_utc": "0000",
+     "lpm": 120,
+     "ioc": 576
+    },
+    {
+     "utc": "0945",
+     "title": "Sea surface temperature North Sea",
+     "minutes": 20,
+     "valid_utc": "0000",
+     "lpm": 120,
+     "ioc": 576
+    },
+    {
+     "utc": "1007",
+     "title": "Ice conditions chart Western Baltic Sea or special area if ice situation requires",
+     "minutes": 20,
+     "valid_utc": "0000",
+     "lpm": 120,
+     "ioc": 576
+    },
+    {
+     "utc": "1029",
+     "title": "48HR wave prediction North Atlantic",
+     "minutes": 19,
+     "valid_utc": "0000",
+     "lpm": 120,
+     "ioc": 576
+    },
+    {
+     "utc": "1050",
+     "title": "Surface Analysis North Atlantic, Europe",
+     "minutes": 19,
+     "valid_utc": "0600",
+     "lpm": 120,
+     "ioc": 576
+    },
+    {
+     "utc": "1111",
+     "title": "36HR, 48HR 850 hPa H+T, 700 hPa relative humidity",
+     "minutes": 11,
+     "valid_utc": "0000",
+     "lpm": 120,
+     "ioc": 576
+    },
+    {
+     "utc": "1123",
+     "title": "60HR, 72HR 500 hPa H+T, surface pressure",
+     "minutes": 11,
+     "valid_utc": "0000",
+     "lpm": 120,
+     "ioc": 576
+    },
+    {
+     "utc": "1135",
+     "title": "60HR, 72HR 850 hPa H+T, 700 hPa relative humidity",
+     "minutes": 11,
+     "valid_utc": "0000",
+     "lpm": 120,
+     "ioc": 576
+    },
+    {
+     "utc": "1236",
+     "title": "Repetition chart 10.50 UTC",
+     "minutes": 19,
+     "valid_utc": "0600",
+     "lpm": 120,
+     "ioc": 576
+    },
+    {
+     "utc": "1256",
+     "title": "Repetition chart 05.12 UTC",
+     "minutes": 11,
+     "valid_utc": "0000",
+     "lpm": 120,
+     "ioc": 576
+    },
+    {
+     "utc": "1308",
+     "title": "Repetition chart 07.30 UTC",
+     "minutes": 11,
+     "valid_utc": "0000",
+     "lpm": 120,
+     "ioc": 576
+    },
+    {
+     "utc": "1320",
+     "title": "Repetition chart 07.43 UTC",
+     "minutes": 11,
+     "valid_utc": "0000",
+     "lpm": 120,
+     "ioc": 576
+    },
+    {
+     "utc": "1332",
+     "title": "Repetition chart 08.04 UTC",
+     "minutes": 11,
+     "valid_utc": "0000",
+     "lpm": 120,
+     "ioc": 576
+    },
+    {
+     "utc": "1344",
+     "title": "Repetition chart 08.17 UTC",
+     "minutes": 11,
+     "valid_utc": "0000",
+     "lpm": 120,
+     "ioc": 576
+    },
+    {
+     "utc": "1356",
+     "title": "Repetition chart 10.50 UTC",
+     "minutes": 19,
+     "valid_utc": "0600",
+     "lpm": 120,
+     "ioc": 576
+    },
+    {
+     "utc": "1425",
+     "title": "Transmission schedule part 1",
+     "minutes": 19,
+     "valid_utc": "0000",
+     "lpm": 120,
+     "ioc": 576
+    },
+    {
+     "utc": "1445",
+     "title": "Transmission schedule part 2",
+     "minutes": 19,
+     "valid_utc": "0000",
+     "lpm": 120,
+     "ioc": 576
+    },
+    {
+     "utc": "1508",
+     "title": "Ice conditions chart Northwest Atlantic, Canadian Ice serv., or int. Ice Patrol",
+     "minutes": 11,
+     "valid_utc": "0000",
+     "lpm": 120,
+     "ioc": 576
+    },
+    {
+     "utc": "1520",
+     "title": "Ice conditions chart Baltic Sea or special area",
+     "minutes": 19,
+     "valid_utc": "0900",
+     "lpm": 120,
+     "ioc": 576
+    },
+    {
+     "utc": "1540",
+     "title": "Ice conditions chart European Arctic Sea or special area",
+     "minutes": 19,
+     "valid_utc": "0900",
+     "lpm": 120,
+     "ioc": 576
+    },
+    {
+     "utc": "1636",
+     "title": "Surface Analysis North Atlantic, Europe",
+     "minutes": 19,
+     "valid_utc": "1200",
+     "lpm": 120,
+     "ioc": 576
+    },
+    {
+     "utc": "1800",
+     "title": "Surface pressure analysis, arrows showing the movement of pressure systems, significant weather, ice",
+     "minutes": 19,
+     "valid_utc": "1200",
+     "lpm": 120,
+     "ioc": 576
+    },
+    {
+     "utc": "1821",
+     "title": "Information of tropical storms, North Atlantic (during season only)",
+     "minutes": 11,
+     "valid_utc": "1500",
+     "lpm": 120,
+     "ioc": 576
+    },
+    {
+     "utc": "1834",
+     "title": "48HR-forecast surface pressure",
+     "minutes": 11,
+     "valid_utc": "0000",
+     "lpm": 120,
+     "ioc": 576
+    },
+    {
+     "utc": "1847",
+     "title": "60HR-forecast surface pressure",
+     "minutes": 11,
+     "valid_utc": "0000",
+     "lpm": 120,
+     "ioc": 576
+    },
+    {
+     "utc": "1900",
+     "title": "84HR-forecast surface pressure",
+     "minutes": 11,
+     "valid_utc": "0000",
+     "lpm": 120,
+     "ioc": 576
+    },
+    {
+     "utc": "1913",
+     "title": "24HR-forecast significant height of combined wind waves and swell, wind 10m",
+     "minutes": 11,
+     "valid_utc": "1200",
+     "lpm": 120,
+     "ioc": 576
+    },
+    {
+     "utc": "1926",
+     "title": "48HR-forecast significant height of combined wind waves and swell, wind 10m",
+     "minutes": 11,
+     "valid_utc": "1200",
+     "lpm": 120,
+     "ioc": 576
+    },
+    {
+     "utc": "1939",
+     "title": "72HR-forecast significant height of combined wind waves and swell, wind 10m",
+     "minutes": 11,
+     "valid_utc": "1200",
+     "lpm": 120,
+     "ioc": 576
+    },
+    {
+     "utc": "2100",
+     "title": "Ice conditions chart Northwest Atlantic",
+     "minutes": 11,
+     "valid_utc": "1200",
+     "lpm": 120,
+     "ioc": 576
+    },
+    {
+     "utc": "2115",
+     "title": "Ice conditions chart Baltic Sea or special area",
+     "minutes": 20,
+     "valid_utc": "1500",
+     "lpm": 120,
+     "ioc": 576
+    },
+    {
+     "utc": "2136",
+     "title": "48HR wave prediction Surface weather chart North Atlantic",
+     "minutes": 19,
+     "valid_utc": "1200",
+     "lpm": 120,
+     "ioc": 576
+    },
+    {
+     "utc": "2200",
+     "title": "Surface Analysis North Atlantic, Europe",
+     "minutes": 19,
+     "valid_utc": "1800",
+     "lpm": 120,
+     "ioc": 576
+    }
+   ]
+  },
+  {
+   "call": "GYA",
+   "name": "Northwood, United Kingdom",
+   "operator": "UK Joint Operational Meteorology and Oceanography Centre (JOMOC), per NWS rfax.pdf",
+   "freqs_khz": [
+    2618.5,
+    4610.0,
+    8040.0,
+    11086.5
+   ],
+   "freq_windows_utc": [
+    {
+     "khz": 2618.5,
+     "utc": "2200-0500"
+    },
+    {
+     "khz": 4610.0,
+     "utc": "24 hours"
+    },
+    {
+     "khz": 8040.0,
+     "utc": "'Alternative 24 hour' (as printed)"
+    },
+    {
+     "khz": 11086.5,
+     "utc": "0600-2000"
+    }
+   ],
+   "freq_notes": "J3C, 10 kW. 2618.5 kHz 2200-0500Z; 4610 kHz 24 h; 8040 kHz 'Alternative 24 hour'; 11086.5 kHz 0600-2000Z. Frequencies as printed (NWS convention is assigned frequency; carrier 1.9 kHz below, but the GYA table does not say).",
+   "lpm": null,
+   "ioc": null,
+   "lpm_ioc_note": "Not stated in the GYA section of rfax.pdf.",
+   "map_note": "As printed: 'All MAPS 54°N.82°W 26°N.45°W' (left column) and '54°N.51°E 28°N.12°' (right column, truncated in source)",
+   "source": "https://www.weather.gov/media/marine/rfax.pdf",
+   "source_dated": "NWS rfax.pdf dated March 7, 2025; GYA section 'INFORMATION DATED Jan 05, 2022'",
+   "partial": true,
+   "schedule": [
+    {
+     "utc": "0000",
+     "title": "18Z SFC ANALYSIS"
+    },
+    {
+     "utc": "0012",
+     "title": "18Z SFC PROGNOSIS T+24"
+    },
+    {
+     "utc": "0024",
+     "title": "18Z PRECIPITATION AND REDUCED VIS T+12"
+    },
+    {
+     "utc": "0036",
+     "title": "18Z PRECIPITATION AND REDUCED VIS T+24"
+    },
+    {
+     "utc": "0048",
+     "title": "18Z SFC ANALYSIS"
+    },
+    {
+     "utc": "0100",
+     "title": "18Z SFC PROGNOSIS T+24"
+    },
+    {
+     "utc": "0112",
+     "title": "18Z SEA AND SWELL T+48"
+    },
+    {
+     "utc": "0124",
+     "title": "18Z SEA AND SWELL T+72"
+    },
+    {
+     "utc": "0136",
+     "title": "OCEAN FRONTS"
+    },
+    {
+     "utc": "0148",
+     "title": "18Z SEA AND SWELL T+24"
+    },
+    {
+     "utc": "0200",
+     "title": "18Z SFC ANALYSIS"
+    },
+    {
+     "utc": "0212",
+     "title": "00Z SEA SURFACE TEMP"
+    },
+    {
+     "utc": "0224",
+     "title": "18Z SFC PROGNOSIS T+24"
+    },
+    {
+     "utc": "0236",
+     "title": "00Z SFC ANALYSIS"
+    },
+    {
+     "utc": "0300",
+     "title": "00Z SFC ANALYSIS"
+    },
+    {
+     "utc": "0324",
+     "title": "18Z SFC WINDS T+24"
+    },
+    {
+     "utc": "0336",
+     "title": "00Z ANPS PROGNOSIS T+24"
+    },
+    {
+     "utc": "0348",
+     "title": "00Z ANPS PROGNOSIS T+72"
+    },
+    {
+     "utc": "0400",
+     "title": "00Z SFC ANALYSIS"
+    },
+    {
+     "utc": "0424",
+     "title": "18Z SFC WINDS T+24"
+    },
+    {
+     "utc": "0436",
+     "title": "00Z SFC PROGNOSIS T+24"
+    },
+    {
+     "utc": "0448",
+     "title": "18Z SFC WINDS T+48"
+    },
+    {
+     "utc": "0500",
+     "title": "00Z SFC ANALYSIS"
+    },
+    {
+     "utc": "0512",
+     "title": "00Z SFC PROGNOSIS T+24"
+    },
+    {
+     "utc": "0524",
+     "title": "00Z SFC PROGNOSIS T+48"
+    },
+    {
+     "utc": "0548",
+     "title": "06Z GALE WARNING"
+    },
+    {
+     "utc": "0612",
+     "title": "00Z SFC ANALYSIS"
+    },
+    {
+     "utc": "0624",
+     "title": "00Z SFC PROGNOSIS T+24"
+    },
+    {
+     "utc": "0636",
+     "title": "00Z SFC ANALYSIS"
+    },
+    {
+     "utc": "0648",
+     "title": "00Z SFC PROGNOSIS T+24"
+    },
+    {
+     "utc": "0700",
+     "title": "00Z SFC ANALYSIS"
+    },
+    {
+     "utc": "0712",
+     "title": "00Z SFC PROGNOSIS T+24"
+    },
+    {
+     "utc": "0724",
+     "title": "00Z SFC PROGNOSIS T+48"
+    },
+    {
+     "utc": "0736",
+     "title": "00Z SFC PROGNOSIS T+72"
+    },
+    {
+     "utc": "0748",
+     "title": "00Z SFC PROGNOSIS T+96"
+    },
+    {
+     "utc": "0800",
+     "title": "00Z SFC PROGNOSIS T+120"
+    },
+    {
+     "utc": "0812",
+     "title": "00Z SFC PROGNOSIS T+48"
+    },
+    {
+     "utc": "0824",
+     "title": "00Z PRECIPITATION AND REDUCED VIS T+12"
+    },
+    {
+     "utc": "0836",
+     "title": "00Z PRECIPITATION AND REDUCED VIS T+24"
+    },
+    {
+     "utc": "0848",
+     "title": "00Z SFC PROGNOSIS T+24"
+    },
+    {
+     "utc": "0900",
+     "title": "06Z SFC ANALYSIS"
+    },
+    {
+     "utc": "0924",
+     "title": "00Z ANPS PROGNOSIS T+24"
+    },
+    {
+     "utc": "0936",
+     "title": "00Z ANPS PROGNOSIS T+120"
+    },
+    {
+     "utc": "1000",
+     "title": "06Z SFC ANALYSIS"
+    },
+    {
+     "utc": "1012",
+     "title": "06Z SFC PROGNOSIS T+24"
+    },
+    {
+     "utc": "1036",
+     "title": "00Z ANPS PROGNOSIS T+24"
+    },
+    {
+     "utc": "1100",
+     "title": "06Z SFC ANALYSIS"
+    },
+    {
+     "utc": "1112",
+     "title": "06Z SFC PROGNOSIS T+24"
+    },
+    {
+     "utc": "1124",
+     "title": "06Z SEA AND SWELL T+24"
+    },
+    {
+     "utc": "1136",
+     "title": "06Z SFC PROGNOSIS T+24"
+    },
+    {
+     "utc": "1148",
+     "title": "06Z SEA AND SWELL T+24"
+    },
+    {
+     "utc": "1200",
+     "title": "06Z SFC ANALYSIS"
+    },
+    {
+     "utc": "1212",
+     "title": "06Z SFC PROGNOSIS T+24"
+    },
+    {
+     "utc": "1224",
+     "title": "06Z PRECIPITATION AND REDUCED VIS T+12"
+    },
+    {
+     "utc": "1236",
+     "title": "06Z PRECIPITATION AND REDUCED VIS T+24"
+    },
+    {
+     "utc": "1248",
+     "title": "06Z SFC ANALYSIS"
+    },
+    {
+     "utc": "1300",
+     "title": "06Z SFC PROGNOSIS T+24"
+    },
+    {
+     "utc": "1312",
+     "title": "06Z SFC WINDS T+24"
+    },
+    {
+     "utc": "1324",
+     "title": "06Z GALE WARNING"
+    },
+    {
+     "utc": "1336",
+     "title": "OCEAN FRONTS"
+    },
+    {
+     "utc": "1348",
+     "title": "06Z SEA AND SWELL T+24"
+    },
+    {
+     "utc": "1400",
+     "title": "00Z SEA SURFACE TEMP"
+    },
+    {
+     "utc": "1412",
+     "title": "06Z SFC ANALYSIS"
+    },
+    {
+     "utc": "1424",
+     "title": "06Z SFC PROGNOSIS T+24"
+    },
+    {
+     "utc": "1436",
+     "title": "12Z SFC ANALYSIS"
+    },
+    {
+     "utc": "1500",
+     "title": "12Z SFC ANALYSIS"
+    },
+    {
+     "utc": "1512",
+     "title": "00Z ANPS PROGNOSIS T+24"
+    },
+    {
+     "utc": "1524",
+     "title": "00Z ANPS PROGNOSIS T+120"
+    },
+    {
+     "utc": "1536",
+     "title": "06Z SEA AND SWELL T+48"
+    },
+    {
+     "utc": "1600",
+     "title": "12Z SFC ANALYSIS"
+    },
+    {
+     "utc": "1624",
+     "title": "06Z SFC WINDS T+24"
+    },
+    {
+     "utc": "1636",
+     "title": "12Z SFC PROGNOSIS T+24"
+    },
+    {
+     "utc": "1648",
+     "title": "06Z SFC WINDS T+48"
+    },
+    {
+     "utc": "1700",
+     "title": "12Z SFC ANALYSIS"
+    },
+    {
+     "utc": "1712",
+     "title": "12Z SFC PROGNOSIS T+24"
+    },
+    {
+     "utc": "1724",
+     "title": "12Z SFC PROGNOSIS T+48"
+    },
+    {
+     "utc": "1748",
+     "title": "06Z SEA AND SWELL T+72"
+    },
+    {
+     "utc": "1800",
+     "title": "12Z SFC ANALYSIS"
+    },
+    {
+     "utc": "1812",
+     "title": "12Z SFC PROGNOSIS T+24"
+    },
+    {
+     "utc": "1824",
+     "title": "12Z SFC ANALYSIS"
+    },
+    {
+     "utc": "1836",
+     "title": "12Z SFC PROGNOSIS T+24"
+    },
+    {
+     "utc": "1848",
+     "title": "12Z SFC ANALYSIS"
+    },
+    {
+     "utc": "1900",
+     "title": "12Z SFC PROGNOSIS T+24"
+    },
+    {
+     "utc": "1924",
+     "title": "12Z SFC PROGNOSIS T+48"
+    },
+    {
+     "utc": "1936",
+     "title": "12Z SFC PROGNOSIS T+72"
+    },
+    {
+     "utc": "1948",
+     "title": "12Z SFC PROGNOSIS T+96"
+    },
+    {
+     "utc": "2012",
+     "title": "12Z SFC PROGNOSIS T+120"
+    },
+    {
+     "utc": "2024",
+     "title": "12Z SFC PROGNOSIS T+48"
+    },
+    {
+     "utc": "2036",
+     "title": "12Z PRECIPITATION AND REDUCED VIS T+12"
+    },
+    {
+     "utc": "2048",
+     "title": "12Z SFC PROGNOSIS T+24"
+    },
+    {
+     "utc": "2100",
+     "title": "18Z SFC ANALYSIS"
+    },
+    {
+     "utc": "2112",
+     "title": "12Z PRECIPITATION AND REDUCED VIS T+24"
+    },
+    {
+     "utc": "2124",
+     "title": "00Z ANPS PROGNOSIS T+24"
+    },
+    {
+     "utc": "2136",
+     "title": "00Z ANPS PROGNOSIS T+120"
+    },
+    {
+     "utc": "2200",
+     "title": "18Z SFC ANALYSIS"
+    },
+    {
+     "utc": "2212",
+     "title": "18Z SFC PROGNOSIS T+24"
+    },
+    {
+     "utc": "2236",
+     "title": "00Z ANPS PROGNOSIS T+24"
+    },
+    {
+     "utc": "2300",
+     "title": "18Z SFC ANALYSIS"
+    },
+    {
+     "utc": "2312",
+     "title": "18Z SFC PROGNOSIS T+24"
+    },
+    {
+     "utc": "2324",
+     "title": "18Z SEA AND SWELL T+24"
+    },
+    {
+     "utc": "2336",
+     "title": "18Z SFC PROGNOSIS T+24"
+    },
+    {
+     "utc": "2348",
+     "title": "18Z SEA AND SWELL T+24"
+    }
+   ]
+  }
+ ],
+ "navtex": [
+  {
+   "id": "F",
+   "name": "Boston, Massachusetts (USCG)",
+   "freq_khz": 518,
+   "language": "English",
+   "times_utc": [
+    "0050",
+    "0450",
+    "0850",
+    "1250",
+    "1650",
+    "2050"
+   ],
+   "times_meaning": "USCG/NWS weather broadcast schedule; at the times in nm_repeat_utc, repeats of Notices to Mariners are broadcast instead of the routine forecast. Warnings may go at any time.",
+   "nm_repeat_utc": [
+    "0850",
+    "2050"
+   ],
+   "source": "https://www.weather.gov/marine/uscg_broadcasts"
+  },
+  {
+   "id": "N",
+   "name": "Portsmouth (Chesapeake), Virginia (USCG)",
+   "freq_khz": 518,
+   "language": "English",
+   "times_utc": [
+    "0210",
+    "0610",
+    "1010",
+    "1410",
+    "1810",
+    "2210"
+   ],
+   "times_meaning": "USCG/NWS weather broadcast schedule; at the times in nm_repeat_utc, repeats of Notices to Mariners are broadcast instead of the routine forecast. Warnings may go at any time.",
+   "nm_repeat_utc": [
+    "0210",
+    "1410"
+   ],
+   "source": "https://www.weather.gov/marine/uscg_broadcasts"
+  },
+  {
+   "id": "E",
+   "name": "Charleston, South Carolina (USCG)",
+   "freq_khz": 518,
+   "language": "English",
+   "times_utc": [
+    "0040",
+    "0440",
+    "0840",
+    "1240",
+    "1640",
+    "2040"
+   ],
+   "times_meaning": "USCG/NWS weather broadcast schedule; at the times in nm_repeat_utc, repeats of Notices to Mariners are broadcast instead of the routine forecast. Warnings may go at any time.",
+   "nm_repeat_utc": [
+    "0840",
+    "2040"
+   ],
+   "source": "https://www.weather.gov/marine/uscg_broadcasts"
+  },
+  {
+   "id": "A",
+   "name": "Miami, Florida (USCG)",
+   "freq_khz": 518,
+   "language": "English",
+   "times_utc": [
+    "0000",
+    "0400",
+    "0800",
+    "1200",
+    "1600",
+    "2000"
+   ],
+   "times_meaning": "USCG/NWS weather broadcast schedule; at the times in nm_repeat_utc, repeats of Notices to Mariners are broadcast instead of the routine forecast. Warnings may go at any time.",
+   "nm_repeat_utc": [
+    "0800",
+    "2000"
+   ],
+   "source": "https://www.weather.gov/marine/uscg_broadcasts"
+  },
+  {
+   "id": "R",
+   "name": "San Juan, Puerto Rico (USCG)",
+   "freq_khz": 518,
+   "language": "English",
+   "times_utc": [
+    "0250",
+    "0650",
+    "1050",
+    "1450",
+    "1850",
+    "2250"
+   ],
+   "times_meaning": "USCG/NWS weather broadcast schedule; at the times in nm_repeat_utc, repeats of Notices to Mariners are broadcast instead of the routine forecast. Warnings may go at any time.",
+   "nm_repeat_utc": [
+    "0250",
+    "1450"
+   ],
+   "source": "https://www.weather.gov/marine/uscg_broadcasts"
+  },
+  {
+   "id": "G",
+   "name": "New Orleans, Louisiana (USCG)",
+   "freq_khz": 518,
+   "language": "English",
+   "times_utc": [
+    "0100",
+    "0500",
+    "0900",
+    "1300",
+    "1700",
+    "2100"
+   ],
+   "times_meaning": "USCG/NWS weather broadcast schedule; at the times in nm_repeat_utc, repeats of Notices to Mariners are broadcast instead of the routine forecast. Warnings may go at any time.",
+   "nm_repeat_utc": [
+    "0900",
+    "2100"
+   ],
+   "source": "https://www.weather.gov/marine/uscg_broadcasts"
+  },
+  {
+   "id": "U",
+   "name": "Yarmouth (Chebogue), Nova Scotia (CCG, Halifax MCTS)",
+   "freq_khz": 518,
+   "language": "English",
+   "times_utc": [
+    "0320",
+    "0720",
+    "1120",
+    "1520",
+    "1920",
+    "2320"
+   ],
+   "source": "https://www.canada.ca/en/canadian-coast-guard/corporate/publications/radio-aids-marine-navigation/facilities-information.html",
+   "source_table": "Table 2-2 - Halifax MCTS/VCS – Broadcasts"
+  },
+  {
+   "id": "V",
+   "name": "Yarmouth (Chebogue), Nova Scotia (CCG, Halifax MCTS)",
+   "freq_khz": 490,
+   "language": "French",
+   "times_utc": [
+    "0330",
+    "0730",
+    "1130",
+    "1530",
+    "1930",
+    "2330"
+   ],
+   "source": "https://www.canada.ca/en/canadian-coast-guard/corporate/publications/radio-aids-marine-navigation/facilities-information.html",
+   "source_table": "Table 2-2 - Halifax MCTS/VCS – Broadcasts"
+  },
+  {
+   "id": "S",
+   "name": "Iqaluit, Nunavut (CCG, Iqaluit MCTS) - seasonal, open approx. mid-May to mid-December",
+   "freq_khz": 490,
+   "language": "French",
+   "times_utc": [
+    "0300",
+    "0700",
+    "1100",
+    "1500",
+    "1900",
+    "2300"
+   ],
+   "source": "https://www.canada.ca/en/canadian-coast-guard/corporate/publications/radio-aids-marine-navigation/facilities-information.html",
+   "source_table": "Table 2-4 - Iqaluit MCTS/VFF - Broadcasts"
+  },
+  {
+   "id": "T",
+   "name": "Iqaluit, Nunavut (CCG, Iqaluit MCTS) - seasonal, open approx. mid-May to mid-December",
+   "freq_khz": 518,
+   "language": "English",
+   "times_utc": [
+    "0310",
+    "0710",
+    "1110",
+    "1510",
+    "1910",
+    "2310"
+   ],
+   "source": "https://www.canada.ca/en/canadian-coast-guard/corporate/publications/radio-aids-marine-navigation/facilities-information.html",
+   "source_table": "Table 2-4 - Iqaluit MCTS/VFF - Broadcasts"
+  },
+  {
+   "id": "X",
+   "name": "Cartwright, Labrador (CCG, Labrador MCTS)",
+   "freq_khz": 518,
+   "language": "English",
+   "times_utc": [
+    "0350",
+    "0750",
+    "1150",
+    "1550",
+    "1950",
+    "2350"
+   ],
+   "source": "https://www.canada.ca/en/canadian-coast-guard/corporate/publications/radio-aids-marine-navigation/facilities-information.html",
+   "source_table": "Table 2-6 - Labrador MCTS/VOK - Broadcasts"
+  },
+  {
+   "id": "C",
+   "name": "Moisie, Quebec (CCG, Les Escoumins MCTS)",
+   "freq_khz": 518,
+   "language": "English",
+   "times_utc": [
+    "0020",
+    "0420",
+    "0820",
+    "1220",
+    "1620",
+    "2020"
+   ],
+   "source": "https://www.canada.ca/en/canadian-coast-guard/corporate/publications/radio-aids-marine-navigation/facilities-information.html",
+   "source_table": "Table 2-8 - Les Escoumins MCTS/VCF - Broadcasts"
+  },
+  {
+   "id": "D",
+   "name": "Moisie, Quebec (CCG, Les Escoumins MCTS)",
+   "freq_khz": 490,
+   "language": "French",
+   "times_utc": [
+    "0030",
+    "0430",
+    "0830",
+    "1230",
+    "1630",
+    "2030"
+   ],
+   "source": "https://www.canada.ca/en/canadian-coast-guard/corporate/publications/radio-aids-marine-navigation/facilities-information.html",
+   "source_table": "Table 2-8 - Les Escoumins MCTS/VCF - Broadcasts"
+  },
+  {
+   "id": "O",
+   "name": "Robin Hood Bay (St. John's), Newfoundland (CCG, Placentia MCTS)",
+   "freq_khz": 518,
+   "language": "English",
+   "times_utc": [
+    "0220",
+    "0620",
+    "1020",
+    "1420",
+    "1820",
+    "2220"
+   ],
+   "source": "https://www.canada.ca/en/canadian-coast-guard/corporate/publications/radio-aids-marine-navigation/facilities-information.html",
+   "source_table": "Table 2-10 - Placentia MCTS/VCP - Broadcasts"
+  },
+  {
+   "id": "J",
+   "name": "Port Caledonia (Sydney), Nova Scotia (CCG, Sydney MCTS)",
+   "freq_khz": 490,
+   "language": "French",
+   "times_utc": [
+    "0130",
+    "0530",
+    "0930",
+    "1330",
+    "1730",
+    "2130"
+   ],
+   "source": "https://www.canada.ca/en/canadian-coast-guard/corporate/publications/radio-aids-marine-navigation/facilities-information.html",
+   "source_table": "Table 2-24 - Sydney MCTS/VCO - Broadcasts"
+  },
+  {
+   "id": "Q",
+   "name": "Port Caledonia (Sydney), Nova Scotia (CCG, Sydney MCTS)",
+   "freq_khz": 518,
+   "language": "English",
+   "times_utc": [
+    "0240",
+    "0640",
+    "1040",
+    "1440",
+    "1840",
+    "2240"
+   ],
+   "source": "https://www.canada.ca/en/canadian-coast-guard/corporate/publications/radio-aids-marine-navigation/facilities-information.html",
+   "source_table": "Table 2-24 - Sydney MCTS/VCO - Broadcasts"
+  }
+ ],
+ "navtex_note": "CCG Pacific NAVTEX (Digby Island D, Amphitrite Point H) and USCG Pacific stations are in the sources but omitted as not expected to reach Connecticut on 518 kHz.",
+ "hfdl": [
+  {
+   "gs_id": 1,
+   "name": "San Francisco, California",
+   "lat": 38.384587,
+   "lon": -121.759647,
+   "freqs_khz": [
+    5508.0,
+    6559.0,
+    8927.0,
+    10081.0,
+    11327.0,
+    13276.0,
+    17919.0,
+    21934.0
+   ],
+   "source": "https://github.com/szpajder/dumphfdl/blob/master/etc/systable.conf"
+  },
+  {
+   "gs_id": 2,
+   "name": "Molokai, Hawaii",
+   "lat": 21.184428,
+   "lon": -157.186846,
+   "freqs_khz": [
+    5514.0,
+    6565.0,
+    8912.0,
+    8936.0,
+    10027.0,
+    11312.0,
+    11348.0,
+    13276.0,
+    13312.0,
+    13324.0,
+    17919.0,
+    21937.0
+   ],
+   "source": "https://github.com/szpajder/dumphfdl/blob/master/etc/systable.conf"
+  },
+  {
+   "gs_id": 3,
+   "name": "Reykjavik, Iceland",
+   "lat": 63.847168,
+   "lon": -22.455754,
+   "freqs_khz": [
+    3900.0,
+    5720.0,
+    6712.0,
+    8977.0,
+    11184.0,
+    15025.0,
+    17985.0
+   ],
+   "source": "https://github.com/szpajder/dumphfdl/blob/master/etc/systable.conf"
+  },
+  {
+   "gs_id": 4,
+   "name": "Riverhead, New York",
+   "lat": 40.881922,
+   "lon": -72.63762,
+   "freqs_khz": [
+    5652.0,
+    6661.0,
+    8912.0,
+    11387.0,
+    13276.0,
+    17919.0,
+    21931.0
+   ],
+   "source": "https://github.com/szpajder/dumphfdl/blob/master/etc/systable.conf"
+  },
+  {
+   "gs_id": 5,
+   "name": "Auckland, New Zealand",
+   "lat": -37.015757,
+   "lon": 174.809637,
+   "freqs_khz": [
+    5583.0,
+    6535.0,
+    8921.0,
+    10084.0,
+    13351.0,
+    17916.0
+   ],
+   "source": "https://github.com/szpajder/dumphfdl/blob/master/etc/systable.conf"
+  },
+  {
+   "gs_id": 6,
+   "name": "Hat Yai, Thailand",
+   "lat": 6.937536,
+   "lon": 100.388451,
+   "freqs_khz": [
+    5655.0,
+    6535.0,
+    8825.0,
+    10066.0,
+    13270.0,
+    17928.0,
+    21949.0
+   ],
+   "source": "https://github.com/szpajder/dumphfdl/blob/master/etc/systable.conf"
+  },
+  {
+   "gs_id": 7,
+   "name": "Shannon, Ireland",
+   "lat": 52.744089,
+   "lon": -8.926752,
+   "freqs_khz": [
+    2998.0,
+    3455.0,
+    5547.0,
+    6532.0,
+    8843.0,
+    8942.0,
+    10081.0,
+    11384.0
+   ],
+   "source": "https://github.com/szpajder/dumphfdl/blob/master/etc/systable.conf"
+  },
+  {
+   "gs_id": 8,
+   "name": "Johannesburg, South Africa",
+   "lat": -26.129658,
+   "lon": 28.206078,
+   "freqs_khz": [
+    3016.0,
+    4681.0,
+    5529.0,
+    8834.0,
+    11321.0,
+    13321.0,
+    17922.0,
+    21949.0
+   ],
+   "source": "https://github.com/szpajder/dumphfdl/blob/master/etc/systable.conf"
+  },
+  {
+   "gs_id": 9,
+   "name": "Barrow, Alaska",
+   "lat": 71.25849,
+   "lon": -156.577447,
+   "freqs_khz": [
+    2944.0,
+    2992.0,
+    3007.0,
+    3497.0,
+    4654.0,
+    4687.0,
+    5529.0,
+    5538.0,
+    5544.0,
+    6646.0,
+    8927.0,
+    8936.0,
+    10027.0,
+    10093.0,
+    11354.0,
+    17919.0,
+    17934.0,
+    21928.0,
+    21937.0
+   ],
+   "source": "https://github.com/szpajder/dumphfdl/blob/master/etc/systable.conf"
+  },
+  {
+   "gs_id": 10,
+   "name": "Muan, South Korea",
+   "lat": 35.032377,
+   "lon": 126.238644,
+   "freqs_khz": [
+    2941.0,
+    5502.0,
+    6619.0,
+    8939.0,
+    10060.0,
+    13342.0,
+    17958.0,
+    21931.0
+   ],
+   "source": "https://github.com/szpajder/dumphfdl/blob/master/etc/systable.conf"
+  },
+  {
+   "gs_id": 11,
+   "name": "Albrook, Panama",
+   "lat": 9.084681,
+   "lon": -79.373969,
+   "freqs_khz": [
+    5589.0,
+    6589.0,
+    8894.0,
+    10063.0,
+    13264.0,
+    17901.0
+   ],
+   "source": "https://github.com/szpajder/dumphfdl/blob/master/etc/systable.conf"
+  },
+  {
+   "gs_id": 13,
+   "name": "Santa Cruz, Bolivia",
+   "lat": -17.671199,
+   "lon": -63.157088,
+   "freqs_khz": [
+    4660.0,
+    6628.0,
+    8957.0,
+    11318.0,
+    13315.0,
+    17916.0,
+    21997.0
+   ],
+   "source": "https://github.com/szpajder/dumphfdl/blob/master/etc/systable.conf"
+  },
+  {
+   "gs_id": 14,
+   "name": "Krasnoyarsk, Russia",
+   "lat": 56.152603,
+   "lon": 92.583337,
+   "freqs_khz": [
+    5622.0,
+    6596.0,
+    8886.0,
+    10087.0,
+    13321.0,
+    17912.0,
+    21990.0
+   ],
+   "source": "https://github.com/szpajder/dumphfdl/blob/master/etc/systable.conf"
+  },
+  {
+   "gs_id": 15,
+   "name": "Al Muharraq, Bahrain",
+   "lat": 26.308529,
+   "lon": 50.472318,
+   "freqs_khz": [
+    2986.0,
+    5544.0,
+    6646.0,
+    8885.0,
+    10030.0,
+    13312.0,
+    17967.0,
+    21982.0
+   ],
+   "source": "https://github.com/szpajder/dumphfdl/blob/master/etc/systable.conf"
+  },
+  {
+   "gs_id": 16,
+   "name": "Agana, Guam",
+   "lat": 13.488833,
+   "lon": 144.828233,
+   "freqs_khz": [
+    5451.0,
+    6652.0,
+    8927.0,
+    11306.0,
+    13312.0,
+    17919.0,
+    21928.0
+   ],
+   "source": "https://github.com/szpajder/dumphfdl/blob/master/etc/systable.conf"
+  },
+  {
+   "gs_id": 17,
+   "name": "Canarias, Spain",
+   "lat": 27.960945,
+   "lon": -15.405608,
+   "freqs_khz": [
+    6529.0,
+    8948.0,
+    11348.0,
+    13303.0,
+    17928.0,
+    21955.0
+   ],
+   "source": "https://github.com/szpajder/dumphfdl/blob/master/etc/systable.conf"
+  }
+ ],
+ "hfdl_systable_version": 52,
+ "hfdl_note": "dumphfdl etc/systable.conf version 52 (last change 2023-12-14). Ground station 12 is absent from the table. Frequencies are what each station may use; only a subset is active at any time (stations announce active frequencies in squitters).",
+ "dsc": {
+  "distress_khz": [
+   2187.5,
+   4207.5,
+   6312.0,
+   8414.5,
+   12577.0,
+   16804.5
+  ],
+  "distress_note": "HF list (4207.5, 6312.0, 8414.5, 12577, 16804.5) and VHF Ch70 from RAMN 2026 Part 4 'The digital selective calling (DSC) frequencies are'; MF 2187.5 kHz from the same part ('automated listening watch on VHF/DSC Ch70 and MF/DSC 2187.5 kHz').",
+  "routine_note": "Routine (non-distress) DSC calling uses separate international and national channels defined in ITU Radio Regulations Appendix 17 / ITU-R M.541; not listed here because no ITU or coast-guard page listing them could be fetched.",
+  "source": "https://www.canada.ca/en/canadian-coast-guard/corporate/publications/radio-aids-marine-navigation/general.html",
+  "coast_stations_nearby": [
+   {
+    "name": "Iqaluit Coast Guard Radio (CCG MCTS), Nunavut - call sign VFF; seasonal, open approx. mid-May to mid-December",
+    "mmsi": "003160023",
+    "freqs_khz": [
+     4207.5,
+     6312.0,
+     8414.5,
+     12577.0,
+     16804.5
+    ],
+    "freqs_note": "Listed as MF/HF F1B transmit frequencies at Iqaluit in Table 2-3 (also 4177.5, 6268, 8376.5, 12520, 16695 F1B, which are NBDP/SITOR channels).",
+    "source": "https://www.canada.ca/en/canadian-coast-guard/corporate/publications/radio-aids-marine-navigation/facilities-information.html"
+   }
+  ],
+  "unverified": "US Coast Guard HF DSC watch stations and MMSIs (e.g. 003669995 for COMMCOM Chesapeake): the official USCG pages (navcen.uscg.gov, dco.uscg.mil) returned HTTP 403 to automated fetches, so not confirmed here."
+ },
+ "wwv": [
+  {
+   "call": "WWV",
+   "location": "near Fort Collins, Colorado",
+   "freqs_khz": [
+    2500,
+    5000,
+    10000,
+    15000,
+    20000,
+    25000
+   ],
+   "power_note": "10 kW on 5, 10, 15 MHz; 2.5 kW on 2.5 and 20 MHz; 25 MHz is experimental, 2.5 kW, 'typically continuous' but may be interrupted without notice.",
+   "source": "https://www.nist.gov/pml/time-and-frequency-division/time-distribution/radio-station-wwv",
+   "tones": {
+    "500": [
+     4,
+     6,
+     12,
+     14,
+     16,
+     20,
+     22,
+     24,
+     26,
+     28,
+     32,
+     34,
+     36,
+     38,
+     40,
+     42,
+     52,
+     54,
+     56,
+     58
+    ],
+    "600": [
+     1,
+     3,
+     5,
+     7,
+     11,
+     13,
+     15,
+     17,
+     19,
+     21,
+     23,
+     25,
+     27,
+     31,
+     33,
+     35,
+     37,
+     39,
+     41,
+     53,
+     55,
+     57
+    ],
+    "440": [
+     2
+    ],
+    "none": [
+     0,
+     8,
+     9,
+     10,
+     18,
+     29,
+     30,
+     43,
+     44,
+     45,
+     46,
+     47,
+     48,
+     49,
+     50,
+     51,
+     59
+    ]
+   },
+   "tones_source": "https://www.nist.gov/pml/time-and-frequency-division/time-distribution/radio-station-wwv/wwv-and-wwvh-digital-time-code",
+   "voice_time_utc": "Male voice, about 7.5 s before each minute.",
+   "station_id_minutes": [
+    0,
+    30
+   ],
+   "geophysical_alert_minute": 18,
+   "hamsci_test_signal_minute": 8,
+   "schedule_notes": "Per NIST (format page updated 2024-09-03): seconds ticks are 5 ms of 1000 Hz, omitted at seconds 29 and 59; minute marker 800 ms of 1000 Hz; hour marker 800 ms of 1500 Hz. Each tick sits in a 40 ms protected zone (10 ms silence, 5 ms tone, 25 ms silence). Audio tones: 500 Hz and 600 Hz alternate per the minute lists; 440 Hz in minute 2 (omitted during the first hour of each UTC day); no tone in minutes 0, 8-10, 18, 29-30, 43-51, 59. Voice time announcement every minute, ~7.5 s before the minute (WWVH's comes first at ~15 s before). Geophysical alert (NOAA, < 45 s) at minute 18, updated every 3 h (typically 0000, 0300 ... 2100 UTC). HamSCI/NIST ionospheric test signal (tones, chirps, noise bursts) at minute 8 since 2021-11-15. UT1 correction: doubled ticks in seconds 1-8 (+) or 9-16 (-), 0.1 s each. BCD time code on a 100 Hz subcarrier, 1 bit/s. Modulation: double-sideband AM; 50% tones, 50% time code, 100% ticks/markers, 75% voice. Station ID at minutes 0 and 30 is from NIST SP 432 (2002) Figure 3.7. Marine storm warnings (minutes 8-11 in SP 432) were discontinued 2019-01-31 1800 UTC (NWS SCN 18-102). GPS status announcements at minutes 14-15 (SP 432, 2002) are not on the current NIST page and their status is unverified; the current tone table puts tones in those minutes. Recent outage on record: 2026-10-19 2011-2034 UTC on all frequencies (NIST outages page).",
+   "sources_also": [
+    "https://www.nist.gov/pml/time-and-frequency-division/time-distribution/radio-station-wwv/wwv-and-wwvh-broadcast-outages",
+    "http://tf.nist.gov/general/pdf/1383.pdf",
+    "https://www.weather.gov/media/notification/pdfs/scn18-102nist_broadcast_termination_aaa.pdf"
+   ]
+  },
+  {
+   "call": "WWVH",
+   "location": "Kekaha, Kauai, Hawaii",
+   "freqs_khz": [
+    2500,
+    5000,
+    10000,
+    15000
+   ],
+   "power_note": "10 kW on 10 and 15 MHz, 5 kW on 2.5 MHz; 5 MHz normally 10 kW but NIST says it currently runs 5 kW due to equipment failure (page updated 2026-06-22).",
+   "source": "https://www.nist.gov/pml/time-and-frequency-division/time-distribution/radio-station-wwvh",
+   "tones": {
+    "500": [
+     3,
+     5,
+     7,
+     11,
+     13,
+     21,
+     23,
+     25,
+     27,
+     31,
+     33,
+     35,
+     37,
+     39,
+     41,
+     43,
+     44,
+     45,
+     47,
+     48,
+     49,
+     50,
+     51,
+     53,
+     55,
+     57
+    ],
+    "600": [
+     2,
+     4,
+     6,
+     12,
+     20,
+     22,
+     24,
+     26,
+     28,
+     32,
+     34,
+     36,
+     38,
+     40,
+     42,
+     46,
+     52,
+     54,
+     56,
+     58
+    ],
+    "440": [
+     1
+    ],
+    "none": [
+     0,
+     8,
+     9,
+     10,
+     14,
+     15,
+     16,
+     17,
+     18,
+     19,
+     29,
+     30
+    ]
+   },
+   "tones_source": "https://www.nist.gov/pml/time-and-frequency-division/time-distribution/radio-station-wwv/wwv-and-wwvh-digital-time-code",
+   "voice_time_utc": "Female voice, about 15 s before each minute.",
+   "station_id_minutes": [
+    29,
+    59
+   ],
+   "geophysical_alert_minute": 45,
+   "hamsci_test_signal_minute": 48,
+   "schedule_notes": "Ticks are 5 ms of 1200 Hz (omitted at seconds 29 and 59); minute marker 800 ms of 1200 Hz; hour marker 800 ms of 1500 Hz. 440 Hz in minute 1 (omitted in the first UTC hour of the day). No tone in minutes 0, 8-10, 14-19, 29-30. Geophysical alert at minute 45. HamSCI test signal at minute 48 since 2021-11-15. Station ID at minutes 29 and 59 is from NIST SP 432 (2002) Figure 3.8. Marine storm warnings (minutes 48-52 in SP 432) discontinued 2019-01-31 (NWS SCN 18-102). GPS status at minutes 43-44 (SP 432) unverified/likely gone; the current tone table lists 500 Hz tones in those minutes. Note the tone lists overlap in minute 48 (500 Hz listed) and the HamSCI signal; NIST says the test signal 'may be modified occasionally'.",
+   "sources_also": [
+    "https://www.nist.gov/pml/time-and-frequency-division/time-distribution/radio-station-wwv/wwv-and-wwvh-broadcast-outages",
+    "http://tf.nist.gov/general/pdf/1383.pdf"
+   ]
+  }
+ ],
+ "drm": [
+  {
+   "station": "Radio Romania International",
+   "freq_khz": 9720.0,
+   "utc": "1700-1800",
+   "days": "Daily",
+   "target": "Western Europe",
+   "language": "French",
+   "site": "Romania, Tiganesti",
+   "power_kw": 90.0,
+   "beam_deg": "292",
+   "drm_org_region": "Europe, Middle East, Africa",
+   "drm_org_confidence": "confirmed",
+   "drm_org_label": "B26 · confirmed",
+   "note": null,
+   "underlying_sources": [
+    "https://www.drmrx.org/drm-broadcasts-all-by-frequency/",
+    "https://www.rri.ro/fr/info-utiles/frequences/horaires-et-frequences-de-rri-pour-lhiver-2026-2027-id1073365.html",
+    "https://new.hfcc.org/data/schedbybrc.php?broadc=RRO&seas=B26",
+    "https://www.drm.org/broadcast-schedule/"
+   ],
+   "source": "https://www.drm.org/broadcast-schedule/",
+   "utc_start": "1700",
+   "utc_end": "1800"
+  },
+  {
+   "station": "Radio Romania International",
+   "freq_khz": 9570.0,
+   "utc": "1800-1900",
+   "days": "Daily",
+   "target": "Western Europe",
+   "language": "English",
+   "site": "Romania, Tiganesti",
+   "power_kw": 90.0,
+   "beam_deg": "307",
+   "drm_org_region": "Europe, Middle East, Africa",
+   "drm_org_confidence": "confirmed",
+   "drm_org_label": "B26 · confirmed",
+   "note": null,
+   "underlying_sources": [
+    "https://www.drmrx.org/drm-broadcasts-all-by-frequency/",
+    "https://www.rri.ro/en/useful-information-en/how-to-listen/rri-2026-2027-winter-broadcast-frequencies-and-alternative-frequencies-id1073489.html",
+    "https://new.hfcc.org/data/schedbybrc.php?broadc=RRO&seas=B26",
+    "https://www.drm.org/broadcast-schedule/"
+   ],
+   "source": "https://www.drm.org/broadcast-schedule/",
+   "utc_start": "1800",
+   "utc_end": "1900",
+   "source_checked_direct": "https://www.rri.ro/en/useful-information-en/how-to-listen/rri-2026-2027-winter-broadcast-frequencies-and-alternative-frequencies-id1073489.html"
+  },
+  {
+   "station": "Radio Romania International",
+   "freq_khz": 5955.0,
+   "utc": "1900-1926",
+   "days": "Daily",
+   "target": "Italy",
+   "language": "Italian",
+   "site": "Romania, Tiganesti",
+   "power_kw": 40.0,
+   "beam_deg": "270",
+   "drm_org_region": "Europe, Middle East, Africa",
+   "drm_org_confidence": "confirmed",
+   "drm_org_label": "B26 · confirmed",
+   "note": "RRI ends at 1926 UTC; HFCC registers the slot until 1930 UTC.",
+   "underlying_sources": [
+    "https://www.drmrx.org/drm-broadcasts-all-by-frequency/",
+    "https://www.rri.ro/it/info-utili/frequenze/radio-romania-internazionale-onde-corte-internet-satellite-e-reti-sociali-8-id1073490.html",
+    "https://new.hfcc.org/data/schedbybrc.php?broadc=RRO&seas=B26",
+    "https://www.drm.org/broadcast-schedule/"
+   ],
+   "source": "https://www.drm.org/broadcast-schedule/",
+   "utc_start": "1900",
+   "utc_end": "1926"
+  },
+  {
+   "station": "Radio Romania International",
+   "freq_khz": 6110.0,
+   "utc": "1900-2000",
+   "days": "Daily",
+   "target": "Europe",
+   "language": "German",
+   "site": "Romania, Tiganesti",
+   "power_kw": 90.0,
+   "beam_deg": "307",
+   "drm_org_region": "Europe, Middle East, Africa",
+   "drm_org_confidence": "confirmed",
+   "drm_org_label": "B26 · confirmed",
+   "note": null,
+   "underlying_sources": [
+    "https://www.drmrx.org/drm-broadcasts-all-by-frequency/",
+    "https://new.hfcc.org/data/schedbybrc.php?broadc=RRO&seas=B26",
+    "https://www.drm.org/broadcast-schedule/"
+   ],
+   "source": "https://www.drm.org/broadcast-schedule/",
+   "utc_start": "1900",
+   "utc_end": "2000"
+  },
+  {
+   "station": "Music 4 Joy",
+   "freq_khz": 13730.0,
+   "utc": "1800-1900",
+   "days": "Tue & Thu",
+   "target": "East Africa",
+   "language": "Multi",
+   "site": "Germany, Nauen",
+   "power_kw": 100.0,
+   "beam_deg": "158",
+   "drm_org_region": "Europe, Middle East, Africa",
+   "drm_org_confidence": "confirmed",
+   "drm_org_label": "B26 · confirmed",
+   "note": null,
+   "underlying_sources": [
+    "HFCC B26 DRM report, 15 October 2026 — Media Broadcast",
+    "https://www.drmrx.org/drm-broadcasts-all-by-frequency/",
+    "https://new.hfcc.org/data/schedbyfmo.php?fmor=MBR&seas=B26",
+    "https://www.drmrx.org/drm-broadcasts-shortwave-by-frequency/",
+    "https://www.drm.org/broadcast-schedule/"
+   ],
+   "source": "https://www.drm.org/broadcast-schedule/",
+   "utc_start": "1800",
+   "utc_end": "1900"
+  },
+  {
+   "station": "Music 4 Joy",
+   "freq_khz": 7225.0,
+   "utc": "1830-1930",
+   "days": "Tue & Thu",
+   "target": "Eastern Europe, Russia, Central and South Asia",
+   "language": "Multi",
+   "site": "Germany, Nauen",
+   "power_kw": 100.0,
+   "beam_deg": "113",
+   "drm_org_region": "Europe, Middle East, Africa",
+   "drm_org_confidence": "confirmed",
+   "drm_org_label": "B26 · confirmed",
+   "note": null,
+   "underlying_sources": [
+    "HFCC B26 DRM report, 15 October 2026 — Media Broadcast",
+    "https://www.drmrx.org/drm-broadcasts-all-by-frequency/",
+    "https://new.hfcc.org/data/schedbyfmo.php?fmor=MBR&seas=B26",
+    "https://www.drmrx.org/drm-broadcasts-shortwave-by-frequency/",
+    "https://www.drm.org/broadcast-schedule/"
+   ],
+   "source": "https://www.drm.org/broadcast-schedule/",
+   "utc_start": "1830",
+   "utc_end": "1930"
+  },
+  {
+   "station": "Music 4 Joy",
+   "freq_khz": 9810.0,
+   "utc": "2000-2100",
+   "days": "Tue & Thu",
+   "target": "West Africa",
+   "language": "Multi",
+   "site": "Germany, Nauen",
+   "power_kw": 100.0,
+   "beam_deg": "200",
+   "drm_org_region": "Europe, Middle East, Africa",
+   "drm_org_confidence": "confirmed",
+   "drm_org_label": "B26 · confirmed",
+   "note": null,
+   "underlying_sources": [
+    "HFCC B26 DRM report, 15 October 2026 — Media Broadcast",
+    "https://www.drmrx.org/drm-broadcasts-all-by-frequency/",
+    "https://new.hfcc.org/data/schedbyfmo.php?fmor=MBR&seas=B26",
+    "https://www.drmrx.org/drm-broadcasts-shortwave-by-frequency/",
+    "https://www.drm.org/broadcast-schedule/"
+   ],
+   "source": "https://www.drm.org/broadcast-schedule/",
+   "utc_start": "2000",
+   "utc_end": "2100"
+  },
+  {
+   "station": "Radio Romania International",
+   "freq_khz": 9500.0,
+   "utc": "2200-2300",
+   "days": "Daily",
+   "target": "Argentina, Brazil",
+   "language": "Spanish",
+   "site": "Romania, Tiganesti",
+   "power_kw": 90.0,
+   "beam_deg": "247",
+   "drm_org_region": "Spain and Latin America",
+   "drm_org_confidence": "confirmed",
+   "drm_org_label": "B26 · confirmed",
+   "note": null,
+   "underlying_sources": [
+    "https://www.rri.ro/es/informaciones-utiles/frecuencias/nuevas-frecuencias-de-radio-rumania-internacional-19-id1073478.html",
+    "https://new.hfcc.org/data/schedbybrc.php?broadc=RRO&seas=B26",
+    "https://www.drmrx.org/drm-broadcasts-all-by-frequency/",
+    "https://www.drm.org/broadcast-schedule/"
+   ],
+   "source": "https://www.drm.org/broadcast-schedule/",
+   "utc_start": "2200",
+   "utc_end": "2300"
+  },
+  {
+   "station": "TDF / Radio France Internationale",
+   "freq_khz": 9565.0,
+   "utc": "2200-2300",
+   "days": "Daily",
+   "target": "West Africa",
+   "language": "French",
+   "site": "France, Issoudun",
+   "power_kw": 100.0,
+   "beam_deg": "204",
+   "drm_org_region": "Europe, Middle East, Africa",
+   "drm_org_confidence": "confirmed",
+   "drm_org_label": "B26 · confirmed",
+   "note": null,
+   "underlying_sources": [
+    "https://new.hfcc.org/data/schedbybrc.php?broadc=RFI&seas=B26",
+    "https://www.drmrx.org/drm-broadcasts-all-by-frequency/"
+   ],
+   "source": "https://www.drm.org/broadcast-schedule/",
+   "utc_start": "2200",
+   "utc_end": "2300"
+  }
+ ],
+ "drm_other": [
+  {
+   "station": "Europasender Waldheim",
+   "freq_khz": 6195.0,
+   "utc": "0900-1400",
+   "days": "Occasionally",
+   "target": "central Europe",
+   "language": "Various",
+   "site": "Germany, Waldheim",
+   "power_kw": 0.2,
+   "beam_deg": "Non Directional",
+   "drm_org_region": "Europe, Middle East, Africa",
+   "drm_org_confidence": "confirmed",
+   "drm_org_label": "Confirmed · occasional",
+   "note": null,
+   "underlying_sources": [
+    "https://www.waldheim.es/"
+   ],
+   "source": "https://www.drm.org/broadcast-schedule/",
+   "utc_start": "0900",
+   "utc_end": "1400"
+  },
+  {
+   "station": "TDF",
+   "freq_khz": 13740.0,
+   "utc": "2200-2300",
+   "days": "Daily",
+   "target": "Burundi",
+   "language": "French",
+   "site": "France, Issoudun",
+   "power_kw": 100.0,
+   "beam_deg": "145",
+   "drm_org_region": "Europe, Middle East, Africa",
+   "drm_org_confidence": "uncertain",
+   "drm_org_label": "B26 · DRM unverified",
+   "note": "DRM designation unverified.",
+   "underlying_sources": [
+    "https://www.drmrx.org/drm-broadcasts-all-by-frequency/",
+    "https://new.hfcc.org/data/schedbybrc.php?broadc=RFI&seas=B26",
+    "https://www.drmrx.org/drm-broadcasts-shortwave-by-frequency/",
+    "https://www.drm.org/broadcast-schedule/"
+   ],
+   "source": "https://www.drm.org/broadcast-schedule/",
+   "utc_start": "2200",
+   "utc_end": "2300"
+  },
+  {
+   "station": "RNZ Pacific",
+   "freq_khz": 7285.0,
+   "utc": "1651-1758",
+   "days": "Sun-Fri",
+   "target": "Cook Islands, Samoa, Tonga",
+   "language": "English",
+   "site": "New Zealand, Rangitaiki",
+   "power_kw": 35.0,
+   "beam_deg": "35",
+   "drm_org_region": "Pacific",
+   "drm_org_confidence": "confirmed",
+   "drm_org_label": "B26 · confirmed",
+   "note": "Times and days follow RNZ; HFCC lists 1655–1900 UTC with different weekdays.",
+   "underlying_sources": [
+    "https://www.rnz.co.nz/international/listen",
+    "https://www.drmrx.org/drm-broadcasts-all-by-frequency/",
+    "https://new.hfcc.org/data/schedbybrc.php?broadc=RNZ&seas=B26",
+    "https://www.drmrx.org/drm-broadcasts-shortwave-by-frequency/",
+    "https://www.drm.org/broadcast-schedule/"
+   ],
+   "source": "https://www.drm.org/broadcast-schedule/",
+   "utc_start": "1651",
+   "utc_end": "1758"
+  },
+  {
+   "station": "RNZ Pacific",
+   "freq_khz": 11690.0,
+   "utc": "1759-1858 1859-1958",
+   "days": "Sun-Fri",
+   "target": "Cook Islands, Samoa, Tonga",
+   "language": "English",
+   "site": "New Zealand, Rangitaiki",
+   "power_kw": 35.0,
+   "beam_deg": "35",
+   "drm_org_region": "Pacific",
+   "drm_org_confidence": "confirmed",
+   "drm_org_label": "B26 · confirmed",
+   "note": "Times and days follow RNZ; HFCC lists 1655–2100 UTC with different weekdays.",
+   "underlying_sources": [
+    "https://www.rnz.co.nz/international/listen",
+    "https://www.drmrx.org/drm-broadcasts-all-by-frequency/",
+    "https://new.hfcc.org/data/schedbybrc.php?broadc=RNZ&seas=B26",
+    "https://www.drmrx.org/drm-broadcasts-shortwave-by-frequency/",
+    "https://www.drm.org/broadcast-schedule/"
+   ],
+   "source": "https://www.drm.org/broadcast-schedule/",
+   "utc_windows": [
+    [
+     "1759",
+     "1858"
+    ],
+    [
+     "1859",
+     "1958"
+    ]
+   ]
+  },
+  {
+   "station": "RNZ Pacific",
+   "freq_khz": 13840.0,
+   "utc": "1959-2058",
+   "days": "Sun-Fri",
+   "target": "Cook Islands, Samoa, Tonga",
+   "language": "English",
+   "site": "New Zealand, Rangitaiki",
+   "power_kw": 35.0,
+   "beam_deg": "35",
+   "drm_org_region": "Pacific",
+   "drm_org_confidence": "confirmed",
+   "drm_org_label": "B26 · confirmed",
+   "note": "Times and days follow RNZ; HFCC lists 1755–2100 UTC with different weekdays.",
+   "underlying_sources": [
+    "https://www.rnz.co.nz/international/listen",
+    "https://www.drmrx.org/drm-broadcasts-all-by-frequency/",
+    "https://new.hfcc.org/data/schedbybrc.php?broadc=RNZ&seas=B26",
+    "https://www.drmrx.org/drm-broadcasts-shortwave-by-frequency/",
+    "https://www.drm.org/broadcast-schedule/"
+   ],
+   "source": "https://www.drm.org/broadcast-schedule/",
+   "utc_start": "1959",
+   "utc_end": "2058"
+  },
+  {
+   "station": "China National Radio 1",
+   "freq_khz": 13790.0,
+   "utc": "0000-1000",
+   "days": "Daily",
+   "target": "China",
+   "language": "Chinese",
+   "site": "China, Qihar",
+   "power_kw": 30.0,
+   "beam_deg": "203",
+   "drm_org_region": "Asia",
+   "drm_org_confidence": "confirmed",
+   "drm_org_label": "B26 · confirmed",
+   "note": null,
+   "underlying_sources": [
+    "HFCC B26 DRM report, 15 October 2026 — Media Broadcast",
+    "https://www.drmrx.org/drm-broadcasts-all-by-frequency/",
+    "CNR DRM text messages — Atsuhiko Takezawa (undated)",
+    "https://new.hfcc.org/data/schedbybrc.php?broadc=CNR&seas=B26",
+    "https://www.drmrx.org/drm-broadcasts-shortwave-by-frequency/",
+    "https://www.drm.org/broadcast-schedule/"
+   ],
+   "source": "https://www.drm.org/broadcast-schedule/",
+   "utc_start": "0000",
+   "utc_end": "1000"
+  },
+  {
+   "station": "China National Radio 1",
+   "freq_khz": 13730.0,
+   "utc": "0100-0200",
+   "days": "Daily",
+   "target": "China",
+   "language": "Chinese",
+   "site": "China, Kunming",
+   "power_kw": 30.0,
+   "beam_deg": "32",
+   "drm_org_region": "Asia",
+   "drm_org_confidence": "uncertain",
+   "drm_org_label": "A26 · unverified",
+   "note": null,
+   "underlying_sources": [
+    "https://www.drmrx.org/drm-broadcasts-all-by-frequency/",
+    "https://www.drmrx.org/drm-broadcasts-shortwave-by-frequency/",
+    "https://new.hfcc.org/data/schedbybrc.php?broadc=CNR&seas=B26",
+    "https://www.drm.org/broadcast-schedule/"
+   ],
+   "source": "https://www.drm.org/broadcast-schedule/",
+   "utc_start": "0100",
+   "utc_end": "0200"
+  },
+  {
+   "station": "China National Radio 1",
+   "freq_khz": 17650.0,
+   "utc": "0100-0600",
+   "days": "Daily",
+   "target": "China",
+   "language": "Chinese",
+   "site": "China, Kunming",
+   "power_kw": 30.0,
+   "beam_deg": "32",
+   "drm_org_region": "Asia",
+   "drm_org_confidence": "confirmed",
+   "drm_org_label": "B26 · confirmed",
+   "note": null,
+   "underlying_sources": [
+    "HFCC B26 DRM report, 15 October 2026 — Media Broadcast",
+    "https://www.drmrx.org/drm-broadcasts-all-by-frequency/",
+    "https://www.drmrx.org/drm-broadcasts-shortwave-by-frequency/",
+    "https://new.hfcc.org/data/schedbybrc.php?broadc=CNR&seas=B26",
+    "https://www.drm.org/broadcast-schedule/"
+   ],
+   "source": "https://www.drm.org/broadcast-schedule/",
+   "utc_start": "0100",
+   "utc_end": "0600"
+  },
+  {
+   "station": "China National Radio 1",
+   "freq_khz": 17830.0,
+   "utc": "0100-0800",
+   "days": "Daily",
+   "target": "N & E China",
+   "language": "Chinese",
+   "site": "China, Urumqi",
+   "power_kw": 30.0,
+   "beam_deg": "98",
+   "drm_org_region": "Asia",
+   "drm_org_confidence": "confirmed",
+   "drm_org_label": "B26 · confirmed",
+   "note": null,
+   "underlying_sources": [
+    "HFCC B26 DRM report, 15 October 2026 — Media Broadcast",
+    "https://www.drmrx.org/drm-broadcasts-all-by-frequency/",
+    "CNR DRM text messages — Atsuhiko Takezawa (undated)",
+    "https://new.hfcc.org/data/schedbybrc.php?broadc=CNR&seas=B26",
+    "https://www.drmrx.org/drm-broadcasts-shortwave-by-frequency/",
+    "https://www.drm.org/broadcast-schedule/"
+   ],
+   "source": "https://www.drm.org/broadcast-schedule/",
+   "utc_start": "0100",
+   "utc_end": "0800"
+  },
+  {
+   "station": "China National Radio 1",
+   "freq_khz": 13825.0,
+   "utc": "0100-0800",
+   "days": "Daily",
+   "target": "S China",
+   "language": "Chinese",
+   "site": "China, Beijing",
+   "power_kw": 30.0,
+   "beam_deg": "175",
+   "drm_org_region": "Asia",
+   "drm_org_confidence": "likely",
+   "drm_org_label": "Provisional",
+   "note": "DRM text: 0100–0800 UTC; HFCC: 0100–0900 UTC.",
+   "underlying_sources": [
+    "HFCC B26 DRM report, 15 October 2026 — Media Broadcast",
+    "https://www.drmrx.org/drm-broadcasts-all-by-frequency/",
+    "CNR DRM text messages — Atsuhiko Takezawa (undated)",
+    "https://new.hfcc.org/data/schedbybrc.php?broadc=CNR&seas=B26",
+    "https://www.drmrx.org/drm-broadcasts-shortwave-by-frequency/",
+    "https://www.drm.org/broadcast-schedule/"
+   ],
+   "source": "https://www.drm.org/broadcast-schedule/",
+   "utc_start": "0100",
+   "utc_end": "0800"
+  },
+  {
+   "station": "China National Radio 1",
+   "freq_khz": 11695.0,
+   "utc": "0100-0900",
+   "days": "Daily",
+   "target": "China",
+   "language": "Chinese",
+   "site": "China, Donfang",
+   "power_kw": 30.0,
+   "beam_deg": "41",
+   "drm_org_region": "Asia",
+   "drm_org_confidence": "confirmed",
+   "drm_org_label": "B26 · confirmed",
+   "note": null,
+   "underlying_sources": [
+    "HFCC B26 DRM report, 15 October 2026 — Media Broadcast",
+    "https://www.drmrx.org/drm-broadcasts-all-by-frequency/",
+    "CNR DRM text messages — Atsuhiko Takezawa (undated)",
+    "https://new.hfcc.org/data/schedbybrc.php?broadc=CNR&seas=B26",
+    "https://www.drmrx.org/drm-broadcasts-shortwave-by-frequency/",
+    "https://www.drm.org/broadcast-schedule/"
+   ],
+   "source": "https://www.drm.org/broadcast-schedule/",
+   "utc_start": "0100",
+   "utc_end": "0900"
+  },
+  {
+   "station": "China National Radio 1",
+   "freq_khz": 17770.0,
+   "utc": "0100-0900",
+   "days": "Daily",
+   "target": "China",
+   "language": "Chinese",
+   "site": "China, Donfang",
+   "power_kw": 30.0,
+   "beam_deg": "16",
+   "drm_org_region": "Asia",
+   "drm_org_confidence": "confirmed",
+   "drm_org_label": "B26 · confirmed",
+   "note": null,
+   "underlying_sources": [
+    "HFCC B26 DRM report, 15 October 2026 — Media Broadcast",
+    "https://www.drmrx.org/drm-broadcasts-all-by-frequency/",
+    "CNR DRM text messages — Atsuhiko Takezawa (undated)",
+    "https://new.hfcc.org/data/schedbybrc.php?broadc=CNR&seas=B26",
+    "https://www.drmrx.org/drm-broadcasts-shortwave-by-frequency/",
+    "https://www.drm.org/broadcast-schedule/"
+   ],
+   "source": "https://www.drm.org/broadcast-schedule/",
+   "utc_start": "0100",
+   "utc_end": "0900"
+  },
+  {
+   "station": "China National Radio 1",
+   "freq_khz": 15730.0,
+   "utc": "0200-0300 0500-0600",
+   "days": "Daily",
+   "target": "China",
+   "language": "Chinese",
+   "site": "China, Kunming",
+   "power_kw": 30.0,
+   "beam_deg": "32",
+   "drm_org_region": "Asia",
+   "drm_org_confidence": "uncertain",
+   "drm_org_label": "A26 · unverified",
+   "note": null,
+   "underlying_sources": [
+    "https://www.drmrx.org/drm-broadcasts-all-by-frequency/",
+    "https://www.drmrx.org/drm-broadcasts-shortwave-by-frequency/",
+    "https://new.hfcc.org/data/schedbybrc.php?broadc=CNR&seas=B26",
+    "https://www.drm.org/broadcast-schedule/"
+   ],
+   "source": "https://www.drm.org/broadcast-schedule/",
+   "utc_windows": [
+    [
+     "0200",
+     "0300"
+    ],
+    [
+     "0500",
+     "0600"
+    ]
+   ]
+  },
+  {
+   "station": "Radio Romania International",
+   "freq_khz": 15250.0,
+   "utc": "0400-0500",
+   "days": "Daily",
+   "target": "India (Mumbai)",
+   "language": "English",
+   "site": "Romania, Tiganesti",
+   "power_kw": 90.0,
+   "beam_deg": "112",
+   "drm_org_region": "Asia",
+   "drm_org_confidence": "confirmed",
+   "drm_org_label": "B26 · confirmed",
+   "note": null,
+   "underlying_sources": [
+    "https://www.drmrx.org/drm-broadcasts-all-by-frequency/",
+    "https://www.rri.ro/en/useful-information-en/how-to-listen/rri-2026-2027-winter-broadcast-frequencies-and-alternative-frequencies-id1073489.html",
+    "https://new.hfcc.org/data/schedbybrc.php?broadc=RRO&seas=B26",
+    "https://www.drm.org/broadcast-schedule/"
+   ],
+   "source": "https://www.drm.org/broadcast-schedule/",
+   "utc_start": "0400",
+   "utc_end": "0500"
+  },
+  {
+   "station": "China National Radio 1",
+   "freq_khz": 15590.0,
+   "utc": "0300-0400",
+   "days": "Daily",
+   "target": "China",
+   "language": "Chinese",
+   "site": "China, Kunming",
+   "power_kw": 30.0,
+   "beam_deg": "32",
+   "drm_org_region": "Asia",
+   "drm_org_confidence": "uncertain",
+   "drm_org_label": "A26 · unverified",
+   "note": null,
+   "underlying_sources": [
+    "https://www.drmrx.org/drm-broadcasts-all-by-frequency/",
+    "https://www.drmrx.org/drm-broadcasts-shortwave-by-frequency/",
+    "https://new.hfcc.org/data/schedbybrc.php?broadc=CNR&seas=B26",
+    "https://www.drm.org/broadcast-schedule/"
+   ],
+   "source": "https://www.drm.org/broadcast-schedule/",
+   "utc_start": "0300",
+   "utc_end": "0400"
+  },
+  {
+   "station": "China National Radio 1",
+   "freq_khz": 15640.0,
+   "utc": "0400-0500",
+   "days": "Daily",
+   "target": "China",
+   "language": "Chinese",
+   "site": "China, Kunming",
+   "power_kw": 30.0,
+   "beam_deg": "32",
+   "drm_org_region": "Asia",
+   "drm_org_confidence": "uncertain",
+   "drm_org_label": "A26 · unverified",
+   "note": null,
+   "underlying_sources": [
+    "https://www.drmrx.org/drm-broadcasts-all-by-frequency/",
+    "https://www.drmrx.org/drm-broadcasts-shortwave-by-frequency/",
+    "https://new.hfcc.org/data/schedbybrc.php?broadc=CNR&seas=B26",
+    "https://www.drm.org/broadcast-schedule/"
+   ],
+   "source": "https://www.drm.org/broadcast-schedule/",
+   "utc_start": "0400",
+   "utc_end": "0500"
+  },
+  {
+   "station": "Radio Romania International",
+   "freq_khz": 21470.0,
+   "utc": "0630-0700",
+   "days": "Daily",
+   "target": "India (New Delhi)",
+   "language": "English",
+   "site": "Romania, Tiganesti",
+   "power_kw": 90.0,
+   "beam_deg": "97",
+   "drm_org_region": "Asia",
+   "drm_org_confidence": "confirmed",
+   "drm_org_label": "B26 · confirmed",
+   "note": null,
+   "underlying_sources": [
+    "https://www.drmrx.org/drm-broadcasts-all-by-frequency/",
+    "https://www.rri.ro/en/useful-information-en/how-to-listen/rri-2026-2027-winter-broadcast-frequencies-and-alternative-frequencies-id1073489.html",
+    "https://new.hfcc.org/data/schedbybrc.php?broadc=RRO&seas=B26",
+    "https://www.drm.org/broadcast-schedule/"
+   ],
+   "source": "https://www.drm.org/broadcast-schedule/",
+   "utc_start": "0630",
+   "utc_end": "0700"
+  },
+  {
+   "station": "China National Radio 1",
+   "freq_khz": 17870.0,
+   "utc": "0600-0800",
+   "days": "Daily",
+   "target": "China",
+   "language": "Chinese",
+   "site": "China, Kunming",
+   "power_kw": 30.0,
+   "beam_deg": "32",
+   "drm_org_region": "Asia",
+   "drm_org_confidence": "confirmed",
+   "drm_org_label": "B26 · confirmed",
+   "note": null,
+   "underlying_sources": [
+    "HFCC B26 DRM report, 15 October 2026 — Media Broadcast",
+    "https://www.drmrx.org/drm-broadcasts-all-by-frequency/",
+    "https://www.drmrx.org/drm-broadcasts-shortwave-by-frequency/",
+    "https://new.hfcc.org/data/schedbybrc.php?broadc=CNR&seas=B26",
+    "https://www.drm.org/broadcast-schedule/"
+   ],
+   "source": "https://www.drm.org/broadcast-schedule/",
+   "utc_start": "0600",
+   "utc_end": "0800"
+  },
+  {
+   "station": "China National Radio 1",
+   "freq_khz": 15720.0,
+   "utc": "0700-0800",
+   "days": "Daily",
+   "target": "China",
+   "language": "Chinese",
+   "site": "China, Kunming",
+   "power_kw": 30.0,
+   "beam_deg": "135",
+   "drm_org_region": "Asia",
+   "drm_org_confidence": "uncertain",
+   "drm_org_label": "A26 · unverified",
+   "note": null,
+   "underlying_sources": [
+    "https://www.drmrx.org/drm-broadcasts-all-by-frequency/",
+    "https://www.drmrx.org/drm-broadcasts-shortwave-by-frequency/",
+    "https://new.hfcc.org/data/schedbybrc.php?broadc=CNR&seas=B26",
+    "https://www.drm.org/broadcast-schedule/"
+   ],
+   "source": "https://www.drm.org/broadcast-schedule/",
+   "utc_start": "0700",
+   "utc_end": "0800"
+  },
+  {
+   "station": "China National Radio 1",
+   "freq_khz": 15730.0,
+   "utc": "0800-0900",
+   "days": "Daily",
+   "target": "China",
+   "language": "Chinese",
+   "site": "China, Kunming",
+   "power_kw": 30.0,
+   "beam_deg": "32",
+   "drm_org_region": "Asia",
+   "drm_org_confidence": "uncertain",
+   "drm_org_label": "A26 · unverified",
+   "note": null,
+   "underlying_sources": [
+    "https://www.drmrx.org/drm-broadcasts-all-by-frequency/",
+    "https://www.drmrx.org/drm-broadcasts-shortwave-by-frequency/",
+    "https://new.hfcc.org/data/schedbybrc.php?broadc=CNR&seas=B26",
+    "https://www.drm.org/broadcast-schedule/"
+   ],
+   "source": "https://www.drm.org/broadcast-schedule/",
+   "utc_start": "0800",
+   "utc_end": "0900"
+  },
+  {
+   "station": "China National Radio 1",
+   "freq_khz": 9655.0,
+   "utc": "0800-1200 2200-0100",
+   "days": "Daily",
+   "target": "N & E China",
+   "language": "Chinese",
+   "site": "China, Urumqi",
+   "power_kw": 30.0,
+   "beam_deg": "98",
+   "drm_org_region": "Asia",
+   "drm_org_confidence": "confirmed",
+   "drm_org_label": "B26 · confirmed",
+   "note": null,
+   "underlying_sources": [
+    "HFCC B26 DRM report, 15 October 2026 — Media Broadcast",
+    "https://www.drmrx.org/drm-broadcasts-all-by-frequency/",
+    "CNR DRM text messages — Atsuhiko Takezawa (undated)",
+    "https://new.hfcc.org/data/schedbybrc.php?broadc=CNR&seas=B26",
+    "https://www.drmrx.org/drm-broadcasts-shortwave-by-frequency/",
+    "https://www.drm.org/broadcast-schedule/"
+   ],
+   "source": "https://www.drm.org/broadcast-schedule/",
+   "utc_windows": [
+    [
+     "0800",
+     "1200"
+    ],
+    [
+     "2200",
+     "0100"
+    ]
+   ]
+  },
+  {
+   "station": "China National Radio 1",
+   "freq_khz": 13835.0,
+   "utc": "1000-1200",
+   "days": "Daily",
+   "target": "China",
+   "language": "Chinese",
+   "site": "China, Qihar",
+   "power_kw": 30.0,
+   "beam_deg": "203",
+   "drm_org_region": "Asia",
+   "drm_org_confidence": "confirmed",
+   "drm_org_label": "B26 · confirmed",
+   "note": null,
+   "underlying_sources": [
+    "HFCC B26 DRM report, 15 October 2026 — Media Broadcast",
+    "https://www.drmrx.org/drm-broadcasts-all-by-frequency/",
+    "CNR DRM text messages — Atsuhiko Takezawa (undated)",
+    "https://new.hfcc.org/data/schedbybrc.php?broadc=CNR&seas=B26",
+    "https://www.drmrx.org/drm-broadcasts-shortwave-by-frequency/",
+    "https://www.drm.org/broadcast-schedule/"
+   ],
+   "source": "https://www.drm.org/broadcast-schedule/",
+   "utc_start": "1000",
+   "utc_end": "1200"
+  },
+  {
+   "station": "Radio Romania International",
+   "freq_khz": 9580.0,
+   "utc": "1330-1400",
+   "days": "Daily",
+   "target": "China",
+   "language": "Chinese",
+   "site": "Romania, Tiganesti",
+   "power_kw": 90.0,
+   "beam_deg": "67",
+   "drm_org_region": "Asia",
+   "drm_org_confidence": "confirmed",
+   "drm_org_label": "B26 · confirmed",
+   "note": "RRI specifies 9580 kHz DRM; DRMRX lists 9470 kHz.",
+   "underlying_sources": [
+    "HFCC B26 DRM report, 15 October 2026 — Media Broadcast",
+    "https://www.drmrx.org/drm-broadcasts-all-by-frequency/",
+    "https://www.rri.ro/zh-hans/关于我们/频率/频率-5-id1073462.html",
+    "https://new.hfcc.org/data/schedbybrc.php?broadc=RRO&seas=B26",
+    "https://www.drm.org/broadcast-schedule/"
+   ],
+   "source": "https://www.drm.org/broadcast-schedule/",
+   "utc_start": "1330",
+   "utc_end": "1400"
+  },
+  {
+   "station": "Music 4 Joy",
+   "freq_khz": 13650.0,
+   "utc": "1300-1400",
+   "days": "Tue & Thu",
+   "target": "China, Japan",
+   "language": "Multi",
+   "site": "Germany, Nauen",
+   "power_kw": 100.0,
+   "beam_deg": "62",
+   "drm_org_region": "Asia",
+   "drm_org_confidence": "confirmed",
+   "drm_org_label": "B26 · confirmed",
+   "note": null,
+   "underlying_sources": [
+    "HFCC B26 DRM report, 15 October 2026 — Media Broadcast",
+    "https://www.drmrx.org/drm-broadcasts-all-by-frequency/",
+    "https://new.hfcc.org/data/schedbyfmo.php?fmor=MBR&seas=B26",
+    "https://www.drmrx.org/drm-broadcasts-shortwave-by-frequency/",
+    "https://www.drm.org/broadcast-schedule/"
+   ],
+   "source": "https://www.drm.org/broadcast-schedule/",
+   "utc_start": "1300",
+   "utc_end": "1400"
+  },
+  {
+   "station": "BBC World Service",
+   "freq_khz": 17575.0,
+   "utc": "1500-1600",
+   "days": "Daily",
+   "target": "South Asia",
+   "language": "English",
+   "site": "United Kingdom, Woofferton",
+   "power_kw": 100.0,
+   "beam_deg": "82",
+   "drm_org_region": "Asia",
+   "drm_org_confidence": "confirmed",
+   "drm_org_label": "B26 · confirmed",
+   "note": "BBC start time: 1500 UTC; HFCC: 1458 UTC.",
+   "underlying_sources": [
+    "BBC World Service — B26 DRM schedule",
+    "HFCC B26 DRM report, 15 October 2026 — Media Broadcast",
+    "https://www.drmrx.org/drm-broadcasts-all-by-frequency/",
+    "https://new.hfcc.org/data/schedbybrc.php?broadc=BBC&seas=B26",
+    "https://www.drmrx.org/drm-broadcasts-shortwave-by-frequency/",
+    "https://www.drm.org/broadcast-schedule/"
+   ],
+   "source": "https://www.drm.org/broadcast-schedule/",
+   "utc_start": "1500",
+   "utc_end": "1600"
+  },
+  {
+   "station": "China National Radio 1",
+   "freq_khz": 6030.0,
+   "utc": "2025-1805",
+   "days": "Daily",
+   "target": "N China",
+   "language": "Chinese",
+   "site": "China, Beijing",
+   "power_kw": 30.0,
+   "beam_deg": "Non Directional",
+   "drm_org_region": "Asia",
+   "drm_org_confidence": "confirmed",
+   "drm_org_label": "B26 · confirmed",
+   "note": null,
+   "underlying_sources": [
+    "HFCC B26 DRM report, 15 October 2026 — Media Broadcast",
+    "https://www.drmrx.org/drm-broadcasts-all-by-frequency/",
+    "CNR DRM text messages — Atsuhiko Takezawa (undated)",
+    "https://new.hfcc.org/data/schedbybrc.php?broadc=CNR&seas=B26",
+    "https://www.drmrx.org/drm-broadcasts-shortwave-by-frequency/",
+    "https://www.drm.org/broadcast-schedule/"
+   ],
+   "source": "https://www.drm.org/broadcast-schedule/",
+   "utc_start": "2025",
+   "utc_end": "1805"
+  },
+  {
+   "station": "Korea Central Broadcast Station (DPRK)",
+   "freq_khz": 3205.0,
+   "utc": "2000-1800",
+   "days": "Daily",
+   "target": "East Asia",
+   "language": "Korean",
+   "site": "DPR Korea, Pyongyang",
+   "power_kw": 100.0,
+   "beam_deg": "Non Directional",
+   "drm_org_region": "Asia",
+   "drm_org_confidence": "uncertain",
+   "drm_org_label": "A26 · unverified",
+   "note": "Times estimated; DRMRX lists 50 kW.",
+   "underlying_sources": [
+    "https://www.drmrx.org/drm-broadcasts-all-by-frequency/",
+    "https://www.drmrx.org/drm-broadcasts-shortwave-by-frequency/",
+    "https://www.drm.org/broadcast-schedule/"
+   ],
+   "source": "https://www.drm.org/broadcast-schedule/",
+   "utc_start": "2000",
+   "utc_end": "1800"
+  },
+  {
+   "station": "Korea Central Broadcast Station (DPRK)",
+   "freq_khz": 6140.0,
+   "utc": "2000-1800",
+   "days": "Daily",
+   "target": "East Asia",
+   "language": "Korean",
+   "site": "DPR Korea, Pyongyang",
+   "power_kw": 100.0,
+   "beam_deg": "Non Directional",
+   "drm_org_region": "Asia",
+   "drm_org_confidence": "uncertain",
+   "drm_org_label": "A26 · unverified",
+   "note": "Times estimated; DRMRX lists 50 kW.",
+   "underlying_sources": [
+    "https://www.drmrx.org/drm-broadcasts-all-by-frequency/",
+    "https://www.drmrx.org/drm-broadcasts-shortwave-by-frequency/",
+    "https://www.drm.org/broadcast-schedule/"
+   ],
+   "source": "https://www.drm.org/broadcast-schedule/",
+   "utc_start": "2000",
+   "utc_end": "1800"
+  },
+  {
+   "station": "China National Radio (CNR)",
+   "freq_khz": 13810.0,
+   "utc": "0400-1100",
+   "days": "Days unconfirmed",
+   "target": "China",
+   "language": "Not specified",
+   "site": "China (DRM site unconfirmed)",
+   "power_kw": null,
+   "beam_deg": "Not confirmed",
+   "drm_org_region": "Asia",
+   "drm_org_confidence": "likely",
+   "drm_org_label": "Provisional",
+   "note": "Undated DRM text schedule; not listed by HFCC B26.",
+   "underlying_sources": [
+    "https://www.drmrx.org/drm-broadcasts-all-by-frequency/",
+    "CNR DRM text messages — Atsuhiko Takezawa (undated)",
+    "https://new.hfcc.org/data/schedbybrc.php?broadc=CNR&seas=B26"
+   ],
+   "source": "https://www.drm.org/broadcast-schedule/",
+   "utc_start": "0400",
+   "utc_end": "1100"
+  },
+  {
+   "station": "China National Radio (CNR)",
+   "freq_khz": 15180.0,
+   "utc": "0100-0400",
+   "days": "Days unconfirmed",
+   "target": "China",
+   "language": "Not specified",
+   "site": "China (DRM site unconfirmed)",
+   "power_kw": null,
+   "beam_deg": "Not confirmed",
+   "drm_org_region": "Asia",
+   "drm_org_confidence": "likely",
+   "drm_org_label": "Provisional",
+   "note": "Undated DRM text: 0100–0400 UTC; HFCC: 1800–1100 UTC.",
+   "underlying_sources": [
+    "https://www.drmrx.org/drm-broadcasts-all-by-frequency/",
+    "CNR DRM text messages — Atsuhiko Takezawa (undated)",
+    "https://new.hfcc.org/data/schedbybrc.php?broadc=CNR&seas=B26"
+   ],
+   "source": "https://www.drm.org/broadcast-schedule/",
+   "utc_start": "0100",
+   "utc_end": "0400"
+  },
+  {
+   "station": "China National Radio (CNR)",
+   "freq_khz": 15290.0,
+   "utc": "0800-1200",
+   "days": "Days unconfirmed",
+   "target": "Xinjiang",
+   "language": "Not specified",
+   "site": "China (DRM site unconfirmed)",
+   "power_kw": null,
+   "beam_deg": "Not confirmed",
+   "drm_org_region": "Asia",
+   "drm_org_confidence": "likely",
+   "drm_org_label": "Provisional",
+   "note": "Undated DRM text: 0800–1200 UTC to Xinjiang; HFCC: 0000–1200 UTC.",
+   "underlying_sources": [
+    "HFCC B26 DRM report, 15 October 2026 — Media Broadcast",
+    "https://www.drmrx.org/drm-broadcasts-all-by-frequency/",
+    "CNR DRM text messages — Atsuhiko Takezawa (undated)",
+    "https://new.hfcc.org/data/schedbybrc.php?broadc=CNR&seas=B26"
+   ],
+   "source": "https://www.drm.org/broadcast-schedule/",
+   "utc_start": "0800",
+   "utc_end": "1200"
+  },
+  {
+   "station": "China National Radio (CNR)",
+   "freq_khz": 17605.0,
+   "utc": "0100-0700",
+   "days": "Daily",
+   "target": "China",
+   "language": "Chinese",
+   "site": "China, Beijing",
+   "power_kw": 30.0,
+   "beam_deg": "290",
+   "drm_org_region": "Asia",
+   "drm_org_confidence": "confirmed",
+   "drm_org_label": "B26 · confirmed",
+   "note": null,
+   "underlying_sources": [
+    "HFCC B26 DRM report, 15 October 2026 — Media Broadcast",
+    "https://new.hfcc.org/data/schedbybrc.php?broadc=CNR&seas=B26",
+    "https://www.drmrx.org/drm-broadcasts-all-by-frequency/"
+   ],
+   "source": "https://www.drm.org/broadcast-schedule/",
+   "utc_start": "0100",
+   "utc_end": "0700"
+  },
+  {
+   "station": "China National Radio (CNR)",
+   "freq_khz": 17660.0,
+   "utc": "0700-1200",
+   "days": "Daily",
+   "target": "China",
+   "language": "Chinese",
+   "site": "China, Beijing",
+   "power_kw": 30.0,
+   "beam_deg": "290",
+   "drm_org_region": "Asia",
+   "drm_org_confidence": "confirmed",
+   "drm_org_label": "B26 · confirmed",
+   "note": null,
+   "underlying_sources": [
+    "HFCC B26 DRM report, 15 October 2026 — Media Broadcast",
+    "https://new.hfcc.org/data/schedbybrc.php?broadc=CNR&seas=B26",
+    "https://www.drmrx.org/drm-broadcasts-all-by-frequency/"
+   ],
+   "source": "https://www.drm.org/broadcast-schedule/",
+   "utc_start": "0700",
+   "utc_end": "1200"
+  },
+  {
+   "station": "China National Radio (CNR)",
+   "freq_khz": 17700.0,
+   "utc": "0100-0900",
+   "days": "Daily",
+   "target": "China",
+   "language": "Chinese",
+   "site": "China, Beijing",
+   "power_kw": 150.0,
+   "beam_deg": "193",
+   "drm_org_region": "Asia",
+   "drm_org_confidence": "confirmed",
+   "drm_org_label": "B26 · confirmed",
+   "note": null,
+   "underlying_sources": [
+    "HFCC B26 DRM report, 15 October 2026 — Media Broadcast",
+    "https://new.hfcc.org/data/schedbybrc.php?broadc=CNR&seas=B26",
+    "https://www.drmrx.org/drm-broadcasts-all-by-frequency/"
+   ],
+   "source": "https://www.drm.org/broadcast-schedule/",
+   "utc_start": "0100",
+   "utc_end": "0900"
+  },
+  {
+   "station": "China National Radio (CNR)",
+   "freq_khz": 17710.0,
+   "utc": "0800-1100",
+   "days": "Daily",
+   "target": "China",
+   "language": "Chinese",
+   "site": "China, Kunming",
+   "power_kw": 30.0,
+   "beam_deg": "32",
+   "drm_org_region": "Asia",
+   "drm_org_confidence": "confirmed",
+   "drm_org_label": "B26 · confirmed",
+   "note": null,
+   "underlying_sources": [
+    "HFCC B26 DRM report, 15 October 2026 — Media Broadcast",
+    "https://new.hfcc.org/data/schedbybrc.php?broadc=CNR&seas=B26",
+    "https://www.drmrx.org/drm-broadcasts-all-by-frequency/"
+   ],
+   "source": "https://www.drm.org/broadcast-schedule/",
+   "utc_start": "0800",
+   "utc_end": "1100"
+  },
+  {
+   "station": "China National Radio (CNR)",
+   "freq_khz": 17720.0,
+   "utc": "0700-2000",
+   "days": "Daily",
+   "target": "China",
+   "language": "Chinese",
+   "site": "China, Beijing",
+   "power_kw": 30.0,
+   "beam_deg": "290",
+   "drm_org_region": "Asia",
+   "drm_org_confidence": "confirmed",
+   "drm_org_label": "B26 · confirmed",
+   "note": null,
+   "underlying_sources": [
+    "HFCC B26 DRM report, 15 October 2026 — Media Broadcast",
+    "https://new.hfcc.org/data/schedbybrc.php?broadc=CNR&seas=B26",
+    "https://www.drmrx.org/drm-broadcasts-all-by-frequency/"
+   ],
+   "source": "https://www.drm.org/broadcast-schedule/",
+   "utc_start": "0700",
+   "utc_end": "2000"
+  }
+ ],
+ "drm_note": "drm.org B26 schedule (25 Oct 2026 - 27 Mar 2027, updated 2026-10-26). No entry targets North America. 'drm' holds the confirmed Europe/Africa/Latin America entries of 10 kW or more (beamed across or toward the Atlantic); 'drm_other' holds Asia/Pacific, non-confirmed and low-power (Waldheim 0.2 kW) entries, kept for completeness. Reception in Connecticut is not verified for any of them. drm.org says the BBC DRM service for Europe is discontinued from B26. No B26 DRM entry found for WINB, KTWR, All India Radio shortwave, Radio Kuwait or Vatican Radio.",
+ "sitor": [
+  {
+   "what": "USCG NMF Boston - NWS high seas (incl. International Ice Patrol ice)",
+   "freq_khz": 6314.0,
+   "mode": "B",
+   "times_utc": [
+    "0140"
+   ],
+   "source": "https://www.weather.gov/marine/uscg_broadcasts",
+   "note": "Assigned frequency; carrier 1.7 kHz below (weather.gov). Mode B (FEC). NWS high seas forecasts and storm warnings."
+  },
+  {
+   "what": "USCG NMF Boston - NWS high seas (incl. International Ice Patrol ice)",
+   "freq_khz": 8416.5,
+   "mode": "B",
+   "times_utc": [
+    "0140",
+    "1630"
+   ],
+   "source": "https://www.weather.gov/marine/uscg_broadcasts",
+   "note": "Assigned frequency; carrier 1.7 kHz below (weather.gov). Mode B (FEC). NWS high seas forecasts and storm warnings."
+  },
+  {
+   "what": "USCG NMF Boston - NWS high seas (incl. International Ice Patrol ice)",
+   "freq_khz": 12579.0,
+   "mode": "B",
+   "times_utc": [
+    "0140",
+    "1630"
+   ],
+   "source": "https://www.weather.gov/marine/uscg_broadcasts",
+   "note": "Assigned frequency; carrier 1.7 kHz below (weather.gov). Mode B (FEC). NWS high seas forecasts and storm warnings."
+  },
+  {
+   "what": "USCG NMF Boston - NWS high seas (incl. International Ice Patrol ice)",
+   "freq_khz": 16806.5,
+   "mode": "B",
+   "times_utc": [
+    "1630"
+   ],
+   "source": "https://www.weather.gov/marine/uscg_broadcasts",
+   "note": "Assigned frequency; carrier 1.7 kHz below (weather.gov). Mode B (FEC). NWS high seas forecasts and storm warnings."
+  },
+  {
+   "what": "USCG NMC Point Reyes - NWS high seas",
+   "freq_khz": 8416.5,
+   "mode": "B",
+   "times_utc": [
+    "0015",
+    "1730"
+   ],
+   "source": "https://www.weather.gov/marine/uscg_broadcasts",
+   "note": "Assigned frequency; carrier 1.7 kHz below (weather.gov). Mode B (FEC). NWS high seas forecasts and storm warnings."
+  },
+  {
+   "what": "USCG NMC Point Reyes - NWS high seas",
+   "freq_khz": 16806.5,
+   "mode": "B",
+   "times_utc": [
+    "0015",
+    "1730"
+   ],
+   "source": "https://www.weather.gov/marine/uscg_broadcasts",
+   "note": "Assigned frequency; carrier 1.7 kHz below (weather.gov). Mode B (FEC). NWS high seas forecasts and storm warnings."
+  },
+  {
+   "what": "USCG NMO Honolulu - NWS high seas",
+   "freq_khz": 8416.5,
+   "mode": "B",
+   "times_utc": [
+    "0130",
+    "0730",
+    "1330",
+    "2030"
+   ],
+   "source": "https://www.weather.gov/marine/uscg_broadcasts",
+   "note": "Assigned frequency; carrier 1.7 kHz below (weather.gov). Mode B (FEC). NWS high seas forecasts and storm warnings."
+  },
+  {
+   "what": "USCG NMO Honolulu - NWS high seas",
+   "freq_khz": 12579.0,
+   "mode": "B",
+   "times_utc": [
+    "0130",
+    "0730",
+    "1330",
+    "2030"
+   ],
+   "source": "https://www.weather.gov/marine/uscg_broadcasts",
+   "note": "Assigned frequency; carrier 1.7 kHz below (weather.gov). Mode B (FEC). NWS high seas forecasts and storm warnings."
+  },
+  {
+   "what": "USCG NMO Honolulu - NWS high seas",
+   "freq_khz": 22376.0,
+   "mode": "B",
+   "times_utc": [
+    "0130",
+    "2030"
+   ],
+   "source": "https://www.weather.gov/marine/uscg_broadcasts",
+   "note": "Assigned frequency; carrier 1.7 kHz below (weather.gov). Mode B (FEC). NWS high seas forecasts and storm warnings."
+  },
+  {
+   "what": "USCG NRV Guam - NWS high seas",
+   "freq_khz": 12579.0,
+   "mode": "B",
+   "times_utc": [
+    "0230",
+    "0500",
+    "0900",
+    "1500",
+    "1900",
+    "2315"
+   ],
+   "source": "https://www.weather.gov/marine/uscg_broadcasts",
+   "note": "Assigned frequency; carrier 1.7 kHz below (weather.gov). Mode B (FEC). NWS high seas forecasts and storm warnings."
+  },
+  {
+   "what": "USCG NRV Guam - NWS high seas",
+   "freq_khz": 16806.5,
+   "mode": "B",
+   "times_utc": [
+    "0230",
+    "0500",
+    "0900",
+    "1500",
+    "1900",
+    "2315"
+   ],
+   "source": "https://www.weather.gov/marine/uscg_broadcasts",
+   "note": "Assigned frequency; carrier 1.7 kHz below (weather.gov). Mode B (FEC). NWS high seas forecasts and storm warnings."
+  },
+  {
+   "what": "USCG NRV Guam - NWS high seas",
+   "freq_khz": 22376.0,
+   "mode": "B",
+   "times_utc": [
+    "0230",
+    "0500",
+    "0900",
+    "1500",
+    "1900",
+    "2315"
+   ],
+   "source": "https://www.weather.gov/marine/uscg_broadcasts",
+   "note": "Assigned frequency; carrier 1.7 kHz below (weather.gov). Mode B (FEC). NWS high seas forecasts and storm warnings."
+  },
+  {
+   "what": "CCG Iqaluit VFF - HF NBDP: METAREA XVII/XVIII bulletins, NAVAREA XVII/XVIII warnings (navigation season only)",
+   "freq_khz": 8416.5,
+   "mode": "B",
+   "times_utc": [
+    "0330",
+    "1530"
+   ],
+   "source": "https://www.canada.ca/en/canadian-coast-guard/corporate/publications/radio-aids-marine-navigation/facilities-information.html",
+   "note": "Seasonal (approx. mid-May to mid-December). Times also stated in RAMN 2026 Part 5: https://www.canada.ca/en/canadian-coast-guard/corporate/publications/radio-aids-marine-navigation/environment-climate-change-marine-ice-warning-forecast-programs.html"
+  }
+ ],
+ "rtty": [
+  {
+   "what": "DWD Pinneberg marine weather RTTY, programme 1 (English)",
+   "call": "DDK2",
+   "freq_khz": 4583.0,
+   "baud": 50,
+   "shift": 450,
+   "shift_note": "Source gives 'Hub +/- 225 Hz' (450 Hz total)",
+   "power_kw": 1,
+   "hours_utc": "0000-2400",
+   "source": "https://www.dwd.de/EN/specialusers/shipping/broadcast_en/broadcast_rtty_1_092023.pdf?__blob=publicationFile&v=2"
+  },
+  {
+   "what": "DWD Pinneberg marine weather RTTY, programme 1 (English)",
+   "call": "DDH7",
+   "freq_khz": 7646.0,
+   "baud": 50,
+   "shift": 450,
+   "shift_note": "+/- 225 Hz",
+   "power_kw": 1,
+   "hours_utc": "0000-2400",
+   "source": "https://www.dwd.de/EN/specialusers/shipping/broadcast_en/broadcast_rtty_1_092023.pdf?__blob=publicationFile&v=2"
+  },
+  {
+   "what": "DWD Pinneberg marine weather RTTY, programme 1 (English)",
+   "call": "DDK9",
+   "freq_khz": 10100.8,
+   "baud": 50,
+   "shift": 450,
+   "shift_note": "+/- 225 Hz",
+   "power_kw": 10,
+   "hours_utc": "0000-2400",
+   "source": "https://www.dwd.de/EN/specialusers/shipping/broadcast_en/broadcast_rtty_1_092023.pdf?__blob=publicationFile&v=2"
+  },
+  {
+   "what": "DWD Pinneberg marine weather RTTY, programme 2 (mostly German)",
+   "call": "DDH47",
+   "freq_khz": 147.3,
+   "baud": 50,
+   "shift": 85,
+   "shift_note": "+/- 42.5 Hz (85 Hz total); longwave",
+   "power_kw": 20,
+   "hours_utc": "0000-2400",
+   "source": "https://www.dwd.de/EN/specialusers/shipping/broadcast_en/broadcast_rtty_2_092023.pdf?__blob=publicationFile&v=1"
+  },
+  {
+   "what": "DWD Pinneberg marine weather RTTY, programme 2 (mostly German)",
+   "call": "DDH9",
+   "freq_khz": 11039.0,
+   "baud": 50,
+   "shift": 450,
+   "shift_note": "+/- 225 Hz",
+   "power_kw": 10,
+   "hours_utc": "0000-2400",
+   "source": "https://www.dwd.de/EN/specialusers/shipping/broadcast_en/broadcast_rtty_2_092023.pdf?__blob=publicationFile&v=1"
+  },
+  {
+   "what": "DWD Pinneberg marine weather RTTY, programme 2 (mostly German)",
+   "call": "DDH8",
+   "freq_khz": 14467.3,
+   "baud": 50,
+   "shift": 450,
+   "shift_note": "+/- 225 Hz",
+   "power_kw": 1,
+   "hours_utc": "0000-2400",
+   "source": "https://www.dwd.de/EN/specialusers/shipping/broadcast_en/broadcast_rtty_2_092023.pdf?__blob=publicationFile&v=1"
+  }
+ ],
+ "rtty_dwd_programme1_schedule": {
+  "source": "https://www.dwd.de/EN/specialusers/shipping/broadcast_en/broadcast_rtty_1_092023.pdf?__blob=publicationFile&v=2",
+  "applies_to_khz": [
+   4583.0,
+   7646.0,
+   10100.8
+  ],
+  "schedule": [
+   {
+    "utc": "0000",
+    "title": "Strong wind, gale and storm warnings for German Bight, Western and Southern Baltic Sea, German North Sea and Baltic Sea coast (in German / English)",
+    "heading": "WODL45",
+    "heading_time": "EDZW 0000"
+   },
+   {
+    "utc": "0005",
+    "title": "Weather report North Sea and Baltic Sea (in English), Weather situation, forecast valid for 12 hours and outlook valid for another 12 hours",
+    "heading": "FQEN70",
+    "heading_time": "EDZW 0000"
+   },
+   {
+    "utc": "0020",
+    "title": "Weather report German North Sea and Baltic Sea coast (in English), Weather situation and forecast valid for 12 hours",
+    "heading": "FQEN71",
+    "heading_time": "EDZW 0000"
+   },
+   {
+    "utc": "0030",
+    "title": "Advice on the use of weather data (in English)",
+    "heading": "NOXX70",
+    "heading_time": "EDZW 0000"
+   },
+   {
+    "utc": "0035",
+    "title": "SYNOP (FM 12-XI Ext.), Coded station reports from Europe, North America and North Africa",
+    "heading": "SM / / / /",
+    "heading_time": "CCCC 0000"
+   },
+   {
+    "utc": "0200",
+    "title": "SHIP (FM 13-XI Ext.), Coded ship reports from North Sea, North Polar Sea, Atlantic and Mediterranean Sea",
+    "heading": "SMVX41-45",
+    "heading_time": "EDZW 0000"
+   },
+   {
+    "utc": "0300",
+    "title": "Warnings for the sea areas (in German / English), see 00:00 UTC",
+    "heading": "WODL45",
+    "heading_time": "EDZW 0300"
+   },
+   {
+    "utc": "0305",
+    "title": "Weather report North Sea and Baltic Sea (in English), see 00:05 UTC",
+    "heading": "FQEN70",
+    "heading_time": "EDZW 0300"
+   },
+   {
+    "utc": "0320",
+    "title": "Weather report German North Sea and Baltic Sea coast (in English), see 00:20 UTC",
+    "heading": "FQEN71",
+    "heading_time": "EDZW 0300"
+   },
+   {
+    "utc": "0330",
+    "title": "Medium range weather report Baltic Sea (in English), Weather situation and time series forecast for 5 days",
+    "heading": "FEBQ72",
+    "heading_time": "EDZW 0000"
+   },
+   {
+    "utc": "0355",
+    "title": "Medium range weather report North Sea (in English), Weather situation and time series forecast for 5 days",
+    "heading": "FEEN73",
+    "heading_time": "EDZW 0000"
+   },
+   {
+    "utc": "0415",
+    "title": "Medium range weather report Mediterranean Sea (in English), Weather situation and time series forecast for 5 days",
+    "heading": "FEMM74",
+    "heading_time": "EDZW 0000"
+   },
+   {
+    "utc": "0440",
+    "title": "SHIP (FM 13-XI Ext.), see 02:00 UTC",
+    "heading": "SIVX41-45",
+    "heading_time": "EDZW 0300"
+   },
+   {
+    "utc": "0515",
+    "title": "Navigational warnings for North Sea, Baltic Sea and German coast (in German / English)",
+    "heading": "WWXX60",
+    "heading_time": "EDZW 0500"
+   },
+   {
+    "utc": "0535",
+    "title": "Weather report North Sea and Baltic Sea (in English), see 00:05 UTC",
+    "heading": "FQEN70",
+    "heading_time": "EDZW 0500"
+   },
+   {
+    "utc": "0550",
+    "title": "Weather report German North Sea and Baltic Sea coast (in English), see 00:20 UTC",
+    "heading": "FQEN71",
+    "heading_time": "EDZW 0500"
+   },
+   {
+    "utc": "0600",
+    "title": "Warnings for the sea areas (in German / English), see 00:00 UTC",
+    "heading": "WODL45",
+    "heading_time": "EDZW 0600"
+   },
+   {
+    "utc": "0603",
+    "title": "Advice on the use of weather data (in English)",
+    "heading": "NOXX70",
+    "heading_time": "EDZW 0600"
+   },
+   {
+    "utc": "0604",
+    "title": "Medium range weather report eastern Atlantic (in English), time series forecast for 5 days",
+    "heading": "FEAE75",
+    "heading_time": "EDZW 0600"
+   },
+   {
+    "utc": "0630",
+    "title": "SYNOP (FM 12-XI Ext.), see 00:35 UTC",
+    "heading": "SM / / / /",
+    "heading_time": "CCCC 0600"
+   },
+   {
+    "utc": "0735",
+    "title": "SHIP (FM 13-XI Ext.), see 02:00 UTC",
+    "heading": "SMVX41-45",
+    "heading_time": "EDZW 0600"
+   },
+   {
+    "utc": "0815",
+    "title": "BUOY (FM 13-XI Ext.), Coded buoy reports from North Polar Sea and Atlantic",
+    "heading": "SMVX25-27",
+    "heading_time": "EDZW 0600"
+   },
+   {
+    "utc": "0835",
+    "title": "Weather report North Sea and Baltic Sea (in English), see 00:05 UTC",
+    "heading": "FQEN70",
+    "heading_time": "EDZW 0800"
+   },
+   {
+    "utc": "0850",
+    "title": "Weather report German North Sea and Baltic Sea coast (in English), see 00:20 UTC",
+    "heading": "FQEN71",
+    "heading_time": "EDZW 0800"
+   },
+   {
+    "utc": "0900",
+    "title": "Warnings for the sea areas (in German / English), see 00:00 UTC",
+    "heading": "WODL45",
+    "heading_time": "EDZW 0900"
+   },
+   {
+    "utc": "0905",
+    "title": "Weather report Norwegian Sea and Baltic Sea (in English),",
+    "heading": "FQEN75",
+    "heading_time": "EDZW 0600"
+   },
+   {
+    "utc": "0930",
+    "title": "Weather report North Atlantic (in English)",
+    "heading": "FQNT76",
+    "heading_time": "EDZW 0600"
+   },
+   {
+    "utc": "0955",
+    "title": "Weather report Western European Sea (in English)",
+    "heading": "FQEW77",
+    "heading_time": "EDZW 0600"
+   },
+   {
+    "utc": "1015",
+    "title": "Weather report Western Mediterranean Sea (in English)",
+    "heading": "FQMM78",
+    "heading_time": "EDZW 0600"
+   },
+   {
+    "utc": "1035",
+    "title": "SHIP (FM 13-XI Ext.), see 02:00 UTC",
+    "heading": "SIVX41-45",
+    "heading_time": "EDZW 0900"
+   },
+   {
+    "utc": "1110",
+    "title": "Notices (in English)",
+    "heading": "NODL61",
+    "heading_time": "EDZW 0800"
+   },
+   {
+    "utc": "1115",
+    "title": "Weather report Eastern Mediterranean Sea (in English)",
+    "heading": "FQMM79",
+    "heading_time": "EDZW 0600"
+   },
+   {
+    "utc": "1135",
+    "title": "Weather report North Sea and Baltic Sea (in English), see 00:05 UTC",
+    "heading": "FQEN70",
+    "heading_time": "EDZW 1100"
+   },
+   {
+    "utc": "1150",
+    "title": "Weather report German North Sea and Baltic Sea coast (in English), see 00:20 UTC",
+    "heading": "FQEN71",
+    "heading_time": "EDZW 1100"
+   },
+   {
+    "utc": "1200",
+    "title": "Warnings for the sea areas (in German / English), see 00:00 UTC",
+    "heading": "WODL45",
+    "heading_time": "EDZW 1200"
+   },
+   {
+    "utc": "1205",
+    "title": "Advice on the use of weather data (in English)",
+    "heading": "NOXX70",
+    "heading_time": "EDZW 1200"
+   },
+   {
+    "utc": "1210",
+    "title": "SYNOP (FM 12-XI Ext.), see 00:35 UTC",
+    "heading": "SM / / / /",
+    "heading_time": "CCCC 1200"
+   },
+   {
+    "utc": "1335",
+    "title": "SHIP (FM 13-XI Ext.), see 02:00 UTC",
+    "heading": "SMVX41-45",
+    "heading_time": "EDZW 1200"
+   },
+   {
+    "utc": "1413",
+    "title": "Medium range weather report Mediterranean Sea (in English)",
+    "heading": "FEMM74",
+    "heading_time": "EDZW 0600"
+   },
+   {
+    "utc": "1435",
+    "title": "Weather report North Sea and Baltic Sea (in English), see 00:05 UTC",
+    "heading": "FQEN70",
+    "heading_time": "EDZW 1400"
+   },
+   {
+    "utc": "1450",
+    "title": "Weather report German North Sea and Baltic Sea coast (in English), see 00:20 UTC",
+    "heading": "FQEN71",
+    "heading_time": "EDZW 1400"
+   },
+   {
+    "utc": "1500",
+    "title": "Warnings for the sea areas (in German / English), see 00:00 UTC",
+    "heading": "WODL45",
+    "heading_time": "EDZW 1500"
+   },
+   {
+    "utc": "1505",
+    "title": "Medium range weather report Baltic Sea (in English)",
+    "heading": "FEBQ72",
+    "heading_time": "EDZW 0600"
+   },
+   {
+    "utc": "1530",
+    "title": "Medium range weather report North Sea (in English)",
+    "heading": "FEEN73",
+    "heading_time": "EDZW 0600"
+   },
+   {
+    "utc": "1550",
+    "title": "Weather report Mediterranean Sea (in English), Weather situation and forecast valid for 24 hours",
+    "heading": "FQMM80",
+    "heading_time": "EDZW 1500"
+   },
+   {
+    "utc": "1557",
+    "title": "Weather report Eastern Mediterranean Sea (in English), repetition",
+    "heading": "FQMM79",
+    "heading_time": "EDZW 0600"
+   },
+   {
+    "utc": "1610",
+    "title": "Medium range weather report Mediterranean Sea (in English) (repetition)",
+    "heading": "FEMM74",
+    "heading_time": "EDZW 0600"
+   },
+   {
+    "utc": "1635",
+    "title": "SHIP (FM 13-XI Ext.), see 02:00 UTC",
+    "heading": "SIVX41-45",
+    "heading_time": "EDZW 1500"
+   },
+   {
+    "utc": "1715",
+    "title": "Navigational warnings for North Sea, Baltic Sea and German coast (in German / English)",
+    "heading": "WWXX60",
+    "heading_time": "EDZW 1700"
+   },
+   {
+    "utc": "1735",
+    "title": "Weather report North Sea and Baltic Sea (in English), see 00:05 UTC",
+    "heading": "FQEN70",
+    "heading_time": "EDZW 1700"
+   },
+   {
+    "utc": "1750",
+    "title": "Weather report German North Sea and Baltic Sea coast (in English), see 00:20 UTC",
+    "heading": "FQEN71",
+    "heading_time": "EDZW 1700"
+   },
+   {
+    "utc": "1800",
+    "title": "Warnings for the sea areas (in German / English), see 00:00 UTC",
+    "heading": "WODL45",
+    "heading_time": "EDZW 1800"
+   },
+   {
+    "utc": "1803",
+    "title": "Advice on the use of weather data (in English)",
+    "heading": "NOXX70",
+    "heading_time": "EDZW 1800"
+   },
+   {
+    "utc": "1804",
+    "title": "Medium range weather report eastern Atlantic (in English), time series forecast for 5 days",
+    "heading": "FEAE75",
+    "heading_time": "EDZW 1800"
+   },
+   {
+    "utc": "1830",
+    "title": "SYNOP (FM 12-XI Ext.), see 00:35 UTC",
+    "heading": "SM / / / /",
+    "heading_time": "CCCC 1800"
+   },
+   {
+    "utc": "1935",
+    "title": "SHIP (FM 13-XI Ext.), see 02:00 UTC",
+    "heading": "SMVX41-45",
+    "heading_time": "EDZW 1800"
+   },
+   {
+    "utc": "2015",
+    "title": "BUOY (FM 13-XI Ext.), see 08:15 UTC",
+    "heading": "SMVX25-27",
+    "heading_time": "EDZW 1500"
+   },
+   {
+    "utc": "2035",
+    "title": "Weather report North Sea and Baltic Sea (in English), see 00:05 UTC",
+    "heading": "FQEN70",
+    "heading_time": "EDZW 2000"
+   },
+   {
+    "utc": "2050",
+    "title": "Weather report German North Sea and Baltic Sea coast (in English), see 00:20 UTC",
+    "heading": "FQEN71",
+    "heading_time": "EDZW 2000"
+   },
+   {
+    "utc": "2100",
+    "title": "Warnings for the sea areas (in German / English), see 00:00 UTC",
+    "heading": "WODL45",
+    "heading_time": "EDZW 2100"
+   },
+   {
+    "utc": "2105",
+    "title": "Weather report Norwegian Sea and Baltic Sea (in English), see 09:05 UTC",
+    "heading": "FQEN75",
+    "heading_time": "EDZW 1800"
+   },
+   {
+    "utc": "2130",
+    "title": "Weather report North Atlantic (in English), see 09:30 UTC",
+    "heading": "FQNT76",
+    "heading_time": "EDZW 1800"
+   },
+   {
+    "utc": "2155",
+    "title": "Weather report Western European Sea (in English), see 09:55 UTC",
+    "heading": "FQEW77",
+    "heading_time": "EDZW 1800"
+   },
+   {
+    "utc": "2215",
+    "title": "Weather report Western Mediterranean Sea (in English), see 10:15 UTC",
+    "heading": "FQMM78",
+    "heading_time": "EDZW 1800"
+   },
+   {
+    "utc": "2235",
+    "title": "SHIP (FM 13-XI Ext.), see 02:00 UTC",
+    "heading": "SIVX41-45",
+    "heading_time": "EDZW 2100"
+   },
+   {
+    "utc": "2315",
+    "title": "Weather report Eastern Mediterranean Sea (in English), see 11:15 UTC",
+    "heading": "FQMM79",
+    "heading_time": "EDZW 1800"
+   }
+  ]
+ },
+ "stanag_pactor_notes": "PACTOR/Winlink (amateur): in the US, an automatically controlled digital station (which is what an unattended Winlink RMS is) may transmit RTTY or data only in these HF segments: 3.585-3.600, 7.100-7.105, 10.140-10.150, 14.0950-14.0995, 14.1005-14.112, 18.105-18.110, 21.090-21.100, 24.925-24.930, 28.120-28.189 MHz (plus 6 m and up), or elsewhere when responding to a locally/remotely controlled station with a signal no wider than 500 Hz (47 CFR 97.221, eCFR fetched 2026-11-06: https://www.ecfr.gov/current/title-47/chapter-I/subchapter-D/part-97/subpart-C/section-97.221). Winlink publishes its live RMS channel list at https://winlink.org/RMSChannels (it changes; not copied here; the page sits behind a bot challenge so it was not read). STANAG 4285 (NATO HF single-tone PSK modem per the wiki: 2400 Bd, 75-3600 bps, BPSK/QPSK/8PSK, short/long interleave, ~2.75 kHz bandwidth, USB): the Signal Identification Wiki says it is 'found on many HF frequencies between 1.89 MHz to 22.7 MHz' and points to the Utility DXers Forum logs for current usage (https://www.sigidwiki.com/wiki/STANAG_4285, a community reference, not an official one). No specific STANAG 4285 stations are listed because none could be verified from an official source.",
+ "unverified": [
+  {
+   "item": "CFH Halifax (Canadian Forces) radiofax",
+   "why": "Not in NWS rfax.pdf (Mar 2025) or CCG RAMN 2026; no official schedule found."
+  },
+  {
+   "item": "VCO Sydney NS radiofax ice charts (4416 / 6915.1 kHz)",
+   "why": "Still printed in NWS rfax.pdf (info dated 2014), but CCG RAMN 2026 Part 5 says the daily radiofax broadcast of CIS ice charts from MCTS Sydney was discontinued 1 Oct 2024. Treat as OFF AIR.",
+   "source": "https://www.canada.ca/en/canadian-coast-guard/corporate/publications/radio-aids-marine-navigation/environment-climate-change-marine-ice-warning-forecast-programs.html"
+  },
+  {
+   "item": "Iqaluit, Resolute, Inuvik radiofax",
+   "why": "NWS rfax.pdf: 'Services Discontinued in 2019'."
+  },
+  {
+   "item": "USCG HF DSC watch list and MMSIs; USCG NAVTEX page on navcen.uscg.gov",
+   "why": "navcen.uscg.gov and dco.uscg.mil answered HTTP 403 (bot protection); not bypassed. NAVTEX data came from weather.gov instead."
+  },
+  {
+   "item": "WWV/WWVH GPS status announcements",
+   "why": "In NIST SP 432 (2002) at WWV 14-15 / WWVH 43-44; absent from current NIST pages, whose tone table places tones in those minutes."
+  },
+  {
+   "item": "HFDL system table newer than version 52",
+   "why": "dumphfdl master/devel both ship version 52 (committed 2023-12-14). Ground stations broadcast the live table; a decoder can confirm the version on air."
+  },
+  {
+   "item": "DRM: WINB, KTWR, AIR shortwave, Radio Kuwait, Vatican",
+   "why": "No B26 entries in the drm.org schedule; drmrx.org returned HTTP 403."
+  },
+  {
+   "item": "GYA Northwood LPM/IOC and current schedule",
+   "why": "Only source is NWS rfax.pdf with info dated Jan 2022; LPM/IOC not stated."
+  },
+  {
+   "item": "Routine DSC calling frequencies",
+   "why": "ITU-R M.541 PDF URL returned 404; not listed."
+  }
+ ]
+}

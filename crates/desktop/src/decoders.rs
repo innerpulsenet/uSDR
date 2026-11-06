@@ -40,7 +40,7 @@ impl Family {
             Family::Paging => "POCSAG and FLEX pages appear here. PAGER walks the paging channels around the tuned frequency; FLEX and PACKET decode the tuned channel.",
             Family::Packet => "AX.25 packets, APRS positions and messages among them, appear here. PACKET decodes the tuned channel.",
             Family::Broadcast => "A broadcast station's RDS (its name, RadioText, clock) and NOAA SAME alerts appear here. Tune WFM to a station for RDS.",
-            Family::HfData => "HF data appears here: FT8 and FT4 at the end of each slot, RTTY, PSK31 and NAVTEX text as it is copied, and radiofax pictures in their viewer. Pick a mode and tune a dial frequency; BANDS lists them.",
+            Family::HfData => "HF data appears here: FT8 and FT4 at the end of each slot; RTTY, PSK31, NAVTEX, SITOR and PACTOR text as it is copied; DSC calls, HFDL aircraft messages, STANAG modems, the WWV time code and DRM broadcasts; radiofax pictures in their viewer. Pick a mode under HF and tune; BANDS and STATIONS list where.",
         }
     }
 
@@ -50,7 +50,7 @@ impl Family {
             Mode::P25 | Mode::Dmr | Mode::Nxdn => Some(Family::Voice),
             Mode::Pager | Mode::Flex => Some(Family::Paging),
             Mode::Wfm => Some(Family::Broadcast),
-            Mode::Ft8 | Mode::Ft4 | Mode::Wefax | Mode::Rtty | Mode::Navtex | Mode::Psk31 => Some(Family::HfData),
+            m if m.is_hf_data() => Some(Family::HfData),
             _ => None,
         }
     }
@@ -81,6 +81,13 @@ pub const DECODERS: &[Decoder] = &[
     Decoder { chip: "RTTY", family: Family::HfData, matches: &["RTTY"] },
     Decoder { chip: "NAVTEX", family: Family::HfData, matches: &["NAVTEX"] },
     Decoder { chip: "WEFAX", family: Family::HfData, matches: &["WEFAX"] },
+    Decoder { chip: "SITOR", family: Family::HfData, matches: &["SITOR"] },
+    Decoder { chip: "DSC", family: Family::HfData, matches: &["DSC"] },
+    Decoder { chip: "HFDL", family: Family::HfData, matches: &["HFDL"] },
+    Decoder { chip: "PACTOR", family: Family::HfData, matches: &["PACTOR"] },
+    Decoder { chip: "STANAG", family: Family::HfData, matches: &["STANAG", "188-110", "2G ALE"] },
+    Decoder { chip: "WWV", family: Family::HfData, matches: &["WWV"] },
+    Decoder { chip: "DRM", family: Family::HfData, matches: &["DRM"] },
 ];
 
 impl Decoder {
@@ -143,6 +150,21 @@ pub const RTTY_DIALS: &[(&str, f64)] = &[
     ("DWD 7.6", 7_644_500.0),
 ];
 
+/// The US automatic digital station segments (47 CFR 97.221), where
+/// unattended PACTOR mailbox stations are heard: a dial at the foot of
+/// each, the signals up to 3 kHz above it.
+pub const PACTOR_DIALS: &[(&str, f64)] = &[
+    ("80 m", 3_585_000.0),
+    ("40 m", 7_100_000.0),
+    ("30 m", 10_140_000.0),
+    ("20 m", 14_095_000.0),
+    ("20 m", 14_100_500.0),
+    ("17 m", 18_105_000.0),
+    ("15 m", 21_090_000.0),
+    ("12 m", 24_925_000.0),
+    ("10 m", 28_120_000.0),
+];
+
 pub const NAVTEX_DIALS: &[(&str, f64)] = &[
     // The international channel and the national one, and the HF one;
     // the dial goes 1 kHz below so the tones sit at 1 kHz.
@@ -172,6 +194,13 @@ mod tests {
             ("PSK31", Family::HfData),
             ("NAVTEX", Family::HfData),
             ("WEFAX", Family::HfData),
+            ("SITOR", Family::HfData),
+            ("DSC", Family::HfData),
+            ("HFDL", Family::HfData),
+            ("PACTOR", Family::HfData),
+            ("STANAG 4285", Family::HfData),
+            ("WWV", Family::HfData),
+            ("DRM", Family::HfData),
         ] {
             assert_eq!(family_of(p), Some(f), "{p}");
         }

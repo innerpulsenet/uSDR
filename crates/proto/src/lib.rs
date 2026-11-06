@@ -560,11 +560,27 @@ pub struct DigitalCfg {
     pub fax_auto_start: bool,
     /// Line-period trim for a sample clock that runs fast or slow.
     pub fax_slant_ppm: f32,
+    /// SITOR: `auto` tells ARQ (mode A) from FEC (mode B) by the timing;
+    /// `a` or `b` holds one.
+    pub sitor_mode: String,
+    /// DRM: the service to play, 0 to 3.
+    pub drm_service: u8,
 }
 
 impl Default for DigitalCfg {
     fn default() -> Self {
-        Self { rtty_baud: 45.45, rtty_shift_hz: 170.0, rtty_reverse: None, psk_baud: 31.25, fax_lpm: 120, fax_ioc: 576, fax_auto_start: true, fax_slant_ppm: 0.0 }
+        Self {
+            rtty_baud: 45.45,
+            rtty_shift_hz: 170.0,
+            rtty_reverse: None,
+            psk_baud: 31.25,
+            fax_lpm: 120,
+            fax_ioc: 576,
+            fax_auto_start: true,
+            fax_slant_ppm: 0.0,
+            sitor_mode: "auto".into(),
+            drm_service: 0,
+        }
     }
 }
 
@@ -591,6 +607,36 @@ pub struct DigitalReading {
     pub fax_width: u32,
     /// PSK31: the signals being copied across the passband.
     pub channels: Vec<PskChannel>,
+    /// What the decoder found the signal to be, in a few words: `ARQ (A)`,
+    /// `STANAG 4285 · 8-PSK`, `B · SO 3 · 64-QAM`, `1200 bps`.
+    pub variant: Option<String>,
+    /// The decoder's other live numbers, as labeled values in the order to
+    /// show them.
+    pub facts: Vec<Fact>,
+    /// WWV: the current minute's time code so far, a second each: 0 and 1
+    /// for bits, 2 for a position marker, 3 for one not yet or not heard.
+    pub bits: Vec<u8>,
+    /// The last equalized symbols, for a constellation (STANAG, HFDL, DRM).
+    pub constellation: Vec<[f32; 2]>,
+}
+
+/// One labeled number or word in a decoder's reading.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Fact {
+    pub label: String,
+    pub value: String,
+    /// `ok`, `warn` or empty, for how it is drawn.
+    pub tone: String,
+}
+
+impl Fact {
+    pub fn new(label: impl Into<String>, value: impl Into<String>) -> Self {
+        Fact { label: label.into(), value: value.into(), tone: String::new() }
+    }
+    pub fn toned(label: impl Into<String>, value: impl Into<String>, tone: &str) -> Self {
+        Fact { label: label.into(), value: value.into(), tone: tone.into() }
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -733,12 +779,25 @@ pub enum Mode {
     Rtty,
     Navtex,
     Psk31,
+    /// HF utility and data links on upper sideband: SITOR A and B, MF/HF
+    /// digital selective calling, the aeronautical HF data link, PACTOR-I,
+    /// and the NATO serial-tone modems (STANAG 4285, MIL-STD-188-110).
+    Sitor,
+    Dsc,
+    Hfdl,
+    Pactor,
+    Stanag,
+    /// The NIST time stations' 100 Hz time code, on AM.
+    Wwv,
+    /// Digital Radio Mondiale: an OFDM broadcast decoded to its service
+    /// information and audio.
+    Drm,
     Auto,
     Scan,
 }
 
 impl Mode {
-    pub const ALL: [Mode; 19] = [
+    pub const ALL: [Mode; 26] = [
         Mode::Nfm,
         Mode::Am,
         Mode::Usb,
@@ -756,6 +815,13 @@ impl Mode {
         Mode::Rtty,
         Mode::Navtex,
         Mode::Psk31,
+        Mode::Sitor,
+        Mode::Dsc,
+        Mode::Hfdl,
+        Mode::Pactor,
+        Mode::Stanag,
+        Mode::Wwv,
+        Mode::Drm,
         Mode::Auto,
         Mode::Scan,
     ];
@@ -778,14 +844,33 @@ impl Mode {
             Mode::Rtty => "RTTY",
             Mode::Navtex => "NAVTEX",
             Mode::Psk31 => "PSK31",
+            Mode::Sitor => "SITOR",
+            Mode::Dsc => "DSC",
+            Mode::Hfdl => "HFDL",
+            Mode::Pactor => "PACTOR",
+            Mode::Stanag => "STANAG",
+            Mode::Wwv => "WWV",
+            Mode::Drm => "DRM",
             Mode::Auto => "AUTO",
             Mode::Scan => "SCAN",
         }
     }
-    /// The HF data modes: sideband audio handed to a decoder, the tuned
-    /// frequency the dial (the suppressed carrier).
+    /// The HF data modes, behind the mode board's HF key: a decoder on the
+    /// receiver's signal, its decodes in the HF data log.
     pub fn is_hf_data(self) -> bool {
-        matches!(self, Mode::Ft8 | Mode::Ft4 | Mode::Wefax | Mode::Rtty | Mode::Navtex | Mode::Psk31)
+        self.is_sideband_data() || matches!(self, Mode::Wwv | Mode::Drm)
+    }
+
+    /// The HF data modes heard on upper sideband: the tuned frequency is the
+    /// dial (the suppressed carrier) and the decoder finds its signal in
+    /// the audio above it.
+    pub fn is_sideband_data(self) -> bool {
+        matches!(self, Mode::Ft8 | Mode::Ft4 | Mode::Wefax | Mode::Rtty | Mode::Navtex | Mode::Psk31 | Mode::Sitor | Mode::Dsc | Mode::Hfdl | Mode::Pactor | Mode::Stanag)
+    }
+
+    /// Demodulated as single sideband: voice, and the sideband data modes.
+    pub fn is_sideband(self) -> bool {
+        matches!(self, Mode::Usb | Mode::Lsb) || self.is_sideband_data()
     }
     pub fn wire(self) -> &'static str {
         match self {
@@ -806,6 +891,13 @@ impl Mode {
             Mode::Rtty => "rtty",
             Mode::Navtex => "navtex",
             Mode::Psk31 => "psk31",
+            Mode::Sitor => "sitor",
+            Mode::Dsc => "dsc",
+            Mode::Hfdl => "hfdl",
+            Mode::Pactor => "pactor",
+            Mode::Stanag => "stanag",
+            Mode::Wwv => "wwv",
+            Mode::Drm => "drm",
             Mode::Auto => "auto",
             Mode::Scan => "scan",
         }
