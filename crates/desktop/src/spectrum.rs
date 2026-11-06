@@ -445,13 +445,21 @@ fn drag_edges(d: EdgeDrag, r: &usdr_proto::FilterRange, lo: f32, hi: f32, rel: f
         let half = rel.abs().clamp(min_w / 2.0, r.max_width_hz / 2.0);
         return (-half, half);
     }
-    let lim = r.max_edge_hz;
+    // A sideband filter stays on its own side of the carrier: the server
+    // refuses edges across it.
+    let (floor, ceil) = if lo >= 0.0 {
+        (0.0, r.max_edge_hz)
+    } else if hi <= 0.0 {
+        (-r.max_edge_hz, 0.0)
+    } else {
+        (-r.max_edge_hz, r.max_edge_hz)
+    };
     match d {
-        EdgeDrag::Low => (rel.clamp(-lim, hi - min_w), hi),
-        EdgeDrag::High => (lo, rel.clamp(lo + min_w, lim)),
+        EdgeDrag::Low => (rel.clamp(floor, (hi - min_w).max(floor)), hi),
+        EdgeDrag::High => (lo, rel.clamp((lo + min_w).min(ceil), ceil)),
         EdgeDrag::Shift { from_hz, lo, hi } => {
             let d = rel - from_hz as f32;
-            let d = d.clamp(-lim - lo, lim - hi);
+            let d = d.clamp(floor - lo, ceil - hi);
             (lo + d, hi + d)
         }
     }
@@ -1719,6 +1727,33 @@ impl Panafall {
             let band = Rect::from_min_max(pos2(px0.max(pan.left()), pan.top()), pos2(px1.min(pan.right()), pan.bottom()));
             let band_a = if wide { 0.05 + 0.10 * pulse } else { 0.10 + 0.22 * pulse };
             painter.rect_filled(band, CornerRadius::ZERO, alpha(theme::AMBER, band_a));
+            // A sideband filter's skirt, as wide as its shape's: the wash
+            // fades the way the response does, a sharp filter's at once, a
+            // soft one's over 400 Hz.
+            if matches!(status.mode, usdr_proto::Mode::Usb | usdr_proto::Mode::Lsb | usdr_proto::Mode::Ft8 | usdr_proto::Mode::Ft4) {
+                let skirt = f64::from(status.filter_shape.skirt_hz());
+                for (edge, d) in [(pc - bw / 2.0, -1.0), (pc + bw / 2.0, 1.0)] {
+                    let (x0, x1) = (self.x_for(edge, pan), self.x_for(edge + d * skirt, pan));
+                    if (x1 - x0).abs() < 2.0 {
+                        continue;
+                    }
+                    const STEPS: usize = 10;
+                    let mut mesh = Mesh::default();
+                    for i in 0..=STEPS {
+                        let f = i as f32 / STEPS as f32;
+                        let x = x0 + (x1 - x0) * f;
+                        let a = alpha(theme::AMBER, band_a * 0.5 * (1.0 + (std::f32::consts::PI * f).cos()));
+                        mesh.colored_vertex(pos2(x, pan.top()), a);
+                        mesh.colored_vertex(pos2(x, pan.bottom()), a);
+                        if i > 0 {
+                            let k = (2 * i) as u32;
+                            mesh.add_triangle(k - 2, k - 1, k);
+                            mesh.add_triangle(k - 1, k + 1, k);
+                        }
+                    }
+                    painter.with_clip_rect(pan).add(Shape::mesh(mesh));
+                }
+            }
             let wf_band = Rect::from_min_max(pos2(px0.max(wf.left()), wf.top()), pos2(px1.min(wf.right()), wf.bottom()));
             painter.rect_filled(wf_band, CornerRadius::ZERO, alpha(theme::AMBER, 0.035 + 0.08 * pulse));
             if px1 - px0 > 6.0 {
@@ -2977,11 +3012,11 @@ mod tests {
 
     #[test]
     fn edge_drags_respect_the_mode() {
-        let sym = usdr_proto::FilterRange { min_width_hz: 2_500.0, max_width_hz: 25_000.0, max_edge_hz: 12_500.0, symmetric: true };
+        let sym = usdr_proto::FilterRange { min_width_hz: 2_500.0, max_width_hz: 25_000.0, max_edge_hz: 12_500.0, symmetric: true, shaped: false };
         // Either edge of a symmetric filter sets a centered width.
         assert_eq!(drag_edges(EdgeDrag::High, &sym, -6_250.0, 6_250.0, 4_000.0), (-4_000.0, 4_000.0));
         assert_eq!(drag_edges(EdgeDrag::Low, &sym, -6_250.0, 6_250.0, -100.0), (-1_250.0, 1_250.0));
-        let ssb = usdr_proto::FilterRange { min_width_hz: 200.0, max_width_hz: 4_000.0, max_edge_hz: 4_000.0, symmetric: false };
+        let ssb = usdr_proto::FilterRange { min_width_hz: 200.0, max_width_hz: 4_000.0, max_edge_hz: 4_000.0, symmetric: false, shaped: true };
         // A sideband edge moves alone, never past the other less the minimum.
         assert_eq!(drag_edges(EdgeDrag::High, &ssb, 300.0, 2_800.0, 2_000.0), (300.0, 2_000.0));
         assert_eq!(drag_edges(EdgeDrag::High, &ssb, 300.0, 2_800.0, 350.0), (300.0, 500.0));
@@ -2989,12 +3024,16 @@ mod tests {
         let shift = EdgeDrag::Shift { from_hz: 1_000.0, lo: 300.0, hi: 2_800.0 };
         assert_eq!(drag_edges(shift, &ssb, 300.0, 2_800.0, 1_500.0), (800.0, 3_300.0));
         assert_eq!(drag_edges(shift, &ssb, 300.0, 2_800.0, 9_000.0), (1_500.0, 4_000.0));
+        // Never across the carrier: USB's low edge stops at 0 Hz, LSB's high.
+        assert_eq!(drag_edges(EdgeDrag::Low, &ssb, 300.0, 2_800.0, -500.0), (0.0, 2_800.0));
+        assert_eq!(drag_edges(EdgeDrag::High, &ssb, -2_800.0, -300.0, 400.0), (-2_800.0, 0.0));
+        assert_eq!(drag_edges(shift, &ssb, 300.0, 2_800.0, -2_000.0), (0.0, 2_500.0));
     }
 
     #[test]
     fn dragging_a_passband_edge_sets_the_filter() {
         let mut h = harness();
-        let range = usdr_proto::FilterRange { min_width_hz: 2_500.0, max_width_hz: 25_000.0, max_edge_hz: 12_500.0, symmetric: true };
+        let range = usdr_proto::FilterRange { min_width_hz: 2_500.0, max_width_hz: 25_000.0, max_edge_hz: 12_500.0, symmetric: true, shaped: false };
         h.state_mut().status.bandwidth_hz = 100_000.0;
         h.state_mut().pan.filter = Some((range, -50_000.0, 50_000.0));
         h.run_steps(2);

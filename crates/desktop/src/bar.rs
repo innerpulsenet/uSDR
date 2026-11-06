@@ -10,7 +10,7 @@ use crate::vfo::VfoAct;
 use crate::widgets::{self, Fader, Tone};
 use egui::{RichText, Sense, Stroke, Ui, vec2};
 use serde_json::json;
-use usdr_proto::Mode;
+use usdr_proto::{FilterShape, Mode};
 
 const B_MODES: [Mode; 5] = [Mode::Nfm, Mode::Am, Mode::Usb, Mode::Lsb, Mode::Wfm];
 
@@ -319,92 +319,345 @@ fn mode_tally(m: Mode) -> egui::Color32 {
     }
 }
 
-/// The listening modes, with AUTO and SCAN: receiver A's first row.
-const LISTEN: [Mode; 7] = [Mode::Nfm, Mode::Am, Mode::Usb, Mode::Lsb, Mode::Wfm, Mode::Auto, Mode::Scan];
+/// One key on the mode board: a mode, or the key that lists the HF data
+/// modes.
+#[derive(Clone, Copy, PartialEq)]
+enum Key {
+    Mode(Mode),
+    Hf,
+}
+
+/// The mode board for receiver A: rows of tracks, one family to a track.
+/// The first row listens (and AUTO and SCAN, which pick for you); the
+/// second decodes, the HF data modes behind one key. Only the modes the
+/// server offers, so an older one is never asked for one it lacks.
+fn board_a(app: &App) -> Vec<Vec<Vec<Key>>> {
+    let offered = |m: Mode| app.modes.is_empty() || app.modes.iter().any(|c| c.mode == m);
+    let track = |ms: &[Mode]| ms.iter().copied().filter(|m| offered(*m)).map(Key::Mode).collect::<Vec<_>>();
+    let hf: Vec<Key> = if Mode::ALL.iter().any(|m| m.is_hf_data() && offered(*m)) { vec![Key::Hf] } else { vec![] };
+    let rows = vec![
+        vec![track(&[Mode::Nfm, Mode::Am, Mode::Usb, Mode::Lsb, Mode::Wfm]), track(&[Mode::Auto, Mode::Scan])],
+        vec![track(&[Mode::P25, Mode::Dmr, Mode::Nxdn]), track(&[Mode::Packet, Mode::Pager, Mode::Flex]), hf],
+    ];
+    rows.into_iter().map(|r| r.into_iter().filter(|t| !t.is_empty()).collect()).collect()
+}
+
+/// Receiver B listens only: one track.
+fn board_b() -> Vec<Vec<Vec<Key>>> {
+    vec![vec![B_MODES.iter().copied().map(Key::Mode).collect()]]
+}
+
+const KEY_FONT: f32 = 10.5;
+const KEY_PAD: f32 = 12.0;
+const KEY_H: f32 = 22.0;
+const TRACK_PAD: f32 = 2.0;
+const TRACK_GAP: f32 = 6.0;
+const ROW_GAP: f32 = 4.0;
+
+fn key_label(k: Key, current: Mode) -> String {
+    match k {
+        Key::Mode(m) => m.label().to_string(),
+        Key::Hf if current.is_hf_data() => format!("{} ▾", current.label()),
+        Key::Hf => "HF ▾".into(),
+    }
+}
+
+/// A key's own width: its label, or for the HF key the widest it gets.
+fn key_width(ui: &Ui, k: Key) -> f32 {
+    let w = |t: String| ui.painter().layout_no_wrap(t, theme::mono_bold(KEY_FONT), egui::Color32::PLACEHOLDER).size().x + KEY_PAD;
+    match k {
+        Key::Mode(m) => w(m.label().to_string()),
+        Key::Hf => Mode::ALL.iter().filter(|m| m.is_hf_data()).map(|m| w(format!("{} ▾", m.label()))).fold(w("HF ▾".into()), f32::max),
+    }
+}
+
+fn row_width(ui: &Ui, row: &[Vec<Key>]) -> f32 {
+    row.iter().map(|t| t.iter().map(|k| key_width(ui, *k)).sum::<f32>() + 2.0 * TRACK_PAD).sum::<f32>() + TRACK_GAP * row.len().saturating_sub(1) as f32
+}
 
 /// The MODE bay's width: the widest of what it shows for A and for B, so
 /// switching receivers does not move the bays after it.
-fn modes_width(ui: &Ui) -> f32 {
-    let chip = |l: &str| ui.painter().layout_no_wrap(l.to_string(), theme::mono_bold(10.5), egui::Color32::PLACEHOLDER).size().x + 14.0;
-    let row = |ms: &mut dyn Iterator<Item = Mode>| {
-        let ws: Vec<f32> = ms.map(|m| chip(m.label())).collect();
-        ws.iter().sum::<f32>() + 3.0 * ws.len().saturating_sub(1) as f32
-    };
+fn modes_width(ui: &Ui, app: &App) -> f32 {
     let note = ui.painter().layout_no_wrap(B_NOTE.into(), theme::mono(10.5), egui::Color32::PLACEHOLDER).size().x;
-    let hf = ui.painter().layout_no_wrap("NAVTEX ▾".into(), theme::mono_bold(10.5), egui::Color32::PLACEHOLDER).size().x + 14.0 + 3.0;
-    row(&mut LISTEN.into_iter())
-        .max(row(&mut Mode::ALL.into_iter().filter(|m| !LISTEN.contains(m) && !m.is_hf_data())) + hf)
-        .max(row(&mut B_MODES.into_iter()))
-        .max(note)
+    board_a(app).iter().chain(board_b().iter()).map(|r| row_width(ui, r)).fold(note, f32::max)
 }
 
 const B_NOTE: &str = "receiver B listens; the decoders run on A";
 
 fn modes(app: &mut App, ui: &mut Ui) {
     let b = app.status.rx2.clone().filter(|_| app.active_b);
-    let w = modes_width(ui);
+    let w = modes_width(ui, app);
     bay(ui, "MODE", |ui| {
         ui.set_min_width(w);
-        modes_inner(app, ui, b)
+        modes_inner(app, ui, b, w)
     });
 }
 
-fn modes_inner(app: &mut App, ui: &mut Ui, b: Option<usdr_proto::SubRx>) {
+fn modes_inner(app: &mut App, ui: &mut Ui, b: Option<usdr_proto::SubRx>, width: f32) {
     match b {
         Some(b) => {
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = 3.0;
-                for m in B_MODES {
-                    if widgets::chip_key(ui, m.label(), b.mode == m, theme::VIOLET).clicked() && b.mode != m {
-                        app.set_rx2(b.freq_hz, m);
-                    }
-                }
-            });
+            if let Some(Key::Mode(m)) = mode_board(app, ui, "b", &board_b(), b.mode, width, theme::VIOLET)
+                && b.mode != m
+            {
+                app.set_rx2(b.freq_hz, m);
+            }
             ui.label(small(B_NOTE));
         }
         None => {
-            // Listening modes and the two that pick for you on the first
-            // row, the decoders on the second: those the server offers, so
-            // an older one is never asked for a mode it does not have.
-            let offered = |m: &Mode| app.modes.is_empty() || app.modes.iter().any(|c| c.mode == *m);
-            let decode: Vec<Mode> = Mode::ALL.iter().copied().filter(|m| !LISTEN.contains(m) && !m.is_hf_data() && offered(m)).collect();
-            let hf: Vec<Mode> = Mode::ALL.iter().copied().filter(|m| m.is_hf_data() && offered(m)).collect();
-            for (k, row) in [&LISTEN[..], &decode[..]].into_iter().enumerate() {
-                ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = 3.0;
-                    for m in row {
-                        let on = app.status.mode == *m;
-                        let desc = app.modes.iter().find(|c| c.mode == *m).map(|c| c.description.clone()).unwrap_or_default();
-                        let r = widgets::chip_key(ui, m.label(), on, mode_tally(*m));
-                        let r = if desc.is_empty() { r } else { r.on_hover_text(desc) };
-                        if r.clicked() && !on {
-                            app.set_mode(*m);
+            let cur = app.status.mode;
+            if let Some(Key::Mode(m)) = mode_board(app, ui, "a", &board_a(app), cur, width, egui::Color32::TRANSPARENT)
+                && cur != m
+            {
+                app.set_mode(m);
+            }
+        }
+    }
+}
+
+/// Draw a mode board `width` wide and return the key clicked (a mode,
+/// including one picked from the HF key's menu). Each family sits in its
+/// own recessed track; every row is stretched to the same width, so the
+/// tracks end flush. One lit key, in its family's color (or `tint` when
+/// given), glides to the choice across rows and tracks, so the change is
+/// seen as a move and not a blink.
+fn mode_board(app: &App, ui: &mut Ui, id: &str, rows: &[Vec<Vec<Key>>], current: Mode, width: f32, tint: egui::Color32) -> Option<Key> {
+    let id = egui::Id::new(("mode-board", id));
+    let font = theme::mono_bold(KEY_FONT);
+    let h = rows.len() as f32 * KEY_H + ROW_GAP * rows.len().saturating_sub(1) as f32;
+    let (area, _) = ui.allocate_exact_size(vec2(width, h), Sense::hover());
+    let p = ui.painter().clone();
+    let tally_of = |k: Key| match k {
+        Key::Mode(m) => mode_tally(m),
+        Key::Hf => mode_tally(Mode::Ft8),
+    };
+    // Lay out every key: the stretch is shared evenly by a row's keys.
+    let mut cells: Vec<(Key, egui::Rect)> = Vec::new();
+    for (r, row) in rows.iter().enumerate() {
+        let keys = row.iter().map(Vec::len).sum::<usize>().max(1) as f32;
+        let extra = ((width - row_width(ui, row)) / keys).max(0.0);
+        let top = area.top() + r as f32 * (KEY_H + ROW_GAP);
+        let mut x = area.left();
+        for track in row {
+            let tw = track.iter().map(|k| key_width(ui, *k) + extra).sum::<f32>() + 2.0 * TRACK_PAD;
+            let tr = egui::Rect::from_min_size(egui::pos2(x, top), vec2(tw, KEY_H));
+            theme::well(&p, tr, None);
+            let mut kx = tr.left() + TRACK_PAD;
+            for k in track {
+                let kw = key_width(ui, *k) + extra;
+                cells.push((*k, egui::Rect::from_min_size(egui::pos2(kx, tr.top() + TRACK_PAD), vec2(kw, KEY_H - 2.0 * TRACK_PAD))));
+                kx += kw;
+            }
+            x += tw + TRACK_GAP;
+        }
+    }
+    let lit_key = if current.is_hf_data() { Key::Hf } else { Key::Mode(current) };
+    let lit = cells.iter().find(|(k, _)| *k == lit_key).map(|(k, r)| (*k, *r));
+    if let Some((k, c)) = lit {
+        let reduce = ui.data(|d| d.get_temp::<bool>(egui::Id::new("usdr-reduce-motion")).unwrap_or(false));
+        let t = if reduce { 0.0 } else { 0.18 };
+        let anim = |name: &str, v: f32| ui.ctx().animate_value_with_time(id.with(name), v, t);
+        let rect = egui::Rect::from_min_max(egui::pos2(anim("l", c.left()), anim("t", c.top())), egui::pos2(anim("r", c.right()), anim("b", c.bottom())));
+        let want = if tint == egui::Color32::TRANSPARENT { tally_of(k) } else { tint };
+        let col = egui::Color32::from_rgb(anim("cr", want.r() as f32) as u8, anim("cg", want.g() as f32) as u8, anim("cb", want.b() as f32) as u8);
+        p.rect(rect, egui::CornerRadius::same(3), alpha(col, 0.24), Stroke::new(1.0, alpha(col, 0.75)), egui::StrokeKind::Inside);
+        // A tally lamp along the lit key's foot.
+        let lamp = egui::Rect::from_min_max(egui::pos2(rect.left() + 5.0, rect.bottom() - 3.0), egui::pos2(rect.right() - 5.0, rect.bottom() - 1.5));
+        p.rect_filled(lamp.expand(1.0), egui::CornerRadius::same(2), alpha(col, 0.18));
+        p.rect_filled(lamp, egui::CornerRadius::same(1), alpha(col, 0.9));
+    }
+    let mut out = None;
+    let mut prev: Option<(Key, egui::Rect)> = None;
+    for (k, cell) in &cells {
+        let label = key_label(*k, current);
+        let resp = ui.interact(*cell, id.with(label.as_str()), Sense::click());
+        let on = *k == lit_key;
+        let shown = match k {
+            Key::Mode(m) => m.label(),
+            Key::Hf => "HF",
+        };
+        resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::RadioButton, true, on, shown));
+        let hover = ui.ctx().animate_bool_with_time(resp.id.with("hv"), resp.hovered() && !on, 0.12);
+        if hover > 0.0 {
+            p.rect_filled(*cell, egui::CornerRadius::same(3), alpha(theme::surface_4(), 0.6 * hover));
+        }
+        if resp.hovered() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        }
+        // A hairline between two unlit neighbors in one track.
+        if let Some((pk, pr)) = prev
+            && (pr.right() - cell.left()).abs() < 0.5
+            && !on
+            && pk != lit_key
+        {
+            p.line_segment([egui::pos2(cell.left(), cell.top() + 4.0), egui::pos2(cell.left(), cell.bottom() - 4.0)], Stroke::new(1.0, theme::line()));
+        }
+        prev = Some((*k, *cell));
+        // Unlit labels carry a breath of their family's color, so the
+        // families read apart before a label is.
+        let family = theme::lerp(theme::text_3(), tally_of(*k), 0.28);
+        let c = if on { theme::text() } else { theme::lerp(family, theme::text_2(), 0.35 + 0.65 * hover) };
+        p.text(cell.center() + vec2(0.0, if on { -0.5 } else { 0.0 }), egui::Align2::CENTER_CENTER, &label, font.clone(), c);
+        let desc = |m: Mode| app.modes.iter().find(|c| c.mode == m).map(|c| c.description.clone()).filter(|d| !d.is_empty());
+        match k {
+            Key::Mode(m) => {
+                let resp = match desc(*m) {
+                    Some(d) => resp.on_hover_text(d),
+                    None => resp,
+                };
+                if resp.clicked() {
+                    out = Some(*k);
+                }
+            }
+            Key::Hf => {
+                let hf: Vec<Mode> = Mode::ALL.iter().copied().filter(|m| m.is_hf_data() && (app.modes.is_empty() || app.modes.iter().any(|c| c.mode == *m))).collect();
+                egui::Popup::menu(&resp).show(|ui| {
+                    for m in &hf {
+                        let r = ui.selectable_label(current == *m, RichText::new(m.label()).font(theme::mono_bold(11.0)));
+                        let r = match desc(*m) {
+                            Some(d) => r.on_hover_text(d),
+                            None => r,
+                        };
+                        if r.clicked() {
+                            out = Some(Key::Mode(*m));
+                            ui.close();
                         }
-                    }
-                    // The HF data modes share one key on the decoder row: it
-                    // names the one in use and lists them all.
-                    if k == 1 && !hf.is_empty() {
-                        let cur = app.status.mode;
-                        let lit = cur.is_hf_data();
-                        let labels: Vec<&str> = hf.iter().map(|m| m.label()).chain(["HF"]).collect();
-                        widgets::menu_chip_lit(ui, if lit { cur.label() } else { "HF" }, &labels, mode_tally(Mode::Ft8), lit, |ui| {
-                            for m in &hf {
-                                let desc = app.modes.iter().find(|c| c.mode == *m).map(|c| c.description.clone()).unwrap_or_default();
-                                let r = ui.selectable_label(cur == *m, RichText::new(m.label()).font(theme::mono_bold(11.0)));
-                                let r = if desc.is_empty() { r } else { r.on_hover_text(desc) };
-                                if r.clicked() {
-                                    if cur != *m {
-                                        app.set_mode(*m);
-                                    }
-                                    ui.close();
-                                }
-                            }
-                        });
                     }
                 });
             }
         }
     }
+    out
+}
+
+/// A filter's response drawn small: flat top, and skirts as steep as the
+/// shape's, with the elliptic shapes' ripple, so the three tell apart at a
+/// glance.
+pub fn shape_glyph(p: &egui::Painter, r: egui::Rect, shape: FilterShape, color: egui::Color32) {
+    let (flat, skirt, ripple) = match shape {
+        FilterShape::Sharp => (0.33, 0.025, 0.10),
+        FilterShape::Normal => (0.24, 0.17, 0.035),
+        FilterShape::Soft => (0.12, 0.33, 0.0),
+    };
+    let n = 48;
+    let pts: Vec<egui::Pos2> = (0..=n)
+        .map(|i| {
+            let x = i as f32 / n as f32;
+            let d = (x - 0.5).abs() - flat;
+            let y = if d <= 0.0 {
+                1.0 - ripple * (0.5 - 0.5 * (std::f32::consts::PI * 3.0 * (x - 0.5) / flat).cos())
+            } else if d < skirt {
+                0.5 * (1.0 + (std::f32::consts::PI * d / skirt).cos())
+            } else {
+                0.0
+            };
+            egui::pos2(r.left() + x * r.width(), r.bottom() - y * r.height())
+        })
+        .collect();
+    let mut mesh = egui::Mesh::default();
+    for (i, q) in pts.iter().enumerate() {
+        mesh.colored_vertex(*q, alpha(color, 0.28));
+        mesh.colored_vertex(egui::pos2(q.x, r.bottom()), alpha(color, 0.04));
+        if i > 0 {
+            let k = (2 * i) as u32;
+            mesh.add_triangle(k - 2, k - 1, k);
+            mesh.add_triangle(k - 1, k + 1, k);
+        }
+    }
+    p.add(egui::Shape::mesh(mesh));
+    p.add(egui::Shape::line(pts, Stroke::new(1.25, color)));
+}
+
+/// The header key that shows the filter's shape and opens the choice of
+/// the three, each drawn and with what it trades.
+fn shape_key(ui: &mut Ui, shape: FilterShape, height: f32) -> Option<FilterShape> {
+    let font = theme::mono_bold(10.0);
+    let label = format!("{} ▾", shape.label());
+    let tw = ui.painter().layout_no_wrap(label.clone(), font.clone(), egui::Color32::PLACEHOLDER).size().x;
+    let (rect, resp) = ui.allocate_exact_size(vec2(18.0 + 5.0 + tw + 8.0, height), Sense::click());
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, true, format!("Filter shape {}", shape.label())));
+    let open = egui::Popup::is_id_open(ui.ctx(), egui::Popup::default_response_id(&resp));
+    let hover = ui.ctx().animate_bool_with_time(resp.id.with("hv"), resp.hovered() || open, 0.12);
+    let p = ui.painter();
+    p.rect(rect, egui::CornerRadius::same(3), alpha(theme::AMBER, 0.05 + 0.10 * hover), Stroke::new(1.0, alpha(theme::AMBER, 0.25 + 0.35 * hover)), egui::StrokeKind::Inside);
+    let g = egui::Rect::from_center_size(egui::pos2(rect.left() + 12.0, rect.center().y), vec2(16.0, (height - 5.0).max(6.0)));
+    shape_glyph(p, g, shape, theme::lerp(alpha(theme::AMBER, 0.75), theme::AMBER, hover));
+    p.text(egui::pos2(g.right() + 5.0, rect.center().y), egui::Align2::LEFT_CENTER, &label, font, theme::lerp(theme::text_2(), theme::text(), hover));
+    if resp.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    let resp = resp.on_hover_text(shape.describe());
+    let mut out = None;
+    egui::Popup::menu(&resp).width(320.0).show(|ui| {
+        ui.spacing_mut().item_spacing.y = 2.0;
+        for s in FilterShape::ALL {
+            let (row, r) = ui.allocate_exact_size(vec2(320.0, 40.0), Sense::click());
+            r.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::RadioButton, true, s == shape, s.label()));
+            let hv = ui.ctx().animate_bool_with_time(r.id.with("hv"), r.hovered(), 0.1);
+            let on = s == shape;
+            let p = ui.painter();
+            if on || hv > 0.0 {
+                p.rect(row, egui::CornerRadius::same(3), alpha(theme::AMBER, if on { 0.16 } else { 0.07 * hv }), Stroke::new(1.0, alpha(theme::AMBER, if on { 0.6 } else { 0.0 })), egui::StrokeKind::Inside);
+            }
+            let g = egui::Rect::from_min_size(row.left_top() + vec2(8.0, 9.0), vec2(40.0, 22.0));
+            shape_glyph(p, g, s, if on { theme::AMBER } else { theme::lerp(theme::text_3(), theme::AMBER, 0.5 + 0.5 * hv) });
+            let trade = s.describe().split_once(": ").map_or("", |(_, t)| t);
+            p.text(egui::pos2(g.right() + 10.0, row.top() + 7.0), egui::Align2::LEFT_TOP, s.label(), theme::mono_bold(11.0), if on { theme::text() } else { theme::text_2() });
+            let skirt = format!("{:.0} Hz skirt", s.skirt_hz());
+            p.text(egui::pos2(row.right() - 8.0, row.top() + 7.0), egui::Align2::RIGHT_TOP, skirt, theme::mono(10.0), theme::text_3());
+            let short = trade.split(". ").last().unwrap_or(trade);
+            p.text(egui::pos2(g.right() + 10.0, row.top() + 22.0), egui::Align2::LEFT_TOP, short, theme::sans(11.0), theme::text_3());
+            if r.hovered() {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+            }
+            if r.clicked() {
+                if !on {
+                    out = Some(s);
+                }
+                ui.close();
+            }
+        }
+    });
+    out
+}
+
+/// A filter preset: a width that keeps the low edge where it is (or, for
+/// symmetric filters, centers on the carrier), or named edges of its own.
+#[derive(Clone)]
+struct Preset {
+    label: String,
+    width: f32,
+    edges: Option<(f32, f32)>,
+    tip: Option<&'static str>,
+}
+
+/// The presets a mode offers. Extended SSB is a voice preset only: CW has
+/// no mode here, and the data modes' presets widen the decoder's search.
+fn presets_for(mode: Mode) -> Vec<Preset> {
+    let widths = |ws: &[f32]| ws.iter().map(|w| Preset { label: preset_label(*w), width: *w, edges: None, tip: None }).collect::<Vec<_>>();
+    match mode {
+        Mode::Usb | Mode::Lsb => {
+            let sign = if mode == Mode::Lsb { -1.0 } else { 1.0 };
+            let named = |label: &str, lo: f32, hi: f32, tip: &'static str| {
+                let (a, b) = (sign * lo, sign * hi);
+                Preset { label: label.into(), width: hi - lo, edges: Some((a.min(b), a.max(b))), tip: Some(tip) }
+            };
+            let mut v = widths(&[1_800.0, 2_100.0, 2_400.0, 2_700.0, 3_000.0, 3_600.0]);
+            v.push(named("ESSB", 50.0, 4_000.0, "Extended SSB: 50–4000 Hz, for wide-audio voice stations"));
+            v.push(named("HI-FI", 50.0, 4_500.0, "Hi-fi SSB: 50–4500 Hz, the widest ESSB stations"));
+            v
+        }
+        // The decoder searches what the filter passes: wider finds the
+        // stations above 3 kHz.
+        Mode::Ft8 | Mode::Ft4 => widths(&[2_000.0, 3_000.0, 4_000.0, 4_900.0]),
+        Mode::Am => widths(&[4_000.0, 6_000.0, 8_000.0, 10_000.0, 12_000.0, 16_000.0]),
+        Mode::Nfm => widths(&[6_000.0, 8_000.0, 11_000.0, 12_500.0, 16_000.0, 25_000.0]),
+        Mode::Wfm => widths(&[100_000.0, 150_000.0, 180_000.0, 200_000.0, 230_000.0]),
+        _ => vec![],
+    }
+}
+
+fn preset_label(w: f32) -> String {
+    format!("{}k", format!("{:.1}", w / 1000.0).trim_end_matches(".0"))
 }
 
 fn filter(app: &mut App, ui: &mut Ui, width_px: f32) {
@@ -424,20 +677,43 @@ fn filter(app: &mut App, ui: &mut Ui, width_px: f32) {
     };
     let width = (hi - lo).max(0.0);
     let k = |v: f32| format!("{}k", format!("{:.2}", v / 1000.0).trim_end_matches('0').trim_end_matches('.'));
-    let range = if app.server.as_ref().is_some_and(|i| i.has("filter")) {
-        app.modes.iter().find(|c| c.mode == mode).and_then(|c| c.filter)
-    } else {
-        None
+    let server = app.server.clone();
+    let has = |f: &str| server.as_ref().is_some_and(|i| i.has(f));
+    let range = if has("filter") { app.modes.iter().find(|c| c.mode == mode).and_then(|c| c.filter) } else { None };
+    let shape = match &b {
+        Some(b) => b.filter_shape,
+        None => app.status.filter_shape,
     };
+    let shaped = range.is_some_and(|r| r.shaped) && has("filter-shape");
     let custom = if b.is_some() { range.is_some() && (width - app.modes.iter().find(|c| c.mode == mode).map_or(0.0, |c| c.bandwidth_hz)).abs() > 1.0 } else { app.status.filter_custom };
-    let label = format!("FILTER  {} … {}", k(lo), k(hi));
-    bay(ui, &label, |ui| {
+    // With the shape key on the header line, a narrow bay moves the edges
+    // into the width's readout.
+    let edges_in_head = !shaped || width_px >= 220.0;
+    let head = if edges_in_head { format!("FILTER  {} … {}", k(lo), k(hi)) } else { "FILTER".to_string() };
+    let mut new_shape = None;
+    bay_with(
+        ui,
+        |ui| {
+            // As tall as the other bays' labels, so this bay's rows line up
+            // with theirs.
+            let line = ui.painter().layout_no_wrap("FILTER".into(), theme::mono(10.5), egui::Color32::PLACEHOLDER).size().y;
+            ui.allocate_ui_with_layout(vec2(width_px, line), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                ui.spacing_mut().item_spacing.x = 6.0;
+                theme::engraved(ui, &head, theme::mono(10.5), theme::text_3(), 1.0, Sense::hover());
+                if shaped {
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        new_shape = shape_key(ui, shape, line + 1.0);
+                    });
+                }
+            });
+        },
+        |ui| {
         ui.set_min_width(width_px);
         ui.set_max_width(width_px);
         let Some(range) = range else {
             // One short line, so it never wraps in the narrow bay; the
             // whole of it is a hover away.
-            let (note, tip) = if app.server.as_ref().is_some_and(|i| i.has("filter")) {
+            let (note, tip) = if has("filter") {
                 ("set by the decoder", format!("{}'s decoder sets its own channel filter", mode.label()))
             } else {
                 ("fixed on this server", "This server predates the adjustable filter".to_string())
@@ -445,48 +721,46 @@ fn filter(app: &mut App, ui: &mut Ui, width_px: f32) {
             ui.label(small(note)).on_hover_text(tip);
             return;
         };
-        let mut presets: Vec<f32> = match mode {
-            Mode::Usb | Mode::Lsb => vec![1_800.0, 2_100.0, 2_400.0, 2_700.0, 3_000.0, 3_600.0],
-            Mode::Am => vec![4_000.0, 6_000.0, 8_000.0, 10_000.0, 12_000.0, 16_000.0],
-            Mode::Nfm => vec![6_000.0, 8_000.0, 11_000.0, 12_500.0, 16_000.0, 25_000.0],
-            Mode::Wfm => vec![100_000.0, 150_000.0, 180_000.0, 200_000.0, 230_000.0],
-            _ => vec![],
-        };
+        let mut presets = presets_for(mode);
         // The mode's own width is always a preset, and choosing it is the
         // reset: no separate key to find once the filter has wandered.
         let home = app.modes.iter().find(|c| c.mode == mode).map(|c| c.bandwidth_hz).filter(|w| *w > 0.0);
         if let Some(h) = home
-            && !presets.iter().any(|p| (p - h).abs() < 1.0)
+            && !presets.iter().any(|p| p.edges.is_none() && (p.width - h).abs() < 1.0)
         {
-            presets.push(h);
-            presets.sort_by(f32::total_cmp);
+            presets.push(Preset { label: preset_label(h), width: h, edges: None, tip: None });
         }
-        presets.retain(|p| *p >= range.min_width_hz - 1.0 && *p <= range.max_width_hz + 1.0);
+        presets.sort_by(|a, b| a.width.total_cmp(&b.width));
+        presets.retain(|p| p.width >= range.min_width_hz - 1.0 && p.width <= range.max_width_hz + 1.0 && p.edges.is_none_or(|(l, h)| l.abs().max(h.abs()) <= range.max_edge_hz + 1.0));
         if presets.is_empty() {
-            presets.push(width);
+            presets.push(Preset { label: preset_label(width), width, edges: None, tip: None });
         }
         let around = |w: f32| -> (f32, f32) {
             match mode {
-                Mode::Usb => (lo, (lo + w).min(range.max_edge_hz)),
+                Mode::Usb | Mode::Ft8 | Mode::Ft4 => (lo, (lo + w).min(range.max_edge_hz)),
                 Mode::Lsb => ((hi - w).max(-range.max_edge_hz), hi),
                 _ => (-w / 2.0, w / 2.0),
             }
         };
+        let edges_of = |p: &Preset| p.edges.unwrap_or_else(|| around(p.width));
+        let is_on = |p: &Preset| match p.edges {
+            Some((l, h)) => (l - lo).abs() < 1.0 && (h - hi).abs() < 1.0,
+            None => (width - p.width).abs() < 1.0 && !presets.iter().any(|q| q.edges.is_some_and(|(l, h)| (l - lo).abs() < 1.0 && (h - hi).abs() < 1.0)),
+        };
         let mut set: Option<(f32, f32)> = None;
         let mut reset = false;
-        let is_home = |p: f32| home.is_some_and(|h| (p - h).abs() < 1.0);
-        let label_of = |p: f32| format!("{}k", format!("{:.1}", p / 1000.0).trim_end_matches(".0"));
+        let is_home = |p: &Preset| p.edges.is_none() && home.is_some_and(|h| (p.width - h).abs() < 1.0);
         // Arrows either side always reach the next preset narrower and
         // wider, so a narrow bay never strands the width at one end.
-        let narrower = presets.iter().rev().copied().find(|p| *p < width - 1.0);
-        let wider = presets.iter().copied().find(|p| *p > width + 1.0);
+        let narrower = presets.iter().rev().find(|p| p.width < width - 1.0).cloned();
+        let wider = presets.iter().find(|p| p.width > width + 1.0).cloned();
         // Between them, as many presets as fit, grown outward from the one
         // nearest the width in use so its neighbors on both sides show.
         const GAP_X: f32 = 3.0;
-        let chip_w = |p: f32| ui.painter().layout_no_wrap(label_of(p), theme::mono_bold(10.5), egui::Color32::PLACEHOLDER).size().x + 14.0 + GAP_X;
-        let widths: Vec<f32> = presets.iter().map(|p| chip_w(*p)).collect();
+        let chip_w = |p: &Preset| ui.painter().layout_no_wrap(p.label.clone(), theme::mono_bold(10.5), egui::Color32::PLACEHOLDER).size().x + 14.0 + GAP_X;
+        let widths: Vec<f32> = presets.iter().map(chip_w).collect();
         let room = width_px - 2.0 * (20.0 + GAP_X);
-        let near = presets.iter().enumerate().min_by(|a, b| (a.1 - width).abs().total_cmp(&(b.1 - width).abs())).map_or(0, |(i, _)| i);
+        let near = presets.iter().position(is_on).unwrap_or_else(|| presets.iter().enumerate().min_by(|a, b| (a.1.width - width).abs().total_cmp(&(b.1.width - width).abs())).map_or(0, |(i, _)| i));
         let (mut first, mut last, mut used) = (near, near, widths[near]);
         loop {
             let right = (last + 1 < presets.len()).then(|| widths[last + 1]).filter(|w| used + w <= room);
@@ -506,46 +780,48 @@ fn filter(app: &mut App, ui: &mut Ui, width_px: f32) {
         let row = ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = GAP_X;
             if widgets::step_chip(ui, false, narrower.is_some()).on_hover_text("Narrower (wheel down over the presets)").clicked()
-                && let Some(p) = narrower
+                && let Some(p) = &narrower
             {
-                set = Some(around(p));
+                set = Some(edges_of(p));
             }
             for p in &presets[first..=last] {
-                let on = (width - p).abs() < 1.0;
-                let mut r = widgets::chip_key(ui, &label_of(*p), on, theme::AMBER);
-                if is_home(*p) {
+                let mut r = widgets::chip_key(ui, &p.label, is_on(p), theme::AMBER);
+                if is_home(p) {
                     // A green pip marks the mode's own filter.
                     let c = r.rect.right_top() + vec2(-4.0, 4.0);
                     ui.painter().circle_filled(c, 2.0, if custom { theme::OK } else { alpha(theme::OK, 0.6) });
                     r = r.on_hover_text(if custom { "The mode's own filter — click to reset" } else { "The mode's own filter (in use)" });
+                } else if let Some(t) = p.tip {
+                    r = r.on_hover_text(t);
                 }
                 if r.clicked() {
-                    if is_home(*p) {
+                    if is_home(p) {
                         reset = true;
                     } else {
-                        set = Some(around(*p));
+                        set = Some(edges_of(p));
                     }
                 }
             }
             if widgets::step_chip(ui, true, wider.is_some()).on_hover_text("Wider (wheel up over the presets)").clicked()
-                && let Some(p) = wider
+                && let Some(p) = &wider
             {
-                set = Some(around(p));
+                set = Some(edges_of(p));
             }
         });
         if row.response.contains_pointer() {
             let notches = widgets::wheel(ui);
             if notches != 0.0 {
                 widgets::eat_scroll(ui);
-                if let Some(p) = if notches > 0.0 { wider } else { narrower } {
-                    set = Some(around(p));
+                if let Some(p) = if notches > 0.0 { &wider } else { &narrower } {
+                    set = Some(edges_of(p));
                 }
             }
         }
         // Stepping onto the mode's own width is the reset too, so it lands
         // with the mode's own edges (sideband filters sit off the carrier).
         if let Some((l, h)) = set
-            && is_home(h - l)
+            && presets.iter().any(|p| is_home(p) && (p.width - (h - l)).abs() < 1.0 && p.edges.is_none())
+            && !presets.iter().any(|p| p.edges.is_some_and(|(pl, ph)| (pl - l).abs() < 1.0 && (ph - h).abs() < 1.0))
         {
             set = None;
             reset = true;
@@ -558,6 +834,7 @@ fn filter(app: &mut App, ui: &mut Ui, width_px: f32) {
             }
         }
         let mut wv = width as f64;
+        let sideband = !range.symmetric;
         let (ch, _) = Fader {
             value: &mut wv,
             min: range.min_width_hz as f64,
@@ -565,7 +842,17 @@ fn filter(app: &mut App, ui: &mut Ui, width_px: f32) {
             step: if range.max_width_hz > 50_000.0 { 5_000.0 } else { 100.0 },
             fine: if range.max_width_hz > 50_000.0 { 1_000.0 } else { 50.0 },
             label: "WIDTH",
-            text: |v| k(v as f32),
+            // Sideband's edges, when the header has no room for them: the
+            // low edge stays put as the width moves.
+            text: |v| {
+                if sideband && !edges_in_head {
+                    let (l, h) = around(v as f32);
+                    let (l, h) = (l.abs().min(h.abs()), l.abs().max(h.abs()));
+                    format!("{}–{}", k(l).trim_end_matches('k'), k(h))
+                } else {
+                    k(v as f32)
+                }
+            },
             color: theme::AMBER,
             enabled: true,
             ticks: vec![],
@@ -587,6 +874,9 @@ fn filter(app: &mut App, ui: &mut Ui, width_px: f32) {
             }
         }
     });
+    if let Some(s) = new_shape {
+        app.set_filter_shape(s);
+    }
 }
 
 fn audio(app: &mut App, ui: &mut Ui, width_px: f32) {

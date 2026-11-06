@@ -15,6 +15,7 @@ use scannerd_engine::rds::RdsDecoder;
 use scannerd_engine::stereo::{StereoStatus, WfmAudio};
 use scannerd_engine::{CallEvent, ToneCode};
 use scannerd_engine::leveler::Leveler;
+pub use scannerd_engine::passband::FilterShape;
 use scannerd_engine::noisegate::NoiseGate;
 use scannerd_engine::autonotch::AutoNotch;
 use scannerd_engine::agc::AgcSpeed;
@@ -528,6 +529,16 @@ fn filter_override(mode: SdrMode) -> Option<(f32, f32)> {
     FILTERS.lock().ok()?.as_ref()?.get(&mode).copied()
 }
 
+/// The operator's filter shape for each sideband mode that has one; the
+/// rest are [`FilterShape::Normal`]. Kept apart from the edges, so going
+/// back to the mode's own width keeps the shape chosen.
+static SHAPES: std::sync::Mutex<Option<std::collections::HashMap<SdrMode, FilterShape>>> = std::sync::Mutex::new(None);
+
+/// The widest a sideband filter may be, and the furthest its edge may sit
+/// from the carrier: room for extended SSB's 50–4500 Hz and for every FT8
+/// station above the dial, under the decoder's 6 kHz Nyquist.
+pub const SIDEBAND_MAX_HZ: f32 = 5_000.0;
+
 /// Which filters can be set, and how far. Sideband takes both edges (width
 /// and shift); AM, NFM and WFM a symmetric width. The digital modes keep the
 /// filters their decoders were built for.
@@ -539,6 +550,8 @@ pub struct FilterRange {
     /// Furthest an edge may sit from the carrier.
     pub max_edge_hz: f32,
     pub symmetric: bool,
+    /// Whether the skirt's shape can be chosen (sharp, normal, soft).
+    pub shaped: bool,
 }
 
 impl SdrMode {
@@ -557,9 +570,13 @@ impl SdrMode {
     }
 
     pub fn filter_range(self) -> Option<FilterRange> {
-        let sym = |lo: f32, hi: f32| FilterRange { min_width_hz: lo, max_width_hz: hi, max_edge_hz: hi / 2.0, symmetric: true };
+        let sym = |lo: f32, hi: f32| FilterRange { min_width_hz: lo, max_width_hz: hi, max_edge_hz: hi / 2.0, symmetric: true, shaped: false };
+        let side = |min: f32| FilterRange { min_width_hz: min, max_width_hz: SIDEBAND_MAX_HZ, max_edge_hz: SIDEBAND_MAX_HZ, symmetric: false, shaped: true };
         match self {
-            SdrMode::Usb | SdrMode::Lsb => Some(FilterRange { min_width_hz: 200.0, max_width_hz: 4_000.0, max_edge_hz: 4_000.0, symmetric: false }),
+            SdrMode::Usb | SdrMode::Lsb => Some(side(200.0)),
+            // The slot decoder searches whatever the filter passes; narrower
+            // than 500 Hz holds too few stations to be worth a slot.
+            SdrMode::Ft8 | SdrMode::Ft4 => Some(side(500.0)),
             SdrMode::Am => Some(sym(2_000.0, 20_000.0)),
             SdrMode::Nfm => Some(sym(2_500.0, INSPECT_BANDWIDTH_HZ)),
             SdrMode::Wfm => Some(sym(50_000.0, 230_000.0)),
@@ -582,7 +599,7 @@ impl SdrMode {
         } else {
             let (lo, hi) = (low.clamp(-r.max_edge_hz, r.max_edge_hz), high.clamp(-r.max_edge_hz, r.max_edge_hz));
             match self {
-                SdrMode::Usb if lo < 0.0 => return Err("upper sideband edges sit above the carrier".into()),
+                SdrMode::Usb | SdrMode::Ft8 | SdrMode::Ft4 if lo < 0.0 => return Err("upper sideband edges sit above the carrier".into()),
                 SdrMode::Lsb if hi > 0.0 => return Err("lower sideband edges sit below the carrier".into()),
                 _ => {}
             }
@@ -603,6 +620,31 @@ impl SdrMode {
                 None => map.remove(&self),
             };
         }
+    }
+
+    /// Set (or with `None` go back to normal) this mode's filter shape.
+    pub fn set_filter_shape(self, shape: Option<FilterShape>) {
+        if let Ok(mut g) = SHAPES.lock() {
+            let map = g.get_or_insert_with(Default::default);
+            match shape.filter(|s| *s != FilterShape::Normal) {
+                Some(s) => map.insert(self, s),
+                None => map.remove(&self),
+            };
+        }
+    }
+
+    /// The shape of this mode's passband skirt: the operator's where the
+    /// mode takes one, otherwise normal.
+    pub fn filter_shape(self) -> FilterShape {
+        if !self.filter_range().is_some_and(|r| r.shaped) {
+            return FilterShape::Normal;
+        }
+        SHAPES.lock().ok().and_then(|g| g.as_ref()?.get(&self).copied()).unwrap_or_default()
+    }
+
+    /// Whether the operator has set this mode's edges.
+    pub fn filter_custom(self) -> bool {
+        filter_override(self).is_some()
     }
 
     /// The passband edges in use, relative to the carrier.
@@ -700,6 +742,8 @@ impl SdrMode {
             // AM voice/broadcast channel: 12 kS/s delivers a 6 kHz Nyquist
             // audio spectrum that matches the AM IF filter passband (6.0 kHz).
             SdrMode::Am => 12_000.0,
+            // Sideband voice and FT8 may be 5 kHz wide.
+            SdrMode::Usb | SdrMode::Lsb | SdrMode::Ft8 | SdrMode::Ft4 => 12_000.0,
             _ => 8_000.0,
         }
     }
@@ -733,8 +777,11 @@ impl SdrMode {
     fn chain_bandwidth_hz(self) -> f32 {
         match self {
             SdrMode::Usb | SdrMode::Lsb | SdrMode::Ft8 | SdrMode::Ft4 | SdrMode::Wefax | SdrMode::Rtty | SdrMode::Navtex | SdrMode::Psk31 => {
+                // Both sides of the carrier out to the far edge, and the
+                // widest skirt past it, so the channel filter never shapes
+                // the band before the demodulator's own filter does.
                 let (lo, hi) = self.filter_edges();
-                2.0 * lo.abs().max(hi.abs()) + 400.0
+                2.0 * (lo.abs().max(hi.abs()) + FilterShape::Soft.skirt_hz() as f32)
             }
             _ => self.bandwidth_hz(),
         }
@@ -777,8 +824,8 @@ impl SdrMode {
             SdrMode::Auto => ("AUTO", "voice+data", "Every decoder at once on the tuned channel: classifier, P25, DMR, and all packet/paging paths"),
             SdrMode::Pager => ("PAGER", "data", "POCSAG+FLEX bank walked across the 25 kHz paging channels around the tuned frequency"),
             SdrMode::Flex => ("FLEX", "data", "Dedicated Motorola FLEX demodulator with symbol eye and discriminator scope"),
-            SdrMode::Ft8 => ("FT8", "data", "FT8 on upper sideband: 100–3100 Hz above the dial, decoded at the end of every 15 s UTC slot"),
-            SdrMode::Ft4 => ("FT4", "data", "FT4 on upper sideband: 100–3100 Hz above the dial, decoded at the end of every 7.5 s UTC slot"),
+            SdrMode::Ft8 => ("FT8", "data", "FT8 on upper sideband: every signal in the filter's passband above the dial (100–3100 Hz unless widened, up to 5 kHz), decoded at the end of every 15 s UTC slot"),
+            SdrMode::Ft4 => ("FT4", "data", "FT4 on upper sideband: every signal in the filter's passband above the dial (100–3100 Hz unless widened, up to 5 kHz), decoded at the end of every 7.5 s UTC slot"),
             SdrMode::Wefax => ("WEFAX", "data", "HF radiofax on upper sideband: the 1900 Hz subcarrier decoded row by row into a picture, started by the station's tones"),
             SdrMode::Rtty => ("RTTY", "data", "Baudot RTTY on upper sideband: the tone pair found in 100–3100 Hz, 45.45 baud 170 Hz by default"),
             SdrMode::Navtex => ("NAVTEX", "data", "NAVTEX maritime safety messages (SITOR-B, 100 baud): tune 1 kHz below 518 or 490 kHz"),
@@ -1161,6 +1208,9 @@ pub struct SdrStatus {
     pub filter_high_hz: f64,
     #[serde(default)]
     pub filter_custom: bool,
+    /// The passband skirt's shape: "sharp", "normal" or "soft".
+    #[serde(default)]
+    pub filter_shape: FilterShape,
     /// The second receiver, when one is listening.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rx2: Option<crate::sub_rx::SubRxStatus>,
@@ -1714,6 +1764,7 @@ fn stamp_filter(s: &mut SdrStatus, mode: SdrMode) {
     s.filter_low_hz = f64::from(lo);
     s.filter_high_hz = f64::from(hi);
     s.filter_custom = filter_override(mode).is_some();
+    s.filter_shape = mode.filter_shape();
 }
 
 impl AvgMode {
@@ -2517,11 +2568,12 @@ impl Demod {
             SdrMode::Usb | SdrMode::Lsb | SdrMode::Ft8 | SdrMode::Ft4 | SdrMode::Wefax | SdrMode::Rtty | SdrMode::Navtex | SdrMode::Psk31 => Demod::Ssb {
                 demod: {
                     let (lo, hi) = mode.filter_edges();
-                    SsbDemod::with_passband(
+                    SsbDemod::with_shape(
                         fs_out,
                         if mode == SdrMode::Lsb { Sideband::Lower } else { Sideband::Upper },
                         lo.abs().min(hi.abs()),
                         lo.abs().max(hi.abs()),
+                        mode.filter_shape(),
                     )
                 },
                 audio: Vec::new(),
@@ -2531,6 +2583,10 @@ impl Demod {
                     // USDR_FT8_DUMP=<dir> keeps every slot's audio, for
                     // decoding a band again offline.
                     d.set_dump(std::env::var_os("USDR_FT8_DUMP").map(Into::into));
+                    // Search what the filter passes: a filter change
+                    // rebuilds the demodulator, and this with it.
+                    let (lo, hi) = mode.filter_edges();
+                    d.set_band(lo.abs().min(hi.abs()), lo.abs().max(hi.abs()));
                     Box::new(d)
                 }),
                 hf: crate::hfdata::HfDecoder::new(mode, fs_out).map(Box::new),
@@ -7367,8 +7423,42 @@ mod tests {
 
         SdrMode::Lsb.set_filter(Some((-2_000.0, -1_000.0)));
         assert_eq!(SdrMode::Lsb.passband_offset_hz(), -1_500.0);
-        assert_eq!(SdrMode::Lsb.chain_bandwidth_hz(), 4_400.0);
+        assert_eq!(SdrMode::Lsb.chain_bandwidth_hz(), 4_800.0);
         SdrMode::Lsb.set_filter(None);
+    }
+
+    #[test]
+    fn sideband_and_ft8_filters_reach_five_khz_and_take_a_shape() {
+        // Extended SSB and the hi-fi preset fit; past 5 kHz is clamped.
+        assert_eq!(SdrMode::Usb.normalize_filter(50.0, 4_500.0), Ok((50.0, 4_500.0)));
+        assert_eq!(SdrMode::Lsb.normalize_filter(-4_000.0, -50.0), Ok((-4_000.0, -50.0)));
+        assert_eq!(SdrMode::Usb.normalize_filter(50.0, 9_000.0), Ok((50.0, 5_000.0)));
+        // FT8 opens to the whole sub-band, above the dial only.
+        assert_eq!(SdrMode::Ft8.normalize_filter(100.0, 4_500.0), Ok((100.0, 4_500.0)));
+        assert!(SdrMode::Ft4.normalize_filter(-200.0, 3_000.0).is_err());
+        assert!(SdrMode::Ft8.normalize_filter(1_000.0, 1_300.0).is_err(), "narrower than 500 Hz");
+        // The other data modes keep the filter their decoder was built for.
+        assert!(SdrMode::Rtty.normalize_filter(100.0, 4_000.0).is_err());
+        // The chain carries the widest filter with room for its skirt.
+        SdrMode::Usb.set_filter(Some((50.0, 5_000.0)));
+        assert!(SdrMode::Usb.chain_bandwidth_hz() >= 2.0 * 5_000.0 + 2.0 * FilterShape::Soft.skirt_hz() as f32);
+        SdrMode::Usb.set_filter(None);
+
+        // Shapes: per mode, normal unless set, and only where the mode
+        // takes one.
+        assert_eq!(SdrMode::Lsb.filter_shape(), FilterShape::Normal);
+        SdrMode::Lsb.set_filter_shape(Some(FilterShape::Soft));
+        SdrMode::Rtty.set_filter_shape(Some(FilterShape::Sharp));
+        assert_eq!(SdrMode::Lsb.filter_shape(), FilterShape::Soft);
+        assert_eq!(SdrMode::Usb.filter_shape(), FilterShape::Normal);
+        assert_eq!(SdrMode::Rtty.filter_shape(), FilterShape::Normal);
+        let mut st = SdrStatus::default();
+        stamp_filter(&mut st, SdrMode::Lsb);
+        assert_eq!(st.filter_shape, FilterShape::Soft);
+        assert_eq!(serde_json::to_value(&st).unwrap()["filter_shape"], "soft");
+        SdrMode::Lsb.set_filter_shape(None);
+        SdrMode::Rtty.set_filter_shape(None);
+        assert_eq!(SdrMode::Lsb.filter_shape(), FilterShape::Normal);
     }
     use super::*;
 

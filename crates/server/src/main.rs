@@ -183,6 +183,9 @@ struct Settings {
     /// carrier, for the modes that have one to set.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     filters: std::collections::BTreeMap<sdr::SdrMode, (f32, f32)>,
+    /// The operator's filter shape per sideband mode, where not normal.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    filter_shapes: std::collections::BTreeMap<sdr::SdrMode, sdr::FilterShape>,
     /// Memory channels; `None` until a client first stores one, so each
     /// client can offer its own defaults until then.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -372,6 +375,9 @@ async fn main() -> Result<()> {
         if let Ok(f) = mode.normalize_filter(*lo, *hi) {
             mode.set_filter(Some(f));
         }
+    }
+    for (mode, shape) in &settings.filter_shapes {
+        mode.set_filter_shape(Some(*shape));
     }
     let cfg = sdr::SdrCfg {
         serial: settings.serial.clone(),
@@ -579,7 +585,7 @@ async fn yield_guard(
 /// What this server is and which API revision it speaks, so a client can say
 /// plainly when it needs a newer one rather than failing on a missing route.
 const API_REVISION: u32 = 2;
-const API_FEATURES: &[&str] = &["presence", "web-policy", "memories", "avg-status", "filter", "rx2", "stereo", "station", "digital", "fax"];
+const API_FEATURES: &[&str] = &["presence", "web-policy", "memories", "avg-status", "filter", "filter-shape", "rx2", "stereo", "station", "digital", "fax"];
 
 fn version_json() -> serde_json::Value {
     serde_json::json!({
@@ -600,9 +606,15 @@ struct SdrFilterReq {
     low_hz: Option<f32>,
     #[serde(default)]
     high_hz: Option<f32>,
-    /// Back to the mode's own filter.
+    /// Back to the mode's own edges. The shape is kept: it is set on its
+    /// own, and a reset that also reset it would undo a choice the operator
+    /// made separately.
     #[serde(default)]
     reset: bool,
+    /// The skirt's shape, "sharp", "normal" or "soft", for the sideband
+    /// modes that take one. Alone, it changes only the shape.
+    #[serde(default)]
+    shape: Option<String>,
     /// The mode whose filter this is; the current mode when absent (the
     /// second receiver sets its own mode's this way).
     #[serde(default)]
@@ -610,7 +622,8 @@ struct SdrFilterReq {
 }
 
 /// Set the current mode's filter: both edges for sideband (width and
-/// shift), a centered width for AM, NFM and WFM. Saved per mode.
+/// shift), a centered width for AM, NFM and WFM, and the skirt's shape for
+/// sideband voice and FT8/FT4. Saved per mode.
 async fn post_sdr_filter(
     State(st): State<Arc<AppState>>,
     Json(req): Json<SdrFilterReq>,
@@ -620,27 +633,54 @@ async fn post_sdr_filter(
         .as_ref()
         .ok_or_else(|| ApiError::BadRequest("the receiver is not running".into()))?;
     let mode = req.mode.unwrap_or_else(|| sdr.status.lock().expect("sdr status").mode);
-    let edges = if req.reset {
-        None
-    } else {
-        let (Some(lo), Some(hi)) = (req.low_hz, req.high_hz) else {
-            return Err(ApiError::BadRequest("give low_hz and high_hz, or reset".into()));
-        };
-        Some(mode.normalize_filter(lo, hi).map_err(ApiError::BadRequest)?)
+    let shape = match req.shape.as_deref() {
+        None => None,
+        Some(name) => {
+            let shape = sdr::FilterShape::parse(name).ok_or_else(|| ApiError::BadRequest(format!("no filter shape \"{name}\"; sharp, normal or soft")))?;
+            if !mode.filter_range().is_some_and(|r| r.shaped) {
+                return Err(ApiError::BadRequest(format!("{}'s filter has no shape to choose", mode.capabilities().label)));
+            }
+            Some(shape)
+        }
     };
-    mode.set_filter(edges);
+    // None: the edges stay as they are; Some(None): back to the mode's own.
+    let edges = if req.reset {
+        Some(None)
+    } else {
+        match (req.low_hz, req.high_hz) {
+            (Some(lo), Some(hi)) => Some(Some(mode.normalize_filter(lo, hi).map_err(ApiError::BadRequest)?)),
+            (None, None) if shape.is_some() => None,
+            _ => return Err(ApiError::BadRequest("give low_hz and high_hz, reset, or a shape".into())),
+        }
+    };
+    if let Some(e) = edges {
+        mode.set_filter(e);
+    }
+    if let Some(sh) = shape {
+        mode.set_filter_shape(Some(sh));
+    }
     sdr.filter_changed()?;
     drop(guard);
-    st.update_settings(|s| match edges {
-        Some(e) => {
-            s.filters.insert(mode, e);
+    st.update_settings(|s| {
+        match edges {
+            Some(Some(e)) => {
+                s.filters.insert(mode, e);
+            }
+            Some(None) => {
+                s.filters.remove(&mode);
+            }
+            None => {}
         }
-        None => {
-            s.filters.remove(&mode);
+        if let Some(sh) = shape {
+            if sh == sdr::FilterShape::Normal {
+                s.filter_shapes.remove(&mode);
+            } else {
+                s.filter_shapes.insert(mode, sh);
+            }
         }
     });
     let (lo, hi) = mode.filter_edges();
-    Ok(Json(serde_json::json!({ "ok": true, "low_hz": lo, "high_hz": hi, "custom": edges.is_some() })))
+    Ok(Json(serde_json::json!({ "ok": true, "low_hz": lo, "high_hz": hi, "custom": mode.filter_custom(), "shape": mode.filter_shape() })))
 }
 
 #[derive(Deserialize)]

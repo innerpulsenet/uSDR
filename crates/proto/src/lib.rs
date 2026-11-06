@@ -527,6 +527,9 @@ pub struct Status {
     pub filter_low_hz: f64,
     pub filter_high_hz: f64,
     pub filter_custom: bool,
+    /// The passband skirt's shape (API 2, `filter-shape`); normal from
+    /// older servers.
+    pub filter_shape: FilterShape,
     /// The second receiver, when one is listening (API 2, `rx2`).
     pub rx2: Option<SubRx>,
     /// RDS from the broadcast station on receiver A, once its PI is
@@ -661,6 +664,8 @@ pub struct SubRx {
     pub mode: Mode,
     pub bandwidth_hz: f64,
     pub passband_offset_hz: f64,
+    /// Its mode's filter shape (`filter-shape`).
+    pub filter_shape: FilterShape,
     /// Why it is silent, when it is.
     pub note: Option<String>,
 }
@@ -833,6 +838,61 @@ pub struct FilterRange {
     pub max_width_hz: f32,
     pub max_edge_hz: f32,
     pub symmetric: bool,
+    /// Whether the skirt's shape can be chosen (`filter-shape`).
+    pub shaped: bool,
+}
+
+/// How a sideband filter's skirt falls away outside its edges: sharp
+/// (elliptic, ~100 Hz to 70 dB, rings most), normal (elliptic, ~300 Hz to
+/// 60 dB) or soft (linear phase, ~400 Hz, barely rings). A name this
+/// client does not know reads as normal.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum FilterShape {
+    Sharp,
+    Soft,
+    /// Last, as serde's catch-all must be.
+    #[default]
+    #[serde(other)]
+    Normal,
+}
+
+impl FilterShape {
+    pub const ALL: [FilterShape; 3] = [FilterShape::Sharp, FilterShape::Normal, FilterShape::Soft];
+
+    pub fn wire(self) -> &'static str {
+        match self {
+            FilterShape::Sharp => "sharp",
+            FilterShape::Normal => "normal",
+            FilterShape::Soft => "soft",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            FilterShape::Sharp => "SHARP",
+            FilterShape::Normal => "NORMAL",
+            FilterShape::Soft => "SOFT",
+        }
+    }
+
+    /// What choosing it trades, for a tooltip.
+    pub fn describe(self) -> &'static str {
+        match self {
+            FilterShape::Sharp => "Sharp: the skirt falls 70 dB within about 100 Hz of each edge. Most selective; rings most on clicks and crashes",
+            FilterShape::Normal => "Normal: 60 dB down about 300 Hz past each edge. Keeps a neighbor out without a sharp filter's ring",
+            FilterShape::Soft => "Soft: linear phase, rolling off over about 400 Hz. Least ringing, most natural speech; least selective",
+        }
+    }
+
+    /// How far past each edge the skirt reaches the stopband, Hz.
+    pub fn skirt_hz(self) -> f32 {
+        match self {
+            FilterShape::Sharp => 100.0,
+            FilterShape::Normal => 300.0,
+            FilterShape::Soft => 400.0,
+        }
+    }
 }
 
 /// What the server says it is, from `GET /api/version` and the hello.
@@ -1067,6 +1127,21 @@ pub const CLIENT_HEADER: &str = "x-usdr-client";
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn filter_shapes_read_back_and_an_unknown_one_reads_as_normal() {
+        for f in FilterShape::ALL {
+            let v = serde_json::to_value(f).unwrap();
+            assert_eq!(v, f.wire());
+            assert_eq!(serde_json::from_value::<FilterShape>(v).unwrap(), f);
+        }
+        assert_eq!(serde_json::from_str::<FilterShape>("\"gaussian\"").unwrap(), FilterShape::Normal);
+        // An older server says nothing about it.
+        let st: Status = serde_json::from_str(r#"{"filter_low_hz":300,"filter_high_hz":2800}"#).unwrap();
+        assert_eq!(st.filter_shape, FilterShape::Normal);
+        let st: Status = serde_json::from_str(r#"{"filter_shape":"soft"}"#).unwrap();
+        assert_eq!(st.filter_shape, FilterShape::Soft);
+    }
 
     /// The layout `encode_fft_frame` writes, rebuilt by hand so the decoder
     /// is tested against the documented order rather than against itself.

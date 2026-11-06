@@ -24,9 +24,12 @@ pub use stream::SlotDecoder;
 /// The rate everything inside the decoder runs at.
 pub const RATE_HZ: f32 = 12_000.0;
 
-/// Audio searched for signals.
-const F_MIN_HZ: f32 = 100.0;
-const F_MAX_HZ: f32 = 3_000.0;
+/// Audio searched for signals unless the caller says otherwise
+/// ([`decode_slot_in`]), and the furthest a search may reach: 5 kHz is the
+/// widest sideband filter, under the 6 kHz Nyquist of the decoder's rate.
+pub const F_MIN_HZ: f32 = 100.0;
+pub const F_MAX_HZ: f32 = 3_000.0;
+pub const F_LIMIT_HZ: f32 = 5_000.0;
 /// Sync candidates tried per slot, and the weakest sync worth trying, in
 /// half-dB of contrast against the neighboring bins.
 const MAX_CANDIDATES: usize = 300;
@@ -114,6 +117,14 @@ type Found = ([u8; 10], demod::Candidate, usize, Option<(f32, f32)>);
 /// Calls heard in full are added to `hashes`, and hashed calls are looked
 /// up in it, including those heard later in the same slot.
 pub fn decode_slot(protocol: Protocol, audio: &[f32], hashes: &mut CallHashes) -> Vec<Decode> {
+    decode_slot_in(protocol, audio, hashes, F_MIN_HZ, F_MAX_HZ)
+}
+
+/// [`decode_slot`] searching `f_min..f_max` Hz of the audio for signals'
+/// lowest tones: the passband the receiver's filter lets through.
+pub fn decode_slot_in(protocol: Protocol, audio: &[f32], hashes: &mut CallHashes, f_min: f32, f_max: f32) -> Vec<Decode> {
+    let f_max = f_max.min(F_LIMIT_HZ);
+    let f_min = f_min.clamp(0.0, f_max - 100.0);
     // Brought to one level first. The waterfall's dB carries an absolute
     // floor, and audio taken ahead of an AGC can sit a hundred dB down,
     // where that floor buries the band's noise and every weak signal in it;
@@ -125,7 +136,7 @@ pub fn decode_slot(protocol: Protocol, audio: &[f32], hashes: &mut CallHashes) -
     }
     let level: Vec<f32> = audio.iter().map(|x| x * (0.1 / rms)).collect();
     let audio = &level[..];
-    let wf = demod::Waterfall::new(protocol, audio, RATE_HZ, F_MIN_HZ, F_MAX_HZ);
+    let wf = demod::Waterfall::new(protocol, audio, RATE_HZ, f_min, f_max);
     if wf.num_blocks < protocol.symbols() / 2 {
         return Vec::new();
     }

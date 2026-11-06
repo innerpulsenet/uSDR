@@ -162,6 +162,60 @@ fn jittery_stamps_cost_nothing_at_the_top_of_the_passband() {
     }
 }
 
+/// Stations above 3 kHz: a wide filter's search finds them through the
+/// streaming front end, and the default search leaves them alone.
+#[test]
+fn a_wide_band_search_finds_the_stations_above_3_khz() {
+    let rate = 48_000.0f32;
+    let p = Protocol::Ft8;
+    let slot0: u64 = 1_700_000_010_000;
+    let signals = [("CQ K1ABC FN42", 1_200.0), ("K1ABC W9XYZ -11", 3_420.0), ("CQ DX W9XYZ EN37", 4_330.0)];
+    let lead = 2.0f32;
+    let total = ((lead + 16.0) * rate) as usize;
+    let a = amplitude(-14.0, rate);
+    let mut noise = Noise(21);
+    let mut audio: Vec<f32> = (0..total).map(|_| noise.gauss()).collect();
+    for (text, f) in signals {
+        let payload = pack::pack(text, &mut CallHashes::default()).unwrap();
+        let wave = demod::gfsk(p, &demod::tones(p, &payload), f, rate);
+        let at = ((lead + 0.5) * rate) as usize;
+        for (x, w) in audio[at..].iter_mut().zip(wave) {
+            *x += a * w;
+        }
+    }
+    let run = |band: Option<(f32, f32)>| {
+        let mut dec = SlotDecoder::new(p, rate as f64);
+        if let Some((lo, hi)) = band {
+            dec.set_band(lo, hi);
+        }
+        let start_ms = slot0 as f64 - lead as f64 * 1000.0;
+        for (k, block) in audio.chunks(480).enumerate() {
+            let end = k * 480 + block.len() - 1;
+            dec.push(block, (start_ms + end as f64 / rate as f64 * 1000.0) as u64);
+        }
+        let mut got = Vec::new();
+        for _ in 0..200 {
+            got.extend(dec.take());
+            if !got.is_empty() && !dec.busy() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
+        got.into_iter().flat_map(|(_, d)| d).collect::<Vec<_>>()
+    };
+    let wide = run(Some((100.0, 4_500.0)));
+    eprintln!("wide: {:?}", wide.iter().map(|d| (d.text.clone(), d.freq_hz, d.snr_db)).collect::<Vec<_>>());
+    for (text, f) in signals {
+        let d = wide.iter().find(|d| d.text == text).unwrap_or_else(|| panic!("{text} not decoded in 100–4500 Hz"));
+        assert!((d.freq_hz - f).abs() <= 3.0, "{text}: {} Hz", d.freq_hz);
+        // The resampler holds the top of the band flat: SNR as sent.
+        assert!((d.snr_db + 14.0).abs() <= 2.0, "{text}: snr {}", d.snr_db);
+    }
+    let narrow = run(None);
+    assert!(narrow.iter().any(|d| d.text == "CQ K1ABC FN42"));
+    assert!(narrow.iter().all(|d| d.freq_hz < 3_100.0), "{:?}", narrow.iter().map(|d| d.freq_hz).collect::<Vec<_>>());
+}
+
 #[test]
 fn the_slot_decoder_cuts_utc_slots_from_a_48k_stream() {
     let rate = 48_000.0f32;
@@ -267,4 +321,3 @@ fn sensitivity() {
     let d = decode_slot(Protocol::Ft8, &audio, &mut CallHashes::default());
     eprintln!("busy band: {} of {} decoded in {:?}", d.len(), signals.len(), t.elapsed());
 }
-

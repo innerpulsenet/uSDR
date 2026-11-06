@@ -31,6 +31,7 @@ pub mod nxdn;
 pub mod p25;
 pub mod pilot;
 pub mod pager_parser;
+pub mod passband;
 pub mod passport;
 pub mod pager_bank;
 pub mod pocsag;

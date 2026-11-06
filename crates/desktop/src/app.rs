@@ -468,9 +468,9 @@ impl App {
             return;
         }
         let (blo, bhi) = self.modes.iter().find(|c| c.mode == mode).map(|c| (c.passband_offset_hz as f64 - c.bandwidth_hz as f64 / 2.0, c.passband_offset_hz as f64 + c.bandwidth_hz as f64 / 2.0)).unwrap_or((-6_250.0, 6_250.0));
-        let keep = self.status.rx2.as_ref().filter(|b| b.mode == mode).map(|b| (b.bandwidth_hz, b.passband_offset_hz));
-        let (bw, off) = keep.unwrap_or((bhi - blo, (blo + bhi) / 2.0));
-        self.status.rx2 = Some(proto::SubRx { freq_hz: hz, mode, bandwidth_hz: bw, passband_offset_hz: off, note: None });
+        let keep = self.status.rx2.as_ref().filter(|b| b.mode == mode).map(|b| (b.bandwidth_hz, b.passband_offset_hz, b.filter_shape));
+        let (bw, off, filter_shape) = keep.unwrap_or((bhi - blo, (blo + bhi) / 2.0, proto::FilterShape::Normal));
+        self.status.rx2 = Some(proto::SubRx { freq_hz: hz, mode, bandwidth_hz: bw, passband_offset_hz: off, filter_shape, note: None });
         self.post("/api/sdr/rx2", json!({ "freq_hz": hz, "mode": mode.wire() }));
     }
 
@@ -603,6 +603,21 @@ impl App {
 
     pub fn reset_filter(&mut self) {
         self.post("/api/sdr/filter", json!({ "reset": true }));
+    }
+
+    /// The sideband filter's skirt, for the receiver being driven.
+    pub fn set_filter_shape(&mut self, shape: proto::FilterShape) {
+        match self.status.rx2.as_mut().filter(|_| self.active_b) {
+            Some(b) => {
+                b.filter_shape = shape;
+                let mode = b.mode;
+                self.post("/api/sdr/filter", json!({ "shape": shape.wire(), "mode": mode.wire() }));
+            }
+            None => {
+                self.status.filter_shape = shape;
+                self.post("/api/sdr/filter", json!({ "shape": shape.wire() }));
+            }
+        }
     }
 
     pub fn set_zoom(&mut self, z: f64) {
@@ -2427,7 +2442,7 @@ mod tests {
     #[test]
     fn filter_presets_post_a_centered_width() {
         let mut h = harness();
-        let range = proto::FilterRange { min_width_hz: 2_500.0, max_width_hz: 25_000.0, max_edge_hz: 12_500.0, symmetric: true };
+        let range = proto::FilterRange { min_width_hz: 2_500.0, max_width_hz: 25_000.0, max_edge_hz: 12_500.0, symmetric: true, shaped: false };
         h.state_mut().app.modes = vec![ModeCaps { mode: Mode::Nfm, filter: Some(range), ..Default::default() }];
         h.run_steps(2);
         let role = egui::accesskit::Role::CheckBox;
@@ -2509,18 +2524,42 @@ mod tests {
     }
 
     #[test]
+    fn the_filter_shape_and_essb_presets_post_to_the_server() {
+        let mut h = harness_sized(1900.0);
+        h.state_mut().app.server = Some(proto::ServerInfo { name: "usdr".into(), version: "test".into(), api: 2, features: vec!["filter".into(), "filter-shape".into(), "rx2".into()] });
+        filtered(&mut h, Mode::Lsb, 2_500.0, (200.0, 5_000.0), (-3_900.0, -300.0), true);
+        // ESSB on LSB: the same 50–4000 Hz, below the carrier.
+        h.get_by_label("ESSB").click();
+        h.run_steps(2);
+        assert!(drain(&h).contains(&("/api/sdr/filter".into(), json!({ "low_hz": -4000.0, "high_hz": -50.0 }))));
+        // The shape is chosen from the header's key.
+        h.get_by_label("Filter shape NORMAL").click();
+        h.run_steps(2);
+        h.get_by_role_and_label(egui::accesskit::Role::RadioButton, "SOFT").click();
+        h.run_steps(2);
+        assert!(drain(&h).contains(&("/api/sdr/filter".into(), json!({ "shape": "soft" }))));
+        assert_eq!(h.state().app.status.filter_shape, proto::FilterShape::Soft);
+        // A server without shapes shows no key.
+        h.state_mut().app.server = Some(proto::ServerInfo { name: "usdr".into(), version: "test".into(), api: 2, features: vec!["filter".into()] });
+        h.run_steps(2);
+        assert_eq!(h.query_all_by_label("Filter shape SOFT").count(), 0);
+    }
+
+    #[test]
     fn the_receiver_bar_follows_receiver_b() {
         let mut h = harness();
-        let range = proto::FilterRange { min_width_hz: 2_000.0, max_width_hz: 20_000.0, max_edge_hz: 10_000.0, symmetric: true };
+        let range = proto::FilterRange { min_width_hz: 2_000.0, max_width_hz: 20_000.0, max_edge_hz: 10_000.0, symmetric: true, shaped: false };
         h.state_mut().app.modes = vec![ModeCaps { mode: Mode::Am, filter: Some(range), bandwidth_hz: 10_000.0, ..Default::default() }];
         h.state_mut().app.status.rx2 = Some(proto::SubRx { freq_hz: 146.1e6, mode: Mode::Nfm, bandwidth_hz: 25_000.0, ..Default::default() });
         h.state_mut().app.active_b = true;
         h.run_steps(3);
-        // B's modes are the listener's five; P25 is not among them.
+        // B's modes are the listener's five; P25 is not among them. Mode
+        // keys pick one, so they are radio buttons.
+        let radio = egui::accesskit::Role::RadioButton;
         let role = egui::accesskit::Role::CheckBox;
         // (The decode log keeps its P25 key inside the VOICE family.)
-        assert_eq!(h.query_all_by_role_and_label(role, "P25").count(), 0);
-        h.get_by_role_and_label(role, "AM").click();
+        assert_eq!(h.query_all_by_role_and_label(radio, "P25").count(), 0);
+        h.get_by_role_and_label(radio, "AM").click();
         h.run_steps(2);
         assert!(drain(&h).contains(&("/api/sdr/rx2".into(), json!({ "freq_hz": 146.1e6, "mode": "am" }))));
         // Its filter is set for its own mode.
@@ -2737,7 +2776,7 @@ mod tests {
         app.modes = vec![proto::ModeCaps {
             mode,
             bandwidth_hz: home,
-            filter: Some(proto::FilterRange { min_width_hz: min, max_width_hz: max, max_edge_hz: if matches!(mode, Mode::Usb | Mode::Lsb) { max } else { max / 2.0 }, symmetric: !matches!(mode, Mode::Usb | Mode::Lsb) }),
+            filter: Some(proto::FilterRange { min_width_hz: min, max_width_hz: max, max_edge_hz: if matches!(mode, Mode::Usb | Mode::Lsb) { max } else { max / 2.0 }, symmetric: !matches!(mode, Mode::Usb | Mode::Lsb), shaped: matches!(mode, Mode::Usb | Mode::Lsb | Mode::Ft8 | Mode::Ft4) }),
             ..Default::default()
         }];
         app.status.mode = mode;
@@ -2784,6 +2823,59 @@ mod tests {
         h.get_by_label("2.7k").click();
         h.run_steps(2);
         assert!(drain(&h).contains(&("/api/sdr/filter".into(), json!({ "low_hz": 300.0, "high_hz": 3000.0 }))));
+    }
+
+    /// Renders the receiver bar at the window widths it has fits for, in
+    /// a voice mode, an HF data mode and with B, as PNGs for a look by eye:
+    /// `USDR_QA_DIR=<dir> cargo test -p usdr-desktop qa_renders_the_receiver_bar -- --ignored`.
+    #[test]
+    #[ignore]
+    fn qa_renders_the_receiver_bar() {
+        let Some(dir) = std::env::var_os("USDR_QA_DIR").map(std::path::PathBuf::from) else { return };
+        let modes: Vec<proto::ModeCaps> = Mode::ALL
+            .iter()
+            .map(|&mode| {
+                let sideband = matches!(mode, Mode::Usb | Mode::Lsb | Mode::Ft8 | Mode::Ft4);
+                proto::ModeCaps {
+                    mode,
+                    bandwidth_hz: if sideband { if matches!(mode, Mode::Ft8 | Mode::Ft4) { 3_000.0 } else { 2_500.0 } } else { 12_500.0 },
+                    filter: matches!(mode, Mode::Usb | Mode::Lsb | Mode::Ft8 | Mode::Ft4 | Mode::Nfm | Mode::Am).then(|| proto::FilterRange { min_width_hz: 200.0, max_width_hz: if sideband { 5_000.0 } else { 25_000.0 }, max_edge_hz: if sideband { 5_000.0 } else { 12_500.0 }, symmetric: !sideband, shaped: sideband }),
+                    description: format!("{} description", mode.label()),
+                    ..Default::default()
+                }
+            })
+            .collect();
+        for w in [1400.0, 1600.0, 1760.0, 1900.0] {
+            for (name, mode, lo, hi, b) in [("usb", Mode::Usb, 50.0, 4_000.0, false), ("ft8", Mode::Ft8, 100.0, 3_100.0, false), ("nfm", Mode::Nfm, -6_250.0, 6_250.0, false), ("b", Mode::Usb, 300.0, 2_800.0, true)] {
+                let mut h = harness_wh(w, 400.0);
+                {
+                    let app = &mut h.state_mut().app;
+                    app.server = Some(proto::ServerInfo { name: "usdr".into(), version: "test".into(), api: 2, features: vec!["filter".into(), "filter-shape".into(), "rx2".into()] });
+                    app.modes = modes.clone();
+                    app.status.mode = mode;
+                    app.status.filter_low_hz = lo;
+                    app.status.filter_high_hz = hi;
+                    app.status.bandwidth_hz = hi - lo;
+                    app.status.passband_offset_hz = (lo + hi) / 2.0;
+                    app.status.filter_custom = true;
+                    app.status.filter_shape = proto::FilterShape::Soft;
+                    if b {
+                        app.status.rx2 = Some(proto::SubRx { freq_hz: 14.2e6, mode: Mode::Usb, bandwidth_hz: 2_500.0, passband_offset_hz: 1_550.0, ..Default::default() });
+                        app.active_b = true;
+                    }
+                }
+                h.run_steps(6);
+                let img = h.render().expect("render");
+                let crop = image::imageops::crop_imm(&img, 0, 0, img.width(), ((if w < 1500.0 { 230.0 } else { 150.0 }) * img.height() as f32 / 400.0) as u32).to_image();
+                crop.save(dir.join(format!("bar-{name}-{w}.png"))).expect("save");
+                if name == "usb" && w == 1900.0 {
+                    // The shape menu, open.
+                    h.get_by_label("Filter shape SOFT").click();
+                    h.run_steps(4);
+                    h.render().expect("render").save(dir.join("shape-menu.png")).expect("save");
+                }
+            }
+        }
     }
 
     /// Renders the HF windows and views to PNGs for a look by eye, with a

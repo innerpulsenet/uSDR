@@ -524,7 +524,7 @@ fn shots() {
                         if s.wfm { (Some(0.0), Some(59.0), Some(true), Some(3)) } else { (Some(7.0), Some(39.0), Some(false), Some(1)) };
                     st.avg = Some("off".into());
                     if s.with_b {
-                        st.rx2 = Some(proto::SubRx { freq_hz: 146.52e6, mode: Mode::Nfm, bandwidth_hz: 12_500.0, passband_offset_hz: 0.0, note: None });
+                        st.rx2 = Some(proto::SubRx { freq_hz: 146.52e6, mode: Mode::Nfm, bandwidth_hz: 12_500.0, passband_offset_hz: 0.0, filter_shape: Default::default(), note: None });
                     }
                     if s.wfm {
                         st.mode = Mode::Wfm;
@@ -565,7 +565,7 @@ fn shots() {
                             mode: Mode::Wfm,
                             label: "WFM".into(),
                             bandwidth_hz: 150e3,
-                            filter: Some(proto::FilterRange { min_width_hz: 50e3, max_width_hz: 250e3, max_edge_hz: 125e3, symmetric: true }),
+                            filter: Some(proto::FilterRange { min_width_hz: 50e3, max_width_hz: 250e3, max_edge_hz: 125e3, symmetric: true, shaped: false }),
                             ..Default::default()
                         }];
                         for k in 0..6 {

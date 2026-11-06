@@ -13,17 +13,19 @@
 //! Samples land in the slot their time falls in; a slot is cut once audio
 //! past its end has arrived.
 
-use super::{CallHashes, Decode, Protocol, RATE_HZ, decode_slot};
+use super::{CallHashes, Decode, F_LIMIT_HZ, F_MAX_HZ, F_MIN_HZ, Protocol, RATE_HZ, decode_slot_in};
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Mutex};
 
-/// Anti-alias filter length at the input rate.
-const TAPS: usize = 63;
-/// FT8 and FT4 live below 3 kHz; everything above 4 kHz is cut before the
-/// rate falls to 12 kHz.
-const CUTOFF_HZ: f64 = 4_000.0;
+/// Anti-alias filter length at the input rate: at 48 kHz, flat (within
+/// 0.1 dB) to about 4.5 kHz, so a search out to the widest 5 kHz filter
+/// is not tilted by the resampler.
+const TAPS: usize = 127;
+/// Half amplitude here; the rate then falls to 12 kHz, whose 6 kHz Nyquist
+/// folds only what the sideband filter has already removed.
+const CUTOFF_HZ: f64 = 5_200.0;
 /// A stamp further than this from the sample clock means audio went
 /// missing (or the clock stepped), not jitter.
 const RESYNC_MS: f64 = 250.0;
@@ -52,6 +54,13 @@ pub struct SlotDecoder {
     drift_ms: f64,
     /// The slot the last sample went to.
     current: Option<u64>,
+    /// The next sample's place: (slot start, index in it). Outputs are one
+    /// 12 kHz sample apart, so the index is counted, not recomputed from
+    /// the clock: truncating a float time put a sample on the clock's
+    /// fraction-of-a-sample edge into the neighbor's place, leaving a
+    /// duplicate and a hole, and the slot lost its top octave (a 4 kHz tone
+    /// came out 10 dB down).
+    cursor: Option<(u64, usize)>,
     slots: BTreeMap<u64, SlotBuf>,
     hashes: Arc<Mutex<CallHashes>>,
     busy: Arc<AtomicBool>,
@@ -60,6 +69,8 @@ pub struct SlotDecoder {
     resyncs: u64,
     /// Where each cut slot's 12 kHz audio is written (f32 LE), when set.
     dump: Option<std::path::PathBuf>,
+    /// The audio searched for signals, Hz.
+    band: (f32, f32),
     tx: Sender<(u64, Vec<Decode>)>,
     rx: Receiver<(u64, Vec<Decode>)>,
 }
@@ -90,12 +101,14 @@ impl SlotDecoder {
             anchor: None,
             drift_ms: 0.0,
             current: None,
+            cursor: None,
             slots: BTreeMap::new(),
             hashes: Arc::new(Mutex::new(CallHashes::default())),
             busy: Arc::new(AtomicBool::new(false)),
             dropped: Arc::new(AtomicU64::new(0)),
             resyncs: 0,
             dump: None,
+            band: (F_MIN_HZ, F_MAX_HZ),
             tx,
             rx,
         }
@@ -122,6 +135,17 @@ impl SlotDecoder {
         self.dump = dir;
     }
 
+    /// Search `low_hz..high_hz` of the audio: the receiver's passband.
+    /// Slots already cut keep the band they were cut with.
+    pub fn set_band(&mut self, low_hz: f32, high_hz: f32) {
+        let high = high_hz.clamp(300.0, F_LIMIT_HZ);
+        self.band = (low_hz.clamp(0.0, high - 200.0), high);
+    }
+
+    pub fn band(&self) -> (f32, f32) {
+        self.band
+    }
+
     /// Whether a slot is being decoded right now.
     pub fn busy(&self) -> bool {
         self.busy.load(Ordering::Relaxed)
@@ -137,6 +161,7 @@ impl SlotDecoder {
         self.anchor = None;
         self.drift_ms = 0.0;
         self.current = None;
+        self.cursor = None;
         self.slots.clear();
     }
 
@@ -191,7 +216,13 @@ impl SlotDecoder {
             self.next_pos += step;
             latest = t;
             let start = (t as u64 / slot_ms) * slot_ms;
-            let idx = ((t - start as f64) * RATE_HZ as f64 / 1000.0) as usize;
+            let exact = (t - start as f64) * RATE_HZ as f64 / 1000.0;
+            let idx = match self.cursor {
+                // Within a slot, while the count agrees with the clock.
+                Some((s, i)) if s == start && (i as f64 - exact).abs() < 0.75 => i,
+                _ => exact.round() as usize,
+            };
+            self.cursor = Some((start, idx + 1));
             if idx >= slot_len {
                 continue;
             }
@@ -244,11 +275,11 @@ impl SlotDecoder {
                 self.dropped.fetch_add(1, Ordering::Relaxed);
                 continue;
             }
-            let (protocol, hashes, busy, tx) = (self.protocol, self.hashes.clone(), self.busy.clone(), self.tx.clone());
+            let (protocol, hashes, busy, tx, (f_min, f_max)) = (self.protocol, self.hashes.clone(), self.busy.clone(), self.tx.clone(), self.band);
             let spawned = std::thread::Builder::new().name(format!("{}-decode", protocol.label().to_lowercase())).spawn(move || {
                 let decodes = {
                     let mut h = hashes.lock().unwrap_or_else(|e| e.into_inner());
-                    decode_slot(protocol, &buf.audio, &mut h)
+                    decode_slot_in(protocol, &buf.audio, &mut h, f_min, f_max)
                 };
                 let _ = tx.send((start, decodes));
                 busy.store(false, Ordering::Release);

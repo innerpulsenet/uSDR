@@ -19,11 +19,9 @@
 //! linear time-invariant band-pass: the oscillator's absolute phase, and any
 //! rounding walk in it, cancels between the two mixers. Nothing drifts.
 //!
-//! The low-pass is an 8th-order Chebyshev (0.5 dB ripple) built from four
-//! existing RBJ biquad sections. A linear-phase FIR with the same 600 Hz
-//! transition would need ~235 taps per rail; four biquads per rail are about
-//! a tenth of the arithmetic, and speech does not care about the non-linear
-//! phase at the band edges.
+//! The low-pass sets the passband's shape: sharp, normal or soft (see
+//! [`crate::passband`]). Its skirt is a fixed number of hertz at any width
+//! and lies outside the edges, so the edges set are the band heard flat.
 //!
 //! There is no carrier to level against, so the AGC tracks the speech
 //! envelope's peaks instead: fast attack, a hang that holds the gain across
@@ -33,7 +31,7 @@
 //! the gain it needs, while a noisy one is held where its hiss sits well
 //! under the speech.
 
-use crate::biquad::{Biquad, Cascade};
+use crate::passband::{FilterShape, Lowpass};
 use num_complex::Complex32;
 use scannerd_dsp::OnePole;
 use std::f64::consts::PI;
@@ -69,16 +67,10 @@ const FLOOR_SMOOTH_S: f32 = 0.020;
 const FLOOR_FALL_S: f32 = 0.050;
 const FLOOR_RISE_DB_PER_S: f32 = 3.0;
 
-/// Chebyshev order and ripple. Order 8 at 0.5 dB puts the nearest
-/// opposite-sideband frequency (−300 Hz, i.e. 1850 Hz after the shift, 1.48×
-/// the corner) ~50 dB down; order 6 manages only ~34 dB.
-const LP_ORDER: usize = 8;
-const LP_RIPPLE_DB: f64 = 0.5;
-
 /// Input DC blocker time constant: an 8 Hz corner, well clear of the 300 Hz
 /// edge. A receiver DC offset (or a carrier sitting at exactly 0 Hz) would
-/// otherwise reach the audio as DC, since 0 Hz is only ~32 dB down the
-/// Chebyshev skirt.
+/// otherwise reach the audio as DC whenever a low edge close to the carrier
+/// leaves 0 Hz on the skirt.
 const DC_TAU_S: f32 = 0.020;
 
 /// Renormalize the rotating phasor this often; f32 rounding grows its
@@ -115,9 +107,9 @@ pub struct SsbDemod {
     phasor: Complex32,
     step: Complex32,
     renorm_count: u32,
-    /// The ±1250 Hz low-pass, one per rail.
-    lp_re: Cascade,
-    lp_im: Cascade,
+    /// The low-pass at half the passband's width, on both rails.
+    lp: Lowpass,
+    shape: FilterShape,
     /// AGC: tracked envelope peak and the hang countdown, in samples.
     peak: f32,
     /// The tracked peak never falls below the ceiling, which lies between
@@ -152,6 +144,11 @@ impl SsbDemod {
     /// the sideband's side of the carrier). Moving both edges together is
     /// IF shift; moving them apart or together is the width.
     pub fn with_passband(fs: f64, sideband: Sideband, low_hz: f32, high_hz: f32) -> Self {
+        Self::with_shape(fs, sideband, low_hz, high_hz, FilterShape::Normal)
+    }
+
+    /// [`Self::with_passband`] with the skirt's shape chosen.
+    pub fn with_shape(fs: f64, sideband: Sideband, low_hz: f32, high_hz: f32, shape: FilterShape) -> Self {
         let low = low_hz.max(0.0) as f64;
         let high = (high_hz as f64).max(low + 100.0);
         let weaver_hz = (low + high) / 2.0;
@@ -168,8 +165,8 @@ impl SsbDemod {
             phasor: Complex32::new(1.0, 0.0),
             step: Self::rotation(fs, sideband, weaver_hz),
             renorm_count: 0,
-            lp_re: chebyshev_lowpass(half_band, fs, LP_ORDER, LP_RIPPLE_DB),
-            lp_im: chebyshev_lowpass(half_band, fs, LP_ORDER, LP_RIPPLE_DB),
+            lp: Lowpass::design(shape, half_band, fs),
+            shape,
             peak: peak_floor,
             peak_floor,
             peak_quiet,
@@ -205,6 +202,10 @@ impl SsbDemod {
 
     pub fn sideband(&self) -> Sideband {
         self.sideband
+    }
+
+    pub fn shape(&self) -> FilterShape {
+        self.shape
     }
 
     /// Switch sidebands without rebuilding the filters. The filter state is
@@ -253,8 +254,8 @@ impl SsbDemod {
         let dc = Complex32::new(self.dc_re.process(x.re), self.dc_im.process(x.im));
         let p = self.phasor;
         let d = (x - dc) * p;
-        let zr = self.lp_re.process(d.re);
-        let zi = self.lp_im.process(d.im);
+        let z = self.lp.process(d);
+        let (zr, zi) = (z.re, z.im);
         // Re{z · conj(p)}: the up-mix, keeping only the real part.
         let audio = zr * p.re + zi * p.im;
         let env = (zr * zr + zi * zi).sqrt();
@@ -317,8 +318,7 @@ impl SsbDemod {
         self.dc_im.reset();
         self.phasor = Complex32::new(1.0, 0.0);
         self.renorm_count = 0;
-        self.lp_re.reset();
-        self.lp_im.reset();
+        self.lp.reset();
         self.peak = self.peak_floor;
         self.env_avg = self.peak_floor / hiss_ratio();
         self.noise = self.env_avg;
@@ -341,36 +341,6 @@ impl SsbDemod {
 /// [`HISS_UNDER_DB`] as an amplitude ratio.
 fn hiss_ratio() -> f32 {
     10f32.powf(HISS_UNDER_DB / 20.0)
-}
-
-/// Chebyshev type I low-pass of even `order`, as a cascade of RBJ low-pass
-/// sections.
-///
-/// Each conjugate pole pair of the analog prototype is a second-order
-/// low-pass with its own natural frequency `w0` (relative to the corner) and
-/// Q. The RBJ section is the bilinear transform of exactly that shape,
-/// prewarped at its own frequency, so pre-warping the *corner* instead just
-/// means placing each section at `atan(w0 · tan(πfc/fs))`. Each section has
-/// unity DC gain, so the passband ripples between 0 and +0.5 dB.
-fn chebyshev_lowpass(fc: f64, fs: f64, order: usize, ripple_db: f64) -> Cascade {
-    let eps = (10f64.powf(ripple_db / 10.0) - 1.0).sqrt();
-    let v = (1.0 / eps).asinh() / order as f64;
-    let warp = (PI * fc / fs).tan();
-    // Lowest Q first, so the sharp resonant section sees an already
-    // band-limited signal.
-    let sections = (1..=order / 2)
-        .rev()
-        .map(|k| {
-            let theta = PI * (2 * k - 1) as f64 / (2 * order) as f64;
-            let sigma = v.sinh() * theta.sin();
-            let omega = v.cosh() * theta.cos();
-            let w0 = sigma.hypot(omega);
-            let q = w0 / (2.0 * sigma);
-            let f_section = (w0 * warp).atan() * fs / PI;
-            Biquad::lowpass(f_section as f32, fs as f32, q as f32)
-        })
-        .collect();
-    Cascade::new(sections)
 }
 
 #[cfg(test)]
@@ -768,6 +738,31 @@ mod tests {
         let amp = goertzel_amp(&out, 1000.0, fs);
         assert!((hz - 1000.0).abs() < 3.0, "after 90 s: {hz:.1} Hz");
         assert!((0.5..0.75).contains(&amp), "after 90 s: level {amp:.3}");
+    }
+
+    /// An ESSB passband, 50–4000 Hz, in every shape: the top of the voice
+    /// comes through at full level, and past the skirt nothing does.
+    #[test]
+    fn a_wide_essb_passband_keeps_its_top_and_cuts_beyond_the_skirt() {
+        for fs in RATES {
+            for shape in FilterShape::ALL {
+                for sb in [Sideband::Upper, Sideband::Lower] {
+                    let sign = if sb == Sideband::Upper { 1.0 } else { -1.0 };
+                    let level = |f: f64| {
+                        let mut d = SsbDemod::with_shape(fs, sb, 50.0, 4_000.0, shape);
+                        let mut out = Vec::new();
+                        d.process_raw(&tone(fs, sign * f, 0.5, 0.5), &mut out);
+                        db(rms(tail(&out, fs, 0.25)))
+                    };
+                    let mid = level(2_000.0);
+                    let top = level(3_950.0) - mid;
+                    let beyond = level(4_000.0 + shape.skirt_hz() * 1.3 + 50.0) - mid;
+                    eprintln!("fs {fs} {shape:?} {sb:?}: 3950 Hz at {top:.2} dB, past the skirt {beyond:.1} dB");
+                    assert!(top > -0.6, "fs {fs} {shape:?} {sb:?}: the top of the band at {top:.2} dB");
+                    assert!(beyond < -55.0, "fs {fs} {shape:?} {sb:?}: past the skirt only {beyond:.1} dB");
+                }
+            }
+        }
     }
 
     #[test]

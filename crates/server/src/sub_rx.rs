@@ -35,6 +35,8 @@ pub struct SubRxStatus {
     /// receiver reports its own.
     pub bandwidth_hz: f64,
     pub passband_offset_hz: f64,
+    /// Its mode's filter shape.
+    pub filter_shape: crate::sdr::FilterShape,
     /// Why it is silent, when it is.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
@@ -76,6 +78,7 @@ impl SubRx {
             mode: self.mode,
             bandwidth_hz: f64::from(hi - lo),
             passband_offset_hz: f64::from((lo + hi) / 2.0),
+            filter_shape: self.mode.filter_shape(),
             note: self.note.clone(),
         }
     }
@@ -94,7 +97,7 @@ impl SubRx {
             SdrMode::Usb | SdrMode::Lsb => {
                 let (lo, hi) = self.mode.filter_edges();
                 let side = if self.mode == SdrMode::Usb { Sideband::Upper } else { Sideband::Lower };
-                Demod::Ssb { ssb: SsbDemod::with_passband(fs, side, lo.abs().min(hi.abs()), lo.abs().max(hi.abs())) }
+                Demod::Ssb { ssb: SsbDemod::with_shape(fs, side, lo.abs().min(hi.abs()), lo.abs().max(hi.abs()), self.mode.filter_shape()) }
             }
             SdrMode::Wfm => Demod::Wfm {
                 fm: NbfmDemod::with_deviation(fs, WFM_DEVIATION_HZ),
