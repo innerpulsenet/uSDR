@@ -70,7 +70,6 @@ impl DrmAudio {
     }
 
     /// Mono PCM at `rate`, as the codec produced it.
-    #[allow(dead_code)]
     pub fn push(&mut self, pcm: &[f32], rate: f64) {
         self.set_rate(rate);
         self.hist.extend(pcm.iter().copied());

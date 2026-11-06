@@ -9,7 +9,8 @@
 use crate::sdr::{SdrEvent, SdrMode, SdrStatus};
 use scannerd_engine::DecodeEvent;
 use scannerd_engine::dsc::{DscDecoder, DscEvent};
-use scannerd_engine::drm::{DrmEvent, DrmReceiver};
+use scannerd_engine::aac::{AacDecoder, DrmAacConfig, DrmAudioMode};
+use scannerd_engine::drm::{AudioCodec, DrmEvent, DrmReceiver};
 use scannerd_engine::hfdl::{HfdlDecoder, HfdlEvent};
 use scannerd_engine::stanag::{StanagDecoder, StanagEvent};
 use scannerd_engine::pactor::{PactorDecoder, PactorEvent, PactorMode};
@@ -102,6 +103,14 @@ enum Kind {
         last_text: String,
         last_time: String,
         locked: bool,
+        /// The service whose audio plays (0 to 3), and the decoder for its
+        /// codec, rebuilt when the service's audio configuration changes.
+        service: u8,
+        aac: Option<(DrmAacConfig, Box<AacDecoder>)>,
+        frames_ok: u64,
+        frames_lost: u64,
+        /// Why there is no audio, when there is a service but none plays.
+        no_audio: Option<&'static str>,
     },
 }
 
@@ -278,6 +287,11 @@ impl HfDecoder {
                 last_text: String::new(),
                 last_time: String::new(),
                 locked: false,
+                service: c.drm_service,
+                aac: None,
+                frames_ok: 0,
+                frames_lost: 0,
+                no_audio: None,
             },
             SdrMode::Sitor => {
                 let mut d = SitorDecoder::new(fs);
@@ -305,7 +319,13 @@ impl HfDecoder {
                 **d = PskDecoder::new(fs as f32, c.psk_baud);
             }
             Kind::Sitor(d) => d.set_mode(sitor_mode(c)),
-            Kind::Navtex(_) | Kind::Dsc(_) | Kind::Pactor(_) | Kind::Wwv(_) | Kind::Hfdl(_) | Kind::Stanag(_) | Kind::Drm { .. } => {}
+            Kind::Navtex(_) | Kind::Dsc(_) | Kind::Pactor(_) | Kind::Wwv(_) | Kind::Hfdl(_) | Kind::Stanag(_) => {}
+            Kind::Drm { service, audio, .. } => {
+                if *service != c.drm_service {
+                    *service = c.drm_service;
+                    audio.reset();
+                }
+            }
         }
     }
 
@@ -336,13 +356,54 @@ impl HfDecoder {
                     send(hf_event("WWV", &e));
                 }
             }
-            Kind::Drm { rx, audio, last_service, last_text, last_time, locked } => {
+            Kind::Drm { rx, audio, last_service, last_text, last_time, locked, service, aac, frames_ok, frames_lost, no_audio } => {
                 rx.push_iq(iq);
                 for e in rx.take() {
                     match &e {
-                        // Every super frame: the audio waits for the codec,
-                        // the numbers are in the reading.
-                        DrmEvent::AudioSuperFrame { .. } | DrmEvent::Stats(_) => continue,
+                        // Every super frame: its codec frames to the speaker,
+                        // the numbers to the reading.
+                        DrmEvent::AudioSuperFrame { service: sid, codec, sample_rate_hz, sbr, stereo, ps, frames, .. } => {
+                            if *sid != *service {
+                                continue;
+                            }
+                            if *codec != AudioCodec::Aac {
+                                *no_audio = Some(match codec {
+                                    AudioCodec::XheAac => "xHE-AAC is not decoded",
+                                    _ => "this codec is not decoded",
+                                });
+                                continue;
+                            }
+                            let mode = if *ps { DrmAudioMode::ParametricStereo } else if *stereo { DrmAudioMode::Stereo } else { DrmAudioMode::Mono };
+                            let cfg = DrmAacConfig { core_sample_rate_hz: *sample_rate_hz, sbr: *sbr, mode };
+                            if aac.as_ref().is_none_or(|(c, _)| *c != cfg) {
+                                *aac = Some((cfg, Box::new(AacDecoder::new_drm(cfg))));
+                                audio.reset();
+                            }
+                            *no_audio = None;
+                            let Some((_, dec)) = aac.as_mut() else { continue };
+                            let channels = dec.output_channels().max(1) as usize;
+                            let rate = dec.output_rate_hz() as f64;
+                            for f in frames {
+                                let pcm = match f.ok.then(|| dec.decode_drm(&f.data, f.crc.unwrap_or(0))) {
+                                    Some(Ok(p)) => {
+                                        *frames_ok += 1;
+                                        p
+                                    }
+                                    // A frame that failed a check plays as the
+                                    // decoder's concealment, never as noise.
+                                    _ => {
+                                        *frames_lost += 1;
+                                        dec.conceal()
+                                    }
+                                };
+                                // One channel to the listener: a stereo
+                                // program's two, averaged.
+                                let mono: Vec<f32> = if channels == 1 { pcm } else { pcm.chunks(channels).map(|c| c.iter().sum::<f32>() / channels as f32).collect() };
+                                audio.push(&mono, rate);
+                            }
+                            continue;
+                        }
+                        DrmEvent::Stats(_) => continue,
                         DrmEvent::Sync { locked: l, .. } => {
                             if *l == *locked {
                                 continue;
@@ -656,7 +717,7 @@ impl HfDecoder {
                 }
                 DigitalReading { locked: s.locked, center_hz: s.center_hz.map(f32::round), snr_db: s.snr_db.map(f32::round), variant, facts, ..Default::default() }
             }
-            Kind::Drm { rx, audio, .. } => {
+            Kind::Drm { rx, audio, frames_ok, frames_lost, no_audio, .. } => {
                 let s = rx.status();
                 let variant = s.mode.map(|m| {
                     let mut v = format!("mode {m}");
@@ -683,8 +744,12 @@ impl HfDecoder {
                 if let Some(d) = s.doppler_hz {
                     facts.push(Fact::new("Doppler", format!("{d:.1} Hz")));
                 }
-                if s.msc_locked {
-                    facts.push(Fact::new("audio", format!("{:.1} s buffered", audio.buffered_s())));
+                if let Some(why) = no_audio {
+                    facts.push(Fact::toned("audio", *why, "warn"));
+                } else if s.msc_locked {
+                    let total = frames_ok + frames_lost;
+                    let lost = if total > 0 { 100.0 * *frames_lost as f64 / total as f64 } else { 0.0 };
+                    facts.push(Fact::toned("audio", format!("{:.1} s buffered · {lost:.1}% concealed", audio.buffered_s()), if lost > 5.0 { "warn" } else { "" }));
                 }
                 DigitalReading {
                     locked: s.fac_locked,

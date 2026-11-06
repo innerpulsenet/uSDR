@@ -1,5 +1,6 @@
 //! Demodulation, squelch, and call segmentation for scannerd.
 
+pub mod aac;
 pub mod adsb;
 pub mod afc;
 pub mod agc;
