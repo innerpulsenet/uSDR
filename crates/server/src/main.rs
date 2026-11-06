@@ -1181,9 +1181,15 @@ async fn post_sdr_spurs(
     ))
 }
 
+/// Any of: a new magnification; `hold` true to keep the zoomed window still
+/// while the receiver moves across it (span lock), false to let it follow
+/// the receiver again; and with `hold`, `center_hz` to put the held window
+/// there (a pan). A field left out is left as it is.
 #[derive(Deserialize)]
 struct SdrZoomReq {
-    zoom: f64,
+    zoom: Option<f64>,
+    hold: Option<bool>,
+    center_hz: Option<f64>,
 }
 
 #[derive(Deserialize)]
@@ -1237,16 +1243,30 @@ async fn post_sdr_zoom(
     State(st): State<Arc<AppState>>,
     Json(req): Json<SdrZoomReq>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    if !(1.0..=sdr::ZOOM_MAX).contains(&req.zoom) {
+    if req.zoom.is_some_and(|z| !(1.0..=sdr::ZOOM_MAX).contains(&z)) {
         return Err(ApiError::BadRequest(format!(
             "zoom must be between 1 and {}",
             sdr::ZOOM_MAX
         )));
     }
-    if let Some(sdr) = st.sdr.lock().expect("sdr").as_ref() {
-        sdr.set_zoom(req.zoom)?;
+    if req.center_hz.is_some_and(|hz| !hz.is_finite() || hz <= 0.0) {
+        return Err(ApiError::BadRequest("center_hz must be a frequency".into()));
     }
-    Ok(Json(serde_json::json!({ "ok": true, "zoom": req.zoom })))
+    if req.center_hz.is_some() && req.hold != Some(true) {
+        return Err(ApiError::BadRequest("center_hz needs hold: true".into()));
+    }
+    if req.zoom.is_none() && req.hold.is_none() {
+        return Err(ApiError::BadRequest("give zoom, hold or both".into()));
+    }
+    if let Some(sdr) = st.sdr.lock().expect("sdr").as_ref() {
+        if let Some(hold) = req.hold {
+            sdr.set_zoom_hold(hold, req.center_hz)?;
+        }
+        if let Some(z) = req.zoom {
+            sdr.set_zoom(z)?;
+        }
+    }
+    Ok(Json(serde_json::json!({ "ok": true, "zoom": req.zoom, "hold": req.hold })))
 }
 
 #[derive(Deserialize)]

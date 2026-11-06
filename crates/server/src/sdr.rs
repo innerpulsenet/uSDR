@@ -233,17 +233,18 @@ impl ShownWindow {
     /// The FFT covers the sampled span around the *hardware* center. With
     /// the LO parked off-center that is not the window being shown, so the
     /// shown part is the bins either side of the requested frequency that
-    /// stay inside the tuner's passband. Zoomed in, the window is on what is
-    /// being received, not on the middle of the span: the operator is
-    /// looking at a signal, not at a coordinate.
-    fn new(rate_hz: f64, lo_on: bool, mode: SdrMode, zoom: f64, tuned_freq: f64, inspect_hz: f64) -> Self {
+    /// stay inside the tuner's passband. Zoomed in, the window is on
+    /// `view_hz`: what is being received, not the middle of the span (the
+    /// operator is looking at a signal, not at a coordinate), or with span
+    /// lock wherever the window is being held.
+    fn new(rate_hz: f64, lo_on: bool, mode: SdrMode, zoom: f64, tuned_freq: f64, view_hz: f64) -> Self {
         let lo_off = lo_offset_for(rate_hz, lo_on, mode);
         let full_rate = display_rate_for(rate_hz, lo_on, mode);
         let shown_rate = full_rate / zoom;
-        let want_centre = if zoom > 1.0 { inspect_hz } else { tuned_freq };
+        let want_center = if zoom > 1.0 { view_hz } else { tuned_freq };
         // Keep the window inside the part of the span that is usable.
         let limit = (full_rate / 2.0 - shown_rate / 2.0).max(0.0);
-        let centre_off = (want_centre - tuned_freq).clamp(-limit, limit);
+        let centre_off = (want_center - tuned_freq).clamp(-limit, limit);
         Self { lo_off, full_rate, shown_rate, centre_off, shown_centre: tuned_freq + centre_off }
     }
 
@@ -251,6 +252,48 @@ impl ShownWindow {
     /// zoom path mixes down to DC.
     fn mix_offset_hz(&self) -> f64 {
         self.centre_off - self.lo_off
+    }
+
+    /// Whether a channel `bandwidth_hz` wide at `hz` sits inside the window
+    /// (at least half of the window's own width when the channel is wider).
+    fn holds(&self, hz: f64, bandwidth_hz: f64) -> bool {
+        let margin = (bandwidth_hz / 2.0).min(self.shown_rate / 4.0);
+        (hz - self.shown_centre).abs() <= self.shown_rate / 2.0 - margin
+    }
+}
+
+/// Where the zoomed window goes for this block. Following, it is on the
+/// receiver. Held (span lock), it stays where it is until a retune puts the
+/// receiver outside it, and then it moves onto the receiver; a window panned
+/// away from a receiver that has not moved stays panned.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct ZoomView {
+    hold: bool,
+    /// The held window's center, absolute.
+    center_hz: f64,
+    /// The receive frequency the hold last saw, so a retune is told from a
+    /// receiver that has not moved.
+    seen_inspect_hz: f64,
+}
+
+impl ZoomView {
+    fn new(inspect_hz: f64) -> Self {
+        Self { hold: false, center_hz: inspect_hz, seen_inspect_hz: inspect_hz }
+    }
+
+    fn window(&mut self, rate_hz: f64, lo_on: bool, mode: SdrMode, zoom: f64, tuned_freq: f64, inspect_hz: f64) -> ShownWindow {
+        if !self.hold || zoom <= 1.0 {
+            self.seen_inspect_hz = inspect_hz;
+            return ShownWindow::new(rate_hz, lo_on, mode, zoom, tuned_freq, inspect_hz);
+        }
+        let held = ShownWindow::new(rate_hz, lo_on, mode, zoom, tuned_freq, self.center_hz);
+        let retuned = (inspect_hz - self.seen_inspect_hz).abs() >= 1.0;
+        self.seen_inspect_hz = inspect_hz;
+        if retuned && !held.holds(inspect_hz, f64::from(mode.bandwidth_hz())) {
+            self.center_hz = inspect_hz;
+            return ShownWindow::new(rate_hz, lo_on, mode, zoom, tuned_freq, inspect_hz);
+        }
+        held
     }
 }
 
@@ -1071,6 +1114,11 @@ pub struct SdrStatus {
     /// Display magnification. 1.0 shows the whole usable span.
     #[serde(default)]
     pub zoom: f64,
+    /// Zoomed in, the window holds still and the receiver moves across it
+    /// (span lock), instead of the window following the receiver. A retune
+    /// that leaves the window moves the window onto it.
+    #[serde(default)]
+    pub zoom_hold: bool,
     /// Width of the channel the inspector is listening through, so the display
     /// can draw the passband it is actually using.
     #[serde(default)]
@@ -1625,6 +1673,9 @@ enum SdrCmd {
     Ppm(f64),
     Processing(Processing),
     Zoom(f64),
+    /// Hold the zoomed window still (at `center_hz`, or where it is now) or
+    /// let it follow the receiver again.
+    ZoomHold { hold: bool, center_hz: Option<f64> },
     /// About how many bins the browser's spectrum is wide at 1x zoom, so the
     /// FFT resolves what the screen can show and no more.
     DisplayBins(usize),
@@ -1744,6 +1795,12 @@ impl SdrRuntime {
         self.cmd_tx
             .send(SdrCmd::Zoom(zoom))
             .map_err(|e| anyhow::anyhow!("send zoom: {e}"))
+    }
+
+    pub fn set_zoom_hold(&self, hold: bool, center_hz: Option<f64>) -> Result<()> {
+        self.cmd_tx
+            .send(SdrCmd::ZoomHold { hold, center_hz })
+            .map_err(|e| anyhow::anyhow!("send zoom hold: {e}"))
     }
 
     /// Display averaging mode (weak-signal spectrum aid).
@@ -3719,6 +3776,10 @@ fn run_sdr(
     let mut current_gain = cfg.gain_db;
     let mut current_mode = cfg.mode;
     let mut current_zoom = 1.0f64;
+    let mut zoom_view = ZoomView::new(cfg.freq_hz);
+    // The center of the window the last block showed, which a hold that
+    // names no center keeps.
+    let mut shown_center_hz = cfg.freq_hz;
     // Bins at 1x zoom. The browser asks for about one bin per device pixel
     // of its spectrum (see SdrCmd::DisplayBins); 1024 until it does.
     let mut display_bins = ZOOM_TARGET_BINS;
@@ -4377,6 +4438,9 @@ fn run_sdr(
                     let z = z.clamp(1.0, ZOOM_MAX);
                     if (z - current_zoom).abs() > 0.001 {
                         current_zoom = z;
+                        // A zoom centers on the receiver, held or not; a
+                        // held window then stays there.
+                        zoom_view.center_hz = inspect_hz;
                         // The zoom path is (re)built on the next block from
                         // the new window; the full-span FFT does not change.
                         let mut s = status.lock().unwrap();
@@ -4388,6 +4452,16 @@ fn run_sdr(
                         s.max_freq_hz = inspect_hz + shown / 2.0;
                         let _ = events.send(SdrEvent::Status(s.clone()));
                     }
+                }
+                SdrCmd::ZoomHold { hold, center_hz } => {
+                    zoom_view.hold = hold;
+                    zoom_view.seen_inspect_hz = inspect_hz;
+                    if hold {
+                        zoom_view.center_hz = center_hz.unwrap_or(shown_center_hz);
+                    }
+                    let mut s = status.lock().unwrap();
+                    s.zoom_hold = hold;
+                    let _ = events.send(SdrEvent::Status(s.clone()));
                 }
                 SdrCmd::Rx2(want) => {
                     sub_rx = want.map(|(hz, m)| crate::sub_rx::SubRx::new(hz, m));
@@ -5087,7 +5161,8 @@ fn run_sdr(
         // The window this block's frame will show. Decided here, before the
         // samples are mixed, so the zoom path and the frame that reads it
         // agree on where the window is.
-        let window = ShownWindow::new(current_rate, lo_offset, current_mode, current_zoom, tuned_freq, inspect_hz);
+        let window = zoom_view.window(current_rate, lo_offset, current_mode, current_zoom, tuned_freq, inspect_hz);
+        shown_center_hz = window.shown_centre;
         if current_zoom > 1.0 {
             let plan = zoom_plan(current_rate, window.shown_rate, display_bins);
             match zoom.as_mut() {
@@ -7543,6 +7618,36 @@ mod tests {
         assert_eq!(z.plan, plan);
         let moved = zoom_take(fs, zoom, bins, 1.0e6 + 50.0 * bin_hz, &[(1.0e6 + 100.0 * bin_hz, 0.5)], 0.03);
         assert_eq!(peak(&moved.pwr), n / 2 + 50);
+    }
+
+    /// Span lock, zoomed in: a retune inside the window leaves the window
+    /// where it is, one outside it moves the window onto the receiver, and
+    /// a pan stays put while the receiver does not move. Unheld, the window
+    /// is always on the receiver.
+    #[test]
+    fn a_held_zoom_window_stays_until_the_receiver_leaves_it() {
+        let (fs, tuned, zoom, mode) = (8.0e6, 100.0e6, 16.0, SdrMode::Nfm);
+        let mut v = ZoomView::new(tuned);
+        let at = |v: &mut ZoomView, rx: f64| v.window(fs, false, mode, zoom, tuned, rx).shown_centre;
+        // Following: the window is on the receiver.
+        assert_eq!(at(&mut v, 100.1e6), 100.1e6);
+        v.hold = true;
+        v.center_hz = 100.1e6;
+        let shown = ShownWindow::new(fs, false, mode, zoom, tuned, tuned).shown_rate;
+        // Retunes across the window: it holds still.
+        for rx in [100.12e6, 100.08e6, 100.1e6 + shown / 2.0 - 20e3] {
+            assert_eq!(at(&mut v, rx), 100.1e6, "retune to {rx}");
+        }
+        // Past its edge: the window moves onto the receiver, and holds there.
+        assert_eq!(at(&mut v, 100.6e6), 100.6e6);
+        assert_eq!(at(&mut v, 100.62e6), 100.6e6);
+        // Panned off the receiver, with the receiver still: stays panned.
+        v.center_hz = 101.5e6;
+        assert_eq!(at(&mut v, 100.62e6), 101.5e6);
+        assert_eq!(at(&mut v, 100.62e6), 101.5e6);
+        // Released: back on the receiver.
+        v.hold = false;
+        assert_eq!(at(&mut v, 100.62e6), 100.62e6);
     }
 
     /// The capability table the `/api/sdr/modes` endpoint serves must cover

@@ -509,6 +509,9 @@ pub struct Status {
     /// servers.
     pub processing: Option<Processing>,
     pub zoom: f64,
+    /// Zoomed in, the window holds still while the receiver moves across it
+    /// (span lock) rather than following it; absent from older servers.
+    pub zoom_hold: bool,
     pub bandwidth_hz: f64,
     pub passband_offset_hz: f64,
     pub spurs_hz: Vec<f64>,

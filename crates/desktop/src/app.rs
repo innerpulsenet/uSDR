@@ -202,6 +202,9 @@ pub struct App {
     pub clip_until: f64,
     pub spur: Option<SpurCheck>,
     display_bins_sent: usize,
+    /// The span lock last pushed to the server as its zoom hold; `None`
+    /// until it has been on this connection.
+    hold_sent: Option<bool>,
     display_bins_due: Option<(usize, f64)>,
     // Rates for the status bar.
     rate_t: f64,
@@ -337,6 +340,7 @@ impl App {
             clip_until: 0.0,
             spur: None,
             display_bins_sent: 0,
+            hold_sent: None,
             display_bins_due: None,
             rate_t: 0.0,
             rate_frames: 0,
@@ -381,6 +385,7 @@ impl App {
         self.frame = None;
         self.pan = Panafall::default();
         self.display_bins_sent = 0;
+        self.hold_sent = None;
     }
 
     pub fn disconnect(&mut self) {
@@ -503,7 +508,8 @@ impl App {
         } else {
             (1e6, 2.2e9)
         };
-        // Zoomed in, the window already follows the receiver; the span
+        // Zoomed in, the server places the window (on the receiver, or with
+        // span lock held still until the receiver leaves it); the span
         // center is the tuner's, so plan against the full span.
         let (center, span) = if self.status.zoom > 1.01 {
             (self.status.freq_hz, self.status.rate_hz.max(1.0))
@@ -530,6 +536,16 @@ impl App {
 
     pub fn center_span(&mut self, hz: f64) {
         self.post("/api/sdr/tune", json!({ "freq_hz": hz }));
+    }
+
+    /// Put `hz` in the middle of the display: zoomed in with the window held
+    /// (span lock), the window moves there; otherwise the span does.
+    pub fn center_view(&mut self, hz: f64) {
+        if self.status.zoom > 1.01 && self.status.zoom_hold {
+            self.pan_zoom(hz);
+        } else {
+            self.center_span(hz);
+        }
     }
 
     /// The mode is `to` now, by the operator or by another client: a step
@@ -595,6 +611,28 @@ impl App {
         self.post("/api/sdr/zoom", json!({ "zoom": z }));
     }
 
+    /// Zoomed in, the window is the server's to place: it follows the
+    /// receiver, or with span lock holds still while the receiver moves
+    /// across it. The lock is this app's, so it is pushed when it changes
+    /// and on each connection (a restarted server comes back following);
+    /// another client's choice in between is left alone.
+    fn sync_zoom_hold(&mut self) {
+        let lock = self.prefs.span_lock;
+        if !self.have_status || !matches!(self.conn, Conn::Live) || self.hold_sent == Some(lock) {
+            return;
+        }
+        if self.status.zoom_hold != lock {
+            self.post("/api/sdr/zoom", json!({ "hold": lock }));
+        }
+        self.hold_sent = Some(lock);
+    }
+
+    /// Zoomed in with span lock, move the held window to `hz`; the receiver
+    /// stays where it is.
+    pub fn pan_zoom(&mut self, hz: f64) {
+        self.post("/api/sdr/zoom", json!({ "hold": true, "center_hz": hz }));
+    }
+
     pub fn memories(&self) -> Vec<Memory> {
         self.memories.clone().unwrap_or_else(crate::prefs::default_memories)
     }
@@ -649,6 +687,7 @@ impl App {
                     }
                 }
                 self.display_bins_sent = 0;
+                self.hold_sent = None;
                 if !self.prefs.hinted_shortcuts {
                     self.prefs.hinted_shortcuts = true;
                     self.prefs.save();
@@ -1666,7 +1705,7 @@ impl App {
         for a in acts {
             match a {
                 Act::Tune { hz, lock } => self.tune(hz, lock),
-                Act::Center(hz) => self.center_span(hz),
+                Act::Center(hz) => self.center_view(hz),
                 Act::Zoom(z) => self.set_zoom(z),
                 Act::StoreMemory(hz) => {
                     let mut list = self.memories();
@@ -1826,6 +1865,7 @@ impl App {
                 l.get("/api/sdr/calls", Get::Calls);
             }
         }
+        self.sync_zoom_hold();
         self.shortcuts(ctx);
         self.dropped(ctx);
         while let Ok(p) = self.picked.1.try_recv() {
@@ -2409,6 +2449,32 @@ mod tests {
         h.state_mut().app.tune(150e6, false);
         let posts = drain(&h);
         assert!(posts.contains(&("/api/sdr/tune".into(), json!({ "freq_hz": 150e6 }))), "{posts:?}");
+    }
+
+    #[test]
+    fn span_lock_holds_the_zoomed_window_on_the_server() {
+        let mut h = harness();
+        h.run_steps(2);
+        drain(&h);
+        // Off and the server following: nothing to say.
+        h.run_steps(2);
+        assert!(!drain(&h).iter().any(|(p, _)| p == "/api/sdr/zoom"));
+        // On: the hold is pushed once, not every frame.
+        h.state_mut().app.prefs.span_lock = true;
+        h.run_steps(3);
+        let holds: Vec<_> = drain(&h).into_iter().filter(|(p, _)| p == "/api/sdr/zoom").collect();
+        assert_eq!(holds, vec![("/api/sdr/zoom".into(), json!({ "hold": true }))]);
+        // Held and zoomed, "center here" pans the window, not the tuner.
+        h.state_mut().app.status.zoom = 16.0;
+        h.state_mut().app.status.zoom_hold = true;
+        h.state_mut().app.center_view(146.6e6);
+        let posts = drain(&h);
+        assert!(posts.contains(&("/api/sdr/zoom".into(), json!({ "hold": true, "center_hz": 146.6e6 }))), "{posts:?}");
+        assert!(!posts.iter().any(|(p, _)| p == "/api/sdr/tune"), "{posts:?}");
+        // Off again: the window follows the receiver once more.
+        h.state_mut().app.prefs.span_lock = false;
+        h.run_steps(2);
+        assert!(drain(&h).contains(&("/api/sdr/zoom".into(), json!({ "hold": false }))));
     }
 
     #[test]

@@ -2134,8 +2134,10 @@ impl Panafall {
                 self.sql_drag = false;
             }
         } else if !self.split_drag && self.db_drag.is_none() {
+            let follows = status.zoom > 1.01 && !status.zoom_hold;
             // Drag the display to move the span (or, zoomed in, the receiver
-            // the zoomed window follows).
+            // the zoomed window follows; with span lock the window holds
+            // still, so the drag moves the window and the receiver stays).
             if resp.drag_started() {
                 // From where the button went down, not where egui decided a
                 // drag had begun a few pixels later.
@@ -2143,7 +2145,7 @@ impl Panafall {
                     .input(|i| i.pointer.press_origin())
                     .or(resp.interact_pointer_pos())
                     .map_or(0.0, |p| p.x);
-                self.drag_origin = Some((if status.zoom > 1.01 { inspect } else { self.center_hz }, x));
+                self.drag_origin = Some((if follows { inspect } else { self.center_hz }, x));
             }
             if let (Some((origin, x0)), Some(p)) = (self.drag_origin, resp.interact_pointer_pos())
                 && resp.dragged()
@@ -2158,7 +2160,7 @@ impl Panafall {
                 let d_hz = -(self.drag_offset_px / pan.width().max(1.0)) as f64 * self.span_hz;
                 self.drag_offset_px = 0.0;
                 if d_hz.abs() > 1.0 {
-                    if status.zoom > 1.01 {
+                    if follows {
                         acts.push(Act::Tune { hz: crate::tuning::snap(origin + d_hz, step_hz), lock: false });
                     } else {
                         acts.push(Act::Center(origin + d_hz));
@@ -2932,6 +2934,35 @@ mod tests {
         h.run_steps(2);
         let Some(Act::Center(c)) = h.state().acts.last().cloned() else { panic!("{:?}", h.state().acts) };
         assert!((c - (146e6 - 0.2e6)).abs() < 5_000.0, "center {c}");
+    }
+
+    /// Zoomed with the window held (span lock), a drag moves the window and
+    /// leaves the receiver; following, it moves the receiver.
+    #[test]
+    fn a_drag_on_a_held_zoom_pans_the_window() {
+        for (hold, want_center) in [(true, true), (false, false)] {
+            let mut h = harness();
+            h.state_mut().status.zoom = 16.0;
+            h.state_mut().status.zoom_hold = hold;
+            h.run_steps(1);
+            let r = pan_rect(&h);
+            let a = r.center();
+            h.event(Event::PointerMoved(a));
+            h.drag_at(a);
+            h.run_steps(1);
+            for i in 1..=10 {
+                h.event(Event::PointerMoved(a + egui::vec2(r.width() * 0.01 * i as f32, 0.0)));
+                h.run_steps(1);
+            }
+            h.drop_at(a + egui::vec2(r.width() * 0.1, 0.0));
+            h.run_steps(2);
+            let last = h.state().acts.last().cloned();
+            match last {
+                Some(Act::Center(c)) if want_center => assert!((c - (146e6 - 0.2e6)).abs() < 5_000.0, "center {c}"),
+                Some(Act::Tune { hz, .. }) if !want_center => assert!((hz - (146.2e6 - 0.2e6)).abs() < 7_000.0, "tune {hz}"),
+                other => panic!("hold {hold}: {other:?}"),
+            }
+        }
     }
 
     #[test]
