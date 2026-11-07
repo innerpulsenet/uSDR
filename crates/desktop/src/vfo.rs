@@ -358,7 +358,6 @@ const STRIP_PX: f32 = 14.0;
 /// wheel over it; Shift for a tenth of the step. Returns how far to tune.
 pub fn tune_strip(ui: &mut Ui, hz: f64, step: f64, width: f32, height: f32) -> Option<f64> {
     let (rect, resp) = ui.allocate_exact_size(vec2(width, height), Sense::click_and_drag());
-    let tall = height >= 36.0;
     let id = resp.id.with("offset");
     let mut offset: f32 = ui.data(|d| d.get_temp(id).unwrap_or(0.0));
     let fine = ui.input(|i| i.modifiers.shift);
@@ -384,57 +383,95 @@ pub fn tune_strip(ui: &mut Ui, hz: f64, step: f64, width: f32, height: f32) -> O
     }
     ui.data_mut(|d| d.insert_temp(id, offset));
 
-    let p = ui.painter_at(rect);
-    theme::well(&p, rect, None);
-    // The scale moves under the hairline as the dial turns.
-    let frac = ((hz / st) - (hz / st).round()) as f32 * STRIP_PX;
-    let c = rect.center().x - frac + offset;
-    let n = (rect.width() / STRIP_PX / 2.0) as i64 + 2;
-    let base = (hz / st).round() as i64;
-    let decimals = if st >= 100_000.0 { 1 } else if st >= 10_000.0 { 2 } else if st >= 1_000.0 { 3 } else { 4 };
-    for k in -n..=n {
-        let x = c + k as f32 * STRIP_PX;
-        if x < rect.left() + 2.0 || x > rect.right() - 2.0 {
-            continue;
-        }
-        let idx = base + k;
-        let k = if tall { 1.0 } else { 0.7 };
-        let (len, col) = if idx % 10 == 0 {
-            (14.0 * k, theme::text_2())
-        } else if idx % 5 == 0 {
-            (10.0 * k, theme::text_3())
-        } else {
-            (5.0 * k, theme::surface_4())
-        };
-        p.line_segment([pos2(x, rect.top() + 3.0), pos2(x, rect.top() + 3.0 + len)], Stroke::new(1.0, col));
-        let clear = (x - rect.center().x).abs() > 30.0 && x > rect.left() + 26.0 && x < rect.right() - 26.0;
-        if idx % 5 == 0 && clear {
-            p.text(
-                pos2(x, rect.bottom() - if tall { 4.0 } else { 1.0 }),
-                Align2::CENTER_BOTTOM,
-                format!("{:.*}", decimals, idx as f64 * st / 1e6),
-                theme::mono(if tall { 9.5 } else { 9.0 }),
-                theme::text_3(),
-            );
-        }
-    }
-    // The hairline: where the receiver is.
-    p.line_segment([pos2(rect.center().x, rect.top() + 1.0), pos2(rect.center().x, rect.bottom() - 1.0)], Stroke::new(1.5, theme::AMBER));
-    // Fade the ends into the well.
-    for (x0, x1, a0, a1) in [(rect.left(), rect.left() + 28.0, 1.0, 0.0), (rect.right() - 28.0, rect.right(), 0.0, 1.0)] {
-        let mut m = egui::Mesh::default();
-        m.colored_vertex(pos2(x0, rect.top()), theme::alpha(theme::ink(), a0));
-        m.colored_vertex(pos2(x1, rect.top()), theme::alpha(theme::ink(), a1));
-        m.colored_vertex(pos2(x0, rect.bottom()), theme::alpha(theme::ink(), a0));
-        m.colored_vertex(pos2(x1, rect.bottom()), theme::alpha(theme::ink(), a1));
-        m.add_triangle(0, 1, 2);
-        m.add_triangle(2, 1, 3);
-        p.add(egui::Shape::mesh(m));
-    }
+    let hovered = resp.hovered() || resp.dragged();
+    paint_wheel(ui, rect, hz, st, offset, hovered);
     resp.on_hover_text("Drag like a dial, or wheel · Shift for a tenth of the step");
     (out != 0.0).then_some(out)
 }
 
+
+/// A knurled thumbwheel seen edge on, set in a slot: a cylinder lit from
+/// above, one ridge per tuning step, turning as the frequency moves, from
+/// this wheel or anything else, by a ridge's pitch per step. The amber
+/// index at the middle is fixed, as on the radio's case.
+fn paint_wheel(ui: &Ui, rect: Rect, hz: f64, st: f64, offset: f32, hovered: bool) {
+    let p = ui.painter_at(rect.expand(2.0));
+    let cr = CornerRadius::same(4);
+    // The slot the wheel turns in.
+    p.rect_filled(rect.expand(1.0), CornerRadius::same(5), Color32::from_black_alpha(160));
+    let body = rect.shrink2(vec2(2.0, 2.0));
+    let (cx, r) = (body.center().x, body.width() / 2.0);
+    let steel = theme::lerp(theme::surface_3(), theme::text_2(), 0.18);
+    // The cylinder: light at its crown, falling off toward its limbs.
+    let mut m = egui::Mesh::default();
+    let cols = 32;
+    for i in 0..=cols {
+        let t = i as f32 / cols as f32;
+        let th = (t - 0.5) * std::f32::consts::PI;
+        let x = cx + r * th.sin();
+        let lit = th.cos().powf(0.8);
+        let c = theme::lerp(Color32::from_black_alpha(255), steel, 0.25 + 0.75 * lit);
+        m.colored_vertex(pos2(x, body.top()), theme::lerp(c, Color32::WHITE, 0.10 * lit));
+        m.colored_vertex(pos2(x, body.bottom()), theme::lerp(c, Color32::BLACK, 0.35));
+    }
+    for i in 0..cols as u32 {
+        let (a, b, c, d) = (2 * i, 2 * i + 1, 2 * i + 2, 2 * i + 3);
+        m.add_triangle(a, b, c);
+        m.add_triangle(c, b, d);
+    }
+    p.with_clip_rect(body).add(Shape::mesh(m));
+    // The ridges: one per step, a groove's shadow and the lit flank beside
+    // it, crowding toward the limbs as the surface turns away.
+    let cp = p.with_clip_rect(body.shrink2(vec2(0.0, 1.0)));
+    // Three ridges a step, so the knurl reads fine; still a step's turn
+    // per STRIP_PX dragged.
+    const PER_STEP: f64 = 3.0;
+    let pitch = STRIP_PX / PER_STEP as f32 / r;
+    let steps = hz / st * PER_STEP;
+    let turned = (steps.fract() as f32) * pitch - offset / r;
+    let base = steps.floor() as i64;
+    let n = (std::f32::consts::FRAC_PI_2 / pitch) as i64 + 2;
+    for k in -n..=n {
+        let th = k as f32 * pitch - turned;
+        if th.abs() >= std::f32::consts::FRAC_PI_2 {
+            continue;
+        }
+        let x = cx + r * th.sin();
+        let face = th.cos();
+        let decade = (base + k).rem_euclid(10 * PER_STEP as i64) == 0;
+        cp.line_segment([pos2(x, body.top() + 2.0), pos2(x, body.bottom() - 2.0)], Stroke::new(1.0, Color32::from_black_alpha((150.0 * face) as u8)));
+        let flank = x + 1.0 * face;
+        let lite = if decade { 70.0 } else { 38.0 } * face;
+        cp.line_segment([pos2(flank, body.top() + 2.0), pos2(flank, body.bottom() - 2.0)], Stroke::new(1.0, Color32::from_white_alpha(lite as u8)));
+    }
+    // A specular band along the crown, and the shading at top and foot.
+    let sheen = Rect::from_min_max(pos2(body.left(), body.top()), pos2(body.right(), body.top() + body.height() * 0.35));
+    let mut m = egui::Mesh::default();
+    m.colored_vertex(sheen.left_top(), Color32::from_white_alpha(if hovered { 30 } else { 18 }));
+    m.colored_vertex(sheen.right_top(), Color32::from_white_alpha(if hovered { 30 } else { 18 }));
+    m.colored_vertex(sheen.left_bottom(), Color32::TRANSPARENT);
+    m.colored_vertex(sheen.right_bottom(), Color32::TRANSPARENT);
+    m.add_triangle(0, 1, 2);
+    m.add_triangle(2, 1, 3);
+    cp.add(Shape::mesh(m));
+    // The limbs fall into the slot's shadow.
+    for (x0, x1, a0, a1) in [(body.left(), body.left() + r * 0.35, 200u8, 0u8), (body.right() - r * 0.35, body.right(), 0, 200)] {
+        let mut m = egui::Mesh::default();
+        m.colored_vertex(pos2(x0, body.top()), Color32::from_black_alpha(a0));
+        m.colored_vertex(pos2(x1, body.top()), Color32::from_black_alpha(a1));
+        m.colored_vertex(pos2(x0, body.bottom()), Color32::from_black_alpha(a0));
+        m.colored_vertex(pos2(x1, body.bottom()), Color32::from_black_alpha(a1));
+        m.add_triangle(0, 1, 2);
+        m.add_triangle(2, 1, 3);
+        p.with_clip_rect(body).add(Shape::mesh(m));
+    }
+    p.rect_stroke(body, cr, Stroke::new(1.0, Color32::from_black_alpha(180)), egui::StrokeKind::Outside);
+    // The index: fixed, amber, notched into the slot top and foot.
+    let ix = rect.center().x;
+    p.add(Shape::convex_polygon(vec![pos2(ix - 3.5, rect.top() - 1.0), pos2(ix + 3.5, rect.top() - 1.0), pos2(ix, rect.top() + 4.0)], theme::AMBER, Stroke::NONE));
+    p.add(Shape::convex_polygon(vec![pos2(ix - 3.5, rect.bottom() + 1.0), pos2(ix, rect.bottom() - 4.0), pos2(ix + 3.5, rect.bottom() + 1.0)], theme::AMBER, Stroke::NONE));
+    p.line_segment([pos2(ix, rect.top() + 3.0), pos2(ix, rect.bottom() - 3.0)], Stroke::new(1.0, theme::alpha(theme::AMBER, 0.55)));
+}
 
 /// One seven-segment digit's size: its height and width, before the slant.
 struct Seg {

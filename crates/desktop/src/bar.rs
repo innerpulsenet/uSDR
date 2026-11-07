@@ -70,30 +70,37 @@ pub fn receiver_bar(app: &mut App, ui: &mut Ui) {
     let fit = need.iter().position(|&n| w >= n);
     // Four fits, widest first. Each row ends in a section that takes what
     // is left, so no row trails off into empty space.
+    // The display cluster first: the receivers, the frequency and the
+    // signal, read together as one instrument. Then the controls in the
+    // order they are used: tune, mode, filter, audio. The meter is the bay
+    // that takes the width the rest leave, so it is sized against what the
+    // controls after it measured last frame.
     let row = match fit {
         Some(0) => Some(
             ui.horizontal_top(|ui| {
                 switch(app, ui);
                 readout(app, ui);
-                tuning(app, ui);
-                modes(app, ui);
-                filter(app, ui, 270.0);
-                audio(app, ui, 220.0);
-                meter(app, ui, 300.0, 560.0);
+                tail(app, ui, "t0", 300.0, 900.0, |app, ui| {
+                    tuning(app, ui);
+                    modes(app, ui);
+                    filter(app, ui, 270.0);
+                    audio(app, ui, 220.0);
+                });
             })
             .response
             .rect,
         ),
-        // The filter and the meter narrow.
+        // The filter and the audio narrow.
         Some(1) => Some(
             ui.horizontal_top(|ui| {
                 switch(app, ui);
                 readout(app, ui);
-                tuning(app, ui);
-                modes(app, ui);
-                filter(app, ui, 220.0);
-                audio(app, ui, 200.0);
-                meter(app, ui, 0.0, 560.0);
+                tail(app, ui, "t1", 0.0, 900.0, |app, ui| {
+                    tuning(app, ui);
+                    modes(app, ui);
+                    filter(app, ui, 220.0);
+                    audio(app, ui, 200.0);
+                });
             })
             .response
             .rect,
@@ -105,11 +112,12 @@ pub fn receiver_bar(app: &mut App, ui: &mut Ui) {
             ui.horizontal_top(|ui| {
                 switch(app, ui);
                 readout_sized(app, ui, 48.0);
-                tuning(app, ui);
-                modes(app, ui);
-                filter(app, ui, 140.0);
-                audio(app, ui, 160.0);
-                meter(app, ui, 0.0, 560.0);
+                tail(app, ui, "t2", 0.0, 900.0, |app, ui| {
+                    tuning(app, ui);
+                    modes(app, ui);
+                    filter(app, ui, 140.0);
+                    audio(app, ui, 160.0);
+                });
             })
             .response
             .rect,
@@ -118,9 +126,8 @@ pub fn receiver_bar(app: &mut App, ui: &mut Ui) {
             ui.horizontal_top(|ui| {
                 switch(app, ui);
                 readout(app, ui);
-                tuning(app, ui);
                 // A long bar is a finer one: on its own row the meter may run on.
-                meter(app, ui, 260.0, 900.0);
+                tail(app, ui, "t3", 260.0, 900.0, tuning);
             });
             ui.add_space(4.0);
             // A fader wider than this is a slab of empty track.
@@ -128,12 +135,15 @@ pub fn receiver_bar(app: &mut App, ui: &mut Ui) {
             ui.horizontal_top(|ui| {
                 modes(app, ui);
                 filter(app, ui, filter_w);
-                audio(app, ui, 220.0);
+                // The audio runs to the row's end, so it does not trail off.
+                let aw = (ui.available_width() - 22.0).clamp(220.0, 420.0);
+                audio(app, ui, aw);
             });
             None
         }
     };
-    if let (Some(i), Some(r)) = (fit, row) {
+    let settling = ui.data_mut(|d| d.remove_temp::<bool>(egui::Id::new("rx-bar-settling"))).unwrap_or(false);
+    if let (Some(i), Some(r), false) = (fit, row, settling) {
         let over = r.right() - edge;
         if over > 0.5 {
             need[i] = need[i].max((w + over + 2.0).ceil());
@@ -141,6 +151,26 @@ pub fn receiver_bar(app: &mut App, ui: &mut Ui) {
             // Lay the bar out again before anything is shown.
             ui.ctx().request_discard("the receiver bar ran past its edge");
         }
+    }
+}
+
+/// The signal bay, then `rest` after it: the bay takes what the row has
+/// left once `rest` has its width, as measured on the last frame. A frame
+/// whose measure moved is laid out again before it is shown.
+fn tail(app: &mut App, ui: &mut Ui, key: &str, min_w: f32, max_w: f32, rest: impl FnOnce(&mut App, &mut Ui)) {
+    let id = egui::Id::new(("rx-bar-tail", key));
+    let was: Option<f32> = ui.data(|d| d.get_temp(id));
+    meter(app, ui, min_w, max_w, was.unwrap_or(1200.0));
+    let x0 = ui.cursor().left();
+    rest(app, ui);
+    let took = (ui.min_rect().right() - x0).ceil();
+    if was.is_none_or(|w| (w - took).abs() > 1.0) {
+        ui.data_mut(|d| {
+            d.insert_temp(id, took);
+            // Not an overflow to learn from: this frame is laid out again.
+            d.insert_temp(egui::Id::new("rx-bar-settling"), true);
+        });
+        ui.ctx().request_discard("the receiver bar's controls changed width");
     }
 }
 
@@ -994,33 +1024,17 @@ fn filter(app: &mut App, ui: &mut Ui, width_px: f32) {
                 app.reset_filter();
             }
         }
-        let mut wv = width as f64;
         let sideband = !range.symmetric;
-        let (ch, _) = Fader {
-            value: &mut wv,
-            min: range.min_width_hz as f64,
-            max: range.max_width_hz as f64,
-            step: if range.max_width_hz > 50_000.0 { 5_000.0 } else { 100.0 },
-            fine: if range.max_width_hz > 50_000.0 { 1_000.0 } else { 50.0 },
-            label: "WIDTH",
-            // Sideband's edges, when the header has no room for them: the
-            // low edge stays put as the width moves.
-            text: |v| {
-                if sideband && !edges_in_head {
-                    let (l, h) = around(v as f32);
-                    let (l, h) = (l.abs().min(h.abs()), l.abs().max(h.abs()));
-                    format!("{}–{}", k(l).trim_end_matches('k'), k(h))
-                } else {
-                    k(v as f32)
-                }
-            },
-            color: theme::AMBER,
-            enabled: true,
-            ticks: vec![],
-        }
-        .show_compact(ui);
-        if ch {
-            set = Some(around(wv as f32));
+        // The passband itself, drawn to its shape and dragged by its edges.
+        let readout = if sideband && !edges_in_head {
+            let (l, h) = (lo.abs().min(hi.abs()), lo.abs().max(hi.abs()));
+            format!("{}–{}", k(l).trim_end_matches('k'), k(h))
+        } else {
+            k(width)
+        };
+        let tint = if b.is_some() { theme::VIOLET } else { theme::AMBER };
+        if let Some(edges) = crate::passband::show(ui, lo, hi, &range, shaped.then_some(shape), tint, &readout, &around) {
+            set = Some(edges);
         }
         if let Some((l, h)) = set {
             match &b {
@@ -1094,7 +1108,7 @@ fn audio(app: &mut App, ui: &mut Ui, width_px: f32) {
             }
             // Output level, beside the keys.
             let r = player.reading();
-            let lw = (ui.available_width() - 34.0).clamp(40.0, 140.0);
+            let lw = (ui.available_width() - 34.0).clamp(40.0, 260.0);
             level_meter(ui, lw, r.rms, r.peak);
             widgets::menu_chip(ui, "···", theme::text_2(), |ui| {
                 ui.set_min_width(220.0);
@@ -1143,8 +1157,9 @@ fn audio(app: &mut App, ui: &mut Ui, width_px: f32) {
 /// pip, ticks at −40, −20 and −6, and a clip lamp that holds a second.
 fn level_meter(ui: &mut Ui, w: f32, rms: f32, peak: f32) {
     let (rect, resp) = ui.allocate_exact_size(vec2(w, 22.0), Sense::hover());
-    let p = ui.painter_at(rect.expand(1.0));
-    theme::well(&p, rect, None);
+    let p = ui.painter_at(rect.expand(3.0));
+    // The S-meter's glass, at chip height.
+    crate::vfo::lcd_back(&p, rect, theme::AMBER);
     let db = |v: f32| 20.0 * v.max(1e-6).log10();
     let lamp_w = 10.0;
     let bar = egui::Rect::from_min_max(egui::pos2(rect.left() + 5.0, rect.top() + 6.0), egui::pos2(rect.right() - 5.0 - lamp_w, rect.top() + 13.0));
@@ -1155,7 +1170,13 @@ fn level_meter(ui: &mut Ui, w: f32, rms: f32, peak: f32) {
         let d = (x - bar.left()) / bar.width() * 60.0 - 60.0;
         let c = if d >= -3.0 { theme::ERR } else if d >= -12.0 { theme::AMBER } else { theme::OK };
         let seg = egui::Rect::from_min_max(egui::pos2(x, bar.top()), egui::pos2((x + 2.0).min(bar.right()), bar.bottom()));
-        p.rect_filled(seg, egui::CornerRadius::ZERO, if x < lit_to { c } else { alpha(c, 0.10) });
+        if x < lit_to {
+            p.rect_filled(seg.expand2(vec2(1.0, 2.0)), egui::CornerRadius::same(1), alpha(c, 0.18));
+            p.rect_filled(seg, egui::CornerRadius::ZERO, c);
+            p.rect_filled(egui::Rect::from_min_size(seg.min, vec2(seg.width(), 2.0)), egui::CornerRadius::ZERO, alpha(theme::lerp(c, egui::Color32::WHITE, 0.45), 0.9));
+        } else {
+            p.rect_filled(seg, egui::CornerRadius::ZERO, alpha(c, 0.12));
+        }
         x += 3.0;
     }
     if peak > 1e-4 {
@@ -1178,6 +1199,7 @@ fn level_meter(ui: &mut Ui, w: f32, rms: f32, peak: f32) {
         crate::anim::more(ui.ctx());
     }
     theme::lamp(&p, lamp, 2.6, theme::ERR, if on { 1.0 } else { 0.0 }, theme::LampShape::Round);
+    crate::vfo::lcd_glass(&p, rect);
     resp.on_hover_text(if rms > 1e-5 {
         format!("Output: {:.0} dBFS RMS, peak {:.0} dBFS · ticks at −40, −20, −6 · the lamp lights on a clip", db(rms), db(peak))
     } else {
@@ -1185,7 +1207,8 @@ fn level_meter(ui: &mut Ui, w: f32, rms: f32, peak: f32) {
     });
 }
 
-fn meter(app: &mut App, ui: &mut Ui, min_w: f32, max_w: f32) {
+/// `reserve`: the width the bays after this one take.
+fn meter(app: &mut App, ui: &mut Ui, min_w: f32, max_w: f32, reserve: f32) {
     let is_b = app.active_b && app.status.rx2.is_some();
     let rm = app.reduce_motion();
     let mark = app.prefs.view.sql_mark;
@@ -1205,7 +1228,7 @@ fn meter(app: &mut App, ui: &mut Ui, min_w: f32, max_w: f32) {
         + 8.0;
     // (Less the gap and hairline space the bay leaves after itself, so the
     // row ends at the bar's edge.)
-    let w = (ui.available_width() - 22.0).clamp(min_w.max(head_w), max_w.max(head_w));
+    let w = (ui.available_width() - reserve - 22.0).clamp(min_w.max(head_w), max_w.max(head_w));
     let now = ui.input(|i| i.time);
     if err.is_some_and(|e| e.abs() > 2000.0) {
         app.err_warn_until = now + 5.0;

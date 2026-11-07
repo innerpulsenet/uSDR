@@ -2923,6 +2923,31 @@ mod tests {
     }
 
     #[test]
+    fn the_passband_is_widened_by_the_wheel_and_slid_by_a_drag() {
+        let mut h = harness_sized(1900.0);
+        filtered(&mut h, Mode::Usb, 2_100.0, (200.0, 4_000.0), (300.0, 2_400.0), true);
+        let r = h.get_by_label("WIDTH").rect();
+        let filters = |posts: Vec<(String, serde_json::Value)>| posts.into_iter().filter(|(p, _)| p == "/api/sdr/filter").map(|(_, b)| (b["low_hz"].as_f64().unwrap_or(f64::NAN), b["high_hz"].as_f64().unwrap_or(f64::NAN))).collect::<Vec<_>>();
+        // Wheel up over it: 100 Hz wider, the low edge where it was.
+        let inside = egui::pos2(r.left() + 0.3 * r.width(), r.center().y);
+        h.event(egui::Event::PointerMoved(inside));
+        h.run_steps(1);
+        h.event(egui::Event::MouseWheel { unit: egui::MouseWheelUnit::Line, delta: egui::vec2(0.0, 1.0), phase: egui::TouchPhase::Move, modifiers: egui::Modifiers::NONE });
+        h.run_steps(2);
+        assert_eq!(filters(drain(&h)).last(), Some(&(300.0, 2_500.0)));
+        // A drag on the band slides both edges together.
+        h.drag_at(inside);
+        h.run_steps(1);
+        h.event(egui::Event::PointerMoved(inside + egui::vec2(30.0, 0.0)));
+        h.run_steps(1);
+        h.drop_at(inside + egui::vec2(30.0, 0.0));
+        h.run_steps(2);
+        let (l, hi) = *filters(drain(&h)).last().expect("the slide set the filter");
+        // (The wheel left it 2.2k wide.)
+        assert!(l > 300.0 && ((hi - l) - 2_200.0).abs() < 1.0, "slid to {l}..{hi}");
+    }
+
+    #[test]
     fn a_narrow_filter_bay_still_steps_wider() {
         // The 1500-1640 px band gives the filter its narrowest bay: once
         // narrowed to 150k the wider presets used to fall off the row.

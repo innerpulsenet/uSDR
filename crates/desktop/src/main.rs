@@ -30,6 +30,7 @@ mod map;
 mod meter;
 mod net;
 mod panels;
+mod passband;
 mod prefs;
 mod scope;
 mod screens;
