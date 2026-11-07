@@ -140,9 +140,9 @@ impl P25ChannelReceiver {
             chain,
             afc: Afc::new(0.0, 2_500.0),
             front: C4fmFrontEnd::new(fs_chan),
-            detector: FrameDetector::with_payload(),
+            detector: FrameDetector::with_payload().at_rate(fs_chan),
             cqpsk: CqpskDemodulator::new(fs_chan, 4_800.0).with_equalizer(7, 0.02),
-            cqpsk_detector: FrameDetector::with_payload(),
+            cqpsk_detector: FrameDetector::with_payload().at_rate(fs_chan),
             vocoder: Vocoder::new(Rate::FullRate4400x4400),
             decryptor: None,
             resampler: Resampler8k::new(),
@@ -178,9 +178,9 @@ impl P25ChannelReceiver {
         if let Some(p2) = &mut self.phase2 {
             *p2 = super::phase2::live::LiveReceiver::new(p2.config, self.chain.fs_out());
         }
-        self.detector = FrameDetector::with_payload();
+        self.detector = FrameDetector::with_payload().at_rate(self.chain.fs_out());
         self.cqpsk.reset();
-        self.cqpsk_detector = FrameDetector::with_payload();
+        self.cqpsk_detector = FrameDetector::with_payload().at_rate(self.chain.fs_out());
         self.vocoder = Vocoder::new(Rate::FullRate4400x4400);
         self.decryptor = None;
         self.resampler = Resampler8k::new();

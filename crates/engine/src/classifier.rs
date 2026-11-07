@@ -269,7 +269,7 @@ impl SignalClassifier {
             standard_disc: DiscHz::new(fs),
             standard_hz: Vec::with_capacity(4096),
             p25_frontend: C4fmFrontEnd::new(fs),
-            p25_detector: FrameDetector::with_packet_payload(),
+            p25_detector: FrameDetector::with_packet_payload().at_rate(fs),
             p25_buf: Vec::with_capacity(4096),
             dmr_receiver: DmrReceiver::new(fs),
             dmr_data: std::array::from_fn(|_| DataAssembler::new()),
@@ -335,7 +335,7 @@ impl SignalClassifier {
             self.last_ltr_match = None;
             self.last_passport_match = None;
             self.last_clocked = None;
-            self.p25_detector = FrameDetector::with_packet_payload();
+            self.p25_detector = FrameDetector::with_packet_payload().at_rate(self.fs);
         }
     }
 
@@ -367,7 +367,7 @@ impl SignalClassifier {
         self.standard_disc = DiscHz::new(self.fs);
         self.standard_hz.clear();
         self.p25_frontend = C4fmFrontEnd::new(self.fs);
-        self.p25_detector = FrameDetector::with_packet_payload();
+        self.p25_detector = FrameDetector::with_packet_payload().at_rate(self.fs);
         self.p25_buf.clear();
         self.dmr_receiver = DmrReceiver::new(self.fs);
         for assembler in &mut self.dmr_data {
