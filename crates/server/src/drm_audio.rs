@@ -4,7 +4,9 @@
 //! resamples with a windowed-sinc interpolator and holds the result in a
 //! buffer that starts playing once it holds enough to ride over the gaps
 //! between super frames, and pads with silence (never repeats) when the
-//! signal fails.
+//! signal fails. Playback eases out of the last samples before it runs dry
+//! and back in when it resumes, so a failing signal mutes rather than
+//! clicking.
 
 use std::collections::VecDeque;
 
@@ -26,11 +28,15 @@ pub struct DrmAudio {
     playing: bool,
     /// Samples to hold before playing: a super frame and a half.
     prebuffer: usize,
+    /// Length of the fade at either edge of a dropout, in output samples.
+    fade: usize,
+    /// Output samples since playback (re)started, while still under `fade`.
+    faded_in: usize,
 }
 
 impl DrmAudio {
     pub fn new(out_rate: f64) -> Self {
-        let mut a = DrmAudio { in_rate: 0.0, out_rate, step: 1.0, pos: 0.0, hist: VecDeque::new(), kernel: Vec::new(), fifo: VecDeque::new(), playing: false, prebuffer: (out_rate * 0.6) as usize };
+        let mut a = DrmAudio { in_rate: 0.0, out_rate, step: 1.0, pos: 0.0, hist: VecDeque::new(), kernel: Vec::new(), fifo: VecDeque::new(), playing: false, prebuffer: (out_rate * 0.6) as usize, fade: (out_rate * 0.005) as usize, faded_in: 0 };
         a.set_rate(48_000.0);
         a
     }
@@ -106,12 +112,29 @@ impl DrmAudio {
         out.clear();
         if !self.playing && self.fifo.len() >= self.prebuffer {
             self.playing = true;
+            self.faded_in = 0;
         }
         if self.playing {
             let k = n.min(self.fifo.len());
             out.extend(self.fifo.drain(..k));
-            if k < n {
-                // Ran dry: fill again before playing on.
+            // Ease in from the silence before, a raised-cosine ramp.
+            let ramp = |i: usize, len: usize| 0.5 - 0.5 * (std::f32::consts::PI * i as f32 / len as f32).cos();
+            for v in out.iter_mut() {
+                if self.faded_in >= self.fade {
+                    break;
+                }
+                *v *= ramp(self.faded_in, self.fade);
+                self.faded_in += 1;
+            }
+            if self.fifo.is_empty() {
+                // Ran dry (even if exactly at the end of this block, since
+                // nothing is left for the next): ease the tail out to the
+                // silence that follows rather than stepping to it, and fill
+                // again before playing on.
+                let len = self.fade.min(k);
+                for (i, v) in out[k - len..k].iter_mut().enumerate() {
+                    *v *= ramp(len - i, len + 1);
+                }
                 self.playing = false;
             }
         }
@@ -162,6 +185,31 @@ mod tests {
         assert!((hz - 1_000.0).abs() < 3.0, "{hz}");
     }
 
+    /// Playback that runs dry, then resumes, eases across both edges: no
+    /// sample-to-sample jump bigger than the tone's own.
+    #[test]
+    fn a_dropout_fades_instead_of_clicking() {
+        let mut a = DrmAudio::new(48_000.0);
+        let tone = |n: usize| -> Vec<f32> { (0..n).map(|i| (2.0 * std::f32::consts::PI * 200.0 * i as f32 / 48_000.0 + 1.3).sin() * 0.8).collect() };
+        let mut got = Vec::new();
+        let mut block = Vec::new();
+        a.push(&tone(48_000), 48_000.0);
+        for _ in 0..60 {
+            a.take(1_000, &mut block);
+            got.extend_from_slice(&block);
+        }
+        a.push(&tone(48_000), 48_000.0);
+        for _ in 0..60 {
+            a.take(1_000, &mut block);
+            got.extend_from_slice(&block);
+        }
+        assert!(got.iter().any(|v| v.abs() > 0.7), "tone played");
+        // The tone moves at most 2π·200/48000·0.8 ≈ 0.021 per sample; a
+        // hard edge would step by up to 0.8.
+        let worst = got.windows(2).map(|w| (w[1] - w[0]).abs()).fold(0.0, f32::max);
+        assert!(worst < 0.03, "largest step {worst}");
+    }
+
     #[test]
     fn it_waits_to_fill_and_pads_with_silence() {
         let mut a = DrmAudio::new(48_000.0);
@@ -170,6 +218,9 @@ mod tests {
         a.take(480, &mut out);
         assert!(out.iter().all(|v| *v == 0.0), "not yet full");
         a.push(&vec![0.3; 48_000], 48_000.0);
+        // The first 5 ms ease in from the silence.
+        a.take(480, &mut out);
+        assert!(out[..240].windows(2).all(|w| w[1] >= w[0]), "fades in");
         a.take(480, &mut out);
         assert!(out.iter().all(|v| (*v - 0.3).abs() < 0.01));
     }
