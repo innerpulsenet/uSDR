@@ -20,6 +20,9 @@ pub struct ToneSlicer {
     tracking: bool,
     delay: usize,
     delay0: usize,
+    /// Samples pushed since the last reset, the stagger included: the
+    /// absolute clock [`Self::reacquire`] puts the lane's phase back on.
+    pushed: u64,
     /// Chronological history, `win + 2 * gate` deep: enough to place the
     /// on-time window with a full gate of context either side of it.
     ///
@@ -63,6 +66,7 @@ impl ToneSlicer {
             tracking: false,
             delay: 0,
             delay0: 0,
+            pushed: 0,
             hist: vec![0.0; win + 2 * gate],
             hist_head: 0,
             filled: 0,
@@ -86,6 +90,7 @@ impl ToneSlicer {
         self.hist_head = 0;
         self.filled = 0;
         self.delay = self.delay0;
+        self.pushed = 0;
     }
 
     /// Tell the slicer whether it is inside a frame. See `TimingLoop::relax`.
@@ -93,10 +98,22 @@ impl ToneSlicer {
         self.tracking = tracking;
     }
 
-    /// Drop the tracked rate and hunt again at nominal, keeping the phase.
+    /// Drop the tracked rate and hunt again at nominal, back on the phase
+    /// this slicer was staggered to.
+    ///
+    /// Not the phase the burst left it on: every lane of a bank that copied
+    /// a burst was steered onto that burst's eye, so after one packet the
+    /// whole bank sampled at a single phase and no longer covered the baud.
+    /// The next burst, arriving at any phase, was lost whenever its symbol
+    /// edges fell there.
     pub fn reacquire(&mut self) {
         self.tracking = false;
         self.clock.reacquire();
+        if self.delay == 0 {
+            // Ticks fell at `delay0 + k·spb` samples before any steering.
+            let since = (self.pushed - self.delay0 as u64) as f64;
+            self.clock.set_phase(since.rem_euclid(f64::from(self.spb)));
+        }
     }
 
     pub fn samples_per_bit(&self) -> usize {
@@ -131,6 +148,7 @@ impl ToneSlicer {
     /// late gate needs samples from *after* the symbol it is judging, and a
     /// gate of delay is cheaper than being unable to measure timing at all.
     pub fn push(&mut self, x: f32) -> Option<bool> {
+        self.pushed += 1;
         if self.delay > 0 {
             self.delay -= 1;
             return None;

@@ -121,6 +121,12 @@ impl TimingLoop {
         self.elapsed = -delay;
     }
 
+    /// Put the clock `elapsed` samples into the current symbol: the next
+    /// boundary falls `period − elapsed` samples on.
+    pub fn set_phase(&mut self, elapsed: f64) {
+        self.elapsed = elapsed;
+    }
+
     pub fn period(&self) -> f64 {
         self.period
     }
