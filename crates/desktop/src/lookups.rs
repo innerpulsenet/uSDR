@@ -84,7 +84,8 @@ pub fn airline(flight: &str) -> Option<(&'static str, &'static str)> {
     if f.len() < 4 || !f[..3].chars().all(|c| c.is_ascii_alphabetic()) {
         return None;
     }
-    t::AIRLINES.iter().find(|(d, _, _)| *d == &f[..3]).map(|(_, n, c)| (*n, *c))
+    // Six thousand designators, in order: searched by halves.
+    t::AIRLINES.binary_search_by(|(d, _, _)| d.cmp(&&f[..3])).ok().map(|i| (t::AIRLINES[i].1, t::AIRLINES[i].2))
 }
 
 /// What an ACARS label means.
@@ -148,6 +149,17 @@ mod tests {
         assert!(icao_state("A12345").is_some_and(|s| s.contains("United States")));
         assert_eq!(coast_name("003669995").is_some(), true);
         assert!(language("eng").is_some_and(|l| l.contains("English")));
+    }
+
+    /// The airline lookup searches by halves: every designator in order,
+    /// each once, and every one found.
+    #[test]
+    fn the_airlines_are_in_order() {
+        assert!(t::AIRLINES.windows(2).all(|w| w[0].0 < w[1].0), "{:?}", t::AIRLINES.windows(2).find(|w| w[0].0 >= w[1].0));
+        for (d, n, c) in t::AIRLINES.iter().filter(|a| a.0.len() == 3 && a.0.chars().all(|c| c.is_ascii_uppercase())) {
+            assert_eq!(airline(&format!("{d}123")), Some((*n, *c)));
+        }
+        assert_eq!(airline("ZZZ9"), t::AIRLINES.iter().find(|a| a.0 == "ZZZ").map(|a| (a.1, a.2)));
     }
 
     #[test]

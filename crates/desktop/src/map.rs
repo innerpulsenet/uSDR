@@ -98,6 +98,16 @@ fn gather(app: &App, l: Layers) -> (Vec<Mark>, Vec<(Color32, Vec<(f32, f32)>)>) 
     let mut marks = Vec::new();
     let mut tracks: Vec<(String, Vec<(f32, f32)>)> = Vec::new();
     let mut seen = std::collections::HashSet::new();
+    // Each vessel's name from the newest of its reports that has one, found
+    // in one pass rather than a search of the log for every vessel.
+    let mut ship_names: std::collections::HashMap<&str, &str> = std::collections::HashMap::new();
+    if l.ships {
+        for d in app.decodes.iter().filter(|d| d.ev.protocol == "AIS") {
+            if let (Some(m), Some(n)) = (d.ev.fields.get("mmsi"), d.ev.fields.get("name")) {
+                ship_names.entry(m.as_str()).or_insert(n.as_str());
+            }
+        }
+    }
     for (i, d) in app.decodes.iter().enumerate() {
         let p = d.ev.protocol.as_str();
         let age = age_s(d.at);
@@ -134,7 +144,7 @@ fn gather(app: &App, l: Layers) -> (Vec<Mark>, Vec<(Color32, Vec<(f32, f32)>)>) 
                 let mmsi = d.ev.fields.get("mmsi").cloned().unwrap_or_default();
                 if seen.insert(("ship", mmsi.clone())) {
                     // The vessel's name from any of its reports, not only this one.
-                    let name = crate::aisview::name_of(app, &mmsi).unwrap_or_else(|| mmsi.clone());
+                    let name = ship_names.get(mmsi.as_str()).map_or_else(|| mmsi.clone(), |n| n.to_string());
                     marks.push(Mark { lat, lon, kind: Kind::Ship { distress: false }, color: widgets::protocol_color("AIS"), label: name, detail: format!("{} · AIS · {}", local_hms(d.at), d.ev.summary), decode: Some(i), age });
                 }
             }

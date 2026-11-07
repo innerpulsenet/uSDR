@@ -470,9 +470,11 @@ fn plain_error(e: &tungstenite::Error, base: &str) -> String {
 /// Which of a batch of queued requests to send: the newest of each control
 /// that a later one supersedes, everything else, all in send order.
 fn newest_only(batch: &[Req]) -> Vec<bool> {
-    (0..batch.len())
-        .map(|i| match batch[i].coalesce_key() {
-            Some(k) => !batch[i + 1..].iter().any(|r| r.coalesce_key().as_deref() == Some(&k)),
+    // Each key built once: a wheel spun fast queues dozens of posts.
+    let keys: Vec<Option<String>> = batch.iter().map(Req::coalesce_key).collect();
+    (0..keys.len())
+        .map(|i| match &keys[i] {
+            Some(k) => !keys[i + 1..].iter().any(|r| r.as_ref() == Some(k)),
             None => true,
         })
         .collect()

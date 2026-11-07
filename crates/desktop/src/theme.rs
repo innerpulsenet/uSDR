@@ -167,20 +167,28 @@ pub fn lerp(a: Color32, b: Color32, t: f32) -> Color32 {
 pub fn mono(size: f32) -> FontId {
     FontId::new(size, FontFamily::Monospace)
 }
+/// A named family, its name allocated once: these are asked for hundreds
+/// of times a frame, and a clone is a count going up.
+macro_rules! named_family {
+    ($name:literal) => {{
+        static F: std::sync::LazyLock<FontFamily> = std::sync::LazyLock::new(|| FontFamily::Name($name.into()));
+        F.clone()
+    }};
+}
 pub fn mono_bold(size: f32) -> FontId {
-    FontId::new(size, FontFamily::Name("mono-bold".into()))
+    FontId::new(size, named_family!("mono-bold"))
 }
 pub fn sans(size: f32) -> FontId {
     FontId::new(size, FontFamily::Proportional)
 }
 pub fn sans_semibold(size: f32) -> FontId {
-    FontId::new(size, FontFamily::Name("sans-600".into()))
+    FontId::new(size, named_family!("sans-600"))
 }
 pub fn headline(size: f32) -> FontId {
-    FontId::new(size, FontFamily::Name("sans-700".into()))
+    FontId::new(size, named_family!("sans-700"))
 }
 pub fn wordmark(size: f32) -> FontId {
-    FontId::new(size, FontFamily::Name("syne".into()))
+    FontId::new(size, named_family!("syne"))
 }
 
 fn font(defs: &mut FontDefinitions, name: &str, bytes: &'static [u8]) {
