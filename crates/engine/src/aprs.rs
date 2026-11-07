@@ -1,6 +1,7 @@
 //! 1200-baud Bell 202 APRS (AX.25 UI) after NBFM.
 
 use crate::afsk::ToneSlicer;
+use crate::biquad::Cascade;
 
 const MARK: f32 = 1200.0;
 const SPACE: f32 = 2200.0;
@@ -9,6 +10,10 @@ const BAUD: f32 = 1200.0;
 /// and are comfortably inside normal APRS TX-delay preambles, while making a
 /// random discriminator collision exponentially less likely to arm a lane.
 const OPENING_FLAGS: u8 = 4;
+/// Band the tones are taken from: Bell 202 is 1200 and 2200 Hz, with the
+/// keying sidebands a few hundred hertz either side.
+const BAND_LO_HZ: f32 = 600.0;
+const BAND_HI_HZ: f32 = 3_000.0;
 /// Lanes across one baud, evenly spaced: one per sample at 16 kHz (≈13.3
 /// samples/bit), every five samples at 96 kHz.
 const PHASES: usize = 16;
@@ -47,6 +52,17 @@ pub struct AprsDiagnostics {
 }
 
 pub struct AprsDecoder {
+    /// Butterworth edges either side of the tones, second order below and
+    /// fourth above. The one-baud Goertzel is a poor filter on its own (its
+    /// Hann sidelobes reach the whole discriminator band), and an FM
+    /// discriminator's noise rises with frequency, so the noise above the
+    /// tones reached the mark/space decision. With pre-emphasized audio,
+    /// the usual case on air, this band copied about a fifth more packets
+    /// at the threshold; flat audio was unchanged. The low edge is kept
+    /// gentle: a fourth-order one there delays 1200 Hz against 2200 Hz
+    /// enough to lose a frame the FM-chain test sends.
+    band_hp: Cascade,
+    band_lp: Cascade,
     lanes: Vec<Lane>,
     dc_x1: f32,
     dc_y1: f32,
@@ -76,7 +92,10 @@ impl AprsDecoder {
     pub fn new(fs: f64) -> Self {
         let spb = ToneSlicer::new(fs, MARK, SPACE, BAUD).samples_per_bit_f();
         let n = PHASES.min((spb.round() as usize).max(1));
+        let fs32 = fs as f32;
         Self {
+            band_hp: Cascade::butterworth_highpass(BAND_LO_HZ, fs32, 1),
+            band_lp: Cascade::butterworth_lowpass(BAND_HI_HZ.min(0.45 * fs32), fs32, 2),
             lanes: (0..n)
                 .map(|d| Lane {
                     // Lanes spread evenly over one baud. Stepping them one
@@ -110,6 +129,8 @@ impl AprsDecoder {
     }
 
     pub fn reset(&mut self) {
+        self.band_hp.reset();
+        self.band_lp.reset();
         self.dc_x1 = 0.0;
         self.dc_y1 = 0.0;
         self.dc_offset_hz = 0.0;
@@ -148,6 +169,7 @@ impl AprsDecoder {
     pub fn process(&mut self, audio: &[f32]) -> Vec<AprsPacket> {
         let mut out = Vec::new();
         for &x in audio {
+            let x = self.band_lp.process(self.band_hp.process(x));
             // Single-pole DC blocker (cutoff ~38 Hz at 16 kHz): removes carrier mistuning offset
             let clean_x = x - self.dc_x1 + 0.985 * self.dc_y1;
             self.dc_x1 = x;
