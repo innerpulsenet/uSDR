@@ -192,3 +192,46 @@ fn idle_noise_alone_decodes_nothing() {
         .collect();
     assert_eq!(decode(&iq), 0, "receiver noise synthesized a packet");
 }
+
+/// PACKET mode's chain today: the classifier at the inspect rate (about
+/// 96 kHz, 25 kHz channel), APRS fed from one of its discriminators. Over
+/// the whole channel a packet a few dB over the noise is under the FM
+/// threshold; the 12.5 kHz channel's discriminator copies it. A packet on
+/// 144.390 at about 7 dB over the channel noise (KB1AEV-15, 2026-11-07)
+/// decoded from the narrow one and not from the wide.
+#[test]
+fn a_weak_packet_decodes_from_the_classifiers_narrow_discriminator() {
+    use scannerd_engine::classifier::SignalClassifier;
+    let fs = 96_385.542;
+    let (mut narrow, mut wide) = (0, 0);
+    for seed in 0..8u32 {
+        let mut rng = Lcg(0x5eed_0000 ^ seed.wrapping_mul(2_654_435_761));
+        let noise = 0.05f32;
+        // Carrier 6 dB over the channel's total noise power (2 * noise^2 * var).
+        let p_noise = 2.0 * noise * noise / 3.0;
+        let amp = (p_noise * 10f32.powf(0.6)).sqrt();
+        let frame = aprs::build_ui("APRS", "N1TEST-9", "!4134.62N/07324.48W-hello");
+        let (mut ph, mut ta) = (0.0, 0.0);
+        let burst = aprs::modulate_burst(&frame, fs, -400.0, amp, DEV_HZ, &mut ph, &mut ta);
+        let quiet = fs as usize / 4;
+        let mut iq: Vec<Complex32> = (0..quiet).map(|_| Complex32::new(0.0, 0.0)).collect();
+        iq.extend(burst);
+        iq.extend((0..quiet).map(|_| Complex32::new(0.0, 0.0)));
+        for z in iq.iter_mut() {
+            *z += Complex32::new(noise * rng.gauss(), noise * rng.gauss());
+        }
+        let mut cls = SignalClassifier::new(fs);
+        cls.use_external_pagers();
+        let (mut a_narrow, mut a_wide) = (AprsDecoder::new(fs), AprsDecoder::new(fs));
+        let (mut n, mut w) = (0, 0);
+        for block in iq.chunks(fs as usize / 50) {
+            cls.process(block, 144.39e6);
+            n += a_narrow.process(cls.standard_discriminator_hz()).len();
+            w += a_wide.process(cls.monitor_discriminator_hz()).len();
+        }
+        narrow += usize::from(n >= 1);
+        wide += usize::from(w >= 1);
+    }
+    assert!(narrow >= 6, "narrow discriminator copied {narrow}/8 (wide {wide}/8)");
+    assert!(narrow > wide, "narrow {narrow}/8 is no better than wide {wide}/8");
+}

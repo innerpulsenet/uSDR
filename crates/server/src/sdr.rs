@@ -2545,6 +2545,7 @@ fn build_inspect(rate_hz: f64, offset_hz: f64, mode: SdrMode) -> (DecodeChain, S
         classifier.set_flex_only(true);
     } else if matches!(mode, SdrMode::Packet | SdrMode::Auto) {
         classifier.use_external_pagers();
+        classifier.set_data_only(mode == SdrMode::Packet);
     }
     (chain, classifier)
 }
@@ -6560,7 +6561,9 @@ fn run_sdr(
                 } = &mut demod
                 {
                     let disc = classifier.monitor_discriminator_hz();
-                    for packet in aprs.process(disc) {
+                    let mut aprs_heard = false;
+                    for packet in aprs.process(classifier.standard_discriminator_hz()) {
+                        aprs_heard = true;
                         decode_history.note(inspect_hz, "APRS");
                         let _ = events.send(SdrEvent::Decode {
                             inspect_hz,
@@ -6644,6 +6647,9 @@ fn run_sdr(
                     }
                     if let Some(baud) = flex_sync_baud {
                         classifier.note_flex_sync(baud);
+                    }
+                    if aprs_heard {
+                        classifier.note_aprs_frame();
                     }
                 }
                 // A receiver that has locked knows more than a heuristic, so
@@ -6943,9 +6949,14 @@ fn run_sdr(
             }
         };
 
-        // Packet runs every decoder over the same discriminator the classifier
+        // Packet runs every decoder over the discriminators the classifier
         // built, so whatever is in the passband gets decoded without being
-        // told in advance which format it is.
+        // told in advance which format it is. APRS reads the 12.5 kHz
+        // channel's: Bell 202 at 3 kHz deviation is about ±5 kHz wide, and
+        // over the whole 25 kHz channel a packet 7 dB over the noise sat
+        // under the discriminator's threshold and never decoded (it does
+        // from the narrow one, as a 12.5 kHz radio's TNC copies it). The
+        // pagers keep the wide one: 2400 Bd POCSAG and FLEX need the room.
         if let Demod::Packet {
             aprs,
             pocsag,
@@ -6953,7 +6964,9 @@ fn run_sdr(
         } = &mut demod
         {
             let disc = classifier.monitor_discriminator_hz();
-            for packet in aprs.process(disc) {
+            let mut aprs_heard = false;
+            for packet in aprs.process(classifier.standard_discriminator_hz()) {
+                aprs_heard = true;
                 decode_history.note(inspect_hz, "APRS");
                 let _ = events.send(SdrEvent::Decode {
                     inspect_hz,
@@ -6994,6 +7007,9 @@ fn run_sdr(
             }
             if let Some(baud) = pocsag_sync_baud {
                 classifier.note_pocsag_sync(baud);
+            }
+            if aprs_heard {
+                classifier.note_aprs_frame();
             }
             {
                 let d = flex.diagnostics();

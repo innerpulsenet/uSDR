@@ -248,6 +248,9 @@ pub struct SignalClassifier {
     /// [`note_flex_sync`].
     pagers_external: bool,
     flex_only: bool,
+    /// PACKET mode: the voice and trunking receivers stay off (see
+    /// [`Self::set_data_only`]).
+    data_only: bool,
     /// Messages recovered by the internal banks this block, drained by the
     /// event pass later in `process`. Held as fields to keep the borrow of
     /// `self.disc_buf` and the decoders inside one method.
@@ -310,6 +313,7 @@ impl SignalClassifier {
             last_dcs_match: None,
             pagers_external: false,
             flex_only: false,
+            data_only: false,
             pending_pocsag_messages: Vec::new(),
             pending_flex_messages: Vec::new(),
         }
@@ -336,6 +340,23 @@ impl SignalClassifier {
             self.last_passport_match = None;
             self.last_clocked = None;
             self.p25_detector = FrameDetector::with_packet_payload();
+        }
+    }
+
+    /// Dedicate the classifier to data: APRS, paging and the clocked-signal
+    /// survey, with the P25, DMR, NXDN, trunking and legacy digital-voice
+    /// receivers off. PACKET mode asks for data, and on 144.390 those
+    /// receivers found DMR bursts and D-STAR syncs in the AFSK and noise.
+    pub fn set_data_only(&mut self, enabled: bool) {
+        self.data_only = enabled;
+        if enabled {
+            self.last_p25_match = None;
+            self.last_p25_candidate = None;
+            self.last_dmr_match = None;
+            self.dmr_burst_run = None;
+            self.last_nxdn_match = None;
+            self.last_smartnet_match = None;
+            self.last_legacy_match = None;
         }
     }
 
@@ -462,6 +483,14 @@ impl SignalClassifier {
     pub fn note_flex_sync(&mut self, baud: u32) {
         self.flex_decoder.note_sync(baud);
         self.last_flex_match = Some((baud, 0, std::time::Instant::now()));
+    }
+
+    /// Record an APRS frame decoded by an externally-owned decoder. A frame
+    /// whose checksum passed is better evidence than the Bell 202
+    /// correlator, which misses weak bursts and left them labeled by their
+    /// symbol clock as 4-FSK voice (P25, DMR, NXDN96 candidates).
+    pub fn note_aprs_frame(&mut self) {
+        self.last_aprs_match = Some(std::time::Instant::now());
     }
 
     /// True while a FLEX frame is in flight. Packet/NFM AFC must freeze: FLEX
@@ -641,7 +670,7 @@ impl SignalClassifier {
         // One discriminator for the three consumers of the standard buffer —
         // P25, DMR and NXDN96 — instead of one atan2 pass inside each.
         self.standard_disc.process(&standard, &mut self.standard_hz);
-        let flex_hold = self.flex_only || self.flex_is_active();
+        let flex_hold = self.flex_only || self.data_only || self.flex_is_active();
         self.p25_buf.clear();
         let p25_frames = if flex_hold {
             Vec::new()
@@ -665,7 +694,7 @@ impl SignalClassifier {
         }
         self.filters.narrow_buf = narrow;
         self.filters.standard_buf = standard;
-        let smartnet_osws = if self.flex_only {
+        let smartnet_osws = if self.flex_only || self.data_only {
             Vec::new()
         } else {
             self.smartnet_decoder.process(&self.disc_buf)
