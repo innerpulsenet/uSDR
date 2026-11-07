@@ -100,6 +100,8 @@ fn probe(server: &str) -> anyhow::Result<()> {
     let until = std::time::Instant::now() + std::time::Duration::from_secs(4);
     let (mut frames, mut status, mut decodes, mut presence) = (0, 0, 0, None);
     let mut last: Option<Box<usdr_proto::FftFrame>> = None;
+    // What the classifier called the channel, frame by frame.
+    let mut classes = std::collections::BTreeMap::<String, usize>::new();
     let mut hello = None;
     let mut latest: Option<Box<usdr_proto::Status>> = None;
     while std::time::Instant::now() < until {
@@ -114,6 +116,9 @@ fn probe(server: &str) -> anyhow::Result<()> {
             Ok(net::NetEvent::Fft(f)) => {
                 link.stats.took_fft();
                 frames += 1;
+                if let Some(c) = f.classification.as_ref().filter(|c| c.active) {
+                    *classes.entry(c.protocol.clone()).or_default() += 1;
+                }
                 last = Some(f);
             }
             Ok(net::NetEvent::Status(s)) => {
@@ -131,6 +136,10 @@ fn probe(server: &str) -> anyhow::Result<()> {
     println!("tuning    center {:.6} MHz · receive {:.6} MHz · span {}", s.freq_hz / 1e6, s.inspect_hz / 1e6, tuning::fmt_hz(s.rate_hz));
     let heard = |i: usize| audio.heard[i].load(std::sync::atomic::Ordering::Relaxed);
     println!("stream    {frames} FFT frames in 4 s · {status} status · {decodes} decodes · audio A {} samples, B {}", heard(0), heard(1));
+    if !classes.is_empty() {
+        let list: Vec<String> = classes.iter().map(|(p, n)| format!("{p} ×{n}")).collect();
+        println!("class     {}", list.join(" · "));
+    }
     {
         let keep = audio.keep.lock().unwrap();
         let rms = |v: &[i16]| (v.iter().map(|&x| (x as f64 / 32768.0).powi(2)).sum::<f64>() / v.len().max(1) as f64).sqrt();
