@@ -2346,14 +2346,21 @@ fn lo_move_between(from: (f64, SdrMode), to: (f64, SdrMode), on: bool) -> LoMove
     }
 }
 
+/// The tuner's anti-alias filter rolls off over about this fraction of the
+/// sample rate at each edge of the band: 0.3-0.4 MHz at 8 MS/s on the RSP1A.
+const EDGE_ROLLOFF_FRACTION: f64 = 0.04;
+
 /// The span actually shown, which shrinks when the LO is parked off-centre:
 /// centered on the receive frequency, it can only reach as far as the
-/// nearer edge of the sampled band.
+/// nearer edge of the sampled band, less that edge's filter rolloff. Without
+/// the rolloff margin the window ran right to the band edge on the LO's side
+/// (a dark strip there) while stopping twice the offset short on the other,
+/// so the spectrum looked shifted toward the clean side.
 fn display_rate_for(rate_hz: f64, lo_on: bool, mode: SdrMode) -> f64 {
     if !lo_active(rate_hz, lo_on, mode) {
         rate_hz
     } else if lo_plan_zero_if() {
-        rate_hz - 2.0 * zero_if_offset(rate_hz, mode)
+        rate_hz - 2.0 * (zero_if_offset(rate_hz, mode) + rate_hz * EDGE_ROLLOFF_FRACTION)
     } else {
         rate_hz * LO_USABLE_FRACTION
     }
@@ -8244,11 +8251,11 @@ mod tests {
             let off = lo_offset_for(rate, true, mode);
             let edge = f64::from(mode.bandwidth_hz()) / 2.0 + f64::from(mode.passband_offset_hz()).abs();
             assert!(off >= edge + 15e3, "{mode:?}: DC hump ({off} Hz) reaches the passband edge ({edge} Hz)");
-            let keep = if rate >= 1e6 { 0.8 } else { 0.65 };
+            let keep = if rate >= 1e6 { 0.8 } else { 0.6 };
             assert!(display_rate_for(rate, true, mode) >= rate * keep, "{mode:?} at {rate} keeps most of the span");
         }
-        assert_eq!(display_rate_for(5e6, true, SdrMode::Nfm), 4.8e6);
-        assert_eq!(display_rate_for(5e6, true, SdrMode::Wfm), 4.7e6);
+        assert_eq!(display_rate_for(5e6, true, SdrMode::Nfm), 4.4e6);
+        assert_eq!(display_rate_for(5e6, true, SdrMode::Wfm), 4.3e6);
         // A span change moves it too once the 15% cap binds: 100 kHz at
         // 2 MS/s is 75 kHz at 500 kS/s, and WFM's 150 kHz no longer fits.
         assert_eq!(lo_move_between((2e6, SdrMode::Nfm), (8e6, SdrMode::Nfm), true), LoMove::Stay);
