@@ -53,9 +53,15 @@ pub const PAGER_DEVIATION_HZ: f32 = 8_000.0;
 /// raster of offset (a carrier between two grid channels) plus full ±4.8 kHz
 /// deviation while the decoders' DC reference is still converging. The upper
 /// bound is the adjacent channel: its carrier centre must land in the
-/// stopband, because the box decimator alone passes it at only −1 dB and the
-/// discriminator then captures whichever neighbour is strongest.
+/// stopband, because the decimator's anti-alias stage passes it untouched
+/// and the discriminator then captures whichever neighbour is strongest.
 const CHANNEL_FILTER_HZ: f32 = 20_000.0;
+/// Anti-alias taps per unit of decimation. The decimating stage must be flat
+/// over the channel filter's ±20 kHz and stopped from `rate − 20 kHz` (about
+/// 77 kHz), the nearest frequency that folds into it; a Blackman–Harris
+/// windowed sinc with `14·every + 1` taps has a transition of about
+/// `8·span/taps ≈ 0.57·rate`, which fits that gap at every span.
+const ANTI_ALIAS_TAPS_PER_DECIM: usize = 14;
 /// How long FLEX sync evidence mutes the channel's POCSAG decoders: a bit
 /// more than one FLEX frame period, so a continuously transmitting channel
 /// stays muted while it is on, and a quiet one unmutes within a frame.
@@ -82,19 +88,22 @@ pub struct PagerChannel {
     nco: Nco,
     /// Span-rate mix output, reused per block.
     mixed: Vec<Complex32>,
-    /// CIC-style running decimator: box-average over `every` samples.
-    acc_re: f32,
-    acc_im: f32,
-    count: usize,
-    every: usize,
+    /// The decimator: a low-pass at the span rate that computes only every
+    /// `every`-th output. It replaced a box average over `every` samples,
+    /// whose sidelobes passed carriers on the 25 kHz grid that fold into the
+    /// channel at −24 dB (275 kHz away at 2.048 MS/s lands 17.6 kHz from
+    /// centre), where no filter after the decimation can reach them: a paging
+    /// transmitter 24 dB stronger three hundred kilohertz off captured the
+    /// discriminator. This stage stops them by more than 70 dB.
+    decim: DecimFir,
     /// Sample rate this channel really delivers: `span_rate / every`.
     pub rate: f64,
     pub flex: FlexDecoder,
     pub pocsag: [PocsagDecoder; 3],
     disc: NbfmDemod,
-    /// Channel selectivity the box average does not provide: a complex
+    /// Channel selectivity the anti-alias stage does not provide: a complex
     /// low-pass at the decimated rate, so the adjacent 25 kHz carrier (which
-    /// the box passes at −1 dB) is actually stopped before the discriminator
+    /// that stage passes whole) is actually stopped before the discriminator
     /// can capture it.
     fir: DecimFir,
     filtered: Vec<Complex32>,
@@ -138,10 +147,12 @@ impl PagerChannel {
                 nco
             },
             mixed: Vec::new(),
-            acc_re: 0.0,
-            acc_im: 0.0,
-            count: 0,
-            every,
+            decim: DecimFir::new(
+                (rate * 0.5) as f32,
+                span_rate as f32,
+                every,
+                ANTI_ALIAS_TAPS_PER_DECIM * every + 1,
+            ),
             rate,
             flex: FlexDecoder::new(rate),
             pocsag: [
@@ -173,18 +184,7 @@ impl PagerChannel {
         out_audio: &mut Vec<f32>,
     ) {
         self.nco.mix(iq, &mut self.mixed);
-        for &m in &self.mixed {
-            self.acc_re += m.re;
-            self.acc_im += m.im;
-            self.count += 1;
-            if self.count == self.every {
-                let d = self.every as f32;
-                self.chan_iq.push(Complex32::new(self.acc_re / d, self.acc_im / d));
-                self.acc_re = 0.0;
-                self.acc_im = 0.0;
-                self.count = 0;
-            }
-        }
+        self.decim.process(&self.mixed, &mut self.chan_iq);
         // One discriminator pass and one decoder pass per input block.
         if !self.chan_iq.is_empty() {
             self.fir.process(&self.chan_iq, &mut self.filtered);
@@ -563,7 +563,7 @@ mod tests {
     }
 
     /// The channel filter is the whole reason a dwell on a quiet channel
-    /// next to a busy one stays quiet: without it the box decimator passes
+    /// next to a busy one stays quiet: without it the decimator passes
     /// the adjacent 25 kHz carrier at −1 dB and the discriminator captures
     /// whichever neighbour is strongest. A weaker carrier carrying OUR page
     /// must still decode while a stronger neighbour transmits on the next
@@ -591,6 +591,70 @@ mod tests {
             !texts.iter().any(|t| t == "NEIGHBOUR"),
             "the adjacent channel leaked through the channel filter"
         );
+    }
+
+    /// Power the live channel's decimated, filtered IQ carries for a tone at
+    /// `tone_hz` in the span, after the channel's start-up transient.
+    fn channel_power(tone_hz: f64, offset_hz: f64) -> f64 {
+        const SPAN: f64 = 2_048_000.0;
+        let mut ch = PagerChannel::new(offset_hz, SPAN);
+        let mut ph = 0.0f64;
+        let iq: Vec<Complex32> = (0..(0.05 * SPAN) as usize)
+            .map(|_| {
+                ph = (ph + std::f64::consts::TAU * tone_hz / SPAN) % std::f64::consts::TAU;
+                Complex32::new(ph.cos() as f32, ph.sin() as f32)
+            })
+            .collect();
+        let mut kept = Vec::new();
+        let (mut f, mut p, mut a) = (Vec::new(), Vec::new(), Vec::new());
+        for block in iq.chunks(16_384) {
+            ch.process(block, 8, &mut f, &mut p, &mut a);
+            kept.extend_from_slice(&ch.filtered);
+        }
+        let tail = &kept[kept.len() / 2..];
+        tail.iter().map(|z| f64::from(z.norm_sqr())).sum::<f64>() / tail.len() as f64
+    }
+
+    /// Paging carriers sit on the 25 kHz grid, and at 2.048 MS/s the channel
+    /// rate is 97.52 kHz, so a carrier 275 kHz away folds to −17.6 kHz from
+    /// the live channel's centre: inside the 20 kHz channel filter, where no
+    /// filter after the decimation can take it out again. The decimator
+    /// itself has to stop it. (A box average passed it at −24 dB.)
+    #[test]
+    fn a_carrier_that_folds_into_the_channel_is_stopped_by_the_decimator() {
+        let on = channel_power(50_000.0 + 1_000.0, 50_000.0);
+        for away in [175_000.0f64, -275_000.0, 275_000.0, 300_000.0] {
+            let off = channel_power(50_000.0 + away, 50_000.0);
+            let db = 10.0 * (off / on).log10();
+            assert!(
+                db < -70.0,
+                "a carrier {away} Hz away reaches the channel at {db:.1} dB"
+            );
+        }
+    }
+
+    /// The same fold as decodes: a page 20 dB weaker than a FLEX carrier
+    /// 275 kHz away must still decode, and the far carrier must not.
+    #[test]
+    fn a_strong_carrier_that_folds_into_the_channel_does_not_capture_it() {
+        const SPAN: f64 = 2_048_000.0;
+        const OFFSET_HZ: f64 = 50_000.0;
+
+        let ours = frames_named("WANTED PAGE", 100_001, 3);
+        let theirs = frames_named("FAR CARRIER", 100_002, 3);
+        let mut phase = 0.0f64;
+        let mut far_phase = 0.0f64;
+        let a = fm_at_span(&ours, 96_000.0, SPAN, OFFSET_HZ, 0.1, &mut phase);
+        let b = fm_at_span(&theirs, 96_000.0, SPAN, OFFSET_HZ - 275_000.0, 1.0, &mut far_phase);
+        let iq: Vec<Complex32> = a.iter().zip(b.iter()).map(|(x, y)| x + y).collect();
+
+        let mut bank = PagerBank::new(SPAN, 480_000.0);
+        let texts = decode_at(&mut bank, &iq, SPAN, OFFSET_HZ);
+        assert!(
+            texts.iter().any(|t| t == "WANTED PAGE"),
+            "the carrier 275 kHz away captured the channel; texts={texts:?}"
+        );
+        assert!(!texts.iter().any(|t| t == "FAR CARRIER"));
     }
 
     /// The sweep starts on the tuned channel and walks outward, so pointing
