@@ -44,8 +44,13 @@ const HOLD_SAMPLES: u32 = 512_000;
 const FADE_SAMPLES: f32 = 256.0;
 /// Leakage per update, toward the reference tap alone.
 const LEAK: f32 = 1e-5;
-/// The input power is tracked over about this many samples.
+/// The input power is tracked over about this many samples, except that a
+/// sample this many times the tracked power resets it.
 const POWER_SAMPLES: f32 = 4_096.0;
+const SNAP_RISE: f32 = 4.0;
+/// Output power, against the input's tracked power of one, past which the
+/// taps have run away: a channel inverse keeps it near one.
+const RUNAWAY_POWER: f32 = 100.0;
 
 pub struct Cma {
     mu: f32,
@@ -119,8 +124,19 @@ impl Cma {
         for z in iq.iter_mut() {
             let x = *z;
             let p = x.norm_sqr();
-            if self.power == 0.0 {
+            // A step up (a retune landing on a station, the tuner settling)
+            // is taken at once: normalized by the quiet that came before,
+            // the station would reach the taps tens of decibels hot, and the
+            // update would throw them to infinity in a few samples.
+            if self.power == 0.0 || p > SNAP_RISE * self.power {
+                // The history was normalized by the old power: rescale it so
+                // the plain path's delayed samples keep their level.
+                let old = self.power.max(1e-20);
                 self.power = p.max(1e-20);
+                let r = (old / self.power).sqrt();
+                for h in self.hist.iter_mut() {
+                    *h *= r;
+                }
             }
             self.power += (p - self.power) * k_pow;
             let g = 1.0 / self.power.max(1e-20).sqrt();
@@ -136,7 +152,17 @@ impl Cma {
             }
             // Drive |y|² to one; the gradient of (|y|² − 1)² against each tap.
             let plain = win[REF_TAP];
-            let m = y.norm_sqr();
+            let mut m = y.norm_sqr();
+            // Taps that ran away anyway (or NaN, which the gate would read
+            // as a flat envelope and engage) start over on the plain path.
+            if !(m < RUNAWAY_POWER) {
+                // Field by field: `win` still borrows the history.
+                self.taps = [Complex32::new(0.0, 0.0); TAPS];
+                self.taps[REF_TAP] = Complex32::new(1.0, 0.0);
+                (self.engaged, self.mix, self.since_change) = (false, 0.0, 0);
+                y = plain;
+                m = y.norm_sqr();
+            }
             let e = y * (m - 1.0) * self.mu;
             for (w, h) in self.taps.iter_mut().zip(win) {
                 *w -= e * h.conj();
@@ -184,7 +210,7 @@ impl Cma {
         let want = if self.engaged {
             !(r_in < RELEASE_RIPPLE || r_out > 0.95 * r_in)
         } else {
-            r_in > ENGAGE_RIPPLE && r_out < 0.8 * r_in
+            r_out.is_finite() && r_in > ENGAGE_RIPPLE && r_out < 0.8 * r_in
         };
         if want != self.engaged {
             self.engaged = want;
@@ -349,6 +375,31 @@ mod tests {
         assert!((after - before).abs() < 0.5, "{before:.1} → {after:.1}");
         assert!(!eq.engaged(), "nothing to undo, so the plain path");
         assert!(eq.main_tap_share() > 0.95);
+    }
+
+    #[test]
+    fn a_station_after_quiet() {
+        // A retune: the channel hears near nothing (the tuner between bands,
+        // the stream reopening) and then the station, 40 to 80 dB up. The
+        // taps once ran to NaN on that step, the gate took NaN for a flat
+        // envelope and engaged, and the pilot and RDS went for good.
+        let paths = [(0, 1.0, 0.0), (2, 0.1, 1.0)];
+        let st = station(4.0, &paths, 45.0, 7);
+        let (direct, _) = equalized(&st);
+        let want = stereo_snr(&direct[direct.len() - FS as usize..]);
+        let mut rng = Rng(9);
+        for (quiet_secs, level) in [(0.02, 1e-4f32), (0.05, 0.0), (0.2, 1e-3), (0.3, 1e-2)] {
+            let mut iq: Vec<Complex32> = (0..(quiet_secs * FS) as usize)
+                .map(|_| Complex32::new(rng.gauss() as f32, rng.gauss() as f32) * level)
+                .collect();
+            iq.extend(st.iter().map(|z| z * 0.05));
+            let (out, eq) = equalized(&iq);
+            let got = stereo_snr(&out[out.len() - FS as usize..]);
+            println!("{quiet_secs} s at {level}: stereo S/N {got:.1} dB (no step {want:.1}), main tap {:.3}", eq.main_tap_share());
+            assert!(out.iter().all(|z| z.re.is_finite() && z.im.is_finite()));
+            assert!(eq.main_tap_share() > 0.9, "{}", eq.main_tap_share());
+            assert!(got > want - 1.0, "{got:.1} against {want:.1}");
+        }
     }
 
     #[test]
