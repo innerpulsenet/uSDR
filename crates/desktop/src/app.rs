@@ -2264,6 +2264,42 @@ mod tests {
     }
 
     #[test]
+    fn rds_text_coming_and_going_never_moves_the_receiver_bar() {
+        // Broadcast FM with RDS whose RadioText arrives, grows and changes:
+        // the receiver readout and the bar's height hold still throughout.
+        for w in [1400.0, 1600.0, 1760.0, 1900.0] {
+            let mut h = harness_wh(w, 1000.0);
+            {
+                let app = &mut h.state_mut().app;
+                app.status.mode = Mode::Wfm;
+                app.status.inspect_hz = 100.5e6;
+                app.status.freq_hz = 100.5e6;
+                app.status.bandwidth_hz = 200e3;
+            }
+            h.run_steps(4);
+            let lcd = h.get_by_label("RECEIVER A").rect();
+            let texts = ["", "WIYY", "98 Rock · Now playing", "98 Rock · Now playing METALLICA - ENTER SANDMAN on the station that rocks Baltimore all day long", "short"];
+            for (k, t) in texts.iter().cycle().take(15).enumerate() {
+                {
+                    let app = &mut h.state_mut().app;
+                    app.status.rds = Some(proto::Rds {
+                        pi: "1234".into(),
+                        ps: Some("WIYY".into()),
+                        ps_steady: true,
+                        rt: (!t.is_empty()).then(|| t.to_string()),
+                        rt_partial: (k % 2 == 1).then(|| format!("{t}░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░")),
+                        rt_progress: 0.5,
+                        ..Default::default()
+                    });
+                }
+                h.run_steps(2);
+                let now = h.get_by_label("RECEIVER A").rect();
+                assert_eq!(now, lcd, "{w}: the readout moved with RDS text {t:?} (step {k})");
+            }
+        }
+    }
+
+    #[test]
     fn the_shade_strip_keeps_the_frequency_and_unrolls() {
         let mut h = harness();
         h.run_steps(2);

@@ -426,6 +426,11 @@ pub struct Panafall {
     pub hold: Option<Hold>,
     /// Where each receiver's flag was drawn last frame (A, B), for clicks.
     flags: [Option<Rect>; 2],
+    /// Receiver A's flag drawn as the one-line pill, and since when the
+    /// trace has stayed clear of the full card (to wait out before it
+    /// comes back): a trace that rises and falls under the card every
+    /// frame must not flip the flag with it.
+    flag_compact: (bool, Option<f64>),
     /// Decodes just heard: where, in what color, and when first drawn.
     pings: Vec<(f64, Color32, Option<f64>)>,
 }
@@ -517,6 +522,7 @@ impl Default for Panafall {
             edge_drag: None,
             rx_b: None,
             flags: [None, None],
+            flag_compact: (false, None),
             pings: Vec::new(),
             archive: VecDeque::new(),
             archived: 0,
@@ -1853,7 +1859,9 @@ impl Panafall {
         if view.show_peaks
             && let Some(f) = frame
         {
-            let mut placed: Vec<Rect> = Vec::new();
+            // The receivers' flags (as last drawn) are taken already, so a
+            // spot's label stacks clear of them rather than under them.
+            let mut placed: Vec<Rect> = self.flags.iter().flatten().map(|r| r.expand(2.0)).collect();
             for p in &f.peaks {
                 let x = self.x_for(p.freq_hz, pan);
                 if x < pan.left() || x > pan.right() {
@@ -1939,7 +1947,26 @@ impl Panafall {
             // The trace's highest point over a span of x, for the flag to
             // judge whether its card would cover the signal.
             let peak_top = |x0: f32, x1: f32| line.iter().filter(|p| p.x >= x0 && p.x <= x1).map(|p| p.y).fold(f32::INFINITY, f32::min);
-            self.flags[0] = Some(flag.paint(&painter, &frost, pan, pos2(ix, line_y_at(&line, ix).unwrap_or(pan.center().y)), active_a, &peak_top));
+            // Pill at once when the trace rises under the card; the card
+            // back only once the trace has kept well clear for two seconds.
+            let (card, short) = flag.card_rect(pan, ix);
+            let compact = match self.flag_compact {
+                _ if short => (true, None),
+                (false, _) => (peak_top(card.left(), card.right()) < card.bottom() + 4.0, None),
+                (true, since) => {
+                    if peak_top(card.left(), card.right()) < card.bottom() + 18.0 {
+                        (true, None)
+                    } else {
+                        let t0 = since.unwrap_or(now);
+                        if now - t0 >= 2.0 { (false, None) } else { (true, Some(t0)) }
+                    }
+                }
+            };
+            self.flag_compact = compact;
+            if compact.1.is_some() {
+                crate::anim::after(ui.ctx(), std::time::Duration::from_millis(250));
+            }
+            self.flags[0] = Some(flag.paint(&painter, &frost, pan, pos2(ix, line_y_at(&line, ix).unwrap_or(pan.center().y)), active_a, compact.0));
         } else {
             self.flags[0] = None;
         }
@@ -2520,20 +2547,24 @@ pub struct FlagRds {
 
 impl SliceFlag {
     /// `at`: the carrier's x and the trace's height there.
-    /// `peak_top(x0, x1)`: the trace's highest y over that span.
-    fn paint(&self, painter: &egui::Painter, frost: &Frost, pan: Rect, at: Pos2, active: bool, peak_top: &dyn Fn(f32, f32) -> f32) -> Rect {
-        let (x, trace_y) = (at.x, at.y);
-        // The card goes on the side of the carrier the signal is not: left
-        // of it on upper sideband, right of it on lower, right otherwise.
+    /// Where the full card would sit for a carrier at `x`, and whether the
+    /// panadapter is too short for it at all.
+    fn card_rect(&self, pan: Rect, x: f32) -> (Rect, bool) {
         let prefer_left = self.mode == Mode::Usb || self.mode.is_sideband_data();
         let full_h = if self.rds.is_some() { 84.0 } else { 62.0 };
         let full_w = if self.rds.is_some() { 296.0 } else { 248.0 };
-        let (side_left, _) = flag_side(x, full_w, pan, prefer_left);
-        // A short panadapter, or a trace that rises into where the card
-        // would sit, gets the one-line flag pinned to the top instead.
-        let card_x0 = if side_left { x - 10.0 - full_w } else { x + 10.0 };
-        let card_bottom = pan.top() + 8.0 + full_h;
-        if pan.height() < 220.0 || peak_top(card_x0, card_x0 + full_w) < card_bottom + 4.0 {
+        let (_, left) = flag_side(x, full_w, pan, prefer_left);
+        (Rect::from_min_size(pos2(left, pan.top() + 8.0), vec2(full_w, full_h)), pan.height() < 220.0)
+    }
+
+    /// `compact`: the one-line flag pinned to the top instead of the card,
+    /// where the card would cover the trace it describes.
+    fn paint(&self, painter: &egui::Painter, frost: &Frost, pan: Rect, at: Pos2, active: bool, compact: bool) -> Rect {
+        let (x, _) = (at.x, at.y);
+        // The card goes on the side of the carrier the signal is not: left
+        // of it on upper sideband, right of it on lower, right otherwise.
+        let prefer_left = self.mode == Mode::Usb || self.mode.is_sideband_data();
+        if compact {
             return self.paint_compact(painter, frost, pan, x, active, prefer_left);
         }
         if let Some(rds) = &self.rds {
@@ -2554,8 +2585,7 @@ impl SliceFlag {
         let (on_left, left) = flag_side(x, w, pan, prefer_left);
         let right_side = !on_left;
         // Keep the card clear of the trace where there is room above it.
-        let top = (pan.top() + 8.0).max((trace_y - h - 14.0).min(pan.top() + 8.0));
-        let r = Rect::from_min_size(pos2(left, top), vec2(w, h));
+        let r = Rect::from_min_size(pos2(left, pan.top() + 8.0), vec2(w, h));
         frost.plate(painter, r, 4, alpha(theme::AMBER, 0.45));
         // The index tick: the active receiver.
         if active {
@@ -2808,6 +2838,33 @@ fn paint_b_flag(painter: &egui::Painter, frost: &Frost, pan: Rect, x: f32, b: &R
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_trace_rising_and_falling_under_the_flag_does_not_flip_it() {
+        // A broadcast station's sidebands bounce under the card frame to
+        // frame: the flag goes to the pill once and stays there, not in and
+        // out with every frame.
+        let mut h = harness();
+        let mut heights = Vec::new();
+        for k in 0..24 {
+            let mut pwr = vec![-100.0f32; 1024];
+            if k % 2 == 0 {
+                // Up past the card's foot, just right of the carrier.
+                for v in &mut pwr[702..820] {
+                    *v = -12.0;
+                }
+            }
+            pwr[700] = -40.0;
+            let frame = FftFrame { center_hz: 146e6, rate_hz: 2e6, inspect_hz: 146.2e6, pwr, ..Default::default() };
+            h.state_mut().pan.push(&frame, &View::default(), k as f64 * 0.05);
+            h.state_mut().frame = frame;
+            h.run_steps(1);
+            heights.push(h.state().pan.flags[0].map(|r| r.height().round()));
+        }
+        let after_first: Vec<_> = heights.iter().skip(2).collect();
+        assert!(after_first.windows(2).all(|w| w[0] == w[1]), "the flag changed shape: {heights:?}");
+        assert_eq!(heights.last(), Some(&Some(22.0)), "it is the pill: {heights:?}");
+    }
 
     #[test]
     fn the_flag_sits_off_the_sideband_where_it_fits() {
