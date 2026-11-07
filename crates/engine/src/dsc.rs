@@ -28,6 +28,12 @@
 //!
 //! **The method.**
 //!
+//! - Impulse noise, which on 2187.5 kHz at night is lightning crashes
+//!   several a second 20 to 40 dB over the call, is blanked first by the
+//!   RTTY decoder's [`Blanker`]. Each bit's log-likelihood ratio then
+//!   shrinks with the share of it blanked, so a crash leaves a character
+//!   to its other copy, and the fading correction and the bit clock are
+//!   held through it.
 //! - The audio is mixed from 1700 Hz to 0 Hz and decimated to about
 //!   3.2 kHz, the band where the pair can be. A 512-point spectrum,
 //!   averaged over about half a second, finds the pair as in the RTTY
@@ -62,7 +68,7 @@
 //!   cut off, and the copies heard after the signal went (which the fading
 //!   correction reads as confidently as signal) are not used.
 
-use crate::rtty::Atc;
+use crate::rtty::{Atc, Blanker, MaskTrack, unblank};
 use num_complex::Complex32;
 use rustfft::{Fft, FftPlanner};
 use std::f32::consts::{PI, TAU};
@@ -443,6 +449,8 @@ impl Decim2 {
 struct Demod {
     fs3: f32,
     chan: Decim2,
+    /// Blanked audio followed to the matched filters' outputs.
+    track: MaskTrack,
     osc_hi: Osc,
     osc_lo: Osc,
     ring_hi: Vec<Complex32>,
@@ -454,12 +462,19 @@ struct Demod {
 }
 
 impl Demod {
-    fn new(fs2: f32) -> Self {
+    /// `front_taps` long a front filter decimating by `decim` comes before.
+    fn new(fs2: f32, front_taps: usize, decim: usize) -> Self {
         let fs3 = 0.5 * fs2;
         let len = ((fs3 / BAUD).round() as usize).max(2);
+        let chan = lowpass(fs2, CHAN_PASS_HZ, CHAN_STOP_HZ, 255);
+        // Both filters delay a blanked stretch by half their length, and
+        // their main lobes spread it by about a quarter either way.
+        let lag = (front_taps - 1) / 2 / decim + (chan.len() - 1) / 2;
+        let margin = front_taps.div_ceil(4 * decim) + chan.len().div_ceil(4);
         Self {
             fs3,
-            chan: Decim2::new(lowpass(fs2, CHAN_PASS_HZ, CHAN_STOP_HZ, 255)),
+            track: MaskTrack::new(lag, 2 * len, margin, decim),
+            chan: Decim2::new(chan),
             osc_hi: Osc::new(0.5 * SHIFT_HZ as f64, fs3 as f64),
             osc_lo: Osc::new(-0.5 * SHIFT_HZ as f64, fs3 as f64),
             ring_hi: vec![Complex32::new(0.0, 0.0); len],
@@ -487,10 +502,16 @@ impl Demod {
         self.sum_hi = Complex32::new(0.0, 0.0);
         self.sum_lo = Complex32::new(0.0, 0.0);
         self.since_resum = 0;
+        self.track.reset();
     }
 
+    /// One band sample, `blanked` of the audio samples it stands for
+    /// blanked as impulse noise: when an output is due, the tone
+    /// amplitudes (scaled back up for the blanked share of their bit), the
+    /// share, and whether blanking is near.
     #[inline]
-    fn push(&mut self, z: Complex32) -> Option<(f32, f32)> {
+    fn push(&mut self, z: Complex32, blanked: u16) -> Option<(f32, f32, f32, bool)> {
+        let (share, near) = self.track.push(blanked);
         let y = self.chan.push(z)?;
         let h = y * self.osc_hi.next();
         let l = y * self.osc_lo.next();
@@ -510,7 +531,8 @@ impl Demod {
             self.sum_lo = self.ring_lo.iter().sum();
         }
         let inv = 1.0 / self.ring_hi.len() as f32;
-        Some((self.sum_hi.norm() * inv, self.sum_lo.norm() * inv))
+        let (hi, lo) = unblank(share, self.sum_hi.norm() * inv, self.sum_lo.norm() * inv);
+        Some((hi, lo, share, near))
     }
 }
 
@@ -1765,10 +1787,16 @@ impl CallRx {
 }
 
 pub struct DscDecoder {
+    blanker: Blanker,
+    /// Audio samples blanked since the last band sample.
+    blanked: u16,
     front: FrontEnd,
     spec: Spectrum,
     demod: Demod,
     hist: Vec<Complex32>,
+    /// How many audio samples behind each band sample in `hist` were
+    /// blanked.
+    hist_blank: Vec<u16>,
     /// Band samples taken in so far; also the index of the next one.
     n2: u64,
     /// Center of the pair as an offset from 1700 Hz, while locked.
@@ -1788,6 +1816,9 @@ pub struct DscDecoder {
     half_len: f32,
     ph: f32,
     prev: (f32, f32, f32),
+    /// The previous sample's unblanked share and whether an impulse was
+    /// near it.
+    prev_w: (f32, bool),
     have_prev: bool,
     last_v: f32,
     // Characters.
@@ -1819,13 +1850,19 @@ impl DscDecoder {
         let decim = ((fs / BAND_RATE).round() as usize).max(1);
         let fs2 = fs / decim as f32;
         let spec = Spectrum::new(fs2);
-        let demod = Demod::new(fs2);
+        let front = FrontEnd::new(fs, decim);
+        let demod = Demod::new(fs2, front.taps_re.len(), decim);
         let spb = demod.fs3 / BAUD;
         let half_len = 0.5 * demod.ring_hi.len() as f32;
         let hold_frames = (HOLD_S * fs2 / spec.hop as f32) as u32;
+        let mut blanker = Blanker::new(fs);
+        blanker.set_pair(Some(Self::pair_band(None)));
         Self {
-            front: FrontEnd::new(fs, decim),
+            blanker,
+            blanked: 0,
+            front,
             hist: vec![Complex32::new(0.0, 0.0); (HISTORY_S * fs2) as usize],
+            hist_blank: vec![0; (HISTORY_S * fs2) as usize],
             spec,
             demod,
             n2: 0,
@@ -1842,6 +1879,7 @@ impl DscDecoder {
             half_len,
             ph: spb,
             prev: (0.0, 0.0, 0.0),
+            prev_w: (1.0, false),
             have_prev: false,
             last_v: 0.0,
             soft: [0.0; RING],
@@ -1859,17 +1897,31 @@ impl DscDecoder {
     pub fn push(&mut self, audio: &[f32]) {
         let cap = self.hist.len() as u64;
         for &x in audio {
+            // Impulses are blanked before the band is cut: at 2187.5 kHz
+            // by night, crashes come several a second.
+            let Some((x, blanked)) = self.blanker.push(x) else { continue };
+            self.blanked += u16::from(blanked);
             let Some(z) = self.front.push(x) else { continue };
+            let b = std::mem::take(&mut self.blanked);
             let i = self.n2;
             self.n2 += 1;
             self.hist[(i % cap) as usize] = z;
+            self.hist_blank[(i % cap) as usize] = b;
             if self.spec.push(z) && self.evaluate(i) {
                 continue;
             }
             if self.center.is_some() {
-                self.demod_sample(z, i);
+                self.demod_sample(z, b, i);
             }
         }
+    }
+
+    /// Where the pair can be, in audio Hz, with its keying sidebands:
+    /// around the center when one is held, anywhere searched when not.
+    fn pair_band(center: Option<f32>) -> (f32, f32) {
+        let half = 0.5 * SHIFT_HZ + BAUD + center.map_or(SEARCH_HZ, |_| 0.0);
+        let c = AUDIO_CENTER_HZ + center.unwrap_or(0.0);
+        (c - half, c + half)
     }
 
     pub fn take(&mut self) -> Vec<DscEvent> {
@@ -1941,12 +1993,14 @@ impl DscDecoder {
             self.center = None;
             self.snr_db = None;
         }
+        self.blanker.set_pair(Some(Self::pair_band(self.center)));
         false
     }
 
     /// Lock at `c` and demodulate the history up to band sample `i`.
     fn lock(&mut self, c: f32, i: u64) {
         self.center = Some(c);
+        self.blanker.set_pair(Some(Self::pair_band(self.center)));
         self.present = true;
         self.absent = 0;
         self.snr_db = Some(self.spec.snr_db(&self.spec.pair_at(c)));
@@ -1956,7 +2010,7 @@ impl DscDecoder {
         let start = (i + 1).saturating_sub(cap).max(self.replay_floor);
         for j in start..=i {
             let z = self.hist[(j % cap) as usize];
-            self.demod_sample(z, j);
+            self.demod_sample(z, self.hist_blank[(j % cap) as usize], j);
         }
     }
 
@@ -1970,17 +2024,22 @@ impl DscDecoder {
         self.call = None;
     }
 
-    fn demod_sample(&mut self, z: Complex32, i: u64) {
-        let Some((hi, lo)) = self.demod.push(z) else { return };
-        let cur = (self.atc.step(hi, lo), hi, lo);
+    fn demod_sample(&mut self, z: Complex32, blanked: u16, i: u64) {
+        let Some((hi, lo, share, near)) = self.demod.push(z, blanked) else { return };
+        // The levels the fading correction follows are left alone through
+        // an impulse, as is the bit clock.
+        let cur = (self.atc.step_or_hold(hi, lo, near), hi, lo);
+        let cur_w = (1.0 - share, near);
         if !self.have_prev {
             self.prev = cur;
+            self.prev_w = cur_w;
             self.have_prev = true;
             return;
         }
         let prev = std::mem::replace(&mut self.prev, cur);
+        let prev_w = std::mem::replace(&mut self.prev_w, cur_w);
         self.ph -= 1.0;
-        if (prev.0 > 0.0) != (cur.0 > 0.0) {
+        if (prev.0 > 0.0) != (cur.0 > 0.0) && !prev_w.1 && !cur_w.1 {
             // The matched filter crosses zero half a filter after an edge
             // and holds a whole bit half a filter after that.
             let back = 1.0 - prev.0 / (prev.0 - cur.0);
@@ -1996,18 +2055,21 @@ impl DscDecoder {
             let at = |p: f32, c: f32| p + (c - p) * a;
             let (v, h, l) = (at(prev.0, cur.0), at(prev.1, cur.1), at(prev.2, cur.2));
             self.ph += self.spb;
-            self.bit(v, h, l, i);
+            self.bit(v, h, l, prev_w.0.min(cur_w.0), i);
         }
     }
 
-    /// One bit; `i` is the band sample it came out of.
-    fn bit(&mut self, v: f32, hi: f32, lo: f32, i: u64) {
-        self.last_v = v;
+    /// One bit, `w` of it left after blanking; `i` is the band sample it
+    /// came out of.
+    fn bit(&mut self, v: f32, hi: f32, lo: f32, w: f32, i: u64) {
+        self.last_v = v * w;
         let t = self.nbits;
         let (a, b) = (hi * hi, lo * lo);
         self.tone_pow[(t % RING as u64) as usize] = (a.max(b), a.min(b));
-        // The upper tone is B, binary 0: the ratio is positive for Y.
-        self.soft[(t % RING as u64) as usize] = (-v * self.atc.llr_scale()).clamp(-LLR_MAX, LLR_MAX);
+        // The upper tone is B, binary 0: the ratio is positive for Y. A bit
+        // partly blanked keeps only that part of its energy, and its ratio
+        // shrinks with it: a crash leaves the character to its other copy.
+        self.soft[(t % RING as u64) as usize] = (-v * self.atc.llr_scale() * w).clamp(-LLR_MAX, LLR_MAX);
         self.nbits += 1;
         if t < 9 {
             return;
@@ -2688,6 +2750,80 @@ mod tests {
             }
             println!("{:>16} {row}", ch.name());
         }
+    }
+
+    /// Calls of each of the three kinds, `n` seeds of each, through white
+    /// noise at `snr` and impulse noise at `rate` bursts a second: those
+    /// decoded right, and those that passed their checks but were wrong.
+    fn impulse_calls(snr: f32, rate: f32, n: u64) -> (u64, u64, u64) {
+        let (mut ok, mut wrong) = (0, 0);
+        for (k, content) in [distress_alert(), individual_call(), all_ships_safety()].iter().enumerate() {
+            let dx = dx_sequence(content);
+            let sent: Vec<Option<u8>> = dx[..dx.len() - 2].iter().map(|v| Some(*v)).collect();
+            let want = content_of(&parse(&sent, Some(dx.len() - 4)));
+            for s in 0..n {
+                let seed = 1000 + 100 * k as u64 + s;
+                let tx = Tx { snr, offset: 30.0, ppm: 50.0, ..Tx::default() };
+                let mut x = audio(&[levels(&slots(&dx), 200)], &tx, seed);
+                if rate > 0.0 {
+                    add_impulses(&mut x, 0.1, FS, rate, &mut Rng::new(seed + 50));
+                }
+                let (c, _) = run(&x);
+                if let Some(c) = c.iter().find(|c| c.complete && c.ecc_ok && c.bad_fields.is_empty()) {
+                    if content_of(c) == want {
+                        ok += 1;
+                    } else {
+                        println!("passed its checks but wrong: {}", c.summary());
+                        wrong += 1;
+                    }
+                }
+            }
+        }
+        (ok, wrong, 3 * n)
+    }
+
+    /// `USDR_IMPULSE_TABLE=1 cargo test --release -p scannerd-engine
+    /// dsc_impulse_table -- --nocapture`.
+    #[test]
+    fn dsc_impulse_table() {
+        if std::env::var("USDR_IMPULSE_TABLE").is_err() {
+            return;
+        }
+        let rates = [0.0f32, 1.0, 3.0, 5.0];
+        println!("DSC: calls decoded with impulse noise, by bursts a second; n+w! means w passed every check but were wrong");
+        println!("{:>8} {}", "", rates.iter().map(|r| format!("{r:>9.0}")).collect::<String>());
+        for snr in [5.0f32, 0.0, -3.0] {
+            let row: String = rates
+                .iter()
+                .map(|&r| {
+                    let (ok, w, n) = impulse_calls(snr, r, 6);
+                    format!("{:>9}", if w > 0 { format!("{ok}+{w}!/{n}") } else { format!("{ok}/{n}") })
+                })
+                .collect();
+            println!("{:>5.0} dB {row}", snr);
+        }
+    }
+
+    #[test]
+    fn dsc_calls_through_impulse_noise() {
+        // Three crashes a second, 20 to 35 dB over the signal, at 0 dB:
+        // with nothing done about them 7 calls of 18 came out
+        // (`dsc_impulse_table`). Blanked and erased, a character's other
+        // copy decides, and nothing wrong passes the ECC.
+        let (ok, wrong, n) = impulse_calls(0.0, 3.0, 3);
+        println!("DSC at 0 dB, 3 impulses a second: {ok}/{n} calls");
+        assert!(ok + 1 >= n, "{ok}/{n}");
+        assert_eq!(wrong, 0);
+    }
+
+    #[test]
+    fn dsc_impulses_alone_yield_nothing() {
+        let mut rng = Rng::new(65);
+        let sigma = noise_sigma(0.1, 0.0, FS);
+        let mut x: Vec<f32> = (0..(40.0 * FS) as usize).map(|_| sigma * rng.gauss()).collect();
+        add_impulses(&mut x, 0.1, FS, 5.0, &mut rng);
+        let (c, _) = run(&x);
+        assert!(c.is_empty(), "{c:#?}");
     }
 
     #[test]

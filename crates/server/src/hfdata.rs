@@ -11,6 +11,13 @@ use scannerd_engine::DecodeEvent;
 use scannerd_engine::dsc::{DscDecoder, DscEvent};
 use scannerd_engine::aac::{AacDecoder, DrmAacConfig, DrmAudioMode};
 use scannerd_engine::drm::{AudioCodec, DrmEvent, DrmReceiver};
+use scannerd_engine::cw::{CwDecoder, CwEvent};
+use scannerd_engine::js8::{Js8Decoder, Js8Event, Js8Speed};
+use scannerd_engine::sstv::{SstvDecoder, SstvEvent, SstvMode, SstvState};
+use scannerd_engine::wspr::WsprDecoder;
+use scannerd_engine::hell::{HELL_ROWS, HellDecoder, HellEvent};
+use scannerd_engine::mfsk::{MfskConfig, MfskDecoder, MfskEvent};
+use scannerd_engine::olivia::{OliviaDecoder, OliviaEvent};
 use scannerd_engine::hfdl::{HfdlDecoder, HfdlEvent};
 use scannerd_engine::stanag::{StanagDecoder, StanagEvent};
 use scannerd_engine::pactor::{PactorDecoder, PactorEvent, PactorMode};
@@ -65,6 +72,9 @@ pub fn sanitize(mut c: DigitalCfg) -> DigitalCfg {
         c.sitor_mode = "auto".into();
     }
     c.drm_service = c.drm_service.min(3);
+    if !SstvMode::ALL.iter().any(|m| m.name() == c.sstv_mode) {
+        c.sstv_mode = SstvMode::ScottieS1.name().into();
+    }
     c
 }
 
@@ -94,6 +104,14 @@ enum Kind {
     Wwv(Box<TimecodeDecoder>),
     Hfdl(Box<HfdlDecoder>),
     Stanag(Box<StanagDecoder>),
+    Cw(Box<CwDecoder>),
+    Wspr(Box<WsprDecoder>),
+    Olivia(Box<OliviaDecoder>),
+    Mfsk(Box<MfskDecoder>),
+    /// Feld Hell, and how many columns have gone out.
+    Hell { dec: Box<HellDecoder>, sent: u32 },
+    Js8(Box<Js8Decoder>),
+    Sstv { dec: Box<SstvDecoder>, picture: Option<u32>, rows: u32 },
     Drm {
         rx: Box<DrmReceiver>,
         audio: Box<crate::drm_audio::DrmAudio>,
@@ -124,6 +142,36 @@ impl HfEvent for DrmEvent {
     fn fields(&self) -> Vec<(&'static str, String)> {
         DrmEvent::fields(self)
     }
+}
+
+macro_rules! hf_event_impl {
+    ($t:ty) => {
+        impl HfEvent for $t {
+            fn kind(&self) -> &'static str {
+                <$t>::kind(self)
+            }
+            fn summary(&self) -> String {
+                <$t>::summary(self)
+            }
+            fn fields(&self) -> Vec<(&'static str, String)> {
+                <$t>::fields(self)
+            }
+        }
+    };
+}
+hf_event_impl!(CwEvent);
+hf_event_impl!(Js8Event);
+hf_event_impl!(SstvEvent);
+hf_event_impl!(OliviaEvent);
+hf_event_impl!(MfskEvent);
+
+/// The wall clock, ms since the Unix epoch: the slot decoders cut by it.
+fn wall_ms() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
+}
+
+fn sstv_mode(name: &str) -> SstvMode {
+    SstvMode::ALL.into_iter().find(|m| m.name().eq_ignore_ascii_case(name)).unwrap_or(SstvMode::ScottieS1)
 }
 
 impl HfEvent for StanagEvent {
@@ -235,6 +283,8 @@ fn hf_event(protocol: &str, e: &impl HfEvent) -> DecodeEvent {
 
 pub struct HfDecoder {
     kind: Kind,
+    /// The audio's sample rate.
+    fs: f32,
     last_reading: Instant,
     /// The reading last sent; `None` until the first, which always goes so
     /// a new decoder's reading replaces the last mode's.
@@ -279,7 +329,14 @@ impl HfDecoder {
             SdrMode::Pactor => Kind::Pactor(Box::new(PactorDecoder::new(fs))),
             SdrMode::Wwv => Kind::Wwv(Box::new(TimecodeDecoder::new(fs))),
             SdrMode::Hfdl => Kind::Hfdl(Box::new(HfdlDecoder::new(fs))),
-            SdrMode::Stanag => Kind::Stanag(Box::new(StanagDecoder::new(fs))),
+            SdrMode::Stanag | SdrMode::Ale => Kind::Stanag(Box::new(StanagDecoder::new(fs))),
+            SdrMode::Cw => Kind::Cw(Box::new(CwDecoder::new(fs))),
+            SdrMode::Wspr => Kind::Wspr(Box::new(WsprDecoder::new(fs))),
+            SdrMode::Olivia => Kind::Olivia(Box::new(OliviaDecoder::new_auto(fs, 1_500.0))),
+            SdrMode::Mfsk => Kind::Mfsk(Box::new(MfskDecoder::new(fs, MfskConfig::default()))),
+            SdrMode::Hell => Kind::Hell { dec: Box::new(HellDecoder::new(fs)), sent: 0 },
+            SdrMode::Js8 => Kind::Js8(Box::new(Js8Decoder::new(fs, &Js8Speed::ALL))),
+            SdrMode::Sstv => Kind::Sstv { dec: Box::new(SstvDecoder::new(fs)), picture: None, rows: 0 },
             SdrMode::Drm => Kind::Drm {
                 rx: Box::new(DrmReceiver::new(fs)),
                 audio: Box::new(crate::drm_audio::DrmAudio::new(fs as f64)),
@@ -300,7 +357,7 @@ impl HfDecoder {
             }
             _ => return None,
         };
-        Some(HfDecoder { kind, last_reading: Instant::now() - Duration::from_secs(1), reading: None })
+        Some(HfDecoder { kind, fs, last_reading: Instant::now() - Duration::from_secs(1), reading: None })
     }
 
     /// New settings, applied without rebuilding: a decoder keeps its lock.
@@ -319,7 +376,7 @@ impl HfDecoder {
                 **d = PskDecoder::new(fs as f32, c.psk_baud);
             }
             Kind::Sitor(d) => d.set_mode(sitor_mode(c)),
-            Kind::Navtex(_) | Kind::Dsc(_) | Kind::Pactor(_) | Kind::Wwv(_) | Kind::Hfdl(_) | Kind::Stanag(_) => {}
+            Kind::Navtex(_) | Kind::Dsc(_) | Kind::Pactor(_) | Kind::Wwv(_) | Kind::Hfdl(_) | Kind::Stanag(_) | Kind::Cw(_) | Kind::Js8(_) | Kind::Sstv { .. } | Kind::Wspr(_) | Kind::Olivia(_) | Kind::Mfsk(_) | Kind::Hell { .. } => {}
             Kind::Drm { service, audio, .. } => {
                 if *service != c.drm_service {
                     *service = c.drm_service;
@@ -329,14 +386,36 @@ impl HfDecoder {
         }
     }
 
+    /// START and STOP for the picture modes: radiofax, and SSTV in the
+    /// mode chosen for a picture whose VIS was missed.
     pub fn fax(&mut self, start: bool, stop: bool) {
-        if let Kind::Wefax { dec, .. } = &mut self.kind {
-            if stop {
-                dec.stop_now();
+        match &mut self.kind {
+            Kind::Wefax { dec, .. } => {
+                if stop {
+                    dec.stop_now();
+                }
+                if start {
+                    dec.start_now();
+                }
             }
-            if start {
-                dec.start_now();
+            Kind::Sstv { dec, .. } => {
+                if stop {
+                    dec.stop_now();
+                }
+                if start {
+                    dec.start_now(sstv_mode(&config().sstv_mode));
+                }
             }
+            _ => {}
+        }
+    }
+
+    /// The audio the multi-signal decoders search: the filter's passband.
+    pub fn set_band(&mut self, low_hz: f32, high_hz: f32) {
+        match &mut self.kind {
+            Kind::Cw(d) => d.set_band(low_hz.max(150.0), high_hz.min(3_000.0)),
+            Kind::Js8(d) => d.set_band(low_hz, high_hz),
+            _ => {}
         }
     }
 
@@ -563,6 +642,104 @@ impl HfDecoder {
                         _ => "STANAG",
                     };
                     send(hf_event(protocol, &e));
+                }
+            }
+            Kind::Cw(d) => {
+                d.push(audio);
+                for e in d.take() {
+                    send(hf_event("CW", &e));
+                }
+            }
+            Kind::Wspr(d) => {
+                // Stamped with its first sample: the block just ended.
+                let t0 = wall_ms().saturating_sub((audio.len() as f64 / self.fs as f64 * 1e3) as u64);
+                d.push(audio, t0);
+                for (slot_ms, decodes) in d.take() {
+                    let secs = slot_ms / 1000;
+                    for w in decodes {
+                        let mut f = BTreeMap::new();
+                        f.insert("snr".to_string(), format!("{:.0}", w.snr_db));
+                        f.insert("dt".to_string(), format!("{:.1}", w.dt_s));
+                        f.insert("df".to_string(), format!("{:.0}", w.freq_hz));
+                        f.insert("drift".to_string(), format!("{:.1}", w.drift_hz_per_min));
+                        f.insert("call".to_string(), w.call.clone());
+                        if let Some(g) = &w.grid {
+                            f.insert("grid".to_string(), g.clone());
+                        }
+                        f.insert("dbm".to_string(), w.power_dbm.to_string());
+                        f.insert("slot".to_string(), format!("{:02}{:02}{:02}", (secs / 3600) % 24, (secs / 60) % 60, secs % 60));
+                        f.insert("slotMs".to_string(), slot_ms.to_string());
+                        send(DecodeEvent { protocol: "WSPR".into(), kind: w.kind.into(), summary: w.text.clone(), valid: true, fields: f });
+                    }
+                }
+            }
+            Kind::Olivia(d) => {
+                d.push(audio);
+                for e in d.take() {
+                    send(hf_event("OLIVIA", &e));
+                }
+            }
+            Kind::Mfsk(d) => {
+                d.push(audio);
+                for e in d.take() {
+                    if let MfskEvent::Picture { width, height, color, pixels, .. } = &e {
+                        // The picture to the desktop as color rows, as SSTV's.
+                        let id = NEXT_PICTURE.fetch_add(1, Ordering::Relaxed);
+                        let (w, per) = (*width as usize, if *color { 3 } else { 1 });
+                        for (y, row) in pixels.chunks(w * per).take(*height as usize).enumerate() {
+                            let rgb: Vec<u8> = if *color { row.to_vec() } else { row.iter().flat_map(|&g| [g, g, g]).collect() };
+                            let _ = events.send(SdrEvent::FaxRow { frame: usdr_proto::encode_image_line(0, id, y as u32, &rgb).into() });
+                        }
+                        let mut ev = DecodeEvent { protocol: "MFSK".into(), kind: "picture".into(), summary: format!("MFSK picture {width}×{height}{}", if *color { " color" } else { "" }), valid: true, fields: BTreeMap::new() };
+                        ev.fields.insert("image".into(), id.to_string());
+                        send(ev);
+                        continue;
+                    }
+                    send(hf_event("MFSK", &e));
+                }
+            }
+            Kind::Hell { dec, sent } => {
+                dec.push(audio);
+                for e in dec.take() {
+                    let HellEvent::Columns { pixels } = e;
+                    let cols = (pixels.len() / HELL_ROWS) as u32;
+                    if cols > 0 {
+                        let _ = events.send(SdrEvent::FaxRow { frame: usdr_proto::encode_hell_columns(0, *sent, HELL_ROWS as u16, &pixels).into() });
+                        *sent += cols;
+                    }
+                }
+            }
+            Kind::Js8(d) => {
+                d.push(audio, wall_ms());
+                for e in d.take() {
+                    send(hf_event("JS8", &e));
+                }
+            }
+            Kind::Sstv { dec, picture, rows } => {
+                dec.push(audio);
+                for e in dec.take() {
+                    match &e {
+                        SstvEvent::Start { .. } => {
+                            *picture = Some(NEXT_PICTURE.fetch_add(1, Ordering::Relaxed));
+                            *rows = 0;
+                            let mut ev = hf_event("SSTV", &e);
+                            ev.fields.insert("image".into(), picture.unwrap_or(0).to_string());
+                            send(ev);
+                        }
+                        SstvEvent::Line { line, rgb } => {
+                            let Some(id) = *picture else { continue };
+                            let frame = usdr_proto::encode_image_line(0, id, *line, rgb);
+                            let _ = events.send(SdrEvent::FaxRow { frame: frame.into() });
+                            *rows = (*rows).max(line + 1);
+                        }
+                        SstvEvent::End { .. } => {
+                            let mut ev = hf_event("SSTV", &e);
+                            if let Some(id) = picture.take() {
+                                ev.fields.insert("image".into(), id.to_string());
+                            }
+                            send(ev);
+                        }
+                    }
                 }
             }
             Kind::Hfdl(d) => {
@@ -795,6 +972,92 @@ impl HfDecoder {
                     variant,
                     facts,
                     constellation: if s.locked { points(&d.constellation(), 160) } else { Vec::new() },
+                    ..Default::default()
+                }
+            }
+            Kind::Cw(d) => {
+                let s = d.status();
+                let mut channels: Vec<PskChannel> = d.channels().into_iter().map(|c| PskChannel { id: c.id, audio_hz: round(c.audio_hz), snr_db: c.snr_db.round(), active: c.active }).collect();
+                channels.sort_by(|a, b| a.audio_hz.total_cmp(&b.audio_hz));
+                let variant = (s.active > 0).then(|| match s.wpm {
+                    Some(w) => format!("{} signals · {w:.0} WPM", s.active),
+                    None => format!("{} signals", s.active),
+                });
+                DigitalReading { locked: s.locked, center_hz: s.center_hz.map(f32::round), snr_db: s.snr_db.map(f32::round), variant, channels, ..Default::default() }
+            }
+            Kind::Olivia(d) => {
+                let s = d.status();
+                DigitalReading {
+                    locked: s.locked,
+                    center_hz: Some(s.center_hz.round()),
+                    snr_db: s.snr_db.map(f32::round),
+                    variant: s.locked.then(|| format!("{}/{}", s.tones, s.bandwidth_hz)),
+                    facts: vec![Fact::new("characters", s.chars.to_string())],
+                    ..Default::default()
+                }
+            }
+            Kind::Mfsk(d) => {
+                let s = d.status();
+                let mut facts = Vec::new();
+                if s.locked {
+                    facts.push(Fact::new("bit errors", format!("{:.0}%", s.bit_error_rate * 100.0)));
+                }
+                if let Some(ppm) = s.clock_ppm {
+                    facts.push(Fact::new("clock", format!("{ppm:+.0} ppm")));
+                }
+                if let Some((w, h, color, done)) = s.picture {
+                    facts.push(Fact::toned("picture", format!("{w}×{h}{} · {:.0}%", if color { " color" } else { "" }, done * 100.0), "ok"));
+                }
+                DigitalReading {
+                    locked: s.locked,
+                    center_hz: s.center_hz.map(f32::round),
+                    snr_db: s.snr_db.map(f32::round),
+                    variant: Some(s.mode.name().to_string()),
+                    facts,
+                    ..Default::default()
+                }
+            }
+            Kind::Hell { dec, .. } => {
+                let s = dec.status();
+                DigitalReading { locked: s.locked, center_hz: s.center_hz.map(f32::round), snr_db: s.snr_db.map(f32::round), ..Default::default() }
+            }
+            Kind::Wspr(d) => {
+                let s = d.status();
+                let mut facts = Vec::new();
+                if let Some(t) = s.slot_secs {
+                    facts.push(Fact::new("slot", format!("{t:.0} s of 120")));
+                }
+                if let Some(n) = s.last_count {
+                    facts.push(Fact::new("last slot", format!("{n} decoded")));
+                }
+                let variant = if s.decoding { Some("decoding the slot".to_string()) } else if s.collecting { Some("collecting".to_string()) } else { None };
+                DigitalReading { locked: s.collecting || s.decoding, variant, facts, ..Default::default() }
+            }
+            Kind::Js8(d) => {
+                let s = d.status();
+                let facts = vec![Fact::new("slots", s.slots_decoded.to_string()), Fact::new("frames", s.frames.to_string()), Fact::new("messages", s.messages.to_string())];
+                DigitalReading { locked: s.frames > 0, facts, ..Default::default() }
+            }
+            Kind::Sstv { dec, picture, .. } => {
+                let s = dec.status();
+                let state = match s.state {
+                    SstvState::Listening => "idle",
+                    SstvState::Vis => "starting",
+                    SstvState::Receiving => "receiving",
+                };
+                let mut facts = Vec::new();
+                if matches!(s.state, SstvState::Receiving) {
+                    facts.push(Fact::new("line", format!("{} of {}", s.line, s.lines)));
+                    facts.push(Fact::new("sync", format!("{:.0}%", s.sync_quality * 100.0)));
+                    facts.push(Fact::new("slant", format!("{:+.0} ppm", s.slant_ppm)));
+                }
+                DigitalReading {
+                    locked: matches!(s.state, SstvState::Receiving),
+                    variant: s.mode.map(|m| m.name().to_string()),
+                    fax_state: Some(state.into()),
+                    fax_image: picture.unwrap_or(0),
+                    fax_lines: s.line,
+                    facts,
                     ..Default::default()
                 }
             }

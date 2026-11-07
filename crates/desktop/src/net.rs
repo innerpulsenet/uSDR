@@ -32,6 +32,8 @@ pub enum NetEvent {
     Presence(proto::Presence),
     Station(proto::Station, proto::ReporterStatus),
     FaxLine(proto::FaxLine),
+    ImageLine(proto::ImageLine),
+    HellColumns(proto::HellColumns),
     Reply { what: Get, result: Result<Value, String> },
     Saved { path: PathBuf, bytes: u64 },
     Bytes { what: Fetch, bytes: Vec<u8>, headers: Vec<(String, String)> },
@@ -344,6 +346,14 @@ fn ws_loop(
                                 }
                                 Ok(proto::Binary::FaxLine(l)) => {
                                     let _ = ev.send(NetEvent::FaxLine(l));
+                                    crate::anim::now(&ctx);
+                                }
+                                Ok(proto::Binary::HellColumns(h)) => {
+                                    let _ = ev.send(NetEvent::HellColumns(h));
+                                    crate::anim::now(&ctx);
+                                }
+                                Ok(proto::Binary::ImageLine(l)) => {
+                                    let _ = ev.send(NetEvent::ImageLine(l));
                                     crate::anim::now(&ctx);
                                 }
                                 Err(_) => {

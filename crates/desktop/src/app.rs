@@ -185,6 +185,9 @@ pub struct App {
     pub settings_open: bool,
     /// The radiofax viewer and the session's pictures.
     pub fax: crate::fax::Fax,
+    pub sstv: crate::sstvview::Sstv,
+    /// Feld Hell's columns, the newest last, `HELL_KEEP` at most.
+    pub hell: std::collections::VecDeque<u8>,
     pub settings_page: crate::settings::Page,
     /// The server's station and its spot reporter (servers with `station`).
     pub station: Option<(proto::Station, proto::ReporterStatus)>,
@@ -326,6 +329,8 @@ impl App {
             p25: Default::default(),
             settings_open: false,
             fax: crate::fax::Fax::new(),
+            sstv: crate::sstvview::Sstv::default(),
+            hell: std::collections::VecDeque::new(),
             settings_page: Default::default(),
             station: None,
             station_form: Default::default(),
@@ -757,6 +762,13 @@ impl App {
                 {
                     crate::fax::save(self, ctx, i);
                 }
+                // An SSTV picture's start names its mode for the viewer.
+                if event.protocol == "SSTV"
+                    && event.kind == "start"
+                    && let (Some(id), Some(m)) = (event.fields.get("image").and_then(|v| v.parse().ok()), event.fields.get("mode"))
+                {
+                    self.sstv.named(id, m);
+                }
                 self.push_decode(DecodeRow::new(at, inspect_hz, event));
                 if call && let Some(l) = &self.link {
                     l.get("/api/sdr/calls", Get::Calls);
@@ -767,6 +779,17 @@ impl App {
                 // The receiver's dial, not the span's center.
                 let hz = self.status.inspect_hz;
                 self.fax.line(l, hz);
+            }
+            NetEvent::HellColumns(h) => {
+                self.hell.extend(h.pixels.iter().copied());
+                let keep = crate::utilviews::HELL_KEEP * h.rows.max(1) as usize;
+                while self.hell.len() > keep {
+                    self.hell.pop_front();
+                }
+            }
+            NetEvent::ImageLine(l) => {
+                let hz = self.status.inspect_hz;
+                self.sstv.line(l, hz);
             }
             NetEvent::Presence(p) => {
                 let before = self.presence.web_count();
@@ -1809,6 +1832,14 @@ pub fn mode_idle_text(m: Mode) -> &'static str {
         Mode::Hfdl => "HFDL · listening for bursts",
         Mode::Pactor => "PACTOR-I · listening",
         Mode::Stanag => "STANAG · looking for a serial tone",
+        Mode::Ale => "ALE · listening for soundings and calls",
+        Mode::Cw => "CW · every signal in the passband",
+        Mode::Wspr => "WSPR · decoding each 2-minute slot",
+        Mode::Js8 => "JS8 · decoding each slot, all four speeds",
+        Mode::Sstv => "SSTV · waiting for a VIS code",
+        Mode::Olivia => "Olivia · trying its common settings",
+        Mode::Mfsk => "MFSK · listening",
+        Mode::Hell => "Feld Hell · painting",
         Mode::Wwv => "WWV · reading the time code",
         Mode::Drm => "DRM · finding the multiplex",
         Mode::Nfm => "listening · classifier on",
@@ -2915,6 +2946,15 @@ mod tests {
     fn qa_renders_the_hf_directory() {
         let Some(dir) = std::env::var_os("USDR_QA_DIR").map(std::path::PathBuf::from) else { return };
         let mut h = harness_wh(1600.0, 980.0);
+        // The HF key's menu, open, the receiver on FT8.
+        h.state_mut().app.status.mode = Mode::Ft8;
+        h.state_mut().app.status.inspect_hz = 14_074_000.0;
+        h.run_steps(3);
+        h.get_by_label("HF").click();
+        h.run_steps(4);
+        h.render().expect("render").save(dir.join("hf-menu.png")).expect("save");
+        h.get_by_label("HF").click();
+        h.run_steps(2);
         {
             let app = &mut h.state_mut().app;
             app.status.mode = Mode::Wefax;
@@ -2940,7 +2980,8 @@ mod tests {
         h.state_mut().app.fax.open = false;
 
         // Each mode's own view, with its station list open.
-        for (mode, hz) in [(Mode::Navtex, 517_000.0), (Mode::Hfdl, 8_912_000.0), (Mode::Drm, 9_570_000.0), (Mode::Wwv, 10_000_000.0), (Mode::Dsc, 8_412_800.0), (Mode::Sitor, 8_414_800.0)] {
+        // Just off each station, so the station menu reads STATIONS.
+        for (mode, hz) in [(Mode::Navtex, 517_300.0), (Mode::Hfdl, 8_912_300.0), (Mode::Drm, 9_570_300.0), (Mode::Wwv, 10_000_300.0), (Mode::Dsc, 8_413_100.0), (Mode::Sitor, 8_415_100.0)] {
             {
                 let app = &mut h.state_mut().app;
                 app.status.mode = mode;
@@ -2958,6 +2999,46 @@ mod tests {
             h.render().expect("render").save(dir.join(format!("stations-{name}.png"))).expect("save");
             h.get_by_label("STATIONS").click();
             h.run_steps(2);
+        }
+
+        // Radiofax in the dock, a picture arriving; and PSK31 with one signal
+        // picked beside the rest.
+        {
+            let mut h = harness_with(Prefs { auto_connect: false, dock_height: 420.0, ..Default::default() }, 1600.0, 1100.0);
+            h.run_steps(2);
+            {
+                let app = &mut h.state_mut().app;
+                app.status.mode = Mode::Wefax;
+                app.status.inspect_hz = 8_680_100.0;
+                app.status.digital = Some(proto::DigitalReading { locked: true, snr_db: Some(14.0), fax_state: Some("receiving".into()), fax_image: 3, fax_lines: 400, fax_width: 1809, ..Default::default() });
+                app.status.digital_cfg = Some(proto::DigitalCfg::default());
+                app.decode_family = Some(crate::decoders::Family::HfData);
+                app.dock_tab = DockTab::Decodes;
+            }
+            for i in 0..400u32 {
+                let row: Vec<u8> = (0..1809u32).map(|c| ((((c / 40 + i / 40) % 2) * 200) + 30) as u8).collect();
+                h.state().wire.events.send(NetEvent::FaxLine(proto::FaxLine { rx: 0, image: 3, line: i, pixels: row })).unwrap();
+            }
+            h.run_steps(4);
+            h.render().expect("render").save(dir.join("dock-wefax.png")).expect("save");
+            {
+                let app = &mut h.state_mut().app;
+                app.status.mode = Mode::Psk31;
+                app.status.inspect_hz = 14_070_000.0;
+                app.status.digital = Some(proto::DigitalReading {
+                    locked: true,
+                    channels: vec![proto::PskChannel { id: 1, audio_hz: 875.0, snr_db: 6.0, active: true }, proto::PskChannel { id: 2, audio_hz: 1746.0, snr_db: 0.0, active: true }],
+                    ..Default::default()
+                });
+            }
+            for (ch, hz, text) in [(2, "1746", "CQ de PE1FTV PE1FTV pse k"), (1, "875", "cq de F4JTM F4JTM pse k"), (2, "1746", "btu Robert KF3AA de PE1FTV k")] {
+                let fields = [("channel", ch.to_string()), ("df", hz.to_string())].into_iter().map(|(k, v)| (k.to_string(), v)).collect();
+                let ev = proto::DecodeEvent { protocol: "PSK31".into(), kind: "text".into(), summary: text.into(), valid: true, fields };
+                h.state().wire.events.send(NetEvent::Decode { inspect_hz: 14_070_000.0, event: ev, at: std::time::SystemTime::now() }).unwrap();
+            }
+            h.ctx.data_mut(|d| d.insert_temp(egui::Id::new("psk-pick"), 2u32));
+            h.run_steps(4);
+            h.render().expect("render").save(dir.join("dock-psk-pick.png")).expect("save");
         }
 
         // A mode's view as it was on the air: `USDR_QA_VIEWS=<dir>` holding
@@ -3014,6 +3095,11 @@ mod tests {
                 }
                 h.run_steps(4);
                 h.render().expect("render").save(dir.join(name)).expect("save");
+                // A CQ clicked: its station opens beside the log.
+                let cq = h.state().app.decodes.iter().position(|d| d.ev.summary.starts_with("CQ "));
+                h.state_mut().app.selected_decode = cq;
+                h.run_steps(4);
+                h.render().expect("render").save(dir.join(name.replace(".png", "-inspect.png"))).expect("save");
             }
         }
     }

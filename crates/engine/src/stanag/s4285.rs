@@ -383,9 +383,22 @@ impl Trial {
 fn decoding_ber(m: &Mode) -> f32 {
     if m.order == 8 { 0.055 } else { 0.09 }
 }
-/// Frames (good, varied ones) whose likelihoods are summed to choose the
-/// constellation.
+/// The fewest frames (varied ones, not in a deep fade) whose likelihoods
+/// are summed to choose the constellation.
 const ORDER_FRAMES: u32 = 3;
+/// The most: about five seconds, so a weak signal's evidence adds up but a
+/// change of constellation is still followed.
+const ORDER_WINDOW: usize = 48;
+/// How far, in log-likelihood (nats), the best constellation must lead the
+/// next before it is named; twice this to change one already named. A
+/// strong signal clears it in a frame, one near 0 dB in a few seconds.
+/// Near 0 dB QPSK and 8-PSK are hard to tell apart (QPSK's points are
+/// among 8-PSK's), and a smaller margin was seen to name either on the
+/// same real signal; this one waits until it is sure.
+const ORDER_MARGIN: f32 = 20.0;
+/// A frame whose known symbols show more noise than this (the signal
+/// below the noise at the equalizer: a deep fade) is left out.
+const ORDER_FADE_VAR: f32 = 1.5;
 /// Bad syncs in a row (three seconds) before the lock is let go: a new
 /// lock starts the deinterleavers over, which for the long setting costs
 /// ten seconds, so a deep fade is waited out.
@@ -668,10 +681,14 @@ impl Rx4285 {
     /// the likelihood of the symbols if each were uniform over BPSK, QPSK
     /// or 8-PSK points, given the noise the probes show. Data that sits
     /// on one point (an idle all-zero stream) says nothing about the
-    /// order and is not counted. True when the order changes.
+    /// order and is not counted. The frames' likelihoods add up until one
+    /// constellation leads by [`ORDER_MARGIN`]: a noisy frame weighs less
+    /// by itself, through the noise it shows, so a weak signal is judged
+    /// from more of them rather than not at all. True when the order
+    /// changes.
     fn judge_order(l: &mut Lock) -> bool {
-        // A frame in a fade tells little and would only add noise.
-        if l.block_var.iter().sum::<f32>() / 4.0 > 0.35 {
+        // A frame in a deep fade tells nothing and would only add noise.
+        if l.block_var.iter().sum::<f32>() / 4.0 > ORDER_FADE_VAR {
             return false;
         }
         // An order whose mode decodes is not given up.
@@ -703,7 +720,7 @@ impl Rx4285 {
             return false;
         }
         l.order_ll.push_back(ll);
-        if l.order_ll.len() > ORDER_FRAMES as usize {
+        if l.order_ll.len() > ORDER_WINDOW {
             l.order_ll.pop_front();
         }
         if l.order_ll.len() < ORDER_FRAMES as usize {
@@ -715,14 +732,22 @@ impl Rx4285 {
                 tot[m] += f[m];
             }
         }
-        let best = (0..3).max_by(|&a, &b| tot[a].total_cmp(&tot[b])).unwrap();
+        let mut rank = [0usize, 1, 2];
+        rank.sort_by(|&a, &b| tot[b].total_cmp(&tot[a]));
+        let (best, margin) = (rank[0], tot[rank[0]] - tot[rank[1]]);
         let order = [2, 4, 8][best];
         if l.order == Some(order) {
             l.order_votes = 0;
             return false;
         }
+        let need = if l.order.is_none() { ORDER_MARGIN } else { 2.0 * ORDER_MARGIN };
+        if margin < need {
+            l.order_votes = 0;
+            return false;
+        }
+        // Two frames running, so one odd frame does not decide.
         l.order_votes += 1;
-        if l.order_votes < if l.order.is_none() { 2 } else { 6 } {
+        if l.order_votes < 2 {
             return false;
         }
         l.order_votes = 0;

@@ -7,7 +7,12 @@
 //!
 //! 1. The audio is cut to 12 kHz. Everything an FSK pair can occupy in a
 //!    3 kHz passband survives, and every later stage runs at a quarter of the
-//!    input rate.
+//!    input rate. Impulse noise (lightning crashes, power-line bursts) is
+//!    found by its breadth and blanked ([`Blanker`]), and how much of each
+//!    bit was blanked goes out with the demodulated samples
+//!    ([`FskSample::blank`]): the decoders weigh their soft decisions by
+//!    what is left, and keep their level, clock and frequency trackers out
+//!    of it, so a crash is an erasure rather than a confident wrong bit.
 //! 2. A 2048-point spectrum (5.9 Hz bins), averaged over about a second, is
 //!    searched for two peaks `shift` apart. The weaker of the two tones has
 //!    to stand above the median of the passband, so a lone carrier, a voice
@@ -454,6 +459,325 @@ impl PairFinder {
 }
 
 // ---------------------------------------------------------------------------
+// Impulse noise.
+
+/// Spectral frames are about this many hertz a bin, which makes them about
+/// 5 ms long: short enough to place a click, long enough to see its breadth.
+const BLANK_BIN_HZ: f32 = 190.0;
+/// A bin is lit when its power exceeds its median by this factor (9 dB).
+/// Noise alone lights a bin about one frame in 250.
+const BLANK_BIN_K: f32 = 8.0;
+/// Bins lit, as a share of those voted, for a frame to be an impulse, and
+/// the factor the pair's own bins must stand over their median: an
+/// impulse that does not reach the pair cannot hurt it. A click that rings
+/// a narrower part of the passband counts when it lights the pair harder.
+const BLANK_VOTE: f32 = 0.5;
+const BLANK_PAIR_K: f32 = 3.0;
+const BLANK_VOTE_NARROW: f32 = 0.3;
+const BLANK_PAIR_K_NARROW: f32 = 5.0;
+/// The medians move by this factor a frame toward each new frame (about a
+/// third of a second for 10 dB), faster while they are being learned.
+const BLANK_STEP: f32 = 0.01;
+const BLANK_LEARN_STEP: f32 = 0.15;
+const BLANK_LEARN_S: f32 = 0.05;
+/// Crashes and power-line bursts last up to about 200 ms. Wideband energy
+/// that stays longer is the band itself getting noisier (or the gain
+/// going up), and is learned rather than blanked.
+const BLANK_MAX_S: f32 = 0.3;
+/// Power floor of a bin, per sample in the frame: digital silence must not
+/// make every whisper an impulse.
+const BLANK_MIN_POWER: f32 = 1e-12;
+
+/// Finds impulse noise (lightning crashes, power-line bursts) in sideband
+/// audio and blanks it, delaying the audio by three quarters of a frame
+/// (4 ms) to do so.
+///
+/// An impulse is broadband: a click rings the whole of the receiver's
+/// passband at once, while a signal, however strong, occupies a few
+/// hundred hertz of it. Short spectral frames are cut from the audio, and
+/// each bin between 100 and 3400 Hz is held against a running median of
+/// its own power, so a steady signal or a carrier sets its own bin's
+/// median and lights nothing. A frame in which most bins are lit at once,
+/// and in which the tone pair's own bins are well over theirs, is an
+/// impulse: those two together are something a keyed neighbor, a voice
+/// beside the pair or a fade cannot do. (A click that rings only part of
+/// the passband counts when it lights the pair harder.) Until the pair is
+/// found, breadth alone decides. The samples under such frames are zeroed
+/// before any narrow filter sees them. A click 30 dB over the signal, left
+/// in, rings through a 100 baud matched filter for a whole bit and reads
+/// as a confident wrong one; zeroed, the bit loses a share of its energy
+/// but keeps its sign.
+pub(crate) struct Blanker {
+    n: usize,
+    hop: usize,
+    bin_hz: f32,
+    fft: Arc<dyn Fft<f32>>,
+    win: Vec<f32>,
+    work: Vec<Complex32>,
+    scratch: Vec<Complex32>,
+    ring: Vec<f32>,
+    flag: Vec<bool>,
+    mask: usize,
+    t: u64,
+    lo: usize,
+    hi: usize,
+    /// The pair's bins, which are not voted but must be lit.
+    pair: Option<(usize, usize)>,
+    floor: Vec<f32>,
+    pair_floor: f32,
+    min_power: f32,
+    started: bool,
+    learn: u32,
+    learn_frames: u32,
+    run: u32,
+    max_run: u32,
+    /// Frames found to be impulses, for the tests.
+    #[cfg(test)]
+    impulses: u64,
+    /// The tests' "before" (`USDR_NO_BLANK`): nothing is ever found.
+    #[cfg(test)]
+    off: bool,
+}
+
+impl Blanker {
+    pub(crate) fn new(fs: f32) -> Self {
+        let n = ((fs / BLANK_BIN_HZ) as usize).next_power_of_two().max(16);
+        let hop = n / 4;
+        let bin_hz = fs / n as f32;
+        let fft = FftPlanner::new().plan_fft_forward(n);
+        let scratch = vec![Complex32::new(0.0, 0.0); fft.get_inplace_scratch_len()];
+        let frame_rate = fs / hop as f32;
+        let lo = ((TONE_LO_HZ / bin_hz).ceil() as usize).max(1);
+        let hi = ((TONE_HI_HZ.min(0.45 * fs) / bin_hz).floor() as usize).clamp(lo, n / 2 - 1);
+        Self {
+            n,
+            hop,
+            bin_hz,
+            fft,
+            win: (0..n).map(|i| 0.5 - 0.5 * (TAU * i as f32 / n as f32).cos()).collect(),
+            work: vec![Complex32::new(0.0, 0.0); n],
+            scratch,
+            ring: vec![0.0; 2 * n],
+            flag: vec![false; 2 * n],
+            mask: 2 * n - 1,
+            t: 0,
+            lo,
+            hi,
+            pair: None,
+            floor: vec![0.0; n / 2],
+            pair_floor: 0.0,
+            min_power: BLANK_MIN_POWER * n as f32,
+            started: false,
+            learn: 0,
+            learn_frames: (BLANK_LEARN_S * frame_rate).ceil() as u32,
+            run: 0,
+            max_run: (BLANK_MAX_S * frame_rate) as u32,
+            #[cfg(test)]
+            impulses: 0,
+            #[cfg(test)]
+            off: std::env::var("USDR_NO_BLANK").is_ok(),
+        }
+    }
+
+    /// Samples between one going in and coming out: as few as the latest
+    /// frame that can blank a sample needs, the one whose middle half
+    /// ends at it.
+    pub(crate) fn delay(&self) -> usize {
+        3 * self.n / 4
+    }
+
+    /// Where the tone pair is, in audio Hz, or None while it is not known.
+    pub(crate) fn set_pair(&mut self, band: Option<(f32, f32)>) {
+        let pair = band.map(|(a, b)| {
+            let a = ((a / self.bin_hz).floor().max(0.0) as usize).clamp(self.lo, self.hi);
+            let b = ((b / self.bin_hz).ceil().max(0.0) as usize).clamp(a, self.hi);
+            (a, b)
+        });
+        if pair != self.pair {
+            // Its bins' medians are the pair's own; the summed median is
+            // relearned from them.
+            self.pair = pair;
+            self.pair_floor = pair.map_or(0.0, |(a, b)| self.floor[a..=b].iter().sum());
+        }
+    }
+
+    /// One sample in; the sample [`Blanker::delay`] samples back out, zero
+    /// when it lay in an impulse, and whether it did. Nothing comes out
+    /// for the first [`Blanker::delay`] samples, rather than silence: the
+    /// stream that follows starts with the first sample put in, so every
+    /// frame and decimation phase after it falls where it would without
+    /// the blanker.
+    #[inline]
+    pub(crate) fn push(&mut self, x: f32) -> Option<(f32, bool)> {
+        let i = self.t as usize & self.mask;
+        self.ring[i] = x;
+        self.flag[i] = false;
+        self.t += 1;
+        if self.t >= self.n as u64 && self.t.is_multiple_of(self.hop as u64) {
+            self.frame();
+        }
+        let d = self.delay() as u64;
+        if self.t <= d {
+            return None;
+        }
+        let o = (self.t - 1 - d) as usize & self.mask;
+        Some(if self.flag[o] { (0.0, true) } else { (self.ring[o], false) })
+    }
+
+    fn frame(&mut self) {
+        let n = self.n;
+        let start = self.t as usize - n;
+        for (k, w) in self.work.iter_mut().enumerate() {
+            *w = Complex32::new(self.ring[(start + k) & self.mask] * self.win[k], 0.0);
+        }
+        self.fft.process_with_scratch(&mut self.work, &mut self.scratch);
+        if !self.started {
+            self.started = true;
+            self.learn = self.learn_frames;
+            for k in self.lo..=self.hi {
+                self.floor[k] = self.work[k].norm_sqr().max(self.min_power);
+            }
+            self.pair_floor = self.pair.map_or(0.0, |(a, b)| self.floor[a..=b].iter().sum());
+        }
+        let (mut voted, mut lit, mut pair_p) = (0u32, 0u32, 0.0f32);
+        for k in self.lo..=self.hi {
+            let p = self.work[k].norm_sqr();
+            if self.pair.is_some_and(|(a, b)| (a..=b).contains(&k)) {
+                pair_p += p;
+            } else {
+                voted += 1;
+                lit += u32::from(p > BLANK_BIN_K * self.floor[k]);
+            }
+        }
+        let lit = lit as f32;
+        let wide = lit >= BLANK_VOTE * voted as f32 && (self.pair.is_none() || pair_p > BLANK_PAIR_K * self.pair_floor);
+        let narrow = lit >= BLANK_VOTE_NARROW * voted as f32 && self.pair.is_some() && pair_p > BLANK_PAIR_K_NARROW * self.pair_floor;
+        let mut impulse = self.learn == 0 && lit >= 3.0 && (wide || narrow);
+        #[cfg(test)]
+        {
+            impulse &= !self.off;
+        }
+        if impulse {
+            self.run += 1;
+            if self.run > self.max_run {
+                // Too long for an impulse: the noise has changed.
+                impulse = false;
+                self.learn = self.learn_frames;
+            }
+        } else {
+            self.run = 0;
+        }
+        // The medians are not moved by the impulses they are there to find.
+        if !impulse {
+            let step = 1.0 + if self.learn > 0 { BLANK_LEARN_STEP } else { BLANK_STEP };
+            let follow = |f: &mut f32, p: f32, min: f32| {
+                *f = if p > *f { *f * step } else { (*f / step).max(min) };
+            };
+            for k in self.lo..=self.hi {
+                let p = self.work[k].norm_sqr();
+                follow(&mut self.floor[k], p, self.min_power);
+            }
+            follow(&mut self.pair_floor, pair_p, self.min_power);
+            self.learn = self.learn.saturating_sub(1);
+        }
+        // A click lights the frames whose middles are near it, so each
+        // blanks its middle half. Blanking wider (back to the start of the
+        // first frame, for an onset too little of which is in the window
+        // to light it) took out more of the impulses but cost more signal
+        // than they did: the error rates went up.
+        if impulse {
+            #[cfg(test)]
+            {
+                self.impulses += 1;
+            }
+            let t = self.t as usize;
+            for j in t - 3 * n / 4..t - n / 4 {
+                self.flag[j & self.mask] = true;
+            }
+        }
+    }
+}
+
+/// Follows blanked samples through a decimating filter chain to the
+/// matched filters after it: how much of each output's bit was blanked,
+/// and whether blanking touched it at all.
+///
+/// Samples go in at the rate the chain's input is kept at, each with the
+/// number of blanked audio samples it stands for (`unit` of them at most).
+/// A blanked stretch reaches a matched filter's output one group delay
+/// (`lag`) later and stays in it for the filter's length (`win`); the
+/// filters' skirts reach `margin` further either side.
+pub(crate) struct MaskTrack {
+    ring: Vec<u16>,
+    mask: usize,
+    t: usize,
+    lag: usize,
+    win: usize,
+    margin: usize,
+    norm: f32,
+    share_n: u32,
+    near_n: u32,
+}
+
+impl MaskTrack {
+    pub(crate) fn new(lag: usize, win: usize, margin: usize, unit: usize) -> Self {
+        let margin = margin.min(lag);
+        let size = (lag + win + margin + 2).next_power_of_two();
+        Self {
+            ring: vec![0; size],
+            mask: size - 1,
+            t: 0,
+            lag,
+            win: win.max(1),
+            margin,
+            norm: 1.0 / (win.max(1) * unit.max(1)) as f32,
+            share_n: 0,
+            near_n: 0,
+        }
+    }
+
+    pub(crate) fn reset(&mut self) {
+        self.ring.fill(0);
+        self.share_n = 0;
+        self.near_n = 0;
+    }
+
+    /// One input sample with `blanked` audio samples blanked in it; the
+    /// blanked share of the matched filter's present output, 0 to 1, and
+    /// whether any blanking is near it.
+    #[inline]
+    pub(crate) fn push(&mut self, blanked: u16) -> (f32, bool) {
+        let m = self.mask;
+        self.ring[self.t & m] = blanked;
+        let e1 = self.t.wrapping_sub(self.lag);
+        let e2 = e1.wrapping_add(self.margin);
+        self.share_n += u32::from(self.ring[e1 & m]);
+        self.share_n -= u32::from(self.ring[e1.wrapping_sub(self.win) & m]);
+        self.near_n += u32::from(self.ring[e2 & m]);
+        self.near_n -= u32::from(self.ring[e2.wrapping_sub(self.win + 2 * self.margin) & m]);
+        self.t = self.t.wrapping_add(1);
+        ((self.share_n as f32 * self.norm).min(1.0), self.near_n > 0)
+    }
+}
+
+/// The most of a bit that is made up for when part of it was blanked:
+/// beyond this the rest is too little to scale up, and its log-likelihood
+/// ratio is near zero anyway.
+pub(crate) const BLANK_COMPENSATE_MAX: f32 = 0.75;
+
+/// Tone amplitudes of a bit with `share` of it blanked, scaled back up to
+/// what the whole bit would have given: the matched filter's sum lost that
+/// share of the signal, not its sign.
+#[inline]
+pub(crate) fn unblank(share: f32, hi: f32, lo: f32) -> (f32, f32) {
+    if share <= 0.0 {
+        return (hi, lo);
+    }
+    let g = 1.0 / (1.0 - share.min(BLANK_COMPENSATE_MAX));
+    (hi * g, lo * g)
+}
+
+// ---------------------------------------------------------------------------
 // The demodulator.
 
 /// Mixes a tone pair's center to 0 Hz, decimates to about sixteen samples a
@@ -480,6 +804,10 @@ pub struct FskDemod {
     afc_acc: Complex32,
     afc_n: usize,
     afc_len: usize,
+    /// Blanked audio followed to the matched filters' outputs.
+    track: MaskTrack,
+    /// Blanked samples since the last output.
+    blanked: u16,
 }
 
 impl FskDemod {
@@ -496,6 +824,10 @@ impl FskDemod {
         let stop = (fs2 - pass).max(pass + 0.1 * fs2);
         let taps = design(fs1, pass, stop, 511);
         let len = ((fs2 / baud).round() as usize).max(2);
+        // The channel filter delays a blanked stretch by half its length
+        // and its main lobe spreads it by about a quarter either way; the
+        // matched filter then holds it for a bit.
+        let track = MaskTrack::new((taps.len() - 1) / 2 / decim, len, taps.len().div_ceil(4 * decim), decim);
         let mut d = Self {
             fs1,
             fs2,
@@ -516,6 +848,8 @@ impl FskDemod {
             afc_acc: Complex32::new(0.0, 0.0),
             afc_n: 0,
             afc_len: ((AFC_S * fs2) as usize).max(1),
+            track,
+            blanked: 0,
         };
         d.reset(center_hz);
         d
@@ -559,13 +893,19 @@ impl FskDemod {
         self.prev_lo = self.sum_lo;
         self.afc_acc = Complex32::new(0.0, 0.0);
         self.afc_n = 0;
+        self.track.reset();
+        self.blanked = 0;
     }
 
-    /// One sample at `fs1`; the upper and lower tone amplitudes when an
-    /// output sample is due.
+    /// One sample at `fs1`, `blanked` when the [`Blanker`] zeroed it; when
+    /// an output sample is due, the upper and lower tone amplitudes, the
+    /// share of the bit they cover that was blanked, and whether any
+    /// blanking is near enough to have touched them.
     #[inline]
-    pub fn push(&mut self, x: f32) -> Option<(f32, f32)> {
+    pub(crate) fn push(&mut self, x: f32, blanked: bool) -> Option<(f32, f32, f32, bool)> {
+        self.blanked += u16::from(blanked);
         let y = self.chan.push(self.osc.next() * x)?;
+        let (share, near) = self.track.push(std::mem::take(&mut self.blanked));
         let h = y * self.osc_hi.next();
         let l = y * self.osc_lo.next();
         let old_h = std::mem::replace(&mut self.ring_hi[self.rpos], h);
@@ -586,16 +926,16 @@ impl FskDemod {
         let ah = self.sum_hi.norm() * inv;
         let al = self.sum_lo.norm() * inv;
         // The stronger tone's filter turns at the tone's offset from where
-        // it is expected; the weaker one turns at whatever leaks in.
-        if ah > al {
-            self.afc_acc += self.sum_hi * self.prev_hi.conj();
-        } else {
-            self.afc_acc += self.sum_lo * self.prev_lo.conj();
+        // it is expected; the weaker one turns at whatever leaks in. Not
+        // through a blanked stretch: the filters' phase steps where the
+        // gap begins and ends.
+        if !near {
+            self.afc_acc += if ah > al { self.sum_hi * self.prev_hi.conj() } else { self.sum_lo * self.prev_lo.conj() };
         }
         self.prev_hi = self.sum_hi;
         self.prev_lo = self.sum_lo;
         self.afc_n += 1;
-        Some((ah, al))
+        Some((ah, al, share, near))
     }
 
     /// The tones' frequency error in Hz, positive when they sit above where
@@ -623,13 +963,23 @@ pub struct FskSample {
     /// The first sample after a lock: whatever the caller was framing
     /// belongs to another signal or none.
     pub fresh: bool,
+    /// The share of the bit behind this sample that was blanked as impulse
+    /// noise, 0 to 1. The amplitudes are scaled back up for it (see
+    /// [`unblank`]); what is left of the bit is worth only `1 - blank` of a
+    /// whole one, and a soft decision should be weighed down by that.
+    pub blank: f32,
+    /// Blanking is near enough to have touched this sample: level, clock
+    /// and frequency trackers should leave it out.
+    pub impulse: bool,
 }
 
 /// Finds an FSK pair in sideband audio, locks on it, follows its drift and
 /// demodulates it. Shared by the RTTY and NAVTEX decoders.
 pub struct FskReceiver {
     baud: f32,
+    shift: f32,
     front: RealDecim,
+    blanker: Blanker,
     finder: PairFinder,
     demod: FskDemod,
     fixed: Option<f32>,
@@ -645,6 +995,8 @@ pub struct FskReceiver {
     tracking: bool,
     fresh: bool,
     hist: Vec<f32>,
+    /// Whether each sample in `hist` was blanked.
+    hist_blank: Vec<bool>,
     hist_pos: usize,
     hist_len: usize,
 }
@@ -660,9 +1012,11 @@ impl FskReceiver {
         let tol = (0.5 * baud).max(2.0 * finder.bin_hz);
         let start = center_hz.unwrap_or(1_500.0);
         let cap = (HISTORY_S * fs1) as usize;
-        Self {
+        let mut rx = Self {
             baud,
+            shift: shift_hz,
             front: RealDecim::new(fs, decim),
+            blanker: Blanker::new(fs1),
             finder,
             demod: FskDemod::new(fs1, baud, shift_hz, start),
             fixed: center_hz,
@@ -678,9 +1032,12 @@ impl FskReceiver {
             tracking: false,
             fresh: true,
             hist: vec![0.0; cap.max(1)],
+            hist_blank: vec![false; cap.max(1)],
             hist_pos: 0,
             hist_len: 0,
-        }
+        };
+        rx.place_pair();
+        rx
     }
 
     /// Whether drift corrections may be applied. A decoder clears it while
@@ -729,7 +1086,11 @@ impl FskReceiver {
         let cap = self.hist.len();
         for &x in audio {
             let Some(y) = self.front.push(x) else { continue };
+            // Impulses are blanked before anything narrow sees them: the
+            // spectrum the pair is found in as much as the demodulator.
+            let Some((y, blanked)) = self.blanker.push(y) else { continue };
             self.hist[self.hist_pos] = y;
+            self.hist_blank[self.hist_pos] = blanked;
             self.hist_pos = (self.hist_pos + 1) % cap;
             self.hist_len = (self.hist_len + 1).min(cap);
             if self.finder.push(y) && self.evaluate() {
@@ -738,21 +1099,22 @@ impl FskReceiver {
                 self.demod.reset(self.center);
                 self.fresh = true;
                 for i in 0..self.hist_len {
-                    let y = self.hist[(self.hist_pos + cap - self.hist_len + i) % cap];
-                    self.step(y, out);
+                    let j = (self.hist_pos + cap - self.hist_len + i) % cap;
+                    self.step(self.hist[j], self.hist_blank[j], out);
                 }
                 continue;
             }
             if self.running {
-                self.step(y, out);
+                self.step(y, blanked, out);
             }
         }
     }
 
     #[inline]
-    fn step(&mut self, y: f32, out: &mut Vec<FskSample>) {
-        let Some((hi, lo)) = self.demod.push(y) else { return };
-        out.push(FskSample { hi, lo, fresh: self.fresh });
+    fn step(&mut self, y: f32, blanked: bool, out: &mut Vec<FskSample>) {
+        let Some((hi, lo, blank, impulse)) = self.demod.push(y, blanked) else { return };
+        let (hi, lo) = unblank(blank, hi, lo);
+        out.push(FskSample { hi, lo, fresh: self.fresh, blank, impulse });
         self.fresh = false;
         if let Some(df) = self.demod.take_freq_error()
             && self.tracking
@@ -764,7 +1126,14 @@ impl FskReceiver {
             let max_step = (0.05 * self.baud).max(0.5);
             self.center += (0.5 * df).clamp(-max_step, max_step);
             self.demod.set_center(self.center);
+            self.place_pair();
         }
+    }
+
+    /// Tell the blanker where the pair is, with its keying sidebands.
+    fn place_pair(&mut self) {
+        let half = 0.5 * self.shift + self.baud;
+        self.blanker.set_pair(self.running.then_some((self.center - half, self.center + half)));
     }
 
     /// Look at a new spectrum. True when it completes a lock.
@@ -784,6 +1153,7 @@ impl FskReceiver {
                     self.running = false;
                     self.cand = None;
                     self.cand_n = 0;
+                    self.place_pair();
                 }
             }
             return false;
@@ -801,6 +1171,7 @@ impl FskReceiver {
                     self.present = true;
                     self.absent = 0;
                     self.snr_db = self.finder.snr_db(&self.finder.pair_at(c));
+                    self.place_pair();
                     return true;
                 }
             }
@@ -850,6 +1221,12 @@ impl Atc {
         *self = Self::new(0.5 / self.k_on);
     }
 
+    /// One sample, as [`Atc::step`] or, when `impulse`, [`Atc::decide`].
+    #[inline]
+    pub(crate) fn step_or_hold(&mut self, hi: f32, lo: f32, impulse: bool) -> f32 {
+        if impulse { self.decide(hi, lo) } else { self.step(hi, lo) }
+    }
+
     /// One sample: the soft decision, positive for the upper tone, scaled
     /// to about ±1 at a bit center.
     #[inline]
@@ -868,6 +1245,15 @@ impl Atc {
         }
         let m = hi.min(lo);
         self.noise += self.k_noise * (m * m - self.noise);
+        self.decide(hi, lo)
+    }
+
+    /// The same decision for a sample that impulse noise, or the blanking
+    /// of it, has touched, without letting it move the levels: a crash 30
+    /// dB over the signal would take a tone's level with it, and every bit
+    /// for the next few would be read against a level that is not there.
+    #[inline]
+    pub(crate) fn decide(&self, hi: f32, lo: f32) -> f32 {
         let (ah, al) = (self.a_hi, self.a_lo);
         let den = 0.5 * (ah * ah + al * al);
         if den <= TINY {
@@ -1698,7 +2084,7 @@ impl RttyDecoder {
             if s.fresh {
                 self.restart();
             }
-            self.hist.put(self.n, (self.atc.step(s.hi, s.lo), s.hi, s.lo));
+            self.hist.put(self.n, (self.atc.step_or_hold(s.hi, s.lo, s.impulse), s.hi, s.lo));
             for p in 0..2 {
                 if self.cfg.reverse.is_some() && p != self.active {
                     continue;
@@ -2009,6 +2395,76 @@ pub(crate) mod testsig {
         (p_2500 * (0.5 * fs) / 2500.0).sqrt()
     }
 
+    /// Impulsive noise as a sideband receiver hears it at night on 80 m
+    /// and MF: bursts arriving as a Poisson process at `rate` a second,
+    /// each 1 to 50 ms long (log-uniform) and 20 to 35 dB (uniform) over
+    /// the power of a sine of `amp`, measured over the burst. Half are
+    /// lightning crashes, trains of damped oscillations a few tenths of a
+    /// millisecond long at random frequencies, which ring a sideband
+    /// filter all across its passband; half are power-line bursts, noise
+    /// cut to 300-3000 Hz. Both are wideband, as the real thing is. Returns
+    /// the share of the samples the bursts cover.
+    pub fn add_impulses(x: &mut [f32], amp: f32, fs: f32, rate: f32, rng: &mut Rng) -> f32 {
+        let tau = std::f64::consts::TAU;
+        let mut covered = 0usize;
+        let mut t = 0.0f64;
+        let mut burst = Vec::new();
+        let mut crash = false;
+        loop {
+            t += -rng.uniform().ln() / rate as f64;
+            let i0 = (t * fs as f64) as usize;
+            if i0 >= x.len() {
+                break;
+            }
+            let dur = 1e-3 * 50f64.powf(rng.uniform());
+            let db = 20.0 + 15.0 * rng.uniform() as f32;
+            let n = ((dur * fs as f64) as usize).max(4).min(x.len() - i0);
+            burst.clear();
+            burst.resize(n, 0.0f32);
+            crash = !crash;
+            if crash {
+                // Clicks about every 1.5 ms, the first at the start.
+                let mut c = 0.0f64;
+                while c < dur {
+                    let f = 400.0 + 2400.0 * rng.uniform();
+                    let tc = (1e-4 + 4e-4 * rng.uniform()) * fs as f64;
+                    let a = 0.3 + 0.7 * rng.uniform() as f32;
+                    let ph = tau * rng.uniform();
+                    let k0 = (c * fs as f64) as usize;
+                    for (k, v) in burst.iter_mut().enumerate().skip(k0) {
+                        let d = (k - k0) as f64;
+                        if d > 8.0 * tc {
+                            break;
+                        }
+                        *v += a * ((-d / tc).exp() * (tau * f * d / fs as f64 + ph).sin()) as f32;
+                    }
+                    c += -1.5e-3 * rng.uniform().ln();
+                }
+            } else {
+                // One pole high and two low: 300 to 3000 Hz.
+                let hp = (-tau * 300.0 / fs as f64).exp() as f32;
+                let lp = (-tau * 3000.0 / fs as f64).exp() as f32;
+                let (mut prev, mut h, mut l1, mut l2) = (0.0f32, 0.0f32, 0.0f32, 0.0f32);
+                for v in burst.iter_mut() {
+                    let w = rng.gauss();
+                    h = hp * (h + w - prev);
+                    prev = w;
+                    l1 = lp * l1 + (1.0 - lp) * h;
+                    l2 = lp * l2 + (1.0 - lp) * l1;
+                    *v = l2;
+                }
+            }
+            let p = burst.iter().map(|v| v * v).sum::<f32>() / n as f32;
+            let want = 0.5 * amp * amp * 10f32.powf(db / 10.0);
+            let g = (want / p.max(1e-30)).sqrt();
+            for (o, v) in x[i0..i0 + n].iter_mut().zip(&burst) {
+                *o += g * v;
+            }
+            covered += n;
+        }
+        covered as f32 / x.len() as f32
+    }
+
     /// Feed in irregular chunks, as the server does.
     pub fn chunks(x: &[f32], mut f: impl FnMut(&[f32])) {
         const SIZES: [usize; 6] = [480, 960, 333, 2000, 717, 1440];
@@ -2284,6 +2740,155 @@ mod tests {
             println!("RTTY 45.45/170 at {snr:+.0} dB SNR (2500 Hz): CER {:.2}% ({errs}/{total})", 100.0 * cer);
             assert!(cer <= max_cer, "CER {cer} at {snr} dB");
         }
+    }
+
+    /// Character error rate with impulse noise at `rate` bursts a second on
+    /// top of the white noise, over `seeds` seeds.
+    fn impulse_cer(cfg: &RttyConfig, snr: f32, rate: f32, seeds: u64) -> f32 {
+        let text = TEXT.repeat(3);
+        let expect = [EXPECT; 3].join("\n");
+        let (mut errs, mut total) = (0, 0);
+        for seed in 1..=seeds {
+            let c = Case { cfg: cfg.clone(), center: 1500.0, reverse: false, amp: 0.3, snr_db: Some(snr), seed: 400 + seed };
+            let mut x = signal_through(&text, &c, Channel::Awgn);
+            if rate > 0.0 {
+                add_impulses(&mut x, c.amp, FS, rate, &mut Rng::new(900 + seed));
+            }
+            let (got, _) = run(&x, cfg.clone());
+            errs += levenshtein(&joined(&got), &expect);
+            total += expect.len();
+        }
+        errs as f32 / total as f32
+    }
+
+    /// `USDR_IMPULSE_TABLE=1 cargo test --release -p scannerd-engine
+    /// rtty_impulse_table -- --nocapture`.
+    #[test]
+    fn rtty_impulse_table() {
+        if std::env::var("USDR_IMPULSE_TABLE").is_err() {
+            return;
+        }
+        let rates = [0.0f32, 1.0, 3.0, 5.0];
+        println!("RTTY: CER % with impulse noise, by bursts a second, 4 seeds");
+        println!("{:>22} {}", "", rates.iter().map(|r| format!("{r:>7.0}")).collect::<String>());
+        for (cfg, snr) in [(RttyConfig::amateur(), 0.0f32), (RttyConfig::amateur(), 5.0), (RttyConfig { unshift_on_space: true, ..RttyConfig::dwd() }, 0.0)] {
+            let row: String = rates.iter().map(|&r| format!("{:>7.1}", 100.0 * impulse_cer(&cfg, snr, r, 4))).collect();
+            println!("{:>12} at {snr:+3.0} dB {row}", format!("{}/{}", cfg.baud, cfg.shift_hz));
+        }
+    }
+
+    #[test]
+    fn rtty_copy_through_impulse_noise() {
+        // Three crashes a second, 20 to 35 dB over the signal, at 0 dB:
+        // with nothing done about them the character error rate was 52%
+        // over four seeds (`rtty_impulse_table`). RTTY has no redundancy,
+        // so the characters a crash lands in are mostly lost either way;
+        // the rest must come through.
+        let c = impulse_cer(&RttyConfig::amateur(), 0.0, 3.0, 3);
+        println!("RTTY 45.45/170 at 0 dB, 3 impulses a second: CER {:.1}%", 100.0 * c);
+        assert!(c <= 0.08, "CER {c}");
+    }
+
+    #[test]
+    fn rtty_impulses_alone_print_nothing() {
+        let mut rng = Rng::new(31);
+        let sigma = noise_sigma(0.3, 0.0, FS);
+        let mut x: Vec<f32> = (0..(30.0 * FS) as usize).map(|_| sigma * rng.gauss()).collect();
+        add_impulses(&mut x, 0.3, FS, 5.0, &mut rng);
+        for cfg in [RttyConfig::amateur(), RttyConfig::dwd()] {
+            let (got, _) = run(&x, cfg);
+            assert!(got.is_empty(), "{got:?}");
+        }
+    }
+
+    /// Audio at `fs` through a blanker told where the pair is: the frames
+    /// it found to be impulses, and whether each sample was blanked.
+    fn blank(x: &[f32], fs: f32, pair: Option<(f32, f32)>) -> (u64, Vec<bool>) {
+        let mut b = Blanker::new(fs);
+        b.set_pair(pair);
+        let flags = x.iter().filter_map(|&v| b.push(v)).map(|(_, f)| f).collect();
+        (b.impulses, flags)
+    }
+
+    #[test]
+    fn blanker_takes_out_impulses() {
+        // Three impulses a second over a 100 baud pair: the impulse energy
+        // left after blanking, and how much of the time went with it.
+        let fs = 12_000.0;
+        let amp = 0.2;
+        for snr in [10.0f32, 0.0, -5.0] {
+            let mut rng = Rng::new(5);
+            let lv: Vec<bool> = (0..3000).map(|_| rng.uniform() > 0.5).collect();
+            let mut clean = fsk(&lv, 100.0, fs, 1500.0, 170.0, amp);
+            add_noise(&mut clean, amp, snr, fs, &mut rng);
+            let mut dirty = clean.clone();
+            let covered = add_impulses(&mut dirty, amp, fs, 3.0, &mut Rng::new(77));
+            let (_, flags) = blank(&dirty, fs, Some((1315.0, 1685.0)));
+            let (mut e_in, mut e_left, mut blanked) = (0.0f64, 0.0f64, 0usize);
+            for (j, &f) in flags.iter().enumerate() {
+                let imp = (dirty[j] - clean[j]) as f64;
+                e_in += imp * imp;
+                if f {
+                    blanked += 1;
+                } else {
+                    e_left += imp * imp;
+                }
+            }
+            let down = 10.0 * (e_in / e_left.max(1e-30)).log10();
+            let share = blanked as f32 / flags.len() as f32;
+            println!("at {snr:+.0} dB: impulse energy {down:.1} dB down, {:.1}% of the time blanked, {:.1}% under impulses", 100.0 * share, 100.0 * covered);
+            assert!(down > 20.0, "{down} dB");
+            assert!(share < covered + 0.03, "{share} blanked");
+        }
+    }
+
+    #[test]
+    fn blanker_leaves_signals_alone() {
+        let fs = 12_000.0;
+        let n = (30.0 * fs) as usize;
+        let mut rng = Rng::new(9);
+        let lv: Vec<bool> = (0..3000).map(|_| rng.uniform() > 0.5).collect();
+        let pair = Some((1315.0, 1685.0));
+        // Noise alone, at three levels.
+        for amp in [1e-4f32, 0.05, 0.8] {
+            let x: Vec<f32> = (0..n).map(|_| amp * rng.gauss()).collect();
+            assert_eq!(blank(&x, fs, None).0, 0, "noise at {amp}");
+            assert_eq!(blank(&x, fs, pair).0, 0, "noise at {amp}");
+        }
+        // A pair 40 dB over the noise. Found, its own bins are not lit by
+        // its keying. While it is still being searched for, the splatter
+        // of an unshaped frequency step now and then lights much of the
+        // passband, and a few milliseconds of a signal that strong are
+        // blanked: it has the margin to spare.
+        let mut x = fsk(&lv, 100.0, fs, 1500.0, 170.0, 0.3);
+        x.truncate(n);
+        add_noise(&mut x, 0.3, 40.0, fs, &mut rng);
+        assert_eq!(blank(&x, fs, pair).0, 0, "strong pair");
+        let (_, flags) = blank(&x, fs, None);
+        let share = flags.iter().filter(|f| **f).count() as f32 / flags.len() as f32;
+        assert!(share < 0.002, "strong pair: {share} blanked while searching");
+        // The pair at 10 dB with a neighbor 30 dB over the noise 400 Hz
+        // away, keyed on and off with 5 ms edges as a CW transmitter is.
+        let mut x = fsk(&lv, 100.0, fs, 1500.0, 170.0, 0.1);
+        x.truncate(n);
+        let cw = 0.1 * 10f32.powf(1.0);
+        let edge = 0.005 * fs;
+        for (i, v) in x.iter_mut().enumerate() {
+            let t = i as f32 % (0.12 * fs);
+            let on = if t < edge {
+                0.5 - 0.5 * (PI * t / edge).cos()
+            } else if t < 0.06 * fs {
+                1.0
+            } else if t < 0.06 * fs + edge {
+                0.5 + 0.5 * (PI * (t - 0.06 * fs) / edge).cos()
+            } else {
+                0.0
+            };
+            *v += cw * on * (TAU * 1985.0 * i as f32 / fs).sin();
+        }
+        add_noise(&mut x, 0.1, 10.0, fs, &mut rng);
+        assert_eq!(blank(&x, fs, None).0, 0, "keyed neighbor");
+        assert_eq!(blank(&x, fs, pair).0, 0, "keyed neighbor");
     }
 
     #[test]
@@ -2588,3 +3193,4 @@ mod live {
         }
     }
 }
+

@@ -13,7 +13,7 @@
 
 mod deep;
 mod demod;
-mod ldpc;
+pub(crate) mod ldpc;
 mod pack;
 mod stream;
 mod tables;

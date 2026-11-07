@@ -178,13 +178,6 @@ pub fn constellation(ui: &mut Ui, pts: &[[f32; 2]], size: f32, tally: egui::Colo
     p.rect_stroke(r, egui::CornerRadius::same(4), Stroke::new(1.0, theme::line()), egui::StrokeKind::Inside);
 }
 
-/// A directory menu for a mode, where it has one.
-fn stations(app: &mut App, ui: &mut Ui, mode: Mode) {
-    if let Some(dir) = crate::stations::for_mode(mode) {
-        crate::directory::menu(app, ui, dir, widgets::protocol_color(mode.label()));
-    }
-}
-
 pub fn sitor(app: &mut App, ui: &mut Ui) {
     let c = app.status.digital_cfg.clone().unwrap_or_default();
     let on = app.status.mode == Mode::Sitor;
@@ -198,7 +191,6 @@ pub fn sitor(app: &mut App, ui: &mut Ui) {
                 app.post("/api/sdr/digital", json!({ "sitor_mode": modes[i] }));
             }
         });
-        stations(app, ui, Mode::Sitor);
     });
     ui.add_space(4.0);
     teleprinter(app, ui, "SITOR", Some("from"), "SITOR text appears here as it is copied: mode B broadcasts as they run, mode A links a block at a time with each side's traffic marked. The decoder finds the tone pair in the passband and tells A from B by the timing.");
@@ -209,14 +201,13 @@ pub fn pactor(app: &mut App, ui: &mut Ui) {
         reading_strip(app, ui, Mode::Pactor, "LISTENING FOR PACTOR-I");
     });
     ui.add_space(4.0);
-    teleprinter(app, ui, "PACTOR", Some("side"), "PACTOR-I links appear here: the connect with both callsigns, then each side's text as its packets check. PACTOR-II, III and IV are proprietary and are not decoded. Amateur PACTOR is found in the digital sub-bands; BANDS lists them.");
+    teleprinter(app, ui, "PACTOR", Some("side"), "PACTOR-I links appear here: the connect with both callsigns, then each side's text as its packets check. PACTOR-II, III and IV are proprietary and are not decoded. Amateur PACTOR is found in the automatic digital segments; the band keys above tune them.");
 }
 
 pub fn dsc(app: &mut App, ui: &mut Ui) {
     let cols: &[(&str, &str, f32)] = &[("formatName", "FORMAT", 110.0), ("categoryName", "CATEGORY", 80.0), ("from", "FROM", 80.0), ("to", "TO", 80.0)];
     ui.horizontal_wrapped(|ui| {
         reading_strip(app, ui, Mode::Dsc, "LISTENING FOR CALLS");
-        stations(app, ui, Mode::Dsc);
     });
     // Distress traffic stands out above the log until it is seen.
     let distress = rows(app, "DSC").find(|(_, d)| d.ev.fields.get("category").is_some_and(|c| c.to_ascii_lowercase().contains("distress")) || d.ev.kind.contains("distress")).map(|(_, d)| (d.at, d.ev.summary.clone()));
@@ -240,12 +231,22 @@ pub fn hfdl(app: &mut App, ui: &mut Ui) {
     let cols: &[(&str, &str, f32)] = &[("gsId", "GS", 30.0), ("flight", "FLIGHT", 70.0), ("reg", "REG", 70.0)];
     ui.horizontal_wrapped(|ui| {
         reading_strip(app, ui, Mode::Hfdl, "LISTENING FOR BURSTS");
-        stations(app, ui, Mode::Hfdl);
     });
-    ground_stations(app, ui);
     ui.add_space(4.0);
-    list_head(ui, cols);
-    message_list(app, ui, "HFDL", cols, "HFDL appears here: each ground station's squitter every 32 seconds, and the aircraft logged on to it, their ACARS messages and positions. STATIONS lists the ground stations and their frequencies; most are busiest at night on the lower ones.");
+    // Two columns, so a squitter arriving never moves the messages being
+    // read: the ground stations heard on the left, the traffic beside.
+    let w = ui.available_width();
+    let h = ui.available_height();
+    let left = (w * 0.34).clamp(250.0, 380.0);
+    ui.horizontal_top(|ui| {
+        ui.allocate_ui_with_layout(vec2(left, h), egui::Layout::top_down(egui::Align::Min), |ui| {
+            egui::ScrollArea::vertical().id_salt("hfdl-gs").auto_shrink([false, false]).show(ui, |ui| ground_stations(app, ui));
+        });
+        ui.allocate_ui_with_layout(vec2(w - left - 8.0, h), egui::Layout::top_down(egui::Align::Min), |ui| {
+            list_head(ui, cols);
+            message_list(app, ui, "HFDL", cols, "HFDL appears here: the aircraft logged on to each ground station, their ACARS messages and positions. The station list above tunes the ground stations; most are busiest at night on the lower frequencies.");
+        });
+    });
 }
 
 /// The ground stations heard in the last quarter hour, from their
@@ -268,9 +269,10 @@ fn ground_stations(app: &mut App, ui: &mut Ui) {
         heard.push((id, d.at, ids, table));
     }
     if heard.is_empty() {
+        ui.label(mono("GROUND STATIONS HEARD", theme::text_3()));
+        ui.add(egui::Label::new(RichText::new("Each ground station sends a squitter every 32 seconds, naming the frequencies it has on. They are listed here as they are heard.").font(theme::sans(11.0)).color(theme::text_3())).wrap());
         return;
     }
-    ui.add_space(4.0);
     let table_here = crate::stations_data::HFDL_TABLE_VERSION;
     let stale = heard.iter().filter_map(|h| h.3).find(|v| *v != table_here);
     ui.horizontal_wrapped(|ui| {
@@ -283,10 +285,17 @@ fn ground_stations(app: &mut App, ui: &mut Ui) {
     let mut pick = None;
     for (id, at, ids, _) in &heard {
         let st = crate::stations_data::HFDL.iter().find(|s| s.call == id.to_string());
+        // A station on two lines: who and when, then its frequencies.
         ui.horizontal(|ui| {
-            ui.add_sized(vec2(24.0, 16.0), egui::Label::new(RichText::new(id.to_string()).font(theme::mono_bold(11.0)).color(tally)));
-            ui.add_sized(vec2(170.0, 16.0), egui::Label::new(mono(st.map_or("not in the table", |s| s.name), theme::text())).truncate());
-            ui.add_sized(vec2(60.0, 16.0), egui::Label::new(mono(format!("{} s ago", at.elapsed().map(|e| e.as_secs()).unwrap_or(0)), theme::text_3())));
+            ui.add_sized(vec2(22.0, 16.0), egui::Label::new(RichText::new(id.to_string()).font(theme::mono_bold(11.0)).color(tally)));
+            ui.add(egui::Label::new(mono(st.map_or("not in the table", |s| s.name), theme::text())).truncate());
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.label(mono(format!("{} s ago", at.elapsed().map(|e| e.as_secs()).unwrap_or(0)), theme::text_3()));
+            });
+        });
+        ui.horizontal_wrapped(|ui| {
+            ui.add_space(26.0);
+            ui.spacing_mut().item_spacing.x = 4.0;
             for i in ids {
                 match st.and_then(|s| s.freqs_khz.get(*i as usize)) {
                     Some(khz) if stale.is_none() => {
@@ -301,6 +310,7 @@ fn ground_stations(app: &mut App, ui: &mut Ui) {
                 }
             }
         });
+        ui.add_space(3.0);
     }
     if let Some(k) = pick {
         crate::directory::tune(app, &crate::stations::HFDL, k);
@@ -308,24 +318,143 @@ fn ground_stations(app: &mut App, ui: &mut Ui) {
 }
 
 pub fn stanag(app: &mut App, ui: &mut Ui) {
-    let r = reading(app);
     let cols: &[(&str, &str, f32)] = &[("waveform", "WAVEFORM", 130.0), ("dataRateBps", "BPS", 44.0), ("dpduTypeName", "D_PDU", 90.0)];
-    ui.horizontal_top(|ui| {
-        constellation(ui, &r.constellation, 120.0, widgets::protocol_color("STANAG"));
-        ui.vertical(|ui| {
-            ui.horizontal_wrapped(|ui| reading_strip(app, ui, Mode::Stanag, "LOOKING FOR A SERIAL TONE"));
-            ui.add_space(2.0);
-            ui.add(egui::Label::new(RichText::new("Identifies STANAG 4285 and MIL-STD-188-110 serial tones, demodulates them and reads STANAG 5066 headers where the data is sent in the clear. Most military traffic is encrypted: its waveform, rate and addresses are what can be read.").font(theme::sans(11.0)).color(theme::text_3())).wrap());
-        });
-    });
+    ui.horizontal_wrapped(|ui| reading_strip(app, ui, Mode::Stanag, "LOOKING FOR A SERIAL TONE"));
+    ui.add_space(2.0);
+    ui.add(egui::Label::new(RichText::new("Identifies STANAG 4285 and MIL-STD-188-110 serial tones, demodulates them and reads STANAG 5066 headers where the data is sent in the clear. Most military traffic is encrypted: its waveform, rate and addresses are what can be read. The constellation is in the Scope panel.").font(theme::sans(11.0)).color(theme::text_3())).wrap());
     ui.add_space(4.0);
     list_head(ui, cols);
     message_list(app, ui, "STANAG", cols, "Waveforms and decoded headers appear here as they are found.");
-    if rows(app, "2G ALE").next().is_some() {
-        ui.add_space(4.0);
-        ui.label(mono("2G ALE", theme::text_3()));
-        let ale: &[(&str, &str, f32)] = &[("caller", "FROM", 80.0), ("called", "TO", 80.0)];
-        message_list(app, ui, "2G ALE", ale, "");
+
+}
+
+/// 2G ALE: soundings and calls, a row each, with who called whom; the
+/// words they were built from open under a row.
+pub fn ale(app: &mut App, ui: &mut Ui) {
+    let cols: &[(&str, &str, f32)] = &[("caller", "FROM", 90.0), ("called", "TO", 90.0), ("conclusion", "END", 44.0)];
+    ui.horizontal_wrapped(|ui| reading_strip(app, ui, Mode::Ale, "LISTENING FOR ALE"));
+    ui.add_space(4.0);
+    list_head(ui, cols);
+    message_list(app, ui, "2G ALE", cols, "ALE soundings and calls appear here: a station's sounding names it (TIS or TWAS), a call names both ends. The amateur HFN channels in the station list sound around the clock; 14109 kHz is the busiest by day.");
+}
+
+/// JS8Call: whole messages a row each (frames joined), who to whom and
+/// what; heartbeats and directed queries marked by kind.
+pub fn js8(app: &mut App, ui: &mut Ui) {
+    let cols: &[(&str, &str, f32)] = &[("speed", "SPEED", 50.0), ("df", "Hz", 40.0), ("snr", "dB", 30.0), ("from", "FROM", 70.0), ("to", "TO", 70.0)];
+    ui.horizontal_wrapped(|ui| reading_strip(app, ui, Mode::Js8, "LISTENING"));
+    ui.add_space(4.0);
+    list_head(ui, cols);
+    message_list(app, ui, "JS8", cols, "JS8Call messages appear here a whole transmission at a time: heartbeats, CQs, directed queries and replies, and free text. The band keys above tune JS8Call's dials; 7.078 and 14.078 MHz are the busiest.");
+}
+
+/// WSPR: each slot's beacons, newest first, with the path to each one's
+/// locator from the station's own.
+pub fn wspr(app: &mut App, ui: &mut Ui) {
+    ui.horizontal_wrapped(|ui| reading_strip(app, ui, Mode::Wspr, "WAITING FOR THE SLOT"));
+    ui.add_space(4.0);
+    let here = app.station.as_ref().and_then(|(st, _)| usdr_proto::station::grid_center(&st.grid));
+    let idx: Vec<usize> = rows(app, "WSPR").map(|(i, _)| i).take(400).collect();
+    let head = |t: &str| RichText::new(t).font(theme::mono(10.0)).color(theme::text_3()).extra_letter_spacing(0.6);
+    let cols = [("UTC", 64.0), ("dB", 34.0), ("Hz", 44.0), ("DRIFT", 50.0), ("CALL", 90.0), ("GRID", 56.0), ("POWER", 76.0), ("KM", 56.0), ("KM/W", 70.0)];
+    ui.horizontal(|ui| {
+        for (t, w) in cols {
+            ui.add_sized(vec2(w, 14.0), egui::Label::new(head(t)));
+        }
+    });
+    if idx.is_empty() {
+        ui.add(egui::Label::new(RichText::new("WSPR beacons appear here at the end of each even-minute slot: call, locator and power, with the path from your locator (Settings › Station). The band keys above tune WSJT-X's WSPR dials.").font(theme::sans(12.0)).color(theme::text_3())).wrap());
+        return;
+    }
+    egui::ScrollArea::vertical().id_salt("wspr-rows").auto_shrink([false, false]).show(ui, |ui| {
+        for i in idx {
+            let d = &app.decodes[i];
+            let f = |k: &str| d.ev.fields.get(k).cloned().unwrap_or_default();
+            let slot = f("slot");
+            let dbm: f64 = f("dbm").parse().unwrap_or(f64::NAN);
+            let watts = 10f64.powf((dbm - 30.0) / 10.0);
+            let path = here.zip(usdr_proto::station::grid_center(&f("grid"))).map(|(a, b)| usdr_proto::station::path(a, b).0);
+            ui.horizontal(|ui| {
+                let cells = [
+                    (if slot.len() >= 4 { format!("{}:{}", &slot[..2], &slot[2..4]) } else { slot.clone() }, theme::text_3()),
+                    (f("snr"), theme::text_2()),
+                    (f("df"), theme::AMBER),
+                    (f("drift"), theme::text_3()),
+                    (f("call"), theme::text()),
+                    (f("grid"), theme::CYAN),
+                    (if dbm.is_finite() { format!("{dbm:.0} dBm {}", if watts < 1.0 { format!("{:.0} mW", watts * 1e3) } else { format!("{watts:.0} W") }) } else { String::new() }, theme::text_2()),
+                    (path.map_or(String::new(), |k| format!("{k:.0}")), theme::text_2()),
+                    (path.filter(|_| watts > 0.0).map_or(String::new(), |k| format!("{:.0}", k / watts)), theme::OK),
+                ];
+                for ((t, c), (_, w)) in cells.into_iter().zip(cols) {
+                    ui.add_sized(vec2(w, 16.0), egui::Label::new(mono(t, c)).truncate());
+                }
+            });
+        }
+    });
+}
+
+pub fn olivia(app: &mut App, ui: &mut Ui) {
+    ui.horizontal_wrapped(|ui| reading_strip(app, ui, Mode::Olivia, "TRYING 8/250 · 8/500 · 16/500 · 32/1000 · 16/1000 · 4/250"));
+    ui.add_space(4.0);
+    teleprinter(app, ui, "OLIVIA", None, "Olivia text appears here as it is copied: the decoder tries the common settings at once around 1500 Hz and keeps the one that decodes. The band keys above tune the Olivia club's calling frequencies.");
+}
+
+/// MFSK: the text as it arrives and, beside it, the newest picture a
+/// Shortwave Radiogram show sent.
+pub fn mfsk(app: &mut App, ui: &mut Ui) {
+    ui.horizontal_wrapped(|ui| reading_strip(app, ui, Mode::Mfsk, "LOOKING FOR MFSK"));
+    ui.add_space(4.0);
+    let w = ui.available_width();
+    let h = ui.available_height();
+    let has_picture = rows(app, "MFSK").any(|(_, d)| d.ev.kind == "picture");
+    let pic_w = if has_picture { (w * 0.4).clamp(220.0, 420.0) } else { 0.0 };
+    ui.horizontal_top(|ui| {
+        ui.allocate_ui_with_layout(vec2(w - pic_w - if has_picture { 8.0 } else { 0.0 }, h), egui::Layout::top_down(egui::Align::Min), |ui| {
+            teleprinter(app, ui, "MFSK", None, "MFSK text appears here, and its pictures beside it. Shortwave Radiogram sends both on WRMI; the station list above has its times. The decoder finds an MFSK16, 32 or 64 signal anywhere in 300–2700 Hz.");
+        });
+        if has_picture {
+            ui.allocate_ui_with_layout(vec2(pic_w, h), egui::Layout::top_down(egui::Align::Min), |ui| crate::sstvview::canvas_pub(app, ui, h));
+        }
+    });
+}
+
+/// Columns of Feld Hell kept for the ribbon.
+pub const HELL_KEEP: usize = 2_400;
+
+/// Feld Hell: the columns as the eye reads them, a ribbon drawn twice, one
+/// copy over the other, so text that wanders up or down a row is still
+/// whole in one of them.
+pub fn hell(app: &mut App, ui: &mut Ui) {
+    ui.horizontal_wrapped(|ui| reading_strip(app, ui, Mode::Hell, "LOOKING FOR A HELL CARRIER"));
+    ui.add_space(6.0);
+    let rows = 14usize;
+    let cols = app.hell.len() / rows;
+    let w = ui.available_width();
+    let px = ((ui.available_height() - 20.0) / (2.0 * rows as f32)).clamp(2.0, 5.0);
+    let (r, _) = ui.allocate_exact_size(vec2(w, 2.0 * rows as f32 * px + 8.0), Sense::hover());
+    let p = ui.painter_at(r);
+    p.rect_filled(r, egui::CornerRadius::same(4), theme::ink());
+    if cols == 0 {
+        p.text(r.center(), egui::Align2::CENTER_CENTER, "Feld Hell paints here, newest at the right. The band keys above tune the Feld Hell Club's activity ranges.", theme::sans(12.0), theme::text_3());
+        return;
+    }
+    let shown = ((w - 8.0) / px) as usize;
+    let start = cols.saturating_sub(shown);
+    let ink = theme::text();
+    for c in start..cols {
+        let x = r.left() + 4.0 + (c - start) as f32 * px;
+        for y in 0..rows {
+            let v = app.hell[c * rows + y];
+            if v < 40 {
+                continue;
+            }
+            let col = alpha(ink, v as f32 / 255.0);
+            for copy in 0..2 {
+                let top = r.top() + 4.0 + (copy * rows + y) as f32 * px;
+                p.rect_filled(egui::Rect::from_min_size(pos2(x, top), vec2(px, px)), egui::CornerRadius::ZERO, col);
+            }
+        }
     }
 }
 
@@ -336,7 +465,6 @@ pub fn wwv(app: &mut App, ui: &mut Ui) {
     let r = reading(app);
     ui.horizontal_wrapped(|ui| {
         reading_strip(app, ui, Mode::Wwv, "LISTENING FOR THE TIME CODE");
-        stations(app, ui, Mode::Wwv);
     });
     ui.add_space(6.0);
     let last = rows(app, "WWV").find(|(_, d)| d.ev.kind == "minute").map(|(_, d)| (d.at, d.ev.fields.clone(), d.ev.summary.clone()));
@@ -428,19 +556,16 @@ fn bit_strip(ui: &mut Ui, bits: &[u8], w: f32) {
 /// receiver has got (time, frequency, frame, FAC, SDC, MSC), and the MSC's
 /// constellation.
 pub fn drm(app: &mut App, ui: &mut Ui) {
-    let r = reading(app);
     let c = app.status.digital_cfg.clone().unwrap_or_default();
     let on = app.status.mode == Mode::Drm;
     let tally = widgets::protocol_color("DRM");
     ui.horizontal_wrapped(|ui| {
         reading_strip(app, ui, Mode::Drm, "FINDING THE MULTIPLEX");
-        stations(app, ui, Mode::Drm);
     });
     ui.add_space(4.0);
     let service = rows(app, "DRM").find(|(_, d)| d.ev.kind.eq_ignore_ascii_case("service")).map(|(_, d)| d.ev.fields.clone());
     let text = rows(app, "DRM").find(|(_, d)| d.ev.kind.eq_ignore_ascii_case("text")).map(|(_, d)| (d.at, d.ev.fields.get("text").cloned().unwrap_or_else(|| d.ev.summary.clone())));
     ui.horizontal_top(|ui| {
-        constellation(ui, &r.constellation, 140.0, tally);
         ui.vertical(|ui| {
             match &service {
                 Some(f) => {

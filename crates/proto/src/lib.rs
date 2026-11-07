@@ -52,6 +52,22 @@ pub const STEREO_AUDIO_MAGIC: u8 = 0x05;
 /// the row's place in its picture, from 0. Each pixel is 0 (black) to 255
 /// (white), `width` of them.
 pub const FAX_LINE_MAGIC: u8 = 0x06;
+/// Leading byte of one color picture row (SSTV), sent only to desktop
+/// clients, as [`FAX_LINE_MAGIC`] but three bytes a pixel:
+///
+/// ```text
+/// [0x07][u8 receiver][u32 image][u32 line][u16 width][u8 r, g, b…]
+/// ```
+pub const IMAGE_LINE_MAGIC: u8 = 0x07;
+/// Leading byte of Feld Hell columns, sent only to desktop clients:
+///
+/// ```text
+/// [0x08][u8 receiver][u32 first column][u16 rows][u16 columns][u8 pixels…]
+/// ```
+///
+/// Column after column, each `rows` pixels from the top, 0 no carrier to
+/// 255 full carrier. Hell is read by eye, so these are its picture.
+pub const HELL_COLUMNS_MAGIC: u8 = 0x08;
 
 // ---------- binary frames ----------
 
@@ -184,6 +200,71 @@ pub enum Binary {
     Fft(Box<FftFrame>),
     Audio(AudioFrame),
     FaxLine(FaxLine),
+    ImageLine(ImageLine),
+    HellColumns(HellColumns),
+}
+
+/// Feld Hell columns (see [`HELL_COLUMNS_MAGIC`]).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct HellColumns {
+    pub rx: u8,
+    pub first: u32,
+    pub rows: u16,
+    pub pixels: Vec<u8>,
+}
+
+pub fn encode_hell_columns(rx: u8, first: u32, rows: u16, pixels: &[u8]) -> Vec<u8> {
+    let cols = (pixels.len() / rows.max(1) as usize).min(u16::MAX as usize);
+    let mut b = Vec::with_capacity(10 + pixels.len());
+    b.push(HELL_COLUMNS_MAGIC);
+    b.push(rx);
+    b.extend_from_slice(&first.to_le_bytes());
+    b.extend_from_slice(&rows.to_le_bytes());
+    b.extend_from_slice(&(cols as u16).to_le_bytes());
+    b.extend_from_slice(&pixels[..cols * rows as usize]);
+    b
+}
+
+pub fn decode_hell_columns(buf: &[u8]) -> Result<HellColumns, DecodeError> {
+    let mut r = Reader { buf, at: 1 };
+    let rx = r.u8()?;
+    let first = r.u32()?;
+    let rows = r.u16()?;
+    let cols = r.u16()? as usize;
+    let pixels = r.take(cols * rows as usize)?.to_vec();
+    Ok(HellColumns { rx, first, rows, pixels })
+}
+
+/// One color picture row (see [`IMAGE_LINE_MAGIC`]).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ImageLine {
+    pub rx: u8,
+    pub image: u32,
+    pub line: u32,
+    pub width: u16,
+    pub rgb: Vec<u8>,
+}
+
+pub fn encode_image_line(rx: u8, image: u32, line: u32, rgb: &[u8]) -> Vec<u8> {
+    let width = (rgb.len() / 3).min(u16::MAX as usize);
+    let mut b = Vec::with_capacity(12 + 3 * width);
+    b.push(IMAGE_LINE_MAGIC);
+    b.push(rx);
+    b.extend_from_slice(&image.to_le_bytes());
+    b.extend_from_slice(&line.to_le_bytes());
+    b.extend_from_slice(&(width as u16).to_le_bytes());
+    b.extend_from_slice(&rgb[..3 * width]);
+    b
+}
+
+pub fn decode_image_line(buf: &[u8]) -> Result<ImageLine, DecodeError> {
+    let mut r = Reader { buf, at: 1 };
+    let rx = r.u8()?;
+    let image = r.u32()?;
+    let line = r.u32()?;
+    let width = r.u16()?;
+    let rgb = r.take(3 * width as usize)?.to_vec();
+    Ok(ImageLine { rx, image, line, width, rgb })
 }
 
 /// One radiofax row (see [`FAX_LINE_MAGIC`]).
@@ -292,6 +373,8 @@ pub fn decode_binary(buf: &[u8]) -> Result<Binary, DecodeError> {
         }
         Some(&STEREO_AUDIO_MAGIC) => decode_stereo_audio(buf).map(Binary::Audio),
         Some(&FAX_LINE_MAGIC) => decode_fax_line(buf).map(Binary::FaxLine),
+        Some(&IMAGE_LINE_MAGIC) => decode_image_line(buf).map(Binary::ImageLine),
+        Some(&HELL_COLUMNS_MAGIC) => decode_hell_columns(buf).map(Binary::HellColumns),
         Some(_) => Err(DecodeError("unknown frame type")),
         None => Err(DecodeError("empty frame")),
     }
@@ -565,6 +648,8 @@ pub struct DigitalCfg {
     pub sitor_mode: String,
     /// DRM: the service to play, 0 to 3.
     pub drm_service: u8,
+    /// SSTV: the mode START begins a picture in when its VIS was missed.
+    pub sstv_mode: String,
 }
 
 impl Default for DigitalCfg {
@@ -580,6 +665,7 @@ impl Default for DigitalCfg {
             fax_slant_ppm: 0.0,
             sitor_mode: "auto".into(),
             drm_service: 0,
+            sstv_mode: "Scottie S1".into(),
         }
     }
 }
@@ -787,6 +873,18 @@ pub enum Mode {
     Hfdl,
     Pactor,
     Stanag,
+    /// MIL-STD-188-141 2G automatic link establishment: soundings and calls.
+    Ale,
+    /// Amateur weak-signal, keyboard and picture modes on upper sideband:
+    /// Morse (every signal in the passband), WSPR, JS8Call, slow-scan
+    /// television, Olivia, MFSK and Feld Hell.
+    Cw,
+    Wspr,
+    Js8,
+    Sstv,
+    Olivia,
+    Mfsk,
+    Hell,
     /// The NIST time stations' 100 Hz time code, on AM.
     Wwv,
     /// Digital Radio Mondiale: an OFDM broadcast decoded to its service
@@ -797,7 +895,7 @@ pub enum Mode {
 }
 
 impl Mode {
-    pub const ALL: [Mode; 26] = [
+    pub const ALL: [Mode; 34] = [
         Mode::Nfm,
         Mode::Am,
         Mode::Usb,
@@ -820,6 +918,14 @@ impl Mode {
         Mode::Hfdl,
         Mode::Pactor,
         Mode::Stanag,
+        Mode::Ale,
+        Mode::Cw,
+        Mode::Wspr,
+        Mode::Js8,
+        Mode::Sstv,
+        Mode::Olivia,
+        Mode::Mfsk,
+        Mode::Hell,
         Mode::Wwv,
         Mode::Drm,
         Mode::Auto,
@@ -849,6 +955,14 @@ impl Mode {
             Mode::Hfdl => "HFDL",
             Mode::Pactor => "PACTOR",
             Mode::Stanag => "STANAG",
+            Mode::Ale => "ALE",
+            Mode::Cw => "CW",
+            Mode::Wspr => "WSPR",
+            Mode::Js8 => "JS8",
+            Mode::Sstv => "SSTV",
+            Mode::Olivia => "OLIVIA",
+            Mode::Mfsk => "MFSK",
+            Mode::Hell => "HELL",
             Mode::Wwv => "WWV",
             Mode::Drm => "DRM",
             Mode::Auto => "AUTO",
@@ -865,7 +979,7 @@ impl Mode {
     /// dial (the suppressed carrier) and the decoder finds its signal in
     /// the audio above it.
     pub fn is_sideband_data(self) -> bool {
-        matches!(self, Mode::Ft8 | Mode::Ft4 | Mode::Wefax | Mode::Rtty | Mode::Navtex | Mode::Psk31 | Mode::Sitor | Mode::Dsc | Mode::Hfdl | Mode::Pactor | Mode::Stanag)
+        matches!(self, Mode::Ft8 | Mode::Ft4 | Mode::Wefax | Mode::Rtty | Mode::Navtex | Mode::Psk31 | Mode::Sitor | Mode::Dsc | Mode::Hfdl | Mode::Pactor | Mode::Stanag | Mode::Ale | Mode::Cw | Mode::Wspr | Mode::Js8 | Mode::Sstv | Mode::Olivia | Mode::Mfsk | Mode::Hell)
     }
 
     /// Demodulated as single sideband: voice, and the sideband data modes.
@@ -896,6 +1010,14 @@ impl Mode {
             Mode::Hfdl => "hfdl",
             Mode::Pactor => "pactor",
             Mode::Stanag => "stanag",
+            Mode::Ale => "ale",
+            Mode::Cw => "cw",
+            Mode::Wspr => "wspr",
+            Mode::Js8 => "js8",
+            Mode::Sstv => "sstv",
+            Mode::Olivia => "olivia",
+            Mode::Mfsk => "mfsk",
+            Mode::Hell => "hell",
             Mode::Wwv => "wwv",
             Mode::Drm => "drm",
             Mode::Auto => "auto",
@@ -1432,5 +1554,29 @@ mod tests {
         let c: ScanCfg = serde_json::from_str(j).unwrap();
         let back = serde_json::to_value(&c).unwrap();
         assert_eq!(back["slots"], 4);
+    }
+}
+
+#[cfg(test)]
+mod image_line_tests {
+    use super::*;
+
+    #[test]
+    fn an_image_row_round_trips() {
+        let rgb: Vec<u8> = (0..320 * 3).map(|i| (i % 251) as u8).collect();
+        let b = encode_image_line(0, 9, 17, &rgb);
+        let Binary::ImageLine(l) = decode_binary(&b).unwrap() else { panic!() };
+        assert_eq!((l.image, l.line, l.width), (9, 17, 320));
+        assert_eq!(l.rgb, rgb);
+        assert!(decode_binary(&b[..b.len() - 1]).is_err());
+    }
+
+    #[test]
+    fn hell_columns_round_trip() {
+        let px: Vec<u8> = (0..14 * 5).map(|i| (i * 3) as u8).collect();
+        let b = encode_hell_columns(0, 100, 14, &px);
+        let Binary::HellColumns(h) = decode_binary(&b).unwrap() else { panic!() };
+        assert_eq!((h.first, h.rows, h.pixels.len()), (100, 14, 70));
+        assert_eq!(h.pixels, px);
     }
 }

@@ -1,0 +1,975 @@
+{
+ "fetched": "2026-11-06",
+ "ale": [
+  {
+   "net": "HFLINK amateur HFN",
+   "freq_khz": 1843.0,
+   "ale": true,
+   "mode": "USB",
+   "note": "channel 01BALE; ALE texting/sounding net; USA: HFN (EUR/UK/AUS/ITU1 use it as HFL+). Page column is 'CHANNEL FREQUENCY DIAL CARRIER' (USB dial).",
+   "source": "https://hflink.com/channels/"
+  },
+  {
+   "net": "HFLINK amateur HFL",
+   "freq_khz": 1996.0,
+   "ale": true,
+   "mode": "USB",
+   "note": "channel 01FALE; ALE calling, then SSB/digital voice; NET+ = scan in your area; USA/ITU2. Page column is 'CHANNEL FREQUENCY DIAL CARRIER' (USB dial).",
+   "source": "https://hflink.com/channels/"
+  },
+  {
+   "net": "HFLINK amateur HFN",
+   "freq_khz": 3596.0,
+   "ale": true,
+   "mode": "USB",
+   "note": "channel 03DALE; ALE texting/sounding net; NET+ = scan in your area; all regions except JA. Page column is 'CHANNEL FREQUENCY DIAL CARRIER' (USB dial).",
+   "source": "https://hflink.com/channels/"
+  },
+  {
+   "net": "HFLINK amateur HFL",
+   "freq_khz": 3996.0,
+   "ale": true,
+   "mode": "USB",
+   "note": "channel 03LALE; ALE calling, then SSB/digital voice; NET+ = scan in your area; USA only. Page column is 'CHANNEL FREQUENCY DIAL CARRIER' (USB dial).",
+   "source": "https://hflink.com/channels/"
+  },
+  {
+   "net": "HFLINK amateur HFL",
+   "freq_khz": 5357.0,
+   "ale": true,
+   "mode": "USB",
+   "note": "channel 05EALE; ALE calling, then SSB/digital voice; NET+ = scan in your area; USA/EUR/ITU1-3; 60 m: US rules want digital centered 1.5 kHz above the channel (ARRL band plan). Page column is 'CHANNEL FREQUENCY DIAL CARRIER' (USB dial).",
+   "source": "https://hflink.com/channels/"
+  },
+  {
+   "net": "HFLINK amateur HFL",
+   "freq_khz": 5371.5,
+   "ale": true,
+   "mode": "USB",
+   "note": "channel 05GALE; ALE calling, then SSB/digital voice; NET+ = scan in your area; USA/UK; US 60 m channel. Page column is 'CHANNEL FREQUENCY DIAL CARRIER' (USB dial).",
+   "source": "https://hflink.com/channels/"
+  },
+  {
+   "net": "HFLINK amateur HFN",
+   "freq_khz": 7102.0,
+   "ale": true,
+   "mode": "USB",
+   "note": "channel 07DALE; ALE texting/sounding net; NET+ = scan in your area; all regions. Page column is 'CHANNEL FREQUENCY DIAL CARRIER' (USB dial).",
+   "source": "https://hflink.com/channels/"
+  },
+  {
+   "net": "HFLINK amateur HFL",
+   "freq_khz": 7296.0,
+   "ale": true,
+   "mode": "USB",
+   "note": "channel 07HALE; ALE calling, then SSB/digital voice; NET+ = scan in your area; USA only. Page column is 'CHANNEL FREQUENCY DIAL CARRIER' (USB dial).",
+   "source": "https://hflink.com/channels/"
+  },
+  {
+   "net": "HFLINK amateur HFL",
+   "freq_khz": 10131.0,
+   "ale": true,
+   "mode": "USB",
+   "note": "channel 10BALE; ALE calling, then SSB/digital voice; USA. Page column is 'CHANNEL FREQUENCY DIAL CARRIER' (USB dial).",
+   "source": "https://hflink.com/channels/"
+  },
+  {
+   "net": "HFLINK amateur HFN",
+   "freq_khz": 10145.5,
+   "ale": true,
+   "mode": "USB",
+   "note": "channel 10DALE; ALE texting/sounding net; NET+ = scan in your area; all regions. Page column is 'CHANNEL FREQUENCY DIAL CARRIER' (USB dial).",
+   "source": "https://hflink.com/channels/"
+  },
+  {
+   "net": "HFLINK amateur HFN",
+   "freq_khz": 14109.0,
+   "ale": true,
+   "mode": "USB",
+   "note": "channel 14BALE; ALE texting/sounding net; NET+ = scan in your area; all regions. Page column is 'CHANNEL FREQUENCY DIAL CARRIER' (USB dial).",
+   "source": "https://hflink.com/channels/"
+  },
+  {
+   "net": "HFLINK amateur HFL",
+   "freq_khz": 14346.0,
+   "ale": true,
+   "mode": "USB",
+   "note": "channel 14EALE; ALE calling, then SSB/digital voice; NET+ = scan in your area; all regions. Page column is 'CHANNEL FREQUENCY DIAL CARRIER' (USB dial).",
+   "source": "https://hflink.com/channels/"
+  },
+  {
+   "net": "HFLINK amateur HFN",
+   "freq_khz": 18106.0,
+   "ale": true,
+   "mode": "USB",
+   "note": "channel 18AALE; ALE texting/sounding net; NET+ = scan in your area; all regions. Page column is 'CHANNEL FREQUENCY DIAL CARRIER' (USB dial).",
+   "source": "https://hflink.com/channels/"
+  },
+  {
+   "net": "HFLINK amateur HFL",
+   "freq_khz": 18117.5,
+   "ale": true,
+   "mode": "USB",
+   "note": "channel 18DALE; ALE calling, then SSB/digital voice; NET+ = scan in your area; all regions. Page column is 'CHANNEL FREQUENCY DIAL CARRIER' (USB dial).",
+   "source": "https://hflink.com/channels/"
+  },
+  {
+   "net": "HFLINK amateur HFN",
+   "freq_khz": 21096.0,
+   "ale": true,
+   "mode": "USB",
+   "note": "channel 21BALE; ALE texting/sounding net; all regions. Page column is 'CHANNEL FREQUENCY DIAL CARRIER' (USB dial).",
+   "source": "https://hflink.com/channels/"
+  },
+  {
+   "net": "HFLINK amateur HFL",
+   "freq_khz": 21432.5,
+   "ale": true,
+   "mode": "USB",
+   "note": "channel 21EALE; ALE calling, then SSB/digital voice; all regions. Page column is 'CHANNEL FREQUENCY DIAL CARRIER' (USB dial).",
+   "source": "https://hflink.com/channels/"
+  },
+  {
+   "net": "HFLINK amateur HFN",
+   "freq_khz": 24926.0,
+   "ale": true,
+   "mode": "USB",
+   "note": "channel 24BALE; ALE texting/sounding net; all regions. Page column is 'CHANNEL FREQUENCY DIAL CARRIER' (USB dial).",
+   "source": "https://hflink.com/channels/"
+  },
+  {
+   "net": "HFLINK amateur HFL",
+   "freq_khz": 24932.0,
+   "ale": true,
+   "mode": "USB",
+   "note": "channel 24CALE; ALE calling, then SSB/digital voice; all regions. Page column is 'CHANNEL FREQUENCY DIAL CARRIER' (USB dial).",
+   "source": "https://hflink.com/channels/"
+  },
+  {
+   "net": "HFLINK amateur HFN",
+   "freq_khz": 28146.0,
+   "ale": true,
+   "mode": "USB",
+   "note": "channel 28BALE; ALE texting/sounding net; NET+ = scan in your area; all regions. Page column is 'CHANNEL FREQUENCY DIAL CARRIER' (USB dial).",
+   "source": "https://hflink.com/channels/"
+  },
+  {
+   "net": "HFLINK amateur HFL",
+   "freq_khz": 28312.5,
+   "ale": true,
+   "mode": "USB",
+   "note": "channel 28DALE; ALE calling, then SSB/digital voice; NET+ = scan in your area; all regions. Page column is 'CHANNEL FREQUENCY DIAL CARRIER' (USB dial).",
+   "source": "https://hflink.com/channels/"
+  },
+  {
+   "net": "HFLINK amateur HFL",
+   "freq_khz": 50162.5,
+   "ale": true,
+   "mode": "USB",
+   "note": "channel 50BALE; ALE calling, then SSB/digital voice; all regions. Page column is 'CHANNEL FREQUENCY DIAL CARRIER' (USB dial).",
+   "source": "https://hflink.com/channels/"
+  }
+ ],
+ "wspr": [
+  {
+   "band": "2200m",
+   "dial_mhz": 0.136,
+   "sideband": "USB",
+   "region": "ALL",
+   "note": "WSJT-X default list; WSPR signals sit 1400-1600 Hz above the dial",
+   "source": "https://sourceforge.net/p/wsjt/wsjtx/ci/master/tree/models/FrequencyList.cpp?format=raw"
+  },
+  {
+   "band": "630m",
+   "dial_mhz": 0.4742,
+   "sideband": "USB",
+   "region": "ALL",
+   "note": "WSJT-X default list; WSPR signals sit 1400-1600 Hz above the dial",
+   "source": "https://sourceforge.net/p/wsjt/wsjtx/ci/master/tree/models/FrequencyList.cpp?format=raw"
+  },
+  {
+   "band": "160m",
+   "dial_mhz": 1.8366,
+   "sideband": "USB",
+   "region": "ALL",
+   "note": "WSJT-X default list; WSPR signals sit 1400-1600 Hz above the dial",
+   "source": "https://sourceforge.net/p/wsjt/wsjtx/ci/master/tree/models/FrequencyList.cpp?format=raw"
+  },
+  {
+   "band": "80m",
+   "dial_mhz": 3.5686,
+   "sideband": "USB",
+   "region": "ALL",
+   "note": "WSJT-X default list; source comment: 'needs guard marker and lock out'",
+   "source": "https://sourceforge.net/p/wsjt/wsjtx/ci/master/tree/models/FrequencyList.cpp?format=raw"
+  },
+  {
+   "band": "40m",
+   "dial_mhz": 7.0386,
+   "sideband": "USB",
+   "region": "ALL",
+   "note": "WSJT-X default list; WSPR signals sit 1400-1600 Hz above the dial",
+   "source": "https://sourceforge.net/p/wsjt/wsjtx/ci/master/tree/models/FrequencyList.cpp?format=raw"
+  },
+  {
+   "band": "30m",
+   "dial_mhz": 10.1387,
+   "sideband": "USB",
+   "region": "ALL",
+   "note": "WSJT-X default list; WSPR signals sit 1400-1600 Hz above the dial",
+   "source": "https://sourceforge.net/p/wsjt/wsjtx/ci/master/tree/models/FrequencyList.cpp?format=raw"
+  },
+  {
+   "band": "20m",
+   "dial_mhz": 14.0956,
+   "sideband": "USB",
+   "region": "ALL",
+   "note": "WSJT-X default list; WSPR signals sit 1400-1600 Hz above the dial",
+   "source": "https://sourceforge.net/p/wsjt/wsjtx/ci/master/tree/models/FrequencyList.cpp?format=raw"
+  },
+  {
+   "band": "17m",
+   "dial_mhz": 18.1046,
+   "sideband": "USB",
+   "region": "ALL",
+   "note": "WSJT-X default list; WSPR signals sit 1400-1600 Hz above the dial",
+   "source": "https://sourceforge.net/p/wsjt/wsjtx/ci/master/tree/models/FrequencyList.cpp?format=raw"
+  },
+  {
+   "band": "15m",
+   "dial_mhz": 21.0946,
+   "sideband": "USB",
+   "region": "ALL",
+   "note": "WSJT-X default list; WSPR signals sit 1400-1600 Hz above the dial",
+   "source": "https://sourceforge.net/p/wsjt/wsjtx/ci/master/tree/models/FrequencyList.cpp?format=raw"
+  },
+  {
+   "band": "12m",
+   "dial_mhz": 24.9246,
+   "sideband": "USB",
+   "region": "ALL",
+   "note": "WSJT-X default list; WSPR signals sit 1400-1600 Hz above the dial",
+   "source": "https://sourceforge.net/p/wsjt/wsjtx/ci/master/tree/models/FrequencyList.cpp?format=raw"
+  },
+  {
+   "band": "10m",
+   "dial_mhz": 28.1246,
+   "sideband": "USB",
+   "region": "ALL",
+   "note": "WSJT-X default list; WSPR signals sit 1400-1600 Hz above the dial",
+   "source": "https://sourceforge.net/p/wsjt/wsjtx/ci/master/tree/models/FrequencyList.cpp?format=raw"
+  },
+  {
+   "band": "6m",
+   "dial_mhz": 50.293,
+   "sideband": "USB",
+   "region": "IARU R2 and R3",
+   "note": "WSJT-X default list; WSPR signals sit 1400-1600 Hz above the dial",
+   "source": "https://sourceforge.net/p/wsjt/wsjtx/ci/master/tree/models/FrequencyList.cpp?format=raw"
+  },
+  {
+   "band": "4m",
+   "dial_mhz": 70.091,
+   "sideband": "USB",
+   "region": "IARU R1 only",
+   "note": "WSJT-X default list; WSPR signals sit 1400-1600 Hz above the dial",
+   "source": "https://sourceforge.net/p/wsjt/wsjtx/ci/master/tree/models/FrequencyList.cpp?format=raw"
+  },
+  {
+   "band": "2m",
+   "dial_mhz": 144.489,
+   "sideband": "USB",
+   "region": "ALL",
+   "note": "WSJT-X default list; WSPR signals sit 1400-1600 Hz above the dial",
+   "source": "https://sourceforge.net/p/wsjt/wsjtx/ci/master/tree/models/FrequencyList.cpp?format=raw"
+  },
+  {
+   "band": "70cm",
+   "dial_mhz": 432.3,
+   "sideband": "USB",
+   "region": "ALL",
+   "note": "WSJT-X default list; WSPR signals sit 1400-1600 Hz above the dial",
+   "source": "https://sourceforge.net/p/wsjt/wsjtx/ci/master/tree/models/FrequencyList.cpp?format=raw"
+  },
+  {
+   "band": "23cm",
+   "dial_mhz": 1296.5,
+   "sideband": "USB",
+   "region": "ALL",
+   "note": "WSJT-X default list; WSPR signals sit 1400-1600 Hz above the dial",
+   "source": "https://sourceforge.net/p/wsjt/wsjtx/ci/master/tree/models/FrequencyList.cpp?format=raw"
+  }
+ ],
+ "js8": [
+  {
+   "band": "160m",
+   "dial_mhz": 1.842,
+   "sideband": "USB",
+   "region": "ALL",
+   "note": "JS8Call official repo default frequency list (FrequencyList.cpp, last changed 2024-08-31; latest release v2.3.1)",
+   "source": "https://github.com/js8call/js8call/blob/main/FrequencyList.cpp"
+  },
+  {
+   "band": "80m",
+   "dial_mhz": 3.578,
+   "sideband": "USB",
+   "region": "ALL",
+   "note": "JS8Call official repo default frequency list (FrequencyList.cpp, last changed 2024-08-31; latest release v2.3.1)",
+   "source": "https://github.com/js8call/js8call/blob/main/FrequencyList.cpp"
+  },
+  {
+   "band": "40m",
+   "dial_mhz": 7.078,
+   "sideband": "USB",
+   "region": "ALL",
+   "note": "JS8Call official repo default frequency list (FrequencyList.cpp, last changed 2024-08-31; latest release v2.3.1)",
+   "source": "https://github.com/js8call/js8call/blob/main/FrequencyList.cpp"
+  },
+  {
+   "band": "30m",
+   "dial_mhz": 10.13,
+   "sideband": "USB",
+   "region": "ALL",
+   "note": "JS8Call official repo default frequency list (FrequencyList.cpp, last changed 2024-08-31; latest release v2.3.1)",
+   "source": "https://github.com/js8call/js8call/blob/main/FrequencyList.cpp"
+  },
+  {
+   "band": "20m",
+   "dial_mhz": 14.078,
+   "sideband": "USB",
+   "region": "ALL",
+   "note": "JS8Call official repo default frequency list (FrequencyList.cpp, last changed 2024-08-31; latest release v2.3.1)",
+   "source": "https://github.com/js8call/js8call/blob/main/FrequencyList.cpp"
+  },
+  {
+   "band": "17m",
+   "dial_mhz": 18.104,
+   "sideband": "USB",
+   "region": "ALL",
+   "note": "JS8Call official repo default frequency list (FrequencyList.cpp, last changed 2024-08-31; latest release v2.3.1)",
+   "source": "https://github.com/js8call/js8call/blob/main/FrequencyList.cpp"
+  },
+  {
+   "band": "15m",
+   "dial_mhz": 21.078,
+   "sideband": "USB",
+   "region": "ALL",
+   "note": "JS8Call official repo default frequency list (FrequencyList.cpp, last changed 2024-08-31; latest release v2.3.1)",
+   "source": "https://github.com/js8call/js8call/blob/main/FrequencyList.cpp"
+  },
+  {
+   "band": "12m",
+   "dial_mhz": 24.922,
+   "sideband": "USB",
+   "region": "ALL",
+   "note": "JS8Call official repo default frequency list (FrequencyList.cpp, last changed 2024-08-31; latest release v2.3.1)",
+   "source": "https://github.com/js8call/js8call/blob/main/FrequencyList.cpp"
+  },
+  {
+   "band": "10m",
+   "dial_mhz": 28.078,
+   "sideband": "USB",
+   "region": "ALL",
+   "note": "JS8Call official repo default frequency list (FrequencyList.cpp, last changed 2024-08-31; latest release v2.3.1)",
+   "source": "https://github.com/js8call/js8call/blob/main/FrequencyList.cpp"
+  },
+  {
+   "band": "6m",
+   "dial_mhz": 50.318,
+   "sideband": "USB",
+   "region": "ALL",
+   "note": "JS8Call official repo default frequency list (FrequencyList.cpp, last changed 2024-08-31; latest release v2.3.1)",
+   "source": "https://github.com/js8call/js8call/blob/main/FrequencyList.cpp"
+  },
+  {
+   "band": "2m",
+   "dial_mhz": 144.178,
+   "sideband": "USB",
+   "region": "ALL",
+   "note": "JS8Call official repo default frequency list (FrequencyList.cpp, last changed 2024-08-31; latest release v2.3.1)",
+   "source": "https://github.com/js8call/js8call/blob/main/FrequencyList.cpp"
+  }
+ ],
+ "sstv": [
+  {
+   "band": "80m",
+   "freq_mhz": 3.845,
+   "sideband": "LSB",
+   "note": "ARRL band plan 'SSTV'; IARU R2 'Image Center of Activity 3845 kHz'",
+   "source": [
+    "https://www.arrl.org/band-plan",
+    "https://www.iaru.org/wp-content/uploads/2020/10/IARU-Region-2-Band-plan.pdf",
+    "https://hamstudy.org/browse/E3_2023/G2A"
+   ]
+  },
+  {
+   "band": "40m",
+   "freq_mhz": 7.171,
+   "sideband": "LSB",
+   "note": "ARRL band plan 'SSTV' 7.171; IARU R2 gives 'Image Center of Activity 7165 kHz' instead",
+   "source": [
+    "https://www.arrl.org/band-plan",
+    "https://www.iaru.org/wp-content/uploads/2020/10/IARU-Region-2-Band-plan.pdf",
+    "https://hamstudy.org/browse/E3_2023/G2A"
+   ]
+  },
+  {
+   "band": "20m",
+   "freq_mhz": 14.23,
+   "sideband": "USB",
+   "note": "ARRL 'SSTV'; IARU R2 'Image Center of Activity 14230 kHz'",
+   "source": [
+    "https://www.arrl.org/band-plan",
+    "https://www.iaru.org/wp-content/uploads/2020/10/IARU-Region-2-Band-plan.pdf",
+    "https://hamstudy.org/browse/E3_2023/G2A"
+   ]
+  },
+  {
+   "band": "15m",
+   "freq_mhz": 21.34,
+   "sideband": "USB",
+   "note": "ARRL 'SSTV'; IARU R2 'Image Center of Activity 21340 kHz'",
+   "source": [
+    "https://www.arrl.org/band-plan",
+    "https://www.iaru.org/wp-content/uploads/2020/10/IARU-Region-2-Band-plan.pdf",
+    "https://hamstudy.org/browse/E3_2023/G2A"
+   ]
+  },
+  {
+   "band": "10m",
+   "freq_mhz": 28.68,
+   "sideband": "USB",
+   "note": "ARRL 'SSTV'; IARU R2 'Image Center of Activity 28680 kHz'",
+   "source": [
+    "https://www.arrl.org/band-plan",
+    "https://www.iaru.org/wp-content/uploads/2020/10/IARU-Region-2-Band-plan.pdf",
+    "https://hamstudy.org/browse/E3_2023/G2A"
+   ]
+  },
+  {
+   "band": "2m (ISS)",
+   "freq_mhz": 145.8,
+   "sideband": "FM",
+   "note": "ISS downlink during ARISS SSTV events only (not continuous). Latest ARISS release fetched (25-67, Nov 2025) says mode PD120; ARRL Dec 2014 news says PD180 for that event. Mode varies by event; expect Doppler of a few kHz.",
+   "source": [
+    "https://www.ariss.org/press-releases/ariss-news-release-ariss-sstv-event-scheduled-for-this-week",
+    "https://www.arrl.org/news/sstv-transmissions-from-the-international-space-station-set-for-december-18-and-20"
+   ]
+  }
+ ],
+ "sstv_sideband_note": "Band plans don't give a sideband. The sidebands follow the voice convention in the FCC General question pool (G2A01/G2A02): LSB on 160/75/40 m, USB at 14 MHz and up.",
+ "cw": {
+  "note": "CW-only or CW/narrow segments from the IARU Region 2 band plan (Sept 2020), kHz. The ARRL band plan page lists CW only for 160 m and 10 m (28.000-28.070 and 28.150-28.190) and 1.810 'CW QRP'. US law (47 CFR 97.305) allows CW anywhere in the amateur bands, so these segments are voluntary.",
+  "segments": [
+   {
+    "band": "160m",
+    "cw_khz": [
+     1810,
+     1840
+    ],
+    "note": "1800-1810 is digital; 1830-1840 CW DX window; 1839-1843 CW/DM",
+    "source": "https://www.iaru.org/wp-content/uploads/2020/10/IARU-Region-2-Band-plan.pdf"
+   },
+   {
+    "band": "80m",
+    "cw_khz": [
+     3500,
+     3600
+    ],
+    "note": "3500-3570 CW only; 3570-3600 CW and digital; 3500-3510 DX window; QRS 3555; contest preferred 3510-3560",
+    "source": "https://www.iaru.org/wp-content/uploads/2020/10/IARU-Region-2-Band-plan.pdf"
+   },
+   {
+    "band": "60m",
+    "cw_khz": [
+     5351.5,
+     5354
+    ],
+    "note": "CW and digital, 500 Hz; US also has the 5330.5/5346.5/5371.5/5403.5 channels (CW centered 1.5 kHz above the channel, ARRL)",
+    "source": [
+     "https://www.iaru.org/wp-content/uploads/2020/10/IARU-Region-2-Band-plan.pdf",
+     "https://www.arrl.org/band-plan"
+    ]
+   },
+   {
+    "band": "40m",
+    "cw_khz": [
+     7000,
+     7050
+    ],
+    "note": "7000-7040 CW only; 7040-7050 CW and digital; 7000-7025 DX window",
+    "source": "https://www.iaru.org/wp-content/uploads/2020/10/IARU-Region-2-Band-plan.pdf"
+   },
+   {
+    "band": "30m",
+    "cw_khz": [
+     10100,
+     10140
+    ],
+    "note": "10100-10130 CW only; 10130-10140 CW and digital",
+    "source": "https://www.iaru.org/wp-content/uploads/2020/10/IARU-Region-2-Band-plan.pdf"
+   },
+   {
+    "band": "20m",
+    "cw_khz": [
+     14000,
+     14099
+    ],
+    "note": "14000-14070 CW only; 14070-14099 CW and digital; QRS 14055; 14099-14101 beacons (IBP)",
+    "source": "https://www.iaru.org/wp-content/uploads/2020/10/IARU-Region-2-Band-plan.pdf"
+   },
+   {
+    "band": "17m",
+    "cw_khz": [
+     18068,
+     18109
+    ],
+    "note": "18068-18095 CW only; 18095-18109 CW and digital (source misprints 18095-15105); 18109-18111 IBP",
+    "source": "https://www.iaru.org/wp-content/uploads/2020/10/IARU-Region-2-Band-plan.pdf"
+   },
+   {
+    "band": "15m",
+    "cw_khz": [
+     21000,
+     21120
+    ],
+    "note": "21000-21070 CW only; 21070-21120 CW and digital; 21149-21151 IBP",
+    "source": "https://www.iaru.org/wp-content/uploads/2020/10/IARU-Region-2-Band-plan.pdf"
+   },
+   {
+    "band": "12m",
+    "cw_khz": [
+     24890,
+     24929
+    ],
+    "note": "24890-24915 CW only; 24915-24929 CW and digital; 24929-24931 IBP",
+    "source": "https://www.iaru.org/wp-content/uploads/2020/10/IARU-Region-2-Band-plan.pdf"
+   },
+   {
+    "band": "10m",
+    "cw_khz": [
+     28000,
+     28190
+    ],
+    "note": "28000-28070 CW only; 28070-28190 CW and digital; QRS 28055; 28190-28225 CW beacons",
+    "source": [
+     "https://www.iaru.org/wp-content/uploads/2020/10/IARU-Region-2-Band-plan.pdf",
+     "https://www.arrl.org/band-plan"
+    ]
+   }
+  ],
+  "qrp_calling_khz": [
+   {
+    "band": "160m",
+    "freq_khz": 1812,
+    "note": "IARU R2; ARRL band plan lists 1.810 CW QRP",
+    "source": [
+     "https://www.iaru.org/wp-content/uploads/2020/10/IARU-Region-2-Band-plan.pdf",
+     "https://www.arrl.org/band-plan"
+    ]
+   },
+   {
+    "band": "80m",
+    "freq_khz": 3560,
+    "source": "https://www.iaru.org/wp-content/uploads/2020/10/IARU-Region-2-Band-plan.pdf"
+   },
+   {
+    "band": "40m",
+    "freq_khz": 7030,
+    "source": "https://www.iaru.org/wp-content/uploads/2020/10/IARU-Region-2-Band-plan.pdf"
+   },
+   {
+    "band": "30m",
+    "freq_khz": 10116,
+    "source": "https://www.iaru.org/wp-content/uploads/2020/10/IARU-Region-2-Band-plan.pdf"
+   },
+   {
+    "band": "20m",
+    "freq_khz": 14060,
+    "source": "https://www.iaru.org/wp-content/uploads/2020/10/IARU-Region-2-Band-plan.pdf"
+   },
+   {
+    "band": "17m",
+    "freq_khz": 18086,
+    "source": "https://www.iaru.org/wp-content/uploads/2020/10/IARU-Region-2-Band-plan.pdf"
+   },
+   {
+    "band": "15m",
+    "freq_khz": 21060,
+    "source": "https://www.iaru.org/wp-content/uploads/2020/10/IARU-Region-2-Band-plan.pdf"
+   },
+   {
+    "band": "12m",
+    "freq_khz": 24906,
+    "source": "https://www.iaru.org/wp-content/uploads/2020/10/IARU-Region-2-Band-plan.pdf"
+   },
+   {
+    "band": "10m",
+    "freq_khz": 28060,
+    "source": "https://www.iaru.org/wp-content/uploads/2020/10/IARU-Region-2-Band-plan.pdf"
+   }
+  ],
+  "qrs_khz": [
+   {
+    "band": "80m",
+    "freq_khz": 3555
+   },
+   {
+    "band": "20m",
+    "freq_khz": 14055
+   },
+   {
+    "band": "10m",
+    "freq_khz": 28055
+   }
+  ]
+ },
+ "hell": [
+  {
+   "band": "160m",
+   "from_mhz": 1.843,
+   "to_mhz": 1.844,
+   "note": "FT8 took the old 1.840 spot; Feld Hell Club list; doesn't say whether these are dial or on-air frequencies",
+   "source": "https://www.sites.google.com/site/feldhellclub/Home/frequencies"
+  },
+  {
+   "band": "80m",
+   "from_mhz": 3.578,
+   "to_mhz": 3.586,
+   "note": "FT8 took the old 3.573 spot; Feld Hell Club list; doesn't say whether these are dial or on-air frequencies",
+   "source": "https://www.sites.google.com/site/feldhellclub/Home/frequencies"
+  },
+  {
+   "band": "40m",
+   "from_mhz": 7.08,
+   "to_mhz": 7.09,
+   "note": "Feld Hell Club list; doesn't say whether these are dial or on-air frequencies",
+   "source": "https://www.sites.google.com/site/feldhellclub/Home/frequencies"
+  },
+  {
+   "band": "30m",
+   "from_mhz": 10.137,
+   "to_mhz": 10.143,
+   "note": "10.144 in Region 1; Feld Hell Club list; doesn't say whether these are dial or on-air frequencies",
+   "source": "https://www.sites.google.com/site/feldhellclub/Home/frequencies"
+  },
+  {
+   "band": "20m",
+   "from_mhz": 14.063,
+   "to_mhz": 14.069,
+   "note": "14.063 preferred calling frequency, then up to 14.069; also 14.072-14.073; Feld Hell Club list; doesn't say whether these are dial or on-air frequencies",
+   "source": "https://www.sites.google.com/site/feldhellclub/Home/frequencies"
+  },
+  {
+   "band": "17m",
+   "from_mhz": 18.098,
+   "to_mhz": 18.105,
+   "note": "Feld Hell Club list; doesn't say whether these are dial or on-air frequencies",
+   "source": "https://www.sites.google.com/site/feldhellclub/Home/frequencies"
+  },
+  {
+   "band": "15m",
+   "from_mhz": 21.063,
+   "to_mhz": 21.063,
+   "note": "Feld Hell Club list; doesn't say whether these are dial or on-air frequencies",
+   "source": "https://www.sites.google.com/site/feldhellclub/Home/frequencies"
+  },
+  {
+   "band": "12m",
+   "from_mhz": 24.924,
+   "to_mhz": 24.924,
+   "note": "Feld Hell Club list; doesn't say whether these are dial or on-air frequencies",
+   "source": "https://www.sites.google.com/site/feldhellclub/Home/frequencies"
+  },
+  {
+   "band": "10m",
+   "from_mhz": 28.063,
+   "to_mhz": 28.063,
+   "note": "Feld Hell Club list; doesn't say whether these are dial or on-air frequencies",
+   "source": "https://www.sites.google.com/site/feldhellclub/Home/frequencies"
+  },
+  {
+   "band": "6m",
+   "from_mhz": 50.286,
+   "to_mhz": 50.286,
+   "note": "Feld Hell Club list; doesn't say whether these are dial or on-air frequencies",
+   "source": "https://www.sites.google.com/site/feldhellclub/Home/frequencies"
+  }
+ ],
+ "olivia": [
+  {
+   "center_mhz": 1.839,
+   "dial_mhz": 1.8375,
+   "sideband": "USB",
+   "tones_bw": "8/250",
+   "note": "ITU Region 1; 'Current (2023) Suggested Starting Calling (and Listening) Frequencies' from the Olivia Digital DXers Club (NW7US). The dial is the center minus 1.5 kHz, with the waterfall cursor at 1500 Hz. This is a club list, not a band plan.",
+   "source": "https://oliviadigitalmode.org/"
+  },
+  {
+   "center_mhz": 1.827,
+   "dial_mhz": 1.8255,
+   "sideband": "USB",
+   "tones_bw": "8/250",
+   "note": "ITU Region 2; 'Current (2023) Suggested Starting Calling (and Listening) Frequencies' from the Olivia Digital DXers Club (NW7US). The dial is the center minus 1.5 kHz, with the waterfall cursor at 1500 Hz. This is a club list, not a band plan.",
+   "source": "https://oliviadigitalmode.org/"
+  },
+  {
+   "center_mhz": 3.583,
+   "dial_mhz": 3.5815,
+   "sideband": "USB",
+   "tones_bw": "8/250",
+   "note": "'Current (2023) Suggested Starting Calling (and Listening) Frequencies' from the Olivia Digital DXers Club (NW7US). The dial is the center minus 1.5 kHz, with the waterfall cursor at 1500 Hz. This is a club list, not a band plan.",
+   "source": "https://oliviadigitalmode.org/"
+  },
+  {
+   "center_mhz": 7.04,
+   "dial_mhz": 7.0385,
+   "sideband": "USB",
+   "tones_bw": "8/250",
+   "note": "ITU Region 2; 'Current (2023) Suggested Starting Calling (and Listening) Frequencies' from the Olivia Digital DXers Club (NW7US). The dial is the center minus 1.5 kHz, with the waterfall cursor at 1500 Hz. This is a club list, not a band plan.",
+   "source": "https://oliviadigitalmode.org/"
+  },
+  {
+   "center_mhz": 7.0725,
+   "dial_mhz": 7.071,
+   "sideband": "USB",
+   "tones_bw": "8/250",
+   "note": "secondary; 'Current (2023) Suggested Starting Calling (and Listening) Frequencies' from the Olivia Digital DXers Club (NW7US). The dial is the center minus 1.5 kHz, with the waterfall cursor at 1500 Hz. This is a club list, not a band plan.",
+   "source": "https://oliviadigitalmode.org/"
+  },
+  {
+   "center_mhz": 10.143,
+   "dial_mhz": 10.1415,
+   "sideband": "USB",
+   "tones_bw": "8/250",
+   "note": "'Current (2023) Suggested Starting Calling (and Listening) Frequencies' from the Olivia Digital DXers Club (NW7US). The dial is the center minus 1.5 kHz, with the waterfall cursor at 1500 Hz. This is a club list, not a band plan.",
+   "source": "https://oliviadigitalmode.org/"
+  },
+  {
+   "center_mhz": 10.144,
+   "dial_mhz": 10.1425,
+   "sideband": "USB",
+   "tones_bw": "32/1000",
+   "note": "potential; 'Current (2023) Suggested Starting Calling (and Listening) Frequencies' from the Olivia Digital DXers Club (NW7US). The dial is the center minus 1.5 kHz, with the waterfall cursor at 1500 Hz. This is a club list, not a band plan.",
+   "source": "https://oliviadigitalmode.org/"
+  },
+  {
+   "center_mhz": 14.0725,
+   "dial_mhz": 14.071,
+   "sideband": "USB",
+   "tones_bw": "8/250",
+   "note": "'Current (2023) Suggested Starting Calling (and Listening) Frequencies' from the Olivia Digital DXers Club (NW7US). The dial is the center minus 1.5 kHz, with the waterfall cursor at 1500 Hz. This is a club list, not a band plan.",
+   "source": "https://oliviadigitalmode.org/"
+  },
+  {
+   "center_mhz": 14.1085,
+   "dial_mhz": 14.107,
+   "sideband": "USB",
+   "tones_bw": "32/1000",
+   "note": "'Current (2023) Suggested Starting Calling (and Listening) Frequencies' from the Olivia Digital DXers Club (NW7US). The dial is the center minus 1.5 kHz, with the waterfall cursor at 1500 Hz. This is a club list, not a band plan.",
+   "source": "https://oliviadigitalmode.org/"
+  },
+  {
+   "center_mhz": 18.099,
+   "dial_mhz": 18.0975,
+   "sideband": "USB",
+   "tones_bw": "8/250",
+   "note": "'Current (2023) Suggested Starting Calling (and Listening) Frequencies' from the Olivia Digital DXers Club (NW7US). The dial is the center minus 1.5 kHz, with the waterfall cursor at 1500 Hz. This is a club list, not a band plan.",
+   "source": "https://oliviadigitalmode.org/"
+  },
+  {
+   "center_mhz": 21.0725,
+   "dial_mhz": 21.071,
+   "sideband": "USB",
+   "tones_bw": "8/250",
+   "note": "'Current (2023) Suggested Starting Calling (and Listening) Frequencies' from the Olivia Digital DXers Club (NW7US). The dial is the center minus 1.5 kHz, with the waterfall cursor at 1500 Hz. This is a club list, not a band plan.",
+   "source": "https://oliviadigitalmode.org/"
+  },
+  {
+   "center_mhz": 24.9225,
+   "dial_mhz": 24.921,
+   "sideband": "USB",
+   "tones_bw": "8/250",
+   "note": "'Current (2023) Suggested Starting Calling (and Listening) Frequencies' from the Olivia Digital DXers Club (NW7US). The dial is the center minus 1.5 kHz, with the waterfall cursor at 1500 Hz. This is a club list, not a band plan.",
+   "source": "https://oliviadigitalmode.org/"
+  },
+  {
+   "center_mhz": 28.1225,
+   "dial_mhz": 28.121,
+   "sideband": "USB",
+   "tones_bw": "8/250",
+   "note": "'Current (2023) Suggested Starting Calling (and Listening) Frequencies' from the Olivia Digital DXers Club (NW7US). The dial is the center minus 1.5 kHz, with the waterfall cursor at 1500 Hz. This is a club list, not a band plan.",
+   "source": "https://oliviadigitalmode.org/"
+  }
+ ],
+ "radiogram": [
+  {
+   "station": "WRMI",
+   "utc": "0030-0100",
+   "days": "Mon (UTC) = Sun evening ET",
+   "freq_khz": 5050,
+   "beam": "160 deg, Latin America",
+   "modes": null,
+   "block": "System C",
+   "source": [
+    "https://docs.google.com/spreadsheets/d/1pcIEX8kisrOPqlXHDAq6gympKUgDj0SIb96qce2kGGQ/edit#gid=0",
+    "https://www.wrmi.net/index.php/programming/"
+   ],
+   "note": "From WRMI's own B26 transmission schedule ('WRMI B26 Schedule effective November 1, 2026', the Google Sheet linked from wrmi.net/programming). It maps program-block letters to transmitters by hour. Each slot was decoded by matching the block's day/time entry against the hour grid. Modes are not on WRMI's sheet. The program's own site (swradiogram.net), which lists modes, returned a bot challenge and was skipped."
+  },
+  {
+   "station": "WRMI",
+   "utc": "0800-0815",
+   "days": "Mon",
+   "freq_khz": 5850,
+   "beam": "315 deg, North America",
+   "modes": null,
+   "block": "System D",
+   "source": [
+    "https://docs.google.com/spreadsheets/d/1pcIEX8kisrOPqlXHDAq6gympKUgDj0SIb96qce2kGGQ/edit#gid=0",
+    "https://www.wrmi.net/index.php/programming/"
+   ],
+   "note": "From WRMI's own B26 transmission schedule ('WRMI B26 Schedule effective November 1, 2026', the Google Sheet linked from wrmi.net/programming). It maps program-block letters to transmitters by hour. Each slot was decoded by matching the block's day/time entry against the hour grid. Modes are not on WRMI's sheet. The program's own site (swradiogram.net), which lists modes, returned a bot challenge and was skipped."
+  },
+  {
+   "station": "WRMI",
+   "utc": "0930-1000",
+   "days": "Thu",
+   "freq_khz": 7780,
+   "beam": "222 deg, Central America",
+   "modes": null,
+   "block": "System C",
+   "source": [
+    "https://docs.google.com/spreadsheets/d/1pcIEX8kisrOPqlXHDAq6gympKUgDj0SIb96qce2kGGQ/edit#gid=0",
+    "https://www.wrmi.net/index.php/programming/"
+   ],
+   "note": "From WRMI's own B26 transmission schedule ('WRMI B26 Schedule effective November 1, 2026', the Google Sheet linked from wrmi.net/programming). It maps program-block letters to transmitters by hour. Each slot was decoded by matching the block's day/time entry against the hour grid. Modes are not on WRMI's sheet. The program's own site (swradiogram.net), which lists modes, returned a bot challenge and was skipped."
+  },
+  {
+   "station": "WRMI",
+   "utc": "1330-1345",
+   "days": "Wed",
+   "freq_khz": 15770,
+   "beam": "44 deg, Europe",
+   "modes": null,
+   "block": "System D",
+   "source": [
+    "https://docs.google.com/spreadsheets/d/1pcIEX8kisrOPqlXHDAq6gympKUgDj0SIb96qce2kGGQ/edit#gid=0",
+    "https://www.wrmi.net/index.php/programming/"
+   ],
+   "note": "From WRMI's own B26 transmission schedule ('WRMI B26 Schedule effective November 1, 2026', the Google Sheet linked from wrmi.net/programming). It maps program-block letters to transmitters by hour. Each slot was decoded by matching the block's day/time entry against the hour grid. Modes are not on WRMI's sheet. The program's own site (swradiogram.net), which lists modes, returned a bot challenge and was skipped."
+  },
+  {
+   "station": "WRMI",
+   "utc": "0530-0600",
+   "days": "Fri",
+   "freq_khz": 5850,
+   "beam": "315 deg, North America",
+   "modes": null,
+   "block": "System F",
+   "source": [
+    "https://docs.google.com/spreadsheets/d/1pcIEX8kisrOPqlXHDAq6gympKUgDj0SIb96qce2kGGQ/edit#gid=0",
+    "https://www.wrmi.net/index.php/programming/"
+   ],
+   "note": "From WRMI's own B26 transmission schedule ('WRMI B26 Schedule effective November 1, 2026', the Google Sheet linked from wrmi.net/programming). It maps program-block letters to transmitters by hour. Each slot was decoded by matching the block's day/time entry against the hour grid. Modes are not on WRMI's sheet. The program's own site (swradiogram.net), which lists modes, returned a bot challenge and was skipped."
+  },
+  {
+   "station": "WRMI",
+   "utc": "2300-2330",
+   "days": "Sat",
+   "freq_khz": 9455,
+   "beam": "315 deg, North America",
+   "modes": null,
+   "block": "System D",
+   "source": [
+    "https://docs.google.com/spreadsheets/d/1pcIEX8kisrOPqlXHDAq6gympKUgDj0SIb96qce2kGGQ/edit#gid=0",
+    "https://www.wrmi.net/index.php/programming/"
+   ],
+   "note": "From WRMI's own B26 transmission schedule ('WRMI B26 Schedule effective November 1, 2026', the Google Sheet linked from wrmi.net/programming). It maps program-block letters to transmitters by hour. Each slot was decoded by matching the block's day/time entry against the hour grid. Modes are not on WRMI's sheet. The program's own site (swradiogram.net), which lists modes, returned a bot challenge and was skipped."
+  },
+  {
+   "station": "WRMI",
+   "utc": "1530-1600",
+   "days": "Sun",
+   "freq_khz": 9955,
+   "beam": "160 deg, Latin America",
+   "modes": null,
+   "block": "System B (listed as 10:30 AM ET; UTC assumes EST, which applies from Nov 1, 2026)",
+   "source": [
+    "https://docs.google.com/spreadsheets/d/1pcIEX8kisrOPqlXHDAq6gympKUgDj0SIb96qce2kGGQ/edit#gid=0",
+    "https://www.wrmi.net/index.php/programming/"
+   ],
+   "note": "From WRMI's own B26 transmission schedule ('WRMI B26 Schedule effective November 1, 2026', the Google Sheet linked from wrmi.net/programming). It maps program-block letters to transmitters by hour. Each slot was decoded by matching the block's day/time entry against the hour grid. Modes are not on WRMI's sheet. The program's own site (swradiogram.net), which lists modes, returned a bot challenge and was skipped."
+  }
+ ],
+ "chu": {
+  "status": "off the air: NRC ended the CHU shortwave broadcasts on June 22, 2026",
+  "freq_khz_former": [
+   3330,
+   7850,
+   14670
+  ],
+  "evidence": [
+   {
+    "what": "NRC 'Canada's official time' page now lists only the web clock, NTP, computer time codes and the telephone talking clock; no shortwave service",
+    "source": "https://nrc.canada.ca/en/certifications-evaluations-standards/canadas-official-time"
+   },
+   {
+    "what": "The NRC CHU page (nrc.canada.ca/.../nrc-shortwave-station-broadcasts-chu) returned 404 when fetched today. Its search-index snippet reads 'as of June 22, 2026 ... no longer be available'.",
+    "source": "https://nrc.canada.ca/en/certifications-evaluations-standards/canadas-official-time/nrc-shortwave-station-broadcasts-chu"
+   },
+   {
+    "what": "A reader comment on swling.com quotes an NRC technical officer: shutdown June 22, 10:00-10:30 EDT",
+    "source": "https://swling.com/blog/2026/06/chu-closure-on-june-22-2026/"
+   }
+  ],
+  "format": null,
+  "note": "Keep CHU out of the active directory. If it's kept as a historical entry, the frequencies were not confirmed on a fetched NRC page (see unverified)."
+ },
+ "navtex_hf": {
+  "freq_khz": 4209.5,
+  "confirmed": "47 CFR 80.1135(e): 'Internationally, the frequency 4209.5 kHz is used for NAVTEX-type transmissions by means of narrow-band direct-printing telegraphy with forward error correction'. 518 kHz is the international NAVTEX frequency and 490 kHz is the national/second-language one (80.1135(c),(d)).",
+  "source": "https://www.ecfr.gov/api/versioner/v1/full/2026-11-01/title-47.xml?part=80&section=80.1135",
+  "reachable_from_ct": [],
+  "finding": "No station near Connecticut was found using 4209.5 kHz. The Canadian Coast Guard's Radio Aids to Marine Navigation 2026 (Part 2) lists Atlantic NAVTEX only on 518 kHz (English) and 490 kHz (French). Those stations are Yarmouth U/V, Port Caledonia (Sydney) Q/J, Moisie C/D, Cartwright X, Robin Hood Bay O and Iqaluit T/S. The only HF MSI in RAMN is 8416.5 kHz NBDP from Iqaluit. The US NAVTEX list (USCG NAVCEN) returned 403, so US stations weren't checked directly.",
+  "finding_source": "https://www.canada.ca/en/canadian-coast-guard/corporate/publications/radio-aids-marine-navigation/facilities-information.html"
+ },
+ "unverified": [
+  {
+   "item": "USAF HFGCS 4724/6739/8992/11175/13200/15016 kHz",
+   "why": "These are HFGCS voice (USB) frequencies in hobbyist and Wikipedia lists, not ALE. The only official page (ACC fact sheet, acc.af.mil) returned 403, and the af.mil search results had no frequency list. HFGCS ALE frequencies (e.g. 11226, 9025, 13215 and others in hobbyist logs) have no public primary source. Leave all HFGCS entries out of the ALE list. If voice entries are added, label them hobbyist-sourced."
+  },
+  {
+   "item": "USCG COTHEN ALE 5696/7527/8983/11494/13907/15867 kHz",
+   "why": "No USCG or DHS source publishes these. Only hobbyist logs exist (udxf.nl, ominous-valve, RadioReference), and they disagree (e.g. 8912 vs 8983)."
+  },
+  {
+   "item": "US MARS ALE channels",
+   "why": "Army/Air Force MARS don't publish a standing ALE channel list publicly. ARRL points to the Army MARS site for Armed Forces Day test frequencies only, and that wasn't fetched. Hobbyist lists only."
+  },
+  {
+   "item": "WSPR 60 m (5.2872 and 5.3647 MHz)",
+   "why": "WSJT-X's default frequency list has no 60 m WSPR entry, and its user guide only says to choose a 60 m frequency that meets local rules. Neither number was found on wsprnet.org or in WSJT-X docs; only blogs mention them. Note that 5.3647 USB puts the signal at about 5.3661-5.3663 MHz, inside the US 5351.5-5366.5 kHz segment. 5.2872 is outside every US channel, so US stations can't transmit there."
+  },
+  {
+   "item": "Feld Hell 14.082 MHz",
+   "why": "Not on the Feld Hell Club list, which gives 14.063 (preferred, up to 14.069) and 14.072-14.073 on 20 m. 3.582, 7.082 and 10.142 fall inside the club's ranges, but the club lists ranges, not those exact spots."
+  },
+  {
+   "item": "Shortwave Radiogram modes and WINB slots",
+   "why": "swradiogram.net (the only source for the program's modes and full schedule) returned a 403 bot challenge and was skipped. WINB's schedule wasn't fetched. WRMI times and frequencies were decoded from WRMI's own B26 sheet; the decoding is described in the notes."
+  },
+  {
+   "item": "CHU broadcast format (1000 Hz 300 ms ticks, Bell 103 300-baud FSK time code in seconds 31-39, bilingual voice ID)",
+   "why": "The NRC CHU page is gone (404), the Wayback Machine can't be fetched from here, and the UNT archive copy came back empty. The format summary exists only in secondary sources, and the station is off the air since June 22, 2026."
+  },
+  {
+   "item": "CHU frequencies 3330/7850/14670 kHz",
+   "why": "These numbers appear only in search snippets and secondary sources (Wikipedia, swling reader comment, korben.info). No fetched NRC page confirms them. They're moot now that the station is off."
+  },
+  {
+   "item": "US NAVTEX stations (Boston NMF, Chesapeake NMN, etc.)",
+   "why": "navcen.uscg.gov returned 403. The finding that no Atlantic station uses 4209.5 rests on the Canadian RAMN plus 47 CFR, which describes 4209.5 only as an international NAVTEX-type frequency."
+  }
+ ]
+}

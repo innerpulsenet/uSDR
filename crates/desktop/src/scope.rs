@@ -27,6 +27,8 @@ pub enum Sub {
     Audio,
     Mpx,
     Disc,
+    /// The decoder's equalized symbols on the I/Q plane (STANAG, DRM).
+    Constellation,
 }
 
 pub struct Scope {
@@ -174,6 +176,8 @@ fn default_sub(mode: Mode) -> Sub {
         Mode::Wfm => Sub::Mpx,
         Mode::Nfm | Mode::Am => Sub::Passband,
         Mode::Pager => Sub::Disc,
+        // A serial-tone modem or an OFDM multiplex says most in its symbols.
+        Mode::Stanag | Mode::Drm => Sub::Constellation,
         _ => Sub::Audio,
     }
 }
@@ -185,6 +189,7 @@ impl Sub {
             Sub::Audio => "AUDIO",
             Sub::Mpx => "MPX",
             Sub::Disc => "DISC",
+            Sub::Constellation => "CONSTELLATION",
         }
     }
 }
@@ -270,7 +275,8 @@ impl Scope {
         }
         match mode {
             Mode::Wfm => &[Sub::Passband, Sub::Mpx],
-            Mode::Nfm | Mode::Am | Mode::Packet | Mode::Wwv | Mode::Drm => &[Sub::Passband, Sub::Audio],
+            Mode::Stanag | Mode::Drm => &[Sub::Passband, Sub::Audio, Sub::Constellation],
+            Mode::Nfm | Mode::Am | Mode::Packet | Mode::Wwv => &[Sub::Passband, Sub::Audio],
             m if m.is_sideband_data() => &[Sub::Passband, Sub::Audio],
             Mode::Pager => &[Sub::Passband, Sub::Disc],
             _ => &[],
@@ -306,6 +312,14 @@ impl Scope {
             (Mode::Hfdl, _, _) => ("HFDL audio", None),
             (Mode::Pactor, _, _) => ("PACTOR audio", None),
             (Mode::Stanag, _, _) => ("Serial-tone audio", None),
+            (Mode::Ale, _, _) => ("ALE audio", None),
+            (Mode::Cw, _, _) => ("CW audio", None),
+            (Mode::Js8, _, _) => ("JS8 audio", None),
+            (Mode::Wspr, _, _) => ("WSPR audio", None),
+            (Mode::Olivia, _, _) => ("Olivia audio", None),
+            (Mode::Mfsk, _, _) => ("MFSK audio", None),
+            (Mode::Hell, _, _) => ("Feld Hell audio", None),
+            (Mode::Sstv, _, _) => ("SSTV audio", None),
             (Mode::Wwv, _, _) => ("Time station audio", None),
             (Mode::Drm, _, _) => ("DRM audio", None),
             _ => ("Audio", None),

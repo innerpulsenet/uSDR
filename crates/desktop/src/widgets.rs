@@ -603,7 +603,23 @@ pub fn protocol_color(p: &str) -> Color32 {
         rgb(0x7dd3fc)
     } else if u.contains("PACTOR") {
         rgb(0x6ee7b7)
-    } else if u.contains("STANAG") || u.contains("188-110") || u.contains("2G ALE") {
+    } else if u == "CW" {
+        rgb(0xfcd34d)
+    } else if u.contains("OLIVIA") {
+        rgb(0x86efac)
+    } else if u.contains("MFSK") {
+        rgb(0x67e8f9)
+    } else if u.contains("HELL") {
+        rgb(0xd6d3d1)
+    } else if u.contains("WSPR") {
+        rgb(0xfb7185)
+    } else if u.contains("JS8") {
+        rgb(0xf0abfc)
+    } else if u.contains("SSTV") {
+        rgb(0x5eead4)
+    } else if u.contains("2G ALE") {
+        rgb(0xa5b4fc)
+    } else if u.contains("STANAG") || u.contains("188-110") {
         rgb(0x94a3b8)
     } else if u.contains("WWV") {
         rgb(0xfef08a)

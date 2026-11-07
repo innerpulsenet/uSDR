@@ -138,6 +138,28 @@ fn decodes(app: &mut App, ui: &mut Ui) {
             for d in &app.decodes {
                 *counts.entry(d.family).or_insert(0usize) += 1;
             }
+            // In HF data the families fold into one menu, so the row has
+            // room for the mode's own keys and bands.
+            if app.decode_family == Some(Family::HfData) {
+                let n = counts.get(&Some(Family::HfData)).copied().unwrap_or(0);
+                let label = if n > 0 { format!("HF DATA {n}") } else { "HF DATA".to_string() };
+                widgets::menu_chip_lit(ui, &label, &[], family_color(Family::HfData), true, |ui| {
+                    if ui.button(format!("All decodes · {}", app.decodes.len())).clicked() {
+                        app.decode_family = None;
+                        app.decode_chip = None;
+                        ui.close();
+                    }
+                    for f in Family::ALL.into_iter().filter(|f| *f != Family::HfData) {
+                        let n = counts.get(&Some(f)).copied().unwrap_or(0);
+                        if ui.button(format!("{} · {n}", f.label())).clicked() {
+                            app.decode_family = Some(f);
+                            app.decode_chip = None;
+                            app.selected_decode = None;
+                            ui.close();
+                        }
+                    }
+                });
+            } else {
             if widgets::chip_key(ui, &format!("ALL {}", app.decodes.len()), app.decode_family.is_none(), theme::AMBER).clicked() {
                 app.decode_family = None;
                 app.decode_chip = None;
@@ -150,6 +172,7 @@ fn decodes(app: &mut App, ui: &mut Ui) {
                     app.decode_chip = None;
                     app.selected_decode = None;
                 }
+            }
             }
             if let Some(f) = app.decode_family {
                 // HF data has a decoder for every mode under the HF key; its
@@ -164,7 +187,32 @@ fn decodes(app: &mut App, ui: &mut Ui) {
                     let (r, _) = ui.allocate_exact_size(vec2(9.0, 18.0), egui::Sense::hover());
                     ui.painter().line_segment([r.center_top(), r.center_bottom()], egui::Stroke::new(1.0, theme::line()));
                 }
-                if list.len() > 1 || (f == Family::HfData && !list.is_empty()) {
+                if f == Family::HfData {
+                    // The receiver's mode has a workspace of its own; ALL and
+                    // the protocol keys filter the plain log, whatever the
+                    // receiver is on.
+                    let mode = app.status.mode;
+                    if mode.is_hf_data() {
+                        let lit = app.decode_chip.is_none();
+                        if widgets::chip_key(ui, &format!("{} ▸", mode.label()), lit, widgets::protocol_color(mode.label())).on_hover_text("The mode's own view, with its controls and stations").clicked() {
+                            app.decode_chip = None;
+                            app.selected_decode = None;
+                        }
+                    }
+                    let all = app.decode_chip == Some(ALL_HF) || (app.decode_chip.is_none() && !mode.is_hf_data());
+                    if widgets::chip_key(ui, "ALL", all, family_color(f)).on_hover_text("Every HF decode in one log, each opened beside it").clicked() {
+                        app.decode_chip = Some(ALL_HF);
+                    }
+                    // The mode's own decodes are its workspace; the other
+                    // protocols in the log, a key each.
+                    for d in list.into_iter().filter(|d| !(mode.is_hf_data() && d.chip == mode.label())) {
+                        if widgets::chip_key(ui, d.chip, app.decode_chip == Some(d.chip), widgets::protocol_color(d.chip)).on_hover_text(format!("{} decodes in the log", d.chip)).clicked() {
+                            app.decode_chip = if app.decode_chip == Some(d.chip) { Some(ALL_HF) } else { Some(d.chip) };
+                        }
+                    }
+                    // Where to tune for the receiver's mode.
+                    crate::tunestrip::strip(app, ui);
+                } else if list.len() > 1 {
                     if widgets::chip_key(ui, "ANY", app.decode_chip.is_none(), family_color(f)).clicked() {
                         app.decode_chip = None;
                     }
@@ -173,9 +221,6 @@ fn decodes(app: &mut App, ui: &mut Ui) {
                             app.decode_chip = if app.decode_chip == Some(d.chip) { None } else { Some(d.chip) };
                         }
                     }
-                }
-                if f == Family::HfData {
-                    hf_bands(app, ui);
                 }
             }
         });
@@ -207,7 +252,9 @@ fn decodes(app: &mut App, ui: &mut Ui) {
         .filter(|(_, d)| filter.is_empty() || d.key.contains(&filter))
         .map(|(i, _)| i)
         .collect();
-    if family == Some(Family::HfData) {
+    // HF data with no key chosen is the receiver's mode's workspace; any
+    // key is the log.
+    if family == Some(Family::HfData) && app.decode_chip.is_none() && app.status.mode.is_hf_data() {
         hf_data(app, ui, &visible);
         return;
     }
@@ -512,6 +559,29 @@ fn scope(app: &mut App, ui: &mut Ui) {
         });
     });
     app.scope.rate_hz = app.prefs.scope_rate_hz;
+    // The decoder's symbols, as large as the panel allows, its reading
+    // beside them.
+    if app.scope.sub_for(mode) == crate::scope::Sub::Constellation {
+        let r = app.status.digital.clone().unwrap_or_default();
+        let rect = ui.available_rect_before_wrap();
+        let size = (rect.height() - 8.0).min(rect.width() * 0.6).max(120.0);
+        ui.horizontal_top(|ui| {
+            crate::utilviews::constellation(ui, &r.constellation, size, widgets::protocol_color(mode.label()));
+            ui.vertical(|ui| {
+                ui.label(RichText::new(r.variant.clone().unwrap_or_else(|| "no lock".into())).font(theme::mono_bold(11.0)).color(theme::text()));
+                if let Some(snr) = r.snr_db {
+                    ui.label(mono(format!("SNR {snr:+.0} dB"), theme::text_2()));
+                }
+                for f in r.facts.iter().filter(|f| !["●", "○"].contains(&f.value.as_str())) {
+                    ui.label(mono(format!("{} {}", f.label, f.value), theme::text_3()));
+                }
+                ui.add_space(4.0);
+                ui.add(egui::Label::new(RichText::new("The last equalized symbols, newest brightest; tight clusters on the points mean a clean copy.").font(theme::sans(10.5)).color(theme::text_3())).wrap());
+            });
+        });
+        ui.advance_cursor_after_rect(rect);
+        return;
+    }
     let pass = crate::panels::passband_slice(app);
     // FT8/FT4: the last slot's decodes, by who sent them, at their tones.
     let tags: Vec<(f32, String)> = if matches!(mode, Mode::Ft8 | Mode::Ft4) {
@@ -940,62 +1010,8 @@ fn family_color(f: Family) -> egui::Color32 {
     crate::decoders::in_family(f).next().map_or(theme::AMBER, |d| widgets::protocol_color(d.chip))
 }
 
-/// The FT8 and FT4 dial frequencies by band: choosing one sets the mode
-/// and tunes the carrier there.
-fn hf_bands(app: &mut App, ui: &mut Ui) {
-    widgets::menu_chip(ui, "BANDS", theme::text_2(), |ui| {
-        ui.label(mono("FT8 · FT4", theme::text_3()));
-        egui::Grid::new("hf-dials").num_columns(3).spacing(vec2(8.0, 2.0)).show(ui, |ui| {
-            for &(band, ft8, ft4) in crate::decoders::HF_DIALS {
-                ui.label(mono(band, theme::text_3()));
-                for (mode, hz) in [(Mode::Ft8, ft8), (Mode::Ft4, ft4)] {
-                    let text = format!("{} {}", mode.label(), crate::tuning::fmt_mhz(hz, 4));
-                    let on = app.status.mode == mode && (app.inspect_hz() - hz).abs() < 50.0;
-                    if widgets::chip_key(ui, &text, on, widgets::protocol_color(mode.label())).clicked() {
-                        if app.status.mode != mode {
-                            app.set_mode(mode);
-                        }
-                        app.tune(hz, false);
-                        ui.close();
-                    }
-                }
-                ui.end_row();
-            }
-        });
-        // The text modes: a dial each, the decoder finding its signal in
-        // the passband above it.
-        for (mode, dials) in [(Mode::Psk31, crate::decoders::PSK31_DIALS), (Mode::Rtty, crate::decoders::RTTY_DIALS), (Mode::Navtex, crate::decoders::NAVTEX_DIALS), (Mode::Pactor, crate::decoders::PACTOR_DIALS)] {
-            ui.add_space(6.0);
-            ui.label(mono(mode.label(), theme::text_3()));
-            ui.horizontal_wrapped(|ui| {
-                ui.set_max_width(420.0);
-                for &(band, hz) in dials {
-                    let on = app.status.mode == mode && (app.inspect_hz() - hz).abs() < 50.0;
-                    if widgets::chip_key(ui, &format!("{band} {}", crate::tuning::fmt_mhz(hz, 4)), on, widgets::protocol_color(mode.label())).clicked() {
-                        if app.status.mode != mode {
-                            app.set_mode(mode);
-                        }
-                        // DWD's weather RTTY is 50 baud and 450 Hz.
-                        if mode == Mode::Rtty {
-                            let dwd = band.starts_with("DWD");
-                            app.post("/api/sdr/digital", serde_json::json!({ "rtty_baud": if dwd { 50.0 } else { 45.45 }, "rtty_shift_hz": if dwd { 450.0 } else { 170.0 } }));
-                        }
-                        app.tune(hz, false);
-                        ui.close();
-                    }
-                }
-            });
-        }
-        ui.add_space(6.0);
-        ui.label(mono("WEFAX", theme::text_3()));
-        if widgets::chip_key(ui, "RADIOFAX STATIONS…", app.fax.open, widgets::protocol_color("WEFAX")).clicked() {
-            app.fax.open = true;
-            ui.close();
-        }
-        ui.add_space(6.0);
-        ui.add(egui::Label::new(mono("SITOR, DSC, HFDL, WWV and DRM keep fixed stations: their STATIONS lists are in each mode's view.", theme::text_3())).wrap());
-    });
-}
+/// The HF data key that shows every HF decode as a plain log.
+pub const ALL_HF: &str = "ALL HF";
 
 /// The HF data view: a text mode's own view, or FT8's slot table.
 fn hf_data(app: &mut App, ui: &mut Ui, visible: &[usize]) {

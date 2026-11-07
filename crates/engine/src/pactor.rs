@@ -23,7 +23,10 @@
 //!    log-likelihood ratio per sample through the RTTY decoder's selective
 //!    fading correction (`Atc`). The last few seconds of baseband are kept
 //!    and run through again at lock, so what was sent while the pair was
-//!    being found is not lost.
+//!    being found is not lost. Impulse noise is blanked before the mixer
+//!    (the RTTY decoder's `Blanker`), and each soft decision shrinks with
+//!    the share of its bit blanked: a crash costs a copy the bits it hit,
+//!    as erasures, and memory ARQ fills them from the other copies.
 //! 2. **Packets.** Every sample is tried as the start of a packet: a header
 //!    that alternates (at either speed), CS3 at the head of a break-in
 //!    packet, or a header followed by eight callsign characters (a connect
@@ -57,7 +60,7 @@
 //! PACTOR-II, -III and -IV are proprietary and unpublished. They are not
 //! decoded, and the decoder does not claim to recognize them.
 
-use crate::rtty::{Atc, Lines};
+use crate::rtty::{Atc, Blanker, Lines, MaskTrack, unblank};
 use num_complex::Complex32;
 use rustfft::{Fft, FftPlanner};
 use std::collections::VecDeque;
@@ -833,13 +836,20 @@ struct Demod {
     since_resum: u32,
     atc: [Atc; 2],
     spb: [f32; 2],
+    /// Blanked audio followed to each speed's matched filters.
+    track: [MaskTrack; 2],
 }
 
 impl Demod {
-    fn new(rate: f64, len: [usize; 2]) -> Self {
+    /// `front_taps` long a front filter decimating by `decim` comes before.
+    fn new(rate: f64, len: [usize; 2], front_taps: usize, decim: usize) -> Self {
         let spb = [(rate / 100.0) as f32, (rate / 200.0) as f32];
         let z = Complex32::new(0.0, 0.0);
+        // The front filter delays a blanked stretch by half its length,
+        // and its main lobe spreads it by about a quarter either way.
+        let (lag, margin) = ((front_taps - 1) / 2 / decim, front_taps.div_ceil(4 * decim));
         Self {
+            track: [MaskTrack::new(lag, len[0], margin, decim), MaskTrack::new(lag, len[1], margin, decim)],
             rate,
             osc: Osc::new(0.0, rate),
             up: Osc::new(HALF_SHIFT_HZ as f64, rate),
@@ -869,11 +879,13 @@ impl Demod {
         self.sum_h = [z; 2];
         self.sum_l = [z; 2];
         self.atc = [Atc::new(self.spb[0]), Atc::new(self.spb[1])];
+        self.track.iter_mut().for_each(MaskTrack::reset);
     }
 
-    /// One baseband sample; the soft decision at 100 and at 200 baud.
+    /// One baseband sample, `blanked` of the audio samples behind it
+    /// blanked as impulse noise; the soft decision at 100 and at 200 baud.
     #[inline]
-    fn push(&mut self, x: Complex32) -> [f32; 2] {
+    fn push(&mut self, x: Complex32, blanked: u16) -> [f32; 2] {
         let y = x * self.osc.next();
         let h = y * self.up.next();
         let l = y * self.down.next();
@@ -905,10 +917,15 @@ impl Demod {
         }
         let mut out = [0.0f32; 2];
         for (b, o) in out.iter_mut().enumerate() {
+            let (share, near) = self.track[b].push(blanked);
             let inv = 1.0 / self.len[b] as f32;
-            let (ah, al) = (self.sum_h[b].norm() * inv, self.sum_l[b].norm() * inv);
-            let v = self.atc[b].step(ah, al);
-            *o = (v * self.atc[b].llr_scale()).clamp(-LLR_MAX, LLR_MAX);
+            let (ah, al) = unblank(share, self.sum_h[b].norm() * inv, self.sum_l[b].norm() * inv);
+            // An impulse leaves the levels alone, and a partly blanked bit
+            // counts for the part of it that is left: memory ARQ then sums
+            // a copy a crash hit as near nothing, not as a confident wrong
+            // one that the next copies have to outvote.
+            let v = self.atc[b].step_or_hold(ah, al, near);
+            *o = (v * self.atc[b].llr_scale() * (1.0 - share)).clamp(-LLR_MAX, LLR_MAX);
         }
         out
     }
@@ -1254,11 +1271,16 @@ enum Table {
 
 pub struct PactorDecoder {
     rate: f64,
+    blanker: Blanker,
+    /// Audio samples blanked since the last work sample.
+    blanked: u16,
     front: Front,
     finder: Finder,
     demod: Demod,
     spb: [f64; 2],
     bb: Vec<Complex32>,
+    /// How many audio samples behind each work sample in `bb` were blanked.
+    bb_blank: Vec<u16>,
     soft: [Vec<f32>; 2],
     /// Work samples produced so far.
     n: u64,
@@ -1322,11 +1344,14 @@ impl PactorDecoder {
         let tol1 = PHASE_TOL_S * rate + CYCLE_S * rate * DRIFT;
         Self {
             rate,
-            demod: Demod::new(rate, len),
+            blanker: Blanker::new(fs),
+            blanked: 0,
+            demod: Demod::new(rate, len, front.taps.len(), front.decim),
             front,
             finder,
             spb,
             bb: vec![Complex32::new(0.0, 0.0); RING],
+            bb_blank: vec![0; RING],
             soft: [vec![0.0; RING], vec![0.0; RING]],
             n: 0,
             running: false,
@@ -1364,16 +1389,21 @@ impl PactorDecoder {
 
     pub fn push(&mut self, audio: &[f32]) {
         for &x in audio {
+            // Impulses are blanked before anything narrow sees them.
+            let Some((x, blanked)) = self.blanker.push(x) else { continue };
+            self.blanked += u16::from(blanked);
             let Some(y) = self.front.push(x) else { continue };
+            let b = std::mem::take(&mut self.blanked);
             let i = self.n;
             self.bb[i as usize & MASK] = y;
+            self.bb_blank[i as usize & MASK] = b;
             self.n += 1;
             if self.finder.push(y) && self.evaluate() {
                 self.relock();
                 continue;
             }
             if self.running {
-                let s = self.demod.push(y);
+                let s = self.demod.push(y, b);
                 self.soft[0][i as usize & MASK] = s[0];
                 self.soft[1][i as usize & MASK] = s[1];
             }
@@ -1438,6 +1468,7 @@ impl PactorDecoder {
                     if d.abs() < TONE_HALF_HZ {
                         self.center += 0.2 * d;
                         self.demod.set_center(self.center);
+                        self.place_pair();
                     }
                 }
             } else {
@@ -1446,6 +1477,7 @@ impl PactorDecoder {
                     self.running = false;
                     self.cand = None;
                     self.cand_n = 0;
+                    self.place_pair();
                 }
             }
             return false;
@@ -1460,6 +1492,7 @@ impl PactorDecoder {
                 if self.cand_n >= CONFIRM {
                     self.center = c;
                     self.running = true;
+                    self.place_pair();
                     self.present = true;
                     self.absent = 0;
                     self.snr_db = self.finder.snr_db(c);
@@ -1474,6 +1507,13 @@ impl PactorDecoder {
         false
     }
 
+    /// Tell the blanker where the pair is, with the keying sidebands of
+    /// 200 baud.
+    fn place_pair(&mut self) {
+        let half = HALF_SHIFT_HZ + 200.0;
+        self.blanker.set_pair(self.running.then_some((self.center - half, self.center + half)));
+    }
+
     /// A new lock: run the kept baseband through the demodulator.
     fn history(&self) -> u64 {
         ((HISTORY_S * self.rate) as u64).min((RING as u64).saturating_sub(self.span + 64))
@@ -1483,7 +1523,7 @@ impl PactorDecoder {
         self.demod.reset(self.center);
         let start = self.n.saturating_sub(self.history());
         for i in start..self.n {
-            let s = self.demod.push(self.bb[i as usize & MASK]);
+            let s = self.demod.push(self.bb[i as usize & MASK], self.bb_blank[i as usize & MASK]);
             self.soft[0][i as usize & MASK] = s[0];
             self.soft[1][i as usize & MASK] = s[1];
         }
@@ -2007,15 +2047,36 @@ impl PactorDecoder {
         self.link.data_seen = true;
         let chars = self.field_text(r.data(), (status >> 2) & 3);
         let side = &mut self.link.sides[s];
-        if r.baud == 0 && side.last_baud == Some(1) && side.last_counter == Some(counter) {
+        if r.baud == 0 && side.last_baud == Some(1) {
             // A 200 baud packet sent again at 100: what it carried is
-            // coming again, a few characters a packet.
-            side.skip = side.last_chars.iter().copied().collect();
+            // coming again, a few characters a packet. When the first of
+            // those was lost (a crash takes a whole packet), the counter
+            // has moved on and this one carries a later part of it: found
+            // where it starts, the rest is skipped from there.
+            let from = if side.last_counter == Some(counter) {
+                Some(0)
+            } else {
+                let k = chars.len().min(4);
+                (k >= 3).then(|| side.last_chars.windows(k).position(|w| w == &chars[..k])).flatten()
+            };
+            if let Some(from) = from {
+                side.skip = side.last_chars[from..].iter().copied().collect();
+            }
         }
         side.last_counter = Some(counter);
         side.last_body = r.body.clone();
         side.last_baud = Some(r.baud);
         side.last_chars = chars.clone();
+        // A packet of the repeat lost in between: this one picks up further
+        // along what is to be skipped.
+        let k = chars.len().min(4);
+        if k >= 3 && !side.skip.is_empty() && !side.skip.iter().take(k).eq(chars[..k].iter()) {
+            let (a, b) = side.skip.as_slices();
+            let held: Vec<u8> = [a, b].concat();
+            if let Some(p) = held.windows(k).position(|w| w == &chars[..k]) {
+                side.skip.drain(..p);
+            }
+        }
         let mut out = Vec::with_capacity(chars.len());
         for c in chars {
             if let Some(&d) = side.skip.front() {
@@ -2169,7 +2230,7 @@ impl PactorDecoder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::rtty::testsig::{Rng, chunks, noise_sigma, rayleigh};
+    use crate::rtty::testsig::{Rng, add_impulses, chunks, noise_sigma, rayleigh};
     use std::f32::consts::FRAC_1_SQRT_2;
     use std::f64::consts::TAU as TAU64;
 
@@ -3009,6 +3070,91 @@ mod tests {
         }
         assert_eq!(bad, 0);
         let audio = render(&bad_crcs(960, 99), &Scene::plain(1500.0, 3.0), 2.0);
+        let (ev, st) = run(&audio);
+        assert!(ev.is_empty(), "{ev:?}");
+        assert_eq!(st.packets_ok, 0);
+    }
+
+    /// The share of the text lost, both sides together, over `seeds` runs
+    /// of the full link at `snr` with impulse noise at `rate` bursts a
+    /// second (against the stronger station), and whether any line printed
+    /// was not part of what one station or the other sent. A crash can take
+    /// the changeover packet and the link's roles with it, so the lines
+    /// are matched to either station whatever side they are printed for.
+    fn impulse_loss(snr: f32, rate: f32, seeds: u64) -> (f32, bool) {
+        // Every packet sent twice, as an IRS hearing the same crashes would
+        // ask: memory ARQ is what is meant to carry the copy through them.
+        let l = full_link_with(6, 0.19, 2, 1.0);
+        let want = [lines(&l.sent[0]).concat(), lines(&l.sent[1]).concat()];
+        let (mut lost, mut total, mut invented) = (0usize, 0usize, false);
+        for seed in 1..=seeds {
+            let mut sc = Scene::plain(1500.0 + 11.0 * seed as f32, snr);
+            sc.seed = 700 + seed;
+            let mut audio = render(&l.air, &sc, 3.0);
+            if rate > 0.0 {
+                add_impulses(&mut audio, 1.0, FS, rate, &mut Rng::new(950 + seed));
+            }
+            let (ev, _) = run(&audio);
+            let mut got = 0;
+            for e in &ev {
+                if let PactorEvent::Text { text, .. } = e {
+                    got += text.len();
+                    if !want.iter().any(|w| subsequence(text, w)) {
+                        invented = true;
+                        if std::env::var("USDR_PACTOR_SHOW").is_ok() {
+                            println!("seed {seed} rate {rate}: not sent: {text:?}");
+                            show(&ev);
+                        }
+                    }
+                }
+            }
+            total += want[0].len() + want[1].len();
+            lost += (want[0].len() + want[1].len()).saturating_sub(got);
+        }
+        (lost as f32 / total as f32, invented)
+    }
+
+    /// `USDR_IMPULSE_TABLE=1 cargo test --release -p scannerd-engine
+    /// pactor_impulse_table -- --nocapture`.
+    #[test]
+    fn pactor_impulse_table() {
+        if std::env::var("USDR_IMPULSE_TABLE").is_err() {
+            return;
+        }
+        let rates = [0.0f32, 1.0, 3.0, 5.0];
+        println!("PACTOR full link, every packet twice: text lost % with impulse noise, by bursts a second, 4 seeds; ! means text was invented");
+        println!("{:>8} {}", "", rates.iter().map(|r| format!("{r:>8.0}")).collect::<String>());
+        for snr in [10.0f32, 6.0] {
+            let row: String = rates
+                .iter()
+                .map(|&r| {
+                    let (loss, bad) = impulse_loss(snr, r, 4);
+                    format!("{:>7.1}{}", 100.0 * loss, if bad { "!" } else { " " })
+                })
+                .collect();
+            println!("{:>5.0} dB {row}", snr);
+        }
+    }
+
+    #[test]
+    fn pactor_link_through_impulse_noise() {
+        // Three crashes a second, 20 to 35 dB over the stronger station,
+        // every packet sent twice: with nothing done about them 78 to 85%
+        // of the text was lost (`pactor_impulse_table`). A crash costs a
+        // copy only the bits it blanked, and memory ARQ fills them from the
+        // other copy.
+        let (loss, invented) = impulse_loss(6.0, 3.0, 2);
+        println!("PACTOR at 6 dB, 3 impulses a second: {:.1}% of the text lost", 100.0 * loss);
+        assert!(!invented);
+        assert!(loss <= 0.2, "lost {loss}");
+    }
+
+    #[test]
+    fn pactor_impulses_alone_print_nothing() {
+        let mut rng = Rng::new(6);
+        let sigma = noise_sigma(1.0, 6.0, FS);
+        let mut audio: Vec<f32> = (0..(40.0 * FS) as usize).map(|_| sigma * rng.gauss()).collect();
+        add_impulses(&mut audio, 1.0, FS, 5.0, &mut rng);
         let (ev, st) = run(&audio);
         assert!(ev.is_empty(), "{ev:?}");
         assert_eq!(st.packets_ok, 0);

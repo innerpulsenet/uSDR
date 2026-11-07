@@ -40,7 +40,7 @@ impl Family {
             Family::Paging => "POCSAG and FLEX pages appear here. PAGER walks the paging channels around the tuned frequency; FLEX and PACKET decode the tuned channel.",
             Family::Packet => "AX.25 packets, APRS positions and messages among them, appear here. PACKET decodes the tuned channel.",
             Family::Broadcast => "A broadcast station's RDS (its name, RadioText, clock) and NOAA SAME alerts appear here. Tune WFM to a station for RDS.",
-            Family::HfData => "HF data appears here: FT8 and FT4 at the end of each slot; RTTY, PSK31, NAVTEX, SITOR and PACTOR text as it is copied; DSC calls, HFDL aircraft messages, STANAG modems, the WWV time code and DRM broadcasts; radiofax pictures in their viewer. Pick a mode under HF and tune; BANDS and STATIONS list where.",
+            Family::HfData => "HF data appears here: FT8 and FT4 at the end of each slot; RTTY, PSK31, NAVTEX, SITOR and PACTOR text as it is copied; DSC calls, HFDL aircraft messages, STANAG modems, the WWV time code and DRM broadcasts; radiofax pictures in their viewer. Pick a mode under HF; the keys beside its name tune its bands or stations.",
         }
     }
 
@@ -85,7 +85,14 @@ pub const DECODERS: &[Decoder] = &[
     Decoder { chip: "DSC", family: Family::HfData, matches: &["DSC"] },
     Decoder { chip: "HFDL", family: Family::HfData, matches: &["HFDL"] },
     Decoder { chip: "PACTOR", family: Family::HfData, matches: &["PACTOR"] },
-    Decoder { chip: "STANAG", family: Family::HfData, matches: &["STANAG", "188-110", "2G ALE"] },
+    Decoder { chip: "STANAG", family: Family::HfData, matches: &["STANAG", "188-110"] },
+    Decoder { chip: "ALE", family: Family::HfData, matches: &["2G ALE"] },
+    Decoder { chip: "CW", family: Family::HfData, matches: &["CW"] },
+    Decoder { chip: "JS8", family: Family::HfData, matches: &["JS8"] },
+    Decoder { chip: "WSPR", family: Family::HfData, matches: &["WSPR"] },
+    Decoder { chip: "OLIVIA", family: Family::HfData, matches: &["OLIVIA"] },
+    Decoder { chip: "MFSK", family: Family::HfData, matches: &["MFSK"] },
+    Decoder { chip: "SSTV", family: Family::HfData, matches: &["SSTV"] },
     Decoder { chip: "WWV", family: Family::HfData, matches: &["WWV"] },
     Decoder { chip: "DRM", family: Family::HfData, matches: &["DRM"] },
 ];
@@ -165,13 +172,6 @@ pub const PACTOR_DIALS: &[(&str, f64)] = &[
     ("10 m", 28_120_000.0),
 ];
 
-pub const NAVTEX_DIALS: &[(&str, f64)] = &[
-    // The international channel and the national one, and the HF one;
-    // the dial goes 1 kHz below so the tones sit at 1 kHz.
-    ("518 kHz", 517_000.0),
-    ("490 kHz", 489_000.0),
-    ("4209.5 kHz", 4_208_500.0),
-];
 
 #[cfg(test)]
 mod tests {
@@ -199,6 +199,7 @@ mod tests {
             ("HFDL", Family::HfData),
             ("PACTOR", Family::HfData),
             ("STANAG 4285", Family::HfData),
+            ("2G ALE", Family::HfData),
             ("WWV", Family::HfData),
             ("DRM", Family::HfData),
         ] {

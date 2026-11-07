@@ -15,6 +15,8 @@ pub fn for_mode(mode: Mode) -> Option<&'static Directory> {
         Mode::Sitor => Some(&SITOR),
         Mode::Dsc => Some(&DSC),
         Mode::Hfdl => Some(&HFDL),
+        Mode::Ale => Some(&ALE),
+        Mode::Mfsk => Some(&RADIOGRAM),
         Mode::Wwv => Some(&WWV),
         Mode::Drm => Some(&DRM),
         _ => None,
@@ -60,6 +62,22 @@ pub const HFDL: Directory = Directory {
     dial_offset_hz: 0.0,
     source: "System table version 52 (December 2023), as dumphfdl ships it; checked 2026-11-06. Each station uses a few of its frequencies at a time and names them in its squitters.",
     stations: data::HFDL,
+};
+
+pub const ALE: Directory = Directory {
+    mode: Mode::Ale,
+    title: "2G ALE NETS",
+    dial_offset_hz: 0.0,
+    source: "Amateur ALE channels from hflink.com, checked 2026-11-06. No military or government ALE list could be confirmed from an official source, so none is given; HFGCS's published frequencies are its voice channels.",
+    stations: data::ALE,
+};
+
+pub const RADIOGRAM: Directory = Directory {
+    mode: Mode::Mfsk,
+    title: "SHORTWAVE RADIOGRAM",
+    dial_offset_hz: 0.0,
+    source: "WRMI's schedule sheet effective 1 November 2026, checked 2026-11-06. It gives the slots, not the modes; each show uses several (MFSK32 and MFSK64 among them). Tune the dial to the frequency in USB; the decoder finds the signal.",
+    stations: data::RADIOGRAM,
 };
 
 pub const WWV: Directory = Directory {

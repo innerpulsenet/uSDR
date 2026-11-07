@@ -73,7 +73,7 @@ pub fn toolbar(app: &mut App, ui: &mut Ui) {
         if widgets::chip_key(ui, "SPOTS", v.show_peaks, theme::AMBER).on_hover_text("Peak markers and decode labels").clicked() {
             v.show_peaks = !v.show_peaks;
         }
-        if widgets::chip_key(ui, "BANDS", v.band_plan, theme::OK).on_hover_text("US allocations along the axis; hover for the name").clicked() {
+        if widgets::chip_key(ui, "BAND PLAN", v.band_plan, theme::OK).on_hover_text("US allocations along the axis; hover for the name").clicked() {
             v.band_plan = !v.band_plan;
         }
         if narrow {

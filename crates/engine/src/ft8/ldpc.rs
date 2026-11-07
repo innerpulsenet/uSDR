@@ -61,8 +61,15 @@ pub fn encode(a91: &[u8; 12]) -> [u8; N] {
 }
 
 /// How many parity checks a hard-decided codeword fails.
+#[cfg(test)]
 pub fn check(cw: &[u8; N]) -> usize {
-    NM.iter()
+    check_with(cw, &NM)
+}
+
+/// [`check`] against another code's checks: JS8 keeps the first FT8's
+/// (174, 87) code, which has the same shape.
+pub(crate) fn check_with<const C: usize>(cw: &[u8; N], nm: &[[u8; 7]; C]) -> usize {
+    nm.iter()
         .filter(|row| row.iter().filter(|&&n| n != 0).fold(0u8, |x, &n| x ^ cw[n as usize - 1]) != 0)
         .count()
 }
@@ -74,13 +81,21 @@ pub fn check(cw: &[u8; N]) -> usize {
 /// zero means a valid codeword. Stops early on success, and gives up on an
 /// all-zero word, which the spec rules out and noise converges to.
 pub fn bp_decode(llr: &[f32; N], max_iters: usize) -> ([u8; N], usize) {
+    bp_decode_with::<M>(llr, max_iters, &MN, &NM)
+}
+
+/// [`bp_decode`] over another 174-bit code with three checks per bit and
+/// at most seven bits per check, given its tables in the same one-based
+/// form: `C` checks, `mn` the checks of each bit, `nm` the bits of each
+/// check.
+pub(crate) fn bp_decode_with<const C: usize>(llr: &[f32; N], max_iters: usize, mn: &[[u8; 3]; N], nm: &[[u8; 7]; C]) -> ([u8; N], usize) {
     // Messages from each bit to its three checks, and from each check to
     // its six or seven bits.
     let mut tov = [[0f32; 3]; N];
-    let mut toc = [[0f32; 7]; M];
+    let mut toc = [[0f32; 7]; C];
     let mut plain = [0u8; N];
-    let mut best = (plain, M);
-    let (mut last, mut stalled) = (M, 0);
+    let mut best = (plain, C);
+    let (mut last, mut stalled) = (C, 0);
     for iter in 0..max_iters {
         let mut ones = 0;
         for n in 0..N {
@@ -90,7 +105,7 @@ pub fn bp_decode(llr: &[f32; N], max_iters: usize) -> ([u8; N], usize) {
         if ones == 0 {
             break;
         }
-        let errors = check(&plain);
+        let errors = check_with(&plain, nm);
         if errors < best.1 {
             best = (plain, errors);
             if errors == 0 {
@@ -104,14 +119,14 @@ pub fn bp_decode(llr: &[f32; N], max_iters: usize) -> ([u8; N], usize) {
         if stalled >= 5 && iter >= 10 && errors > 15 {
             break;
         }
-        for (m, row) in NM.iter().enumerate() {
+        for (m, row) in nm.iter().enumerate() {
             for (ni, &n1) in row.iter().enumerate() {
                 if n1 == 0 {
                     continue;
                 }
                 let n = n1 as usize - 1;
                 let mut t = llr[n];
-                for (k, &mm) in MN[n].iter().enumerate() {
+                for (k, &mm) in mn[n].iter().enumerate() {
                     if mm as usize - 1 != m {
                         t += tov[n][k];
                     }
@@ -120,10 +135,10 @@ pub fn bp_decode(llr: &[f32; N], max_iters: usize) -> ([u8; N], usize) {
             }
         }
         for n in 0..N {
-            for (k, &m1) in MN[n].iter().enumerate() {
+            for (k, &m1) in mn[n].iter().enumerate() {
                 let m = m1 as usize - 1;
                 let mut t = 1.0f32;
-                for (ni, &n1) in NM[m].iter().enumerate() {
+                for (ni, &n1) in nm[m].iter().enumerate() {
                     if n1 != 0 && n1 as usize - 1 != n {
                         t *= toc[m][ni];
                     }

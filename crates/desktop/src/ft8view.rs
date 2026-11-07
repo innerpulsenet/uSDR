@@ -102,13 +102,33 @@ pub fn show(app: &mut App, ui: &mut Ui, visible: &[usize], empty: &str) {
     ui.add_space(4.0);
     activity(app, ui, &all);
     ui.add_space(4.0);
+    let with_path = here.is_some();
+    // A decode clicked (here or on the activity strip) opens its station
+    // beside the log.
+    let picked = app.selected_decode.filter(|i| all.iter().any(|r| r.i == *i));
+    match picked {
+        Some(i) => {
+            let w = ui.available_width();
+            let h = ui.available_height();
+            let side = (w * 0.36).clamp(260.0, 380.0);
+            ui.horizontal_top(|ui| {
+                ui.allocate_ui_with_layout(vec2(w - side - 8.0, h), egui::Layout::top_down(egui::Align::Min), |ui| table(app, ui, &all, &rows, filter, with_path, empty));
+                ui.allocate_ui_with_layout(vec2(side, h), egui::Layout::top_down(egui::Align::Min), |ui| inspector(app, ui, &all, i));
+            });
+        }
+        None => table(app, ui, &all, &rows, filter, with_path, empty),
+    }
+}
+
+/// The log as a table: a decode a row, a rule where each slot begins.
+fn table(app: &mut App, ui: &mut Ui, all: &[Row], rows: &[&Row], filter: Filter, with_path: bool, empty: &str) {
     // The mode column only while both modes are in the log.
     let both = all.iter().any(|r| app.decodes[r.i].ev.protocol == "FT4") && all.iter().any(|r| app.decodes[r.i].ev.protocol == "FT8");
-    let with_path = here.is_some();
     let mut cols: Vec<(&str, f32)> = vec![("UTC", 9.0), ("dB", 4.5), ("DT", 5.0), ("FREQ", 6.0)];
     if both {
         cols.push(("MODE", 5.0));
     }
+    cols.push(("TYPE", 9.0));
     let tail: Vec<(&str, f32)> = if with_path { vec![("KM", 6.5), ("AZ", 4.5)] } else { vec![] };
     // One message width for the header and every row: what is left of the
     // view after the fixed columns and the gaps between all the cells.
@@ -154,6 +174,13 @@ pub fn show(app: &mut App, ui: &mut Ui, visible: &[usize], empty: &str) {
                     if both {
                         cell(ui, 5.0 * CHAR_W, mono(&d.ev.protocol, widgets::protocol_color(&d.ev.protocol)));
                     }
+                    let (badge, bc) = kind_of(&d.ev);
+                    ui.allocate_ui_with_layout(vec2(9.0 * CHAR_W, 18.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                        ui.set_min_width(9.0 * CHAR_W);
+                        if !badge.is_empty() {
+                            badge_label(ui, &badge, bc);
+                        }
+                    });
                     let msg = RichText::new(&d.ev.summary).font(theme::mono(11.5));
                     let msg = if row.mine {
                         msg.color(theme::AMBER).strong()
@@ -192,6 +219,95 @@ pub fn show(app: &mut App, ui: &mut Ui, visible: &[usize], empty: &str) {
     if let Some(s) = select {
         app.selected_decode = s;
     }
+}
+
+/// What a message is, as a short badge and its color: a CQ (and what kind,
+/// "CQ POTA", "CQ DX"), a locator answering one, a signal report, a roger
+/// report, or a sign-off.
+fn kind_of(ev: &usdr_proto::DecodeEvent) -> (String, egui::Color32) {
+    let words: Vec<&str> = ev.summary.split_whitespace().collect();
+    let f = |k: &str| ev.fields.get(k).map(String::as_str);
+    if words.first() == Some(&"CQ") {
+        // "CQ POTA K1ABC FN42": a short word between CQ and the call says
+        // what it is calling for.
+        let what = words.get(1).filter(|w| words.len() >= 4 && w.len() <= 4 && w.chars().all(|c| c.is_ascii_alphabetic()));
+        return (what.map_or("CQ".to_string(), |w| format!("CQ {w}")), theme::OK);
+    }
+    match f("extra").or(words.get(2).copied()) {
+        Some("RR73" | "RRR" | "73") => ("73".into(), theme::VIOLET),
+        Some(x) if x.starts_with("R+") || x.starts_with("R-") => ("R-REPORT".into(), theme::AMBER),
+        Some(x) if (x.starts_with('+') || x.starts_with('-')) && x[1..].chars().all(|c| c.is_ascii_digit()) => ("REPORT".into(), theme::AMBER),
+        _ if f("grid").is_some() => ("GRID".into(), theme::CYAN),
+        _ => (String::new(), theme::text_3()),
+    }
+}
+
+fn badge_label(ui: &mut Ui, text: &str, c: egui::Color32) {
+    let g = ui.painter().layout_no_wrap(text.to_string(), theme::mono_bold(9.5), c);
+    let (r, _) = ui.allocate_exact_size(g.size() + vec2(8.0, 4.0), egui::Sense::hover());
+    ui.painter().rect(r, egui::CornerRadius::same(3), alpha(c, 0.1), egui::Stroke::new(1.0, alpha(c, 0.55)), egui::StrokeKind::Inside);
+    ui.painter().galley(r.min + vec2(4.0, 2.0), g, c);
+}
+
+/// The station of a clicked decode: who it is, where, how it was heard,
+/// and every decode in the log with its call, oldest first, so both sides
+/// of a contact read as one exchange.
+fn inspector(app: &mut App, ui: &mut Ui, all: &[Row], i: usize) {
+    let d = app.decodes[i].ev.clone();
+    let f = |k: &str| d.fields.get(k).cloned();
+    // The station is the sender; a CQ's or a reply's "de".
+    let call = f("de").or_else(|| d.summary.split_whitespace().nth(1).map(str::to_string)).unwrap_or_default();
+    let bare = call.trim_matches(|c| c == '<' || c == '>').to_string();
+    let row = all.iter().find(|r| r.i == i);
+    egui::Frame::new().fill(alpha(theme::ink(), 0.6)).stroke(egui::Stroke::new(1.0, theme::line())).corner_radius(egui::CornerRadius::same(4)).inner_margin(egui::Margin::symmetric(10, 6)).show(ui, |ui| {
+        ui.set_width(ui.available_width());
+        ui.set_min_height(ui.available_height());
+        ui.horizontal(|ui| {
+            ui.label(RichText::new(&bare).font(theme::mono_bold(16.0)).color(theme::text()));
+            let (b, c) = kind_of(&d);
+            if !b.is_empty() {
+                badge_label(ui, &b, c);
+            }
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if widgets::action_small(ui, "CLOSE").clicked() {
+                    app.selected_decode = None;
+                }
+            });
+        });
+        // The station's locator: from this decode, or the last it sent.
+        let grid = f("grid").or_else(|| app.decodes.iter().filter(|x| x.ev.fields.get("de").is_some_and(|v| v.trim_matches(|c| c == '<' || c == '>') == bare)).find_map(|x| x.ev.fields.get("grid").cloned()));
+        if let Some(g) = &grid {
+            let path = home(app).1.zip(usdr_proto::station::grid_center(g)).map(|(a, b)| usdr_proto::station::path(a, b));
+            let line = match path {
+                Some((k, az)) => format!("{g} · {} km at {az:.0}°", km(k)),
+                None => g.clone(),
+            };
+            ui.label(mono(line, theme::CYAN));
+        }
+        if let Some(r) = row {
+            ui.label(mono(format!("{} Hz · {} dB · {} s", r.df.map_or("—".into(), |v| format!("{v:.0}")), r.snr.map_or("—".into(), |v| format!("{v:+.0}")), r.dt.map_or("—".into(), |v| format!("{v:+.1}"))), theme::text_2()));
+        }
+        ui.add_space(6.0);
+        ui.label(mono(format!("IN THE LOG WITH {bare}"), theme::text_3()));
+        let mut hist: Vec<&crate::app::DecodeRow> = app
+            .decodes
+            .iter()
+            .filter(|x| matches!(x.ev.protocol.as_str(), "FT8" | "FT4") && x.ev.summary.split_whitespace().any(|w| w.trim_matches(|c| c == '<' || c == '>') == bare))
+            .take(60)
+            .collect();
+        hist.reverse();
+        egui::ScrollArea::vertical().id_salt("ft8-inspector").auto_shrink([false, false]).stick_to_bottom(true).show(ui, |ui| {
+            for x in hist {
+                ui.horizontal(|ui| {
+                    let slot = x.ev.fields.get("slot").map(|s| if s.len() >= 6 { format!("{}:{}:{}", &s[..2], &s[2..4], &s[4..6]) } else { s.clone() }).unwrap_or_else(|| local_hms(x.at));
+                    ui.label(mono(slot, theme::text_3()));
+                    ui.label(mono(x.ev.fields.get("snr").map(|v| format!("{v:>3}")).unwrap_or_default(), theme::text_2()));
+                    let c = if x.ev.summary.starts_with(&format!("{bare} ")) || x.ev.summary.starts_with(&format!("<{bare}> ")) { theme::AMBER } else { theme::text() };
+                    ui.add(egui::Label::new(mono(&x.ev.summary, c)).truncate());
+                });
+            }
+        });
+    });
 }
 
 /// A decode's details: who to whom, from where, and the decoder's numbers.
@@ -233,7 +349,7 @@ fn clock(app: &App, ui: &mut Ui, rows: &[Row], filter: &mut Filter, has_call: bo
         Mode::Ft8 => 15.0,
         Mode::Ft4 => 7.5,
         _ => {
-            ui.label(mono("Not decoding: pick FT8 or FT4 (BANDS tunes a dial frequency).", theme::text_3()));
+            ui.label(mono("Not decoding: pick FT8 or FT4 under HF.", theme::text_3()));
             return;
         }
     };

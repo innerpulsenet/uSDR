@@ -26,6 +26,12 @@
 //!   log-likelihood ratios, are summed and the most likely of the 35 valid
 //!   words taken (see [`combine`]); one that no word stands out for prints
 //!   as `*`.
+//! - **Impulse noise.** On 518 kHz at night lightning crashes come several
+//!   a second, 20 to 40 dB over the signal. The receiver blanks them, and
+//!   a bit's log-likelihood ratio shrinks with the share of it blanked, so
+//!   a crash leaves its characters to their other copies instead of
+//!   outvoting them; the fading correction's levels and the bit clock are
+//!   held through it.
 //! - **Messages.** `ZCZC B1B2B3B4` opens one (station, subject, serial) and
 //!   `NNNN` closes it.
 
@@ -81,7 +87,7 @@ pub struct NavtexDecoder {
     half_len: f32,
     /// Output samples until the next bit is sampled.
     ph: f32,
-    /// The last bit's soft decision.
+    /// The last bit's soft decision, weighed down by its blanking.
     last_v: f32,
     /// Bits in a row the alignment has scored poorly.
     low_words: u32,
@@ -89,9 +95,14 @@ pub struct NavtexDecoder {
     held: Vec<char>,
     held_since: Option<u64>,
     prev: (f32, f32, f32),
+    /// The previous sample's unblanked share and whether an impulse was
+    /// near it.
+    prev_w: (f32, bool),
     have_prev: bool,
     /// The last seven bits, the newest in bit 6.
     reg: u8,
+    /// Which of them were mostly blanked.
+    erased: u8,
     nbits: u64,
     soft: [f32; 7],
     tones: [(f32, f32); 7],
@@ -127,6 +138,9 @@ pub(crate) struct Word {
     /// Soft bits as log-likelihood ratios, first sent first, positive
     /// for B.
     pub(crate) soft: [f32; 7],
+    /// A bit of it was mostly blanked as impulse noise: its hard code is
+    /// a guess there, and it is not taken as valid however it reads.
+    pub(crate) erased: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -338,8 +352,10 @@ impl NavtexDecoder {
             held: Vec::with_capacity(HELD_MAX),
             held_since: None,
             prev: (0.0, 0.0, 0.0),
+            prev_w: (1.0, false),
             have_prev: false,
             reg: 0,
+            erased: 0,
             nbits: 0,
             soft: [0.0; 7],
             tones: [(0.0, 0.0); 7],
@@ -373,7 +389,7 @@ impl NavtexDecoder {
             if s.fresh {
                 self.restart();
             }
-            self.sample(s.hi, s.lo);
+            self.sample(s);
         }
         self.samples = samples;
         self.t_in += audio.len() as u64;
@@ -422,6 +438,7 @@ impl NavtexDecoder {
         self.ph = self.spb;
         self.have_prev = false;
         self.reg = 0;
+        self.erased = 0;
         self.nbits = 0;
         self.score = [[0.0; 2]; 7];
         self.scored = [[0; 2]; 7];
@@ -444,17 +461,21 @@ impl NavtexDecoder {
     }
 
     /// One demodulator sample: the bit clock.
-    fn sample(&mut self, hi: f32, lo: f32) {
-        let cur = (self.atc.step(hi, lo), hi, lo);
+    fn sample(&mut self, s: &FskSample) {
+        let cur = (self.atc.step_or_hold(s.hi, s.lo, s.impulse), s.hi, s.lo);
+        let cur_w = (1.0 - s.blank, s.impulse);
         if !self.have_prev {
             self.prev = cur;
+            self.prev_w = cur_w;
             self.have_prev = true;
             return;
         }
-        let prev = self.prev;
-        self.prev = cur;
+        let prev = std::mem::replace(&mut self.prev, cur);
+        let prev_w = std::mem::replace(&mut self.prev_w, cur_w);
         self.ph -= 1.0;
-        if (prev.0 > 0.0) != (cur.0 > 0.0) {
+        // A crossing an impulse made, or the edge of a blanked stretch, says
+        // nothing about where the bits are.
+        if (prev.0 > 0.0) != (cur.0 > 0.0) && !prev_w.1 && !cur_w.1 {
             // The matched filter crosses zero half a filter after an edge,
             // and holds a whole bit half a filter after that: bit samples
             // belong half a filter after each crossing.
@@ -474,18 +495,23 @@ impl NavtexDecoder {
             let h = prev.1 + (cur.1 - prev.1) * a;
             let l = prev.2 + (cur.2 - prev.2) * a;
             self.ph += self.spb;
-            self.bit(v, h, l);
+            self.bit(v, h, l, prev_w.0.min(cur_w.0));
         }
     }
 
-    /// One bit: alignment scoring, and a word when one is complete.
-    fn bit(&mut self, v: f32, hi: f32, lo: f32) {
+    /// One bit, `w` of it left after blanking: alignment scoring, and a
+    /// word when one is complete.
+    fn bit(&mut self, v: f32, hi: f32, lo: f32, w: f32) {
         let i = (self.nbits % 7) as usize;
         self.reg = (self.reg >> 1) | (u8::from(v > 0.0) << 6);
-        self.last_v = v;
+        self.erased = (self.erased >> 1) | (u8::from(w < 0.5) << 6);
+        self.last_v = v * w;
         // As a log-likelihood ratio, so a copy heard in a fade counts for
-        // less than one heard clearly when the two are combined.
-        self.soft[i] = (v * self.atc.llr_scale()).clamp(-LLR_MAX, LLR_MAX);
+        // less than one heard clearly when the two are combined. A bit
+        // partly blanked keeps only that part of its energy against the
+        // whole of the noise, so its ratio shrinks with it, and a bit lost
+        // to an impulse is left to its other copy.
+        self.soft[i] = (v * self.atc.llr_scale() * w).clamp(-LLR_MAX, LLR_MAX);
         self.tones[i] = (hi, lo);
         self.nbits += 1;
         if self.nbits < 7 {
@@ -493,6 +519,9 @@ impl NavtexDecoder {
         }
         let off = (self.nbits % 7) as usize;
         let ones = self.reg.count_ones();
+        // Words with a blanked bit are scored too: the bit mostly keeps
+        // its sign, and leaving them out slowed the alignment's finding
+        // more than their errors hurt it.
         for (pol, ok) in [(0, ones == 4), (1, ones == 3)] {
             let n = &mut self.scored[off][pol];
             let a = (1.0 / (*n + 1) as f32).max(1.0 / SYNC_LEN);
@@ -506,8 +535,8 @@ impl NavtexDecoder {
             return;
         }
         let sign = if pol == 1 { -1.0 } else { 1.0 };
-        let mut w = Word { code: if pol == 1 { !self.reg & 0x7f } else { self.reg }, ..Word::default() };
-        w.valid = valid(w.code);
+        let mut w = Word { code: if pol == 1 { !self.reg & 0x7f } else { self.reg }, erased: self.erased != 0, ..Word::default() };
+        w.valid = valid(w.code) && !w.erased;
         // The oldest of the seven bits is the first sent, the code's LSB.
         for k in 0..7 {
             let j = (self.nbits as usize + k) % 7;
@@ -984,6 +1013,72 @@ mod tests {
             Some(m) => (levenshtein(&m.text, BODY), true),
             None => (BODY.len(), false),
         }
+    }
+
+    /// Body errors of a message at `snr` with impulse noise at `rate`
+    /// bursts a second, over `seeds` seeds: errors, characters, messages.
+    fn impulse_errors(snr: f32, rate: f32, seeds: u64) -> (usize, usize, usize) {
+        let (mut errs, mut found) = (0, 0);
+        for seed in 1..=seeds {
+            let (mut x, amp) = signal(1000.0, snr, false, 700 + seed);
+            if rate > 0.0 {
+                add_impulses(&mut x, amp, FS, rate, &mut Rng::new(950 + seed));
+            }
+            let (ev, _) = run(&x);
+            match messages(&ev).first() {
+                Some(m) => {
+                    errs += levenshtein(&m.text, BODY);
+                    found += 1;
+                }
+                None => errs += BODY.len(),
+            }
+        }
+        (errs, seeds as usize * BODY.len(), found)
+    }
+
+    /// `USDR_IMPULSE_TABLE=1 cargo test --release -p scannerd-engine
+    /// navtex_impulse_table -- --nocapture`.
+    #[test]
+    fn navtex_impulse_table() {
+        if std::env::var("USDR_IMPULSE_TABLE").is_err() {
+            return;
+        }
+        let rates = [0.0f32, 1.0, 3.0, 5.0];
+        println!("NAVTEX: body CER % (messages of 6) with impulse noise, by bursts a second");
+        println!("{:>10} {}", "", rates.iter().map(|r| format!("{r:>11.0}")).collect::<String>());
+        for snr in [0.0f32, -5.0] {
+            let row: String = rates
+                .iter()
+                .map(|&r| {
+                    let (e, n, f) = impulse_errors(snr, r, 6);
+                    format!("{:>7.1} ({f})", 100.0 * e as f32 / n as f32)
+                })
+                .collect();
+            println!("{:>7.0} dB {row}", snr);
+        }
+    }
+
+    #[test]
+    fn navtex_copy_through_impulse_noise() {
+        // Three crashes a second, 20 to 35 dB over the signal, at -5 dB:
+        // with nothing done about them one message of six came out and
+        // the body error rate was 85% (`navtex_impulse_table`). Blanked
+        // and erased, each character's other copy decides.
+        let (e, n, found) = impulse_errors(-5.0, 3.0, 4);
+        let cer = e as f32 / n as f32;
+        println!("NAVTEX at -5 dB, 3 impulses a second: {found}/4 messages, body CER {:.2}%", 100.0 * cer);
+        assert_eq!(found, 4);
+        assert!(cer <= 0.02, "CER {cer}");
+    }
+
+    #[test]
+    fn navtex_impulses_alone_yield_nothing() {
+        let mut rng = Rng::new(24);
+        let sigma = noise_sigma(0.2, -5.0, FS);
+        let mut x: Vec<f32> = (0..(40.0 * FS) as usize).map(|_| sigma * rng.gauss()).collect();
+        add_impulses(&mut x, 0.2, FS, 5.0, &mut rng);
+        let (ev, _) = run(&x);
+        assert!(ev.is_empty(), "{ev:#?}");
     }
 
     #[test]

@@ -54,6 +54,13 @@
 //! between, or a continuous stream with the DX/RX interleave. Either can
 //! be forced with [`SitorDecoder::set_mode`].
 //!
+//! Impulse noise is blanked by the receiver as for NAVTEX, and its
+//! erasures are carried through both modes: mode B weighs each copy's bits
+//! by what the blanking left of them; mode A counts a blanked stretch as
+//! signal when it looks for a block (a crash mid-block must not make a
+//! gap of it), weighs the bits the same way, and finds a word's one lost
+//! bit again from the 4B/3Y count of the other six.
+//!
 //! A character that fails the 4B/3Y check, in every copy there is, prints
 //! as `*`.
 
@@ -160,11 +167,11 @@ fn invert(w: &Word) -> Word {
     let mut soft = w.soft;
     soft.iter_mut().for_each(|s| *s = -*s);
     let code = !w.code & 0x7f;
-    Word { code, valid: valid(code), soft }
+    Word { code, valid: valid(code) && !w.erased, soft, erased: w.erased }
 }
 
 fn normalize(w: &Word, pol: usize) -> Word {
-    if pol == 1 { invert(w) } else { Word { valid: valid(w.code), ..*w } }
+    if pol == 1 { invert(w) } else { Word { valid: valid(w.code) && !w.erased, ..*w } }
 }
 
 // ---------------------------------------------------------------------------
@@ -427,6 +434,8 @@ pub struct SitorStatus {
 struct Hist {
     hi: Vec<f32>,
     lo: Vec<f32>,
+    /// The share of each sample's bit left after blanking impulses.
+    w: Vec<f32>,
     mask: usize,
     /// Samples written.
     n: u64,
@@ -438,14 +447,23 @@ const HIST_LEN: usize = 8192;
 
 impl Hist {
     fn new() -> Self {
-        Self { hi: vec![0.0; HIST_LEN], lo: vec![0.0; HIST_LEN], mask: HIST_LEN - 1, n: 0 }
+        Self { hi: vec![0.0; HIST_LEN], lo: vec![0.0; HIST_LEN], w: vec![1.0; HIST_LEN], mask: HIST_LEN - 1, n: 0 }
     }
 
-    fn push(&mut self, hi: f32, lo: f32) {
+    fn push(&mut self, s: &FskSample) {
         let i = self.n as usize & self.mask;
-        self.hi[i] = hi;
-        self.lo[i] = lo;
+        self.hi[i] = s.hi;
+        self.lo[i] = s.lo;
+        self.w[i] = 1.0 - s.blank;
         self.n += 1;
+    }
+
+    /// The unblanked share at a fractional sample time: the less of the two
+    /// samples either side.
+    #[inline]
+    fn w_at(&self, t: f64) -> f32 {
+        let i = t.floor() as usize;
+        self.w[i & self.mask].min(self.w[(i + 1) & self.mask])
     }
 
     /// Whether `t..t+len` is still held.
@@ -542,8 +560,11 @@ fn probe(h: &Hist, t0: f64, spb: f64, thr: f32) -> Probe {
     let mut p = Probe { bits: 0, present: 0, present7: 0, max_gap: 0, eye: 0.0, eye7: 0.0, before };
     let mut run = 0;
     for j in 0..BLOCK_BITS {
-        let (hi, lo) = h.at(t0 + j as f64 * spb);
-        let on = hi * hi + lo * lo > thr;
+        let t = t0 + j as f64 * spb;
+        let (hi, lo) = h.at(t);
+        // A bit blanked as impulse noise is given the benefit of the
+        // doubt: a crash in the middle of a block must not make it a gap.
+        let on = hi * hi + lo * lo > thr || h.w_at(t) < 0.5;
         let eye = (hi - lo).abs() / (hi + lo + TINY);
         p.bits |= u32::from(hi > lo) << j;
         p.present += usize::from(on);
@@ -564,15 +585,18 @@ fn probe(h: &Hist, t0: f64, spb: f64, thr: f32) -> Probe {
 /// cycle's quiet part, as log-likelihood ratios like NAVTEX's.
 fn read_words<const N: usize>(h: &Hist, t0: f64, spb: f64, noise: f32, pol: usize) -> [Word; N] {
     let mut hl = [(0.0f32, 0.0f32); 21];
+    let mut wt = [1.0f32; 21];
     let nb = 7 * N;
-    for (j, v) in hl.iter_mut().enumerate().take(nb) {
+    for (j, (v, w)) in hl.iter_mut().zip(&mut wt).enumerate().take(nb) {
         *v = h.at(t0 + j as f64 * spb);
+        *w = h.w_at(t0 + j as f64 * spb);
     }
     let level = |hi: bool| {
         let (mut s, mut n) = (0.0f32, 0u32);
-        for &(a, b) in &hl[..nb] {
+        for (&(a, b), &w) in hl[..nb].iter().zip(&wt) {
             let (on, off) = if hi { (a, b) } else { (b, a) };
-            if on > off {
+            // A bit mostly blanked gives a poor measure of its tone.
+            if on > off && w >= 0.5 {
                 s += on;
                 n += 1;
             }
@@ -586,12 +610,24 @@ fn read_words<const N: usize>(h: &Hist, t0: f64, spb: f64, noise: f32, pol: usiz
         let mut code = 0u8;
         for k in 0..7 {
             let (hi, lo) = hl[7 * w + k];
-            let llr = ((ah * (hi - 0.5 * ah) - al * (lo - 0.5 * al)) / den).clamp(-LLR_MAX, LLR_MAX);
+            // A partly blanked bit counts for the part that is left.
+            let llr = (wt[7 * w + k] * (ah * (hi - 0.5 * ah) - al * (lo - 0.5 * al)) / den).clamp(-LLR_MAX, LLR_MAX);
             word.soft[k] = llr;
             code |= u8::from(hi > lo) << k;
+            word.erased |= wt[7 * w + k] < 0.5;
         }
         word.code = code;
         *word = normalize(word, pol);
+        // A bit lost to impulse noise is found again from the 4B/3Y count
+        // of the other six, when they are clear: the most likely valid
+        // word, with the lost bit's ratio near zero, is that one. Two lost
+        // and the word stays unreadable.
+        if word.erased
+            && let Some(c) = ml_among(&word.soft, &VALID, ML_MARGIN)
+        {
+            word.code = c;
+            word.valid = true;
+        }
     }
     out
 }
@@ -1491,8 +1527,13 @@ struct Fec {
     ph: f32,
     last_v: f32,
     prev: f32,
+    /// The previous sample's unblanked share and whether an impulse was
+    /// near it.
+    prev_w: (f32, bool),
     have_prev: bool,
     reg: u8,
+    /// Which of the last seven bits were mostly blanked.
+    erased: u8,
     nbits: u64,
     soft: [f32; 7],
     score: [[f32; 2]; 7],
@@ -1544,8 +1585,10 @@ impl Fec {
             ph: spb,
             last_v: 0.0,
             prev: 0.0,
+            prev_w: (1.0, false),
             have_prev: false,
             reg: 0,
+            erased: 0,
             nbits: 0,
             soft: [0.0; 7],
             score: [[0.0; 2]; 7],
@@ -1590,6 +1633,7 @@ impl Fec {
         self.ph = self.spb;
         self.have_prev = false;
         self.reg = 0;
+        self.erased = 0;
         self.nbits = 0;
         self.score = [[0.0; 2]; 7];
         self.scored = [[0; 2]; 7];
@@ -1621,19 +1665,22 @@ impl Fec {
         self.sync.is_some()
     }
 
-    /// One demodulator sample: the bit clock (as NAVTEX's).
-    fn sample(&mut self, hi: f32, lo: f32) {
+    /// One demodulator sample: the bit clock (as NAVTEX's, impulses
+    /// included).
+    fn sample(&mut self, s: &FskSample) {
         self.t += 1;
-        let cur = self.atc.step(hi, lo);
+        let cur = self.atc.step_or_hold(s.hi, s.lo, s.impulse);
+        let cur_w = (1.0 - s.blank, s.impulse);
         if !self.have_prev {
             self.prev = cur;
+            self.prev_w = cur_w;
             self.have_prev = true;
             return;
         }
-        let prev = self.prev;
-        self.prev = cur;
+        let prev = std::mem::replace(&mut self.prev, cur);
+        let prev_w = std::mem::replace(&mut self.prev_w, cur_w);
         self.ph -= 1.0;
-        if (prev > 0.0) != (cur > 0.0) {
+        if (prev > 0.0) != (cur > 0.0) && !prev_w.1 && !cur_w.1 {
             let back = 1.0 - prev / (prev - cur);
             let mut e = self.ph + back - self.half_len;
             e -= self.spb * (e / self.spb).round();
@@ -1645,15 +1692,17 @@ impl Fec {
             let a = 1.0 + self.ph;
             let v = prev + (cur - prev) * a;
             self.ph += self.spb;
-            self.bit(v);
+            self.bit(v, prev_w.0.min(cur_w.0));
         }
     }
 
-    fn bit(&mut self, v: f32) {
+    /// One bit, `w` of it left after blanking (see NAVTEX's).
+    fn bit(&mut self, v: f32, w: f32) {
         let i = (self.nbits % 7) as usize;
         self.reg = (self.reg >> 1) | (u8::from(v > 0.0) << 6);
-        self.last_v = v;
-        self.soft[i] = (v * self.atc.llr_scale()).clamp(-LLR_MAX, LLR_MAX);
+        self.erased = (self.erased >> 1) | (u8::from(w < 0.5) << 6);
+        self.last_v = v * w;
+        self.soft[i] = (v * self.atc.llr_scale() * w).clamp(-LLR_MAX, LLR_MAX);
         self.nbits += 1;
         if self.nbits < 7 {
             return;
@@ -1672,7 +1721,7 @@ impl Fec {
         if off != o {
             return;
         }
-        let mut w = Word { code: self.reg, valid: false, soft: [0.0; 7] };
+        let mut w = Word { code: self.reg, valid: false, soft: [0.0; 7], erased: self.erased != 0 };
         for k in 0..7 {
             w.soft[k] = self.soft[(self.nbits as usize + k) % 7];
         }
@@ -2047,8 +2096,8 @@ impl SitorDecoder {
                 self.fec.restart();
                 self.arq.restart(self.hist.n);
             }
-            self.hist.push(s.hi, s.lo);
-            self.fec.sample(s.hi, s.lo);
+            self.hist.push(s);
+            self.fec.sample(s);
         }
         self.samples = samples;
         self.arq.run(&self.hist);
@@ -2712,6 +2761,113 @@ mod tests {
                 .collect();
             println!("{:>14} {row}  (IRS SNR = column)", ch.name());
         }
+    }
+
+    /// Mode B's character error rate with impulse noise at `rate` bursts
+    /// a second, over `seeds` seeds.
+    fn b_impulse_cer(snr: f32, rate: f32, seeds: u64) -> f32 {
+        let mut total = 0.0;
+        for seed in 1..=seeds {
+            let mut x = fec_audio(fec_slots(&encode(B_TEXT), 20, ALPHA), snr, 1650.0 + 50.0 * (seed % 3) as f32, 0.0, Channel::Awgn, false, 700 + seed);
+            if rate > 0.0 {
+                add_impulses(&mut x, 0.2, FS, rate, &mut Rng::new(950 + seed));
+            }
+            let (ev, _) = run(&x, SitorMode::Auto);
+            if std::env::var("USDR_SITOR_SHOW").is_ok() {
+                println!("seed {seed} rate {rate} snr {snr}: {:?}", text_of(&ev, None));
+            }
+            total += levenshtein(&text_of(&ev, None), B_LINES) as f32 / B_LINES.len() as f32;
+        }
+        total / seeds as f32
+    }
+
+    /// Mode A's: both directions of the link, the IRS `irs_db` under the
+    /// ISS, the impulses against the ISS's level.
+    fn a_impulse_cer(snr: f32, irs_db: f32, rate: f32, seeds: u64) -> f32 {
+        let (mut e, mut n) = (0, 0);
+        for seed in 1..=seeds {
+            let r = LinkRun {
+                snr,
+                irs_db,
+                center: 1700.0,
+                irs_df: 5.0,
+                ppm: 50.0,
+                ch: Channel::Awgn,
+                four: seed.is_multiple_of(2),
+                reverse: false,
+                seed: 700 + seed,
+            };
+            let mut x = link_audio(&r);
+            if rate > 0.0 {
+                add_impulses(&mut x, 0.2, FS, rate, &mut Rng::new(950 + seed));
+            }
+            let (ev, _) = run(&x, SitorMode::Auto);
+            // A link whose call was lost to a crash is still copied, with
+            // the stations numbered rather than named.
+            let side = |a: ArqSide, b: ArqSide| {
+                ev.iter()
+                    .filter_map(|e| match e {
+                        SitorEvent::Text { from: Some(f), text, .. } if *f == a || *f == b => Some(text.as_str()),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            };
+            let (caller, called) = (side(ArqSide::Caller, ArqSide::First), side(ArqSide::Called, ArqSide::Second));
+            if std::env::var("USDR_SITOR_SHOW").is_ok() {
+                println!("seed {seed} rate {rate}: {caller:?} / {called:?}");
+            }
+            e += levenshtein(&caller, CALLER_LINES);
+            e += levenshtein(&called, CALLED_LINES);
+            n += CALLER_LINES.len() + CALLED_LINES.len();
+        }
+        e as f32 / n as f32
+    }
+
+    /// `USDR_IMPULSE_TABLE=1 cargo test --release -p scannerd-engine
+    /// sitor_impulse_table -- --nocapture`.
+    #[test]
+    fn sitor_impulse_table() {
+        if std::env::var("USDR_IMPULSE_TABLE").is_err() {
+            return;
+        }
+        let rates = [0.0f32, 1.0, 3.0, 5.0];
+        println!("SITOR: CER % with impulse noise, by bursts a second");
+        println!("{:>26} {}", "", rates.iter().map(|r| format!("{r:>7.0}")).collect::<String>());
+        for snr in [0.0f32, -5.0] {
+            let row: String = rates.iter().map(|&r| format!("{:>7.1}", 100.0 * b_impulse_cer(snr, r, 6))).collect();
+            println!("{:>26} {row}", format!("B at {snr:+.0} dB, 6 seeds"));
+        }
+        for (snr, irs) in [(12.0f32, -6.0f32), (6.0, -6.0)] {
+            let row: String = rates.iter().map(|&r| format!("{:>7.1}", 100.0 * a_impulse_cer(snr, irs, r, 4))).collect();
+            println!("{:>26} {row}", format!("A at {snr:+.0}/{:+.0} dB, 4 seeds", snr + irs));
+        }
+    }
+
+    #[test]
+    fn sitor_copy_through_impulse_noise() {
+        // Three crashes a second, 20 to 35 dB over the ISS. With nothing
+        // done about them mode B lost 73 to 92% of its text and mode A
+        // 91% (`sitor_impulse_table`). Mode B has its RX copies to fall
+        // back on; mode A heard from outside has only the repeats the IRS
+        // asks for, so what a crash takes there is mostly lost, and the
+        // rest must come through.
+        let b = b_impulse_cer(-5.0, 3.0, 3);
+        let a = a_impulse_cer(12.0, -6.0, 3.0, 2);
+        println!("SITOR at 3 impulses a second: B at -5 dB CER {:.1}%, A at +12/+6 dB CER {:.1}%", 100.0 * b, 100.0 * a);
+        assert!(b <= 0.03, "B: CER {b}");
+        assert!(a <= 0.25, "A: CER {a}");
+    }
+
+    #[test]
+    fn sitor_impulses_alone_yield_nothing() {
+        let mut rng = Rng::new(25);
+        let sigma = noise_sigma(0.2, -5.0, FS);
+        let mut x: Vec<f32> = (0..(40.0 * FS) as usize).map(|_| sigma * rng.gauss()).collect();
+        add_impulses(&mut x, 0.2, FS, 5.0, &mut rng);
+        let (ev, st) = run(&x, SitorMode::Auto);
+        assert!(ev.is_empty(), "{ev:#?}");
+        assert!(st.iter().all(|s| s.mode == SitorMode::Auto));
     }
 
     #[test]

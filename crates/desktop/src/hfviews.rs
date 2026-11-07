@@ -23,6 +23,14 @@ pub enum HfView {
     Hfdl,
     Pactor,
     Stanag,
+    Ale,
+    Cw,
+    Js8,
+    Wspr,
+    Olivia,
+    Mfsk,
+    Hell,
+    Sstv,
     Wwv,
     Drm,
 }
@@ -39,6 +47,14 @@ fn view_of(label: &str) -> HfView {
         "HFDL" => HfView::Hfdl,
         "PACTOR" => HfView::Pactor,
         "STANAG" => HfView::Stanag,
+        "ALE" => HfView::Ale,
+        "CW" => HfView::Cw,
+        "JS8" => HfView::Js8,
+        "WSPR" => HfView::Wspr,
+        "OLIVIA" => HfView::Olivia,
+        "MFSK" => HfView::Mfsk,
+        "HELL" => HfView::Hell,
+        "SSTV" => HfView::Sstv,
         "WWV" => HfView::Wwv,
         "DRM" => HfView::Drm,
         _ => HfView::Slots,
@@ -47,10 +63,7 @@ fn view_of(label: &str) -> HfView {
 
 /// The view a chip asks for, or else the one the mode decodes.
 pub fn view_for(app: &App) -> HfView {
-    match app.decode_chip {
-        Some(chip) => view_of(chip),
-        None => view_of(app.status.mode.label()),
-    }
+    view_of(app.status.mode.label())
 }
 
 pub fn show(app: &mut App, ui: &mut Ui, v: HfView) {
@@ -64,6 +77,14 @@ pub fn show(app: &mut App, ui: &mut Ui, v: HfView) {
         HfView::Hfdl => crate::utilviews::hfdl(app, ui),
         HfView::Pactor => crate::utilviews::pactor(app, ui),
         HfView::Stanag => crate::utilviews::stanag(app, ui),
+        HfView::Ale => crate::utilviews::ale(app, ui),
+        HfView::Cw => cw(app, ui),
+        HfView::Js8 => crate::utilviews::js8(app, ui),
+        HfView::Wspr => crate::utilviews::wspr(app, ui),
+        HfView::Olivia => crate::utilviews::olivia(app, ui),
+        HfView::Mfsk => crate::utilviews::mfsk(app, ui),
+        HfView::Hell => crate::utilviews::hell(app, ui),
+        HfView::Sstv => crate::sstvview::view(app, ui),
         HfView::Wwv => crate::utilviews::wwv(app, ui),
         HfView::Drm => crate::utilviews::drm(app, ui),
         HfView::Slots => {}
@@ -149,7 +170,7 @@ fn rtty(app: &mut App, ui: &mut Ui) {
         });
     });
     ui.add_space(4.0);
-    teleprinter(ui, "rtty-text", lines(app, "RTTY", |_| true), "RTTY text appears here as it is copied. The decoder finds the tone pair anywhere in the passband; BANDS lists where to listen.");
+    teleprinter(ui, "rtty-text", lines(app, "RTTY", |_| true), "RTTY text appears here as it is copied. The decoder finds the tone pair anywhere in the passband; the band keys above tune where to listen.");
 }
 
 fn navtex(app: &mut App, ui: &mut Ui) {
@@ -162,7 +183,6 @@ fn navtex(app: &mut App, ui: &mut Ui) {
         if let Some(e) = r.error_rate {
             ui.label(mono(format!("{:.0}% errors", e * 100.0), theme::text_3()));
         }
-        crate::directory::menu(app, ui, &crate::stations::NAVTEX, widgets::protocol_color("NAVTEX"));
     });
     ui.add_space(4.0);
     let messages: Vec<usize> = app.decodes.iter().enumerate().filter(|(_, d)| d.ev.protocol == "NAVTEX" && d.ev.kind.starts_with("message")).map(|(i, _)| i).collect();
@@ -172,7 +192,7 @@ fn navtex(app: &mut App, ui: &mut Ui) {
         let list_w = (avail.x * 0.62).max(240.0);
         ui.allocate_ui_with_layout(vec2(list_w, avail.y), egui::Layout::top_down(egui::Align::Min), |ui| {
             if messages.is_empty() {
-                ui.label(RichText::new("Messages appear here from ZCZC to NNNN, each with its station, subject and number. Tune 517 kHz (BANDS) for the international channel; stations send on a schedule, every four hours each.").font(theme::sans(12.0)).color(theme::text_3()));
+                ui.label(RichText::new("Messages appear here from ZCZC to NNNN, each with its station, subject and number. The station list above tunes 518 kHz (the international channel) or 490 kHz; each station sends every four hours, its times listed there.").font(theme::sans(12.0)).color(theme::text_3()));
                 return;
             }
             egui::ScrollArea::vertical().id_salt("navtex-msgs").auto_shrink([false, false]).show(ui, |ui| {
@@ -243,22 +263,40 @@ fn psk(app: &mut App, ui: &mut Ui) {
                 app.post("/api/sdr/digital", json!({ "psk_baud": bauds[i] }));
             }
         });
-        let picked: Option<u32> = ui.data(|d| d.get_temp(egui::Id::new("psk-pick")));
+        let picked: Option<u32> = ui.data(|d| d.get_temp(egui::Id::new(("pick", "PSK31"))));
         if picked.is_some() && widgets::action_small(ui, "ALL SIGNALS").clicked() {
-            ui.data_mut(|d| d.remove::<u32>(egui::Id::new("psk-pick")));
+            ui.data_mut(|d| d.remove::<u32>(egui::Id::new(("pick", "PSK31"))));
         }
     });
     ui.add_space(4.0);
-    let picked: Option<u32> = ui.data(|d| d.get_temp(egui::Id::new("psk-pick")));
+    let picked: Option<u32> = ui.data(|d| d.get_temp(egui::Id::new(("pick", "PSK31"))));
+    // A signal picked keeps every signal in view beside it: the list on
+    // the left, the one being read on the right.
     if let Some(ch) = picked {
-        let key = ch.to_string();
-        teleprinter(ui, "psk-one", lines(app, "PSK31", move |e| e.fields.get("channel") == Some(&key)), "Nothing from this signal yet.");
+        let w = ui.available_width();
+        let h = ui.available_height();
+        let list_w = (w * 0.42).clamp(260.0, 440.0);
+        ui.horizontal_top(|ui| {
+            ui.allocate_ui_with_layout(vec2(list_w, h), egui::Layout::top_down(egui::Align::Min), |ui| psk_list(app, ui, &reading, Some(ch), "PSK31"));
+            ui.allocate_ui_with_layout(vec2(w - list_w - 8.0, h), egui::Layout::top_down(egui::Align::Min), |ui| {
+                let hz = reading.channels.iter().find(|c| c.id == ch).map(|c| c.audio_hz);
+                ui.label(mono(hz.map_or(format!("SIGNAL {ch}"), |hz| format!("SIGNAL AT {hz:.0} Hz")), theme::text_3()));
+                let key = ch.to_string();
+                teleprinter(ui, "psk-one", lines(app, "PSK31", move |e| e.fields.get("channel") == Some(&key)), "Nothing from this signal yet.");
+            });
+        });
         return;
     }
+    psk_list(app, ui, &reading, None, "PSK31");
+}
+
+/// Each PSK31 signal on its own row, at its frequency, with the newest of
+/// what it sent; `picked` lit. Click one to read all of it.
+fn psk_list(app: &mut App, ui: &mut Ui, reading: &usdr_proto::DigitalReading, picked: Option<u32>, protocol: &str) {
     // One row per channel: what the server tracks now, plus any heard in
     // the log that has since gone quiet, by audio frequency.
     let mut rows: Vec<(u32, f32, Option<f32>, bool)> = reading.channels.iter().map(|c| (c.id, c.audio_hz, Some(c.snr_db), c.active)).collect();
-    for d in app.decodes.iter().filter(|d| d.ev.protocol == "PSK31").take(400) {
+    for d in app.decodes.iter().filter(|d| d.ev.protocol == protocol).take(400) {
         let Some(id) = d.ev.fields.get("channel").and_then(|v| v.parse::<u32>().ok()) else { continue };
         if !rows.iter().any(|r| r.0 == id) {
             let hz = d.ev.fields.get("df").and_then(|v| v.parse().ok()).unwrap_or(0.0);
@@ -267,16 +305,16 @@ fn psk(app: &mut App, ui: &mut Ui) {
     }
     rows.sort_by(|a, b| a.1.total_cmp(&b.1));
     if rows.is_empty() {
-        ui.label(RichText::new("Each PSK31 signal in the passband gets a row here, at its audio frequency, with what it is sending. 14.070 MHz is the busiest; BANDS lists the others.").font(theme::sans(12.0)).color(theme::text_3()));
+        ui.label(RichText::new("Each PSK31 signal in the passband gets a row here, at its audio frequency, with what it is sending. 14.070 MHz is the busiest; the band keys above tune the others.").font(theme::sans(12.0)).color(theme::text_3()));
         return;
     }
     let mut pick = None;
-    egui::ScrollArea::vertical().id_salt("psk-rows").auto_shrink([false, false]).show(ui, |ui| {
+    egui::ScrollArea::vertical().id_salt(("rows", protocol)).auto_shrink([false, false]).show(ui, |ui| {
         for (id, hz, snr, active) in rows {
             // The newest text of this signal, last characters first to go.
             let key = id.to_string();
             let mut tail = String::new();
-            for d in app.decodes.iter().filter(|d| d.ev.protocol == "PSK31" && d.ev.fields.get("channel") == Some(&key)).take(6) {
+            for d in app.decodes.iter().filter(|d| d.ev.protocol == protocol && d.ev.fields.get("channel") == Some(&key)).take(6) {
                 tail = if tail.is_empty() { d.ev.summary.clone() } else { format!("{} · {tail}", d.ev.summary) };
                 if tail.len() > 240 {
                     break;
@@ -286,7 +324,7 @@ fn psk(app: &mut App, ui: &mut Ui) {
                 .horizontal(|ui| {
                     ui.set_min_height(20.0);
                     let (r, _) = ui.allocate_exact_size(vec2(8.0, 18.0), Sense::hover());
-                    theme::lamp(ui.painter(), r.center(), 3.0, widgets::protocol_color("PSK"), if active { 1.0 } else { 0.0 }, theme::LampShape::Round);
+                    theme::lamp(ui.painter(), r.center(), 3.0, widgets::protocol_color(protocol), if active { 1.0 } else { 0.0 }, theme::LampShape::Round);
                     ui.add_sized(vec2(56.0, 18.0), egui::Label::new(mono(format!("{hz:.0}"), theme::AMBER)));
                     ui.add_sized(vec2(40.0, 18.0), egui::Label::new(mono(snr.map_or("—".into(), |s| format!("{s:+.0}")), theme::text_2())));
                     // The end of the text is the newest; it is what is kept
@@ -301,17 +339,26 @@ fn psk(app: &mut App, ui: &mut Ui) {
             if resp.hovered() {
                 ui.painter().rect_filled(resp.rect, egui::CornerRadius::same(3), alpha(theme::AMBER, 0.06));
             }
+            if picked == Some(id) {
+                ui.painter().rect_filled(resp.rect, egui::CornerRadius::same(3), alpha(theme::AMBER, 0.12));
+            }
             if resp.on_hover_text("Read all of this signal").clicked() {
                 pick = Some(id);
             }
         }
     });
     if let Some(id) = pick {
-        ui.data_mut(|d| d.insert_temp(egui::Id::new("psk-pick"), id));
+        ui.data_mut(|d| d.insert_temp(egui::Id::new(("pick", protocol)), id));
     }
 }
 
 fn fax(app: &mut App, ui: &mut Ui) {
+    // The viewer lives in the dock unless it was popped out into its own
+    // window; then the dock keeps the log of what was received.
+    if !app.fax.open {
+        crate::fax::docked(app, ui);
+        return;
+    }
     let r = app.status.digital.clone().unwrap_or_default();
     let on = app.status.mode == Mode::Wefax;
     ui.horizontal_wrapped(|ui| {
@@ -322,8 +369,8 @@ fn fax(app: &mut App, ui: &mut Ui) {
             (true, Some("starting")) => widgets::chip(ui, Tone::Warn, "START TONE"),
             _ => widgets::chip(ui, Tone::Idle, "WAITING FOR A START TONE"),
         };
-        if widgets::primary(ui, if app.fax.open { "VIEWER OPEN" } else { "OPEN VIEWER" }).clicked() {
-            app.fax.open = true;
+        if widgets::primary(ui, "BACK TO THE DOCK").on_hover_text("Close the viewer's window and show the picture here").clicked() {
+            app.fax.open = false;
         }
         ui.label(mono(format!("{} pictures this session", app.fax.pictures.len()), theme::text_3()));
     });
@@ -342,4 +389,39 @@ fn fax(app: &mut App, ui: &mut Ui) {
         }
     });
     let _ = pos2;
+}
+
+/// CW: every signal in the passband a row, at its pitch, with the newest
+/// of what it sent; pick one to read it beside the rest.
+fn cw(app: &mut App, ui: &mut Ui) {
+    let reading = app.status.digital.clone().unwrap_or_default();
+    ui.horizontal_wrapped(|ui| {
+        crate::utilviews::reading_strip(app, ui, Mode::Cw, "LISTENING FOR MORSE");
+        let picked: Option<u32> = ui.data(|d| d.get_temp(egui::Id::new(("pick", "CW"))));
+        if picked.is_some() && widgets::action_small(ui, "ALL SIGNALS").clicked() {
+            ui.data_mut(|d| d.remove::<u32>(egui::Id::new(("pick", "CW"))));
+        }
+    });
+    ui.add_space(4.0);
+    let picked: Option<u32> = ui.data(|d| d.get_temp(egui::Id::new(("pick", "CW"))));
+    if let Some(ch) = picked {
+        let w = ui.available_width();
+        let h = ui.available_height();
+        let list_w = (w * 0.42).clamp(260.0, 440.0);
+        ui.horizontal_top(|ui| {
+            ui.allocate_ui_with_layout(vec2(list_w, h), egui::Layout::top_down(egui::Align::Min), |ui| psk_list(app, ui, &reading, Some(ch), "CW"));
+            ui.allocate_ui_with_layout(vec2(w - list_w - 8.0, h), egui::Layout::top_down(egui::Align::Min), |ui| {
+                let hz = reading.channels.iter().find(|c| c.id == ch).map(|c| c.audio_hz);
+                ui.label(mono(hz.map_or(format!("SIGNAL {ch}"), |hz| format!("SIGNAL AT {hz:.0} Hz")), theme::text_3()));
+                let key = ch.to_string();
+                teleprinter(ui, "cw-one", lines(app, "CW", move |e| e.fields.get("channel") == Some(&key)), "Nothing from this signal yet.");
+            });
+        });
+        return;
+    }
+    if reading.channels.is_empty() && !app.decodes.iter().any(|d| d.ev.protocol == "CW") {
+        ui.label(RichText::new("Each Morse signal in the passband gets a row here, at its pitch and speed, with what it is sending. The band keys above tune the QRP and slow-CW calling frequencies; tune anywhere in a CW segment to skim it.").font(theme::sans(12.0)).color(theme::text_3()));
+        return;
+    }
+    psk_list(app, ui, &reading, None, "CW");
 }

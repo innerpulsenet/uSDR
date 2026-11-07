@@ -320,15 +320,43 @@ fn mode_tally(m: Mode) -> egui::Color32 {
     }
 }
 
-/// The HF data modes as the HF key's menu groups them, by who sends them.
-const HF_GROUPS: &[(&str, &[Mode])] = &[
-    ("AMATEUR", &[Mode::Ft8, Mode::Ft4, Mode::Psk31, Mode::Rtty]),
-    ("MARITIME", &[Mode::Wefax, Mode::Navtex, Mode::Sitor, Mode::Dsc]),
-    ("AVIATION", &[Mode::Hfdl]),
-    ("DATA LINKS", &[Mode::Pactor, Mode::Stanag]),
-    ("TIME", &[Mode::Wwv]),
-    ("BROADCAST", &[Mode::Drm]),
+/// The HF data modes as the HF key's menu lays them out: four domains, by
+/// who sends them, each a card of tiles.
+const HF_DOMAINS: &[(&str, &[Mode])] = &[
+    ("AMATEUR · WEAK SIGNAL & KEYBOARD", &[Mode::Ft8, Mode::Ft4, Mode::Wspr, Mode::Js8, Mode::Psk31, Mode::Rtty, Mode::Cw, Mode::Olivia, Mode::Mfsk, Mode::Hell, Mode::Sstv]),
+    ("MARITIME & WEATHER", &[Mode::Wefax, Mode::Navtex, Mode::Sitor, Mode::Dsc]),
+    ("AVIATION, MILITARY & DATA LINKS", &[Mode::Hfdl, Mode::Ale, Mode::Stanag, Mode::Pactor]),
+    ("TIME & BROADCAST", &[Mode::Wwv, Mode::Drm]),
 ];
+
+/// A mode's tile line under its name: what it is on the air, in a few
+/// words, as the decoder takes it.
+fn hf_spec(m: Mode) -> &'static str {
+    match m {
+        Mode::Ft8 => "3 kHz · 15 s",
+        Mode::Ft4 => "3 kHz · 7.5 s",
+        Mode::Psk31 => "every signal",
+        Mode::Rtty => "45–75 bd",
+        Mode::Wefax => "120 LPM charts",
+        Mode::Navtex => "518 · 490 kHz",
+        Mode::Sitor => "100 bd ARQ/FEC",
+        Mode::Dsc => "100 bd GMDSS",
+        Mode::Hfdl => "PSK · ACARS",
+        Mode::Stanag => "4285 · 110A",
+        Mode::Ale => "8-FSK · 125 bd",
+        Mode::Cw => "Morse · skimmer",
+        Mode::Js8 => "FT8-style chat",
+        Mode::Wspr => "2 min · beacons",
+        Mode::Olivia => "MFSK · deep fades",
+        Mode::Mfsk => "text · pictures",
+        Mode::Hell => "on-off · by eye",
+        Mode::Sstv => "color pictures",
+        Mode::Pactor => "PACTOR-I",
+        Mode::Wwv => "100 Hz code",
+        Mode::Drm => "OFDM · AAC",
+        _ => "",
+    }
+}
 
 /// One key on the mode board: a mode, or the key that lists the HF data
 /// modes.
@@ -368,7 +396,8 @@ const ROW_GAP: f32 = 4.0;
 fn key_label(k: Key, current: Mode) -> String {
     match k {
         Key::Mode(m) => m.label().to_string(),
-        Key::Hf if current.is_hf_data() => format!("{} ▾", current.label()),
+        // The key keeps its name, so it reads as the HF modes' menu.
+        Key::Hf if current.is_hf_data() => format!("HF·{} ▾", current.label()),
         Key::Hf => "HF ▾".into(),
     }
 }
@@ -378,7 +407,7 @@ fn key_width(ui: &Ui, k: Key) -> f32 {
     let w = |t: String| ui.painter().layout_no_wrap(t, theme::mono_bold(KEY_FONT), egui::Color32::PLACEHOLDER).size().x + KEY_PAD;
     match k {
         Key::Mode(m) => w(m.label().to_string()),
-        Key::Hf => Mode::ALL.iter().filter(|m| m.is_hf_data()).map(|m| w(format!("{} ▾", m.label()))).fold(w("HF ▾".into()), f32::max),
+        Key::Hf => Mode::ALL.iter().filter(|m| m.is_hf_data()).map(|m| w(format!("HF·{} ▾", m.label()))).fold(w("HF ▾".into()), f32::max),
     }
 }
 
@@ -416,7 +445,12 @@ fn modes_inner(app: &mut App, ui: &mut Ui, b: Option<usdr_proto::SubRx>, width: 
         }
         None => {
             let cur = app.status.mode;
-            if let Some(Key::Mode(m)) = mode_board(app, ui, "a", &board_a(app), cur, width, egui::Color32::TRANSPARENT)
+            let picked = mode_board(app, ui, "a", &board_a(app), cur, width, egui::Color32::TRANSPARENT);
+            if let Some((m, dial)) = take_quick_tune(ui) {
+                crate::tunestrip::tune_dial(app, m, &dial);
+                return;
+            }
+            if let Some(Key::Mode(m)) = picked
                 && cur != m
             {
                 app.set_mode(m);
@@ -520,38 +554,129 @@ fn mode_board(app: &App, ui: &mut Ui, id: &str, rows: &[Vec<Vec<Key>>], current:
                 }
             }
             Key::Hf => {
-                let offered = |m: Mode| app.modes.is_empty() || app.modes.iter().any(|c| c.mode == m);
-                egui::Popup::menu(&resp).show(|ui| {
-                    // By who sends it, a row of keys each.
-                    egui::Grid::new("hf-modes").num_columns(2).spacing(vec2(10.0, 4.0)).show(ui, |ui| {
-                        for (group, modes) in HF_GROUPS {
-                            let modes: Vec<Mode> = modes.iter().copied().filter(|m| offered(*m)).collect();
-                            if modes.is_empty() {
-                                continue;
-                            }
-                            ui.label(RichText::new(*group).font(theme::mono(9.5)).color(theme::text_3()).extra_letter_spacing(0.6));
-                            ui.horizontal(|ui| {
-                                ui.spacing_mut().item_spacing.x = 4.0;
-                                for m in modes {
-                                    let r = widgets::chip_key_w(ui, m.label(), current == m, mode_tally(m), 58.0);
-                                    let r = match desc(m) {
-                                        Some(d) => r.on_hover_text(d),
-                                        None => r,
-                                    };
-                                    if r.clicked() {
-                                        out = Some(Key::Mode(m));
-                                        ui.close();
-                                    }
-                                }
-                            });
-                            ui.end_row();
-                        }
-                    });
-                });
+                if let Some(m) = egui::Popup::menu(&resp).show(|ui| hf_matrix(app, ui, current)).and_then(|r| r.inner) {
+                    out = Some(Key::Mode(m));
+                }
             }
         }
     }
     out
+}
+
+/// The HF key's menu: the modes in four domain cards, a tile each with what
+/// the mode is, and under them the bands or stations of the mode the
+/// pointer is on, so a mode and where to hear it are one click. A tile
+/// returns its mode; a band or station key is left for the caller to tune
+/// (see [`take_quick_tune`]).
+fn hf_matrix(app: &App, ui: &mut Ui, current: Mode) -> Option<Mode> {
+    let offered = |m: Mode| app.modes.is_empty() || app.modes.iter().any(|c| c.mode == m);
+    let desc = |m: Mode| app.modes.iter().find(|c| c.mode == m).map(|c| c.description.clone()).filter(|d| !d.is_empty());
+    let hover_id = egui::Id::new("hf-matrix-hover");
+    let mut focus: Mode = ui.data(|d| d.get_temp(hover_id)).unwrap_or(if current.is_hf_data() { current } else { Mode::Ft8 });
+    let mut out = None;
+    const TILE: f32 = 104.0;
+    ui.set_width(2.0 * (4.0 * TILE + 3.0 * 4.0) + 3.0 * 10.0);
+    ui.label(RichText::new("HF · MF DATA").font(theme::mono_bold(11.0)).color(theme::text_2()));
+    ui.add_space(4.0);
+    for pair in HF_DOMAINS.chunks(2) {
+        ui.horizontal_top(|ui| {
+            for (title, modes) in pair {
+                egui::Frame::new().fill(theme::surface_2()).stroke(Stroke::new(1.0, theme::line())).corner_radius(egui::CornerRadius::same(4)).inner_margin(egui::Margin::same(6)).show(ui, |ui| ui.vertical(|ui| {
+                    ui.set_width(4.0 * TILE + 3.0 * 4.0);
+                    ui.label(RichText::new(*title).font(theme::mono(9.5)).color(theme::text_3()).extra_letter_spacing(0.6));
+                    ui.add_space(3.0);
+                    // Four tiles to a row; a domain with more takes rows.
+                    ui.horizontal_wrapped(|ui| {
+                        ui.set_max_width(4.0 * TILE + 3.0 * 4.0 + 1.0);
+                        ui.spacing_mut().item_spacing = vec2(4.0, 4.0);
+                        for &m in modes.iter().filter(|m| offered(**m)) {
+                            let r = hf_tile(ui, m, current == m, TILE);
+                            if r.hovered() {
+                                focus = m;
+                            }
+                            let r = match desc(m) {
+                                Some(d) => r.on_hover_text(d),
+                                None => r,
+                            };
+                            if r.clicked() {
+                                out = Some(m);
+                                ui.close();
+                            }
+                        }
+                    });
+                }));
+            }
+        });
+        ui.add_space(6.0);
+    }
+    ui.data_mut(|d| d.insert_temp(hover_id, focus));
+    // Where to hear the mode under the pointer.
+    egui::Frame::new().fill(alpha(theme::ink(), 0.6)).stroke(Stroke::new(1.0, theme::line())).corner_radius(egui::CornerRadius::same(4)).inner_margin(egui::Margin::same(6)).show(ui, |ui| {
+        ui.set_width(ui.available_width());
+        let dials = crate::tunestrip::dials(focus);
+        let dir = crate::stations::for_mode(focus);
+        let what = if !dials.is_empty() { "BANDS" } else if dir.is_some() { "STATIONS" } else { "" };
+        ui.label(RichText::new(format!("{} {what} · a key sets the mode and tunes", focus.label())).font(theme::mono(9.5)).color(theme::text_3()).extra_letter_spacing(0.4));
+        ui.add_space(2.0);
+        let tally = crate::widgets::protocol_color(focus.label());
+        let mut pick: Option<crate::tunestrip::Dial> = None;
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing.x = 4.0;
+            for dial in &dials {
+                let on = app.status.mode == focus && (app.inspect_hz() - dial.hz).abs() < 50.0;
+                let text = format!("{} {}", dial.band.trim_end_matches(" m"), crate::tuning::fmt_mhz(dial.hz, 3));
+                if widgets::chip_key(ui, &text, on, tally).clicked() {
+                    pick = Some(dial.clone());
+                }
+            }
+            if let Some(dir) = dir {
+                // The stations on the air now, then the rest, a frequency
+                // each that they use at this hour.
+                let (day, now) = crate::directory::utc_now();
+                let mut list: Vec<(&crate::directory::Station, bool)> = dir.stations.iter().map(|st| (st, crate::directory::now_and_next(st.schedule, day, now).0.is_some())).collect();
+                list.sort_by_key(|(_, on)| !*on);
+                for (st, on_air) in list.into_iter().take(10) {
+                    let Some(khz) = crate::directory::best_khz(st, now) else { continue };
+                    let hz = dir.dial_hz(khz);
+                    let on = app.status.mode == focus && (app.inspect_hz() - hz).abs() < 50.0;
+                    let text = format!("{}{} {}", if on_air { "● " } else { "" }, st.call, if khz.fract() == 0.0 { format!("{khz:.0}") } else { format!("{khz:.1}") });
+                    if widgets::chip_key(ui, &text, on, tally).on_hover_text(format!("{} · {}", st.name, crate::tunestrip::freq_label(dir, khz))).clicked() {
+                        pick = Some(crate::tunestrip::Dial { band: st.call.to_string(), hz, note: "" });
+                    }
+                }
+            }
+            if dials.is_empty() && dir.is_none() {
+                ui.label(RichText::new("Tune where you hear it: this mode has no fixed bands or stations.").font(theme::sans(11.0)).color(theme::text_3()));
+            }
+        });
+        if let Some(d) = pick {
+            ui.data_mut(|m| m.insert_temp(egui::Id::new("hf-quick-tune"), (focus, d)));
+            ui.close();
+        }
+    });
+    out
+}
+
+/// A band or station picked in the HF menu's quick-tune row, to tune now.
+pub fn take_quick_tune(ui: &Ui) -> Option<(Mode, crate::tunestrip::Dial)> {
+    ui.data_mut(|d| d.remove_temp::<(Mode, crate::tunestrip::Dial)>(egui::Id::new("hf-quick-tune")))
+}
+
+/// One mode in the HF menu: its name, and what it is under it.
+fn hf_tile(ui: &mut Ui, m: Mode, on: bool, w: f32) -> egui::Response {
+    let (r, resp) = ui.allocate_exact_size(vec2(w, 36.0), Sense::click());
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::RadioButton, true, on, m.label()));
+    let tally = mode_tally(m);
+    let hover = ui.ctx().animate_bool_with_time(resp.id.with("hv"), resp.hovered(), 0.12);
+    let p = ui.painter();
+    let bg = if on { alpha(tally, 0.22) } else { theme::lerp(theme::surface_3(), theme::surface_4(), hover) };
+    p.rect(r, egui::CornerRadius::same(3), bg, Stroke::new(1.0, if on { alpha(tally, 0.75) } else { theme::line() }), egui::StrokeKind::Inside);
+    p.text(r.left_top() + vec2(8.0, 5.0), egui::Align2::LEFT_TOP, m.label(), theme::mono_bold(11.5), if on { theme::text() } else { theme::lerp(theme::text_2(), theme::text(), hover) });
+    p.text(r.left_bottom() + vec2(8.0, -5.0), egui::Align2::LEFT_BOTTOM, hf_spec(m), theme::mono(9.5), theme::text_3());
+    if resp.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    resp
 }
 
 /// A filter's response drawn small: flat top, and skirts as steep as the

@@ -282,7 +282,7 @@ pub fn window(app: &mut App, ctx: &egui::Context) {
         .min_size(vec2(460.0, 300.0))
         .default_pos(pos2(screen.center().x - screen.width() * 0.27, screen.top() + 80.0))
         .show(ctx, |ui| {
-            controls(app, ui);
+            controls(app, ui, false);
             ui.add_space(6.0);
             let strip_h = if app.fax.pictures.len() > 1 { 74.0 } else { 0.0 };
             let canvas_h = (ui.available_height() - strip_h - 4.0).max(120.0);
@@ -301,7 +301,21 @@ fn cfg(app: &App) -> DigitalCfg {
     app.status.digital_cfg.clone().unwrap_or_default()
 }
 
-fn controls(app: &mut App, ui: &mut Ui) {
+/// The viewer in the dock: the same picture, controls and filmstrip, the
+/// station list left to the dock's own tuning row.
+pub fn docked(app: &mut App, ui: &mut Ui) {
+    controls(app, ui, true);
+    ui.add_space(4.0);
+    let strip_h = if app.fax.pictures.len() > 1 { 74.0 } else { 0.0 };
+    let canvas_h = (ui.available_height() - strip_h - 4.0).max(80.0);
+    canvas(app, ui, canvas_h);
+    if strip_h > 0.0 {
+        ui.add_space(4.0);
+        filmstrip(app, ui);
+    }
+}
+
+fn controls(app: &mut App, ui: &mut Ui, docked: bool) {
     let on = app.status.mode == Mode::Wefax;
     let reading = app.status.digital.clone().unwrap_or_default();
     let c = cfg(app);
@@ -341,9 +355,14 @@ fn controls(app: &mut App, ui: &mut Ui) {
                 app.post("/api/sdr/digital", json!({ "fax_stop": true }));
             }
         });
-        crate::directory::menu(app, ui, &crate::stations::WEFAX, theme::CYAN);
+        if !docked {
+            crate::directory::menu(app, ui, &crate::stations::WEFAX, theme::CYAN);
+        }
         crate::directory::schedule_menu(app, ui, &crate::stations::WEFAX, theme::CYAN);
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if docked && widgets::action_small(ui, "POP OUT ↗").on_hover_text("The viewer in its own window, as large as you like").clicked() {
+                app.fax.open = true;
+            }
             let idx = shown_index(app);
             if let Some(i) = idx
                 && app.fax.pictures[i].rows > 0

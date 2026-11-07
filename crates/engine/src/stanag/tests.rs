@@ -407,3 +407,23 @@ fn sweep_110a() {
         }
     }
 }
+
+/// Near 0 dB, where a real signal is often heard, the constellation is
+/// still named, from more frames; and the slow BPSK rates still decode.
+#[test]
+fn s4285_weak_signals_are_named_and_slow_rates_decode() {
+    use s4285::Interleave::Short;
+    let awgn = |snr: f64, seed: u64| Channel { offset_hz: -30.0, ppm: 60.0, snr_db: Some(snr), seed, ..Channel::clean(f64::from(FS)) };
+    for (bps, order) in [(300, 2), (1200, 4), (2400, 8)] {
+        for (name, ch) in [("0 dB", awgn(0.0, 3)), ("2 dB", awgn(2.0, 4)), ("poor 3 dB", hard(3.0, 5))] {
+            let o = s4285_case(bps, order, Short, 12.0, &ch, 2);
+            assert!(waveforms(&o.events).contains(&NAME_4285), "{bps} {name}");
+            assert_eq!(o.status.modulation, Some(s4285::modulation(order)), "{bps} bps at {name}");
+        }
+    }
+    for (bps, snr, need) in [(150, 0.0, 2), (75, -2.0, 2), (300, 2.0, 2)] {
+        let o = s4285_case(bps, 2, Short, 20.0, &awgn(snr, 6), 2);
+        assert!(o.decoded >= need, "{bps} bps at {snr} dB: {} decoded", o.decoded);
+    }
+}
+
