@@ -11,14 +11,13 @@ use num_complex::Complex32;
 use scannerd_dsp::{DecodeChain, OnePole};
 use scannerd_engine::am::AmDemod;
 use scannerd_engine::biquad::Cascade;
-use scannerd_engine::nbfm::NbfmDemod;
+use scannerd_engine::leveler::Leveler;
+use scannerd_engine::nbfm::{Demodulated, NbfmDemod};
+use scannerd_engine::noisegate::NoiseGate;
 use scannerd_engine::ssb::{Sideband, SsbDemod};
 use scannerd_engine::stereo::{WFM_AUDIO_SCALE, WFM_DC_TAU_S};
 use serde::Serialize;
 
-/// Narrowband FM deviation the audio is scaled to: 5 kHz peak plays at full
-/// scale, the 2.5 kHz of a narrowbanded channel at half.
-const NFM_DEVIATION_HZ: f32 = 5_000.0;
 /// The audio rate the analogue paths aim for.
 const AUDIO_RATE: f64 = 48_000.0;
 
@@ -43,7 +42,12 @@ pub struct SubRxStatus {
 }
 
 enum Demod {
-    Fm { fm: NbfmDemod, disc: Vec<f32>, dc: OnePole },
+    /// Receiver A's NFM listening chain: de-emphasis and the 300 Hz-3 kHz
+    /// voice band (which keeps CTCSS out), the noise gate, the leveler.
+    /// The raw discriminator this used to play had none of them: static
+    /// whenever the channel was idle, the tone under every call, and the
+    /// treble 6 dB/octave too loud.
+    Fm { fm: NbfmDemod, out: Demodulated, gate: NoiseGate, leveler: Leveler },
     Am { am: AmDemod },
     Ssb { ssb: SsbDemod },
     Wfm { fm: NbfmDemod, disc: Vec<f32>, deemph: OnePole, lp: Cascade, dc: OnePole, decim: usize, phase: usize },
@@ -113,10 +117,11 @@ impl SubRx {
                 phase: 0,
             },
             _ => Demod::Fm {
-                fm: NbfmDemod::with_deviation(fs, NFM_DEVIATION_HZ),
-                disc: Vec::new(),
-                // A 50 ms one-pole tracks the carrier offset out of the audio.
-                dc: OnePole::new(0.05 * fs as f32),
+                // At the deviation the gate's levels were measured with.
+                fm: NbfmDemod::new(fs),
+                out: Demodulated::default(),
+                gate: NoiseGate::new(fs),
+                leveler: Leveler::new(fs),
             },
         });
         self.chain = Some(chain);
@@ -157,12 +162,11 @@ impl SubRx {
                 ssb.process(&self.iq, &mut self.audio);
                 fs
             }
-            Demod::Fm { fm, disc, dc } => {
-                fm.discriminator_hz(&self.iq, disc);
-                for &hz in disc.iter() {
-                    let v = hz / NFM_DEVIATION_HZ;
-                    self.audio.push((v - dc.process(v)).clamp(-1.0, 1.0));
-                }
+            Demod::Fm { fm, out, gate, leveler } => {
+                fm.process(&self.iq, out);
+                gate.process(&mut out.voice, &out.noise);
+                leveler.process(&mut out.voice);
+                self.audio.extend(out.voice.iter().map(|v| v.clamp(-1.0, 1.0)));
                 fs
             }
             Demod::Wfm { fm, disc, deemph, lp, dc, decim, phase } => {
@@ -193,16 +197,93 @@ mod tests {
     /// A carrier 100 kHz above the centre of a 1 MS/s span, FM-modulated by
     /// a 1 kHz tone at 2.5 kHz deviation.
     fn span_with_fm_tone(n: usize) -> Vec<Complex32> {
+        span_with_fm(n, &[(1e3, 2.5e3)])
+    }
+
+    /// The same carrier, modulated by `tones` (Hz, deviation Hz).
+    fn span_with_fm(n: usize, tones: &[(f64, f64)]) -> Vec<Complex32> {
         let fs = 1e6;
         let mut phase = 0.0f64;
         (0..n)
             .map(|i| {
                 let t = i as f64 / fs;
-                let f = 100e3 + 2.5e3 * (2.0 * std::f64::consts::PI * 1e3 * t).sin();
+                let f = 100e3 + tones.iter().map(|&(hz, dev)| dev * (2.0 * std::f64::consts::PI * hz * t).sin()).sum::<f64>();
                 phase += 2.0 * std::f64::consts::PI * f / fs;
                 Complex32::new(phase.cos() as f32 * 0.3, phase.sin() as f32 * 0.3)
             })
             .collect()
+    }
+
+    /// Receiver B's audio for `iq` in NFM, and its rate.
+    fn listen(iq: &[Complex32]) -> (u32, Vec<f32>) {
+        let mut rx = SubRx::new(100.1e6, SdrMode::Nfm);
+        let mut audio = Vec::new();
+        let mut rate = 0;
+        for block in iq.chunks(20_000) {
+            if let Some((r, a)) = rx.process(block, 1e6, 100e6, 0.0) {
+                rate = r;
+                audio.extend(a.iter().map(|&v| v as f32 / 28_000.0));
+            }
+        }
+        (rate, audio)
+    }
+
+    fn amp_at(x: &[f32], hz: f64, fs: f64) -> f32 {
+        let w = 2.0 * std::f64::consts::PI * hz / fs;
+        let (mut re, mut im) = (0.0f64, 0.0f64);
+        for (i, &s) in x.iter().enumerate() {
+            re += s as f64 * (w * i as f64).cos();
+            im += s as f64 * (w * i as f64).sin();
+        }
+        (2.0 * (re * re + im * im).sqrt() / x.len() as f64) as f32
+    }
+
+    /// A CTCSS tone under the voice stays out of the audio, as it does on
+    /// receiver A. The raw discriminator played it at its deviation: a
+    /// 100 Hz tone at a fifth of the voice's level.
+    #[test]
+    fn nfm_keeps_the_subaudible_tone_out() {
+        let (rate, audio) = listen(&span_with_fm(400_000, &[(1e3, 2.5e3), (100.0, 500.0)]));
+        let tail = &audio[audio.len() / 2..];
+        let voice = amp_at(tail, 1e3, f64::from(rate));
+        let tone = amp_at(tail, 100.0, f64::from(rate));
+        let db = 20.0 * (tone / voice).log10();
+        eprintln!("CTCSS {db:.1} dB under the voice");
+        assert!(db < -40.0, "CTCSS only {db:.1} dB under the voice");
+    }
+
+    /// An idle channel (noise, no carrier) is gated, not played as static.
+    #[test]
+    fn nfm_idle_channel_is_quiet() {
+        let mut s = 0x1234_5678u32;
+        let mut uniform = move || {
+            s ^= s << 13;
+            s ^= s >> 17;
+            s ^= s << 5;
+            s as f32 / u32::MAX as f32 - 0.5
+        };
+        let iq: Vec<Complex32> = (0..400_000).map(|_| Complex32::new(uniform(), uniform()) * 0.1).collect();
+        let (_, audio) = listen(&iq);
+        let tail = &audio[audio.len() / 2..];
+        let rms = (tail.iter().map(|v| v * v).sum::<f32>() / tail.len() as f32).sqrt();
+        let db = 20.0 * rms.max(1e-9).log10();
+        eprintln!("idle channel at {db:.1} dBFS");
+        assert!(db < -50.0, "idle channel plays at {db:.1} dBFS");
+    }
+
+    /// Treble is de-emphasized: a 2.5 kHz tone at the deviation of a 500 Hz
+    /// one comes out well under it (750 us de-emphasis and the 3 kHz voice
+    /// edge make about -14 dB across that span), where the raw
+    /// discriminator played them level.
+    #[test]
+    fn nfm_is_de_emphasized() {
+        let (rate, audio) = listen(&span_with_fm(400_000, &[(500.0, 1.2e3), (2_500.0, 1.2e3)]));
+        let tail = &audio[audio.len() / 2..];
+        let lo = amp_at(tail, 500.0, f64::from(rate));
+        let hi = amp_at(tail, 2_500.0, f64::from(rate));
+        let db = 20.0 * (hi / lo).log10();
+        eprintln!("2.5 kHz against 500 Hz: {db:.1} dB");
+        assert!((-16.0..-12.0).contains(&db), "2.5 kHz sits {db:.1} dB against 500 Hz");
     }
 
     #[test]
@@ -220,8 +301,9 @@ mod tests {
         assert_eq!(rate, 47_619, "1 MS/s decimates by 21 toward 48 kHz");
         let tail = &audio[audio.len() / 2..];
         let peak = tail.iter().map(|v| v.unsigned_abs()).max().unwrap_or(0);
-        // 2.5 kHz of a 5 kHz full scale: about half of 28 000.
-        assert!((10_000..18_000).contains(&peak), "peak {peak}");
+        // The leveler steers a steady tone to 0.1 RMS (+12 dB at most): a
+        // peak near 0.14 of full scale, 28 000.
+        assert!((2_500..8_000).contains(&peak), "peak {peak}");
     }
 
     #[test]
