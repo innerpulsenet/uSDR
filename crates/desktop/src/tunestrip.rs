@@ -37,6 +37,8 @@ pub fn dials(mode: Mode) -> Vec<Dial> {
         Mode::Wspr => data::WSPR_DIALS.iter().map(|(b, hz, n)| d(b, *hz, n)).collect(),
         Mode::Js8 => data::JS8_DIALS.iter().map(|(b, hz, n)| d(b, *hz, n)).collect(),
         Mode::Sstv => data::SSTV_DIALS.iter().filter(|(_, _, sb)| *sb == "USB").map(|(b, hz, _)| d(b, *hz, "SSTV calling frequency (upper sideband)")).collect(),
+        // Midway between the two channels, both in the span.
+        Mode::Ais => vec![d("AIS", 162_000_000.0, "Both AIS channels: 161.975 (A, 87B) and 162.025 MHz (B, 88B)")],
         Mode::Pactor => decoders::PACTOR_DIALS.iter().map(|(b, hz)| d(b, *hz, "US automatic digital station segment (47 CFR 97.221)")).collect(),
         _ => Vec::new(),
     }

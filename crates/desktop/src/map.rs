@@ -129,6 +129,15 @@ fn gather(app: &App, l: Layers) -> (Vec<Mark>, Vec<(Color32, Vec<(f32, f32)>)>) 
                     marks.push(Mark { lat, lon, kind: Kind::Ship { distress }, color: if distress { theme::ERR } else { widgets::protocol_color("DSC") }, label: from, detail: format!("{} · {who} · {}", local_hms(d.at), d.ev.summary), decode: Some(i), age });
                 }
             }
+            "AIS" if l.ships => {
+                let (Some(lat), Some(lon)) = (num(d, "lat"), num(d, "lon")) else { continue };
+                let mmsi = d.ev.fields.get("mmsi").cloned().unwrap_or_default();
+                if seen.insert(("ship", mmsi.clone())) {
+                    // The vessel's name from any of its reports, not only this one.
+                    let name = crate::aisview::name_of(app, &mmsi).unwrap_or_else(|| mmsi.clone());
+                    marks.push(Mark { lat, lon, kind: Kind::Ship { distress: false }, color: widgets::protocol_color("AIS"), label: name, detail: format!("{} · AIS · {}", local_hms(d.at), d.ev.summary), decode: Some(i), age });
+                }
+            }
             "FT8" | "FT4" | "WSPR" | "JS8" if l.amateur => {
                 let Some(grid) = d.ev.fields.get("grid") else { continue };
                 let Some((lat, lon)) = usdr_proto::station::grid_center(grid) else { continue };

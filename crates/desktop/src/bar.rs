@@ -354,7 +354,7 @@ fn tuning(app: &mut App, ui: &mut Ui) {
 fn mode_tally(m: Mode) -> egui::Color32 {
     match m {
         Mode::Nfm | Mode::Am | Mode::Usb | Mode::Lsb => theme::AMBER,
-        Mode::Wfm | Mode::Pager | Mode::Flex => theme::CYAN,
+        Mode::Wfm | Mode::Pager | Mode::Flex | Mode::Ais => theme::CYAN,
         m if m.is_hf_data() => theme::CYAN,
         Mode::P25 | Mode::Dmr | Mode::Nxdn | Mode::Packet => theme::OK,
         _ => theme::VIOLET,
@@ -375,7 +375,7 @@ const DATA_DOMAINS: &[(&str, &[Mode])] = &[
     ("VHF · UHF DIGITAL VOICE", &[Mode::P25, Mode::Dmr, Mode::Nxdn]),
     ("PAGING & PACKET", &[Mode::Packet, Mode::Pager, Mode::Flex]),
     ("AMATEUR · WEAK SIGNAL & KEYBOARD", &[Mode::Ft8, Mode::Ft4, Mode::Wspr, Mode::Js8, Mode::Psk31, Mode::Rtty, Mode::Cw, Mode::Olivia, Mode::Mfsk, Mode::Hell, Mode::Sstv]),
-    ("MARITIME & WEATHER", &[Mode::Wefax, Mode::Navtex, Mode::Sitor, Mode::Dsc]),
+    ("MARITIME & WEATHER", &[Mode::Ais, Mode::Dsc, Mode::Navtex, Mode::Sitor, Mode::Wefax]),
     ("AVIATION, MILITARY & DATA LINKS", &[Mode::Hfdl, Mode::Ale, Mode::Stanag, Mode::Pactor]),
     ("TIME & BROADCAST", &[Mode::Wwv, Mode::Drm]),
     ("SEARCH", &[Mode::Auto, Mode::Scan]),
@@ -406,6 +406,7 @@ fn hf_spec(m: Mode) -> &'static str {
         Mode::Pactor => "PACTOR-I",
         Mode::Wwv => "100 Hz code",
         Mode::Drm => "OFDM · AAC",
+        Mode::Ais => "VHF ships · 2 ch",
         Mode::P25 => "Phase 1 · C4FM",
         Mode::Dmr => "Tier II · TDMA",
         Mode::Nxdn => "4-FSK · 6.25k",
@@ -1318,7 +1319,7 @@ fn meter(app: &mut App, ui: &mut Ui, min_w: f32, max_w: f32, reserve: f32) {
         }
         // An HF data decoder owns the channel: the voice classifier has
         // nothing to say about it, so the bay reports the decoder instead.
-        if s.mode.is_hf_data() {
+        if s.mode.is_hf_data() || s.mode == Mode::Ais {
             let (busy, line) = hf_decoder_line(app);
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 6.0;

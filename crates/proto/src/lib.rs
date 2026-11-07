@@ -855,6 +855,9 @@ pub enum Mode {
     Packet,
     Pager,
     Flex,
+    /// Marine AIS: 9600 baud GMSK on both VHF channels (161.975 and
+    /// 162.025 MHz) at once, wherever they sit in the span.
+    Ais,
     /// HF weak-signal data: sideband audio cut into UTC slots and decoded,
     /// 15 s for FT8, 7.5 s for FT4.
     Ft8,
@@ -895,7 +898,7 @@ pub enum Mode {
 }
 
 impl Mode {
-    pub const ALL: [Mode; 34] = [
+    pub const ALL: [Mode; 35] = [
         Mode::Nfm,
         Mode::Am,
         Mode::Usb,
@@ -907,6 +910,7 @@ impl Mode {
         Mode::Packet,
         Mode::Pager,
         Mode::Flex,
+        Mode::Ais,
         Mode::Ft8,
         Mode::Ft4,
         Mode::Wefax,
@@ -944,6 +948,7 @@ impl Mode {
             Mode::Packet => "PACKET",
             Mode::Pager => "PAGER",
             Mode::Flex => "FLEX",
+            Mode::Ais => "AIS",
             Mode::Ft8 => "FT8",
             Mode::Ft4 => "FT4",
             Mode::Wefax => "WEFAX",
@@ -999,6 +1004,7 @@ impl Mode {
             Mode::Packet => "packet",
             Mode::Pager => "pager",
             Mode::Flex => "flex",
+            Mode::Ais => "ais",
             Mode::Ft8 => "ft8",
             Mode::Ft4 => "ft4",
             Mode::Wefax => "wefax",

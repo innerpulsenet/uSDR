@@ -1853,6 +1853,7 @@ pub fn mode_idle_text(m: Mode) -> &'static str {
         Mode::Wwv => "WWV · reading the time code",
         Mode::Drm => "DRM · finding the multiplex",
         Mode::Nfm => "listening · classifier on",
+        Mode::Ais => "AIS · both channels, 161.975 and 162.025",
     }
 }
 
@@ -3310,6 +3311,49 @@ mod tests {
             h.run_steps(2);
         }
         h.render().expect("render").save(dir.join("laptop-lo.png")).expect("save");
+    }
+
+    /// The AIS workspace with test vessels around a station, for a look by
+    /// eye: `USDR_QA_DIR=<dir> cargo test -p usdr-desktop qa_renders_ais -- --ignored`.
+    #[test]
+    #[ignore]
+    fn qa_renders_ais() {
+        let Some(dir) = std::env::var_os("USDR_QA_DIR").map(std::path::PathBuf::from) else { return };
+        let mut h = harness_with(Prefs { auto_connect: false, dock_height: 460.0, ..Default::default() }, 1600.0, 1000.0);
+        h.run_steps(2);
+        let st = proto::Station { callsign: "N0CALL".into(), grid: "FM19qg".into(), antenna: String::new(), report_spots: false };
+        h.state().wire.events.send(NetEvent::Station(st, proto::ReporterStatus::default())).unwrap();
+        {
+            let app = &mut h.state_mut().app;
+            app.status.mode = Mode::Ais;
+            app.status.freq_hz = 162.0e6;
+            app.status.rate_hz = 2e6;
+            app.dock_tab = DockTab::Decodes;
+        }
+        // (MMSI, type, lat, lon, sog, cog, name, kind)
+        let test: &[(&str, &str, f64, f64, f32, f32, &str, &str)] = &[
+            ("367000001", "1", 39.22, -76.55, 11.2, 145.0, "TEST CARGO ONE", "cargo"),
+            ("367000002", "1", 39.26, -76.58, 0.0, 0.0, "TEST TANKER", "tanker"),
+            ("367000003", "18", 39.31, -76.46, 6.4, 40.0, "TEST SLOOP", "sailing"),
+            ("367000004", "1", 39.18, -76.43, 9.8, 330.0, "TEST TUG", "tug"),
+            ("993660001", "21", 39.24, -76.50, 0.0, 0.0, "TEST LIGHT", ""),
+            ("003660001", "4", 39.27, -76.57, 0.0, 0.0, "", ""),
+        ];
+        for (mmsi, t, lat, lon, sog, cog, name, kind) in test {
+            let mut fields = std::collections::BTreeMap::new();
+            for (k, v) in [("mmsi", mmsi.to_string()), ("type", t.to_string()), ("lat", format!("{lat}")), ("lon", format!("{lon}")), ("sog", format!("{sog}")), ("cog", format!("{cog}")), ("name", name.to_string()), ("shipKind", kind.to_string())] {
+                if !v.is_empty() {
+                    fields.insert(k.to_string(), v);
+                }
+            }
+            let ev = proto::DecodeEvent { protocol: "AIS".into(), kind: "position report".into(), summary: format!("{name} · {sog} kn"), valid: true, fields };
+            h.state().wire.events.send(NetEvent::Decode { inspect_hz: 161.975e6, event: ev, at: std::time::SystemTime::now() }).unwrap();
+        }
+        h.run_steps(4);
+        h.render().expect("render").save(dir.join("ais.png")).expect("save");
+        h.get_by_label("DATA").click();
+        h.run_steps(4);
+        h.render().expect("render").save(dir.join("data-menu.png")).expect("save");
     }
 
     /// Renders the HF windows and views to PNGs for a look by eye, with a

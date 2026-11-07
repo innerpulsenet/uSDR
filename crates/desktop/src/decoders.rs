@@ -38,7 +38,7 @@ impl Family {
         match self {
             Family::Voice => "Digital voice calls, trunking grants and signaling (P25, DMR, NXDN, SmartNet and the rest) appear here. Pick P25, DMR or NXDN, or AUTO.",
             Family::Paging => "POCSAG and FLEX pages appear here. PAGER walks the paging channels around the tuned frequency; FLEX and PACKET decode the tuned channel.",
-            Family::Packet => "AX.25 packets, APRS positions and messages among them, appear here. PACKET decodes the tuned channel.",
+            Family::Packet => "AX.25 packets (APRS positions and messages among them) and AIS ship reports appear here. PACKET decodes the tuned channel; AIS hears both marine channels anywhere in the span.",
             Family::Broadcast => "A broadcast station's RDS (its name, RadioText, clock) and NOAA SAME alerts appear here. Tune WFM to a station for RDS.",
             Family::HfData => "HF data appears here: FT8 and FT4 at the end of each slot; RTTY, PSK31, NAVTEX, SITOR and PACTOR text as it is copied; DSC calls, HFDL aircraft messages, STANAG modems, the WWV time code and DRM broadcasts; radiofax pictures in their viewer. Pick a mode under HF; the keys beside its name tune its bands or stations.",
         }
@@ -49,6 +49,7 @@ impl Family {
         match m {
             Mode::P25 | Mode::Dmr | Mode::Nxdn => Some(Family::Voice),
             Mode::Pager | Mode::Flex => Some(Family::Paging),
+            Mode::Ais => Some(Family::Packet),
             Mode::Wfm => Some(Family::Broadcast),
             m if m.is_hf_data() => Some(Family::HfData),
             _ => None,
@@ -73,6 +74,7 @@ pub const DECODERS: &[Decoder] = &[
     Decoder { chip: "POCSAG", family: Family::Paging, matches: &["POCSAG"] },
     Decoder { chip: "FLEX", family: Family::Paging, matches: &["FLEX"] },
     Decoder { chip: "APRS", family: Family::Packet, matches: &["APRS", "AX.25"] },
+    Decoder { chip: "AIS", family: Family::Packet, matches: &["AIS"] },
     Decoder { chip: "RDS", family: Family::Broadcast, matches: &["RDS"] },
     Decoder { chip: "SAME", family: Family::Broadcast, matches: &["SAME"] },
     Decoder { chip: "FT8", family: Family::HfData, matches: &["FT8"] },

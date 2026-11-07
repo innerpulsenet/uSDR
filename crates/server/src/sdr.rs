@@ -126,6 +126,9 @@ pub const PACKET_BANDWIDTH_HZ: f32 = 25_000.0;
 /// The 929/931 MHz paging plans span about a megahertz; ±480 kHz at a 25 kHz
 /// raster is 39 channels, all inside a 2.048 MHz span's usable half (~920 kHz).
 pub const PAGER_HALF_BAND_HZ: f64 = 480_000.0;
+/// AIS's two channels and their filters, 161.96 to 162.04 MHz: the LO
+/// plan parks DC outside it.
+const AIS_BANDWIDTH_HZ: f32 = 80_000.0;
 
 /// AM channel width. Aviation voice is allocated 8.5 kHz (25 kHz spacing in
 /// the airband); 10 kHz covers broadcast shortwave without pulling in the
@@ -493,6 +496,9 @@ pub enum SdrMode {
     /// Dedicated Motorola FLEX pager decoding on the tuned channel with
     /// 4-FSK/2-FSK symbol eye and discriminator level scope.
     Flex,
+    /// Marine AIS: 9600 baud GMSK on both VHF channels, 161.975 and
+    /// 162.025 MHz, decoded at once from the span wherever they sit in it.
+    Ais,
     /// HF weak-signal data: the upper-sideband demodulator over a fixed
     /// 100–3100 Hz, its audio cut into UTC slots and decoded at the end of
     /// each, 15 s for FT8 and 7.5 s for FT4. The tuned frequency is the
@@ -724,6 +730,8 @@ impl SdrMode {
             // whole span, so the display should shade it — not the 15 kHz of
             // the (idle) per-channel demod chain.
             SdrMode::Pager => (2.0 * PAGER_HALF_BAND_HZ) as f32,
+            // Both channels and their filters: 161.96 to 162.04 MHz.
+            SdrMode::Ais => AIS_BANDWIDTH_HZ,
             SdrMode::Wfm => WFM_BANDWIDTH_HZ,
             SdrMode::Packet | SdrMode::Flex => PACKET_BANDWIDTH_HZ,
             SdrMode::P25 => C4FM_BANDWIDTH_HZ,
@@ -869,6 +877,7 @@ impl SdrMode {
             SdrMode::Auto => ("AUTO", "voice+data", "Every decoder at once on the tuned channel: classifier, P25, DMR, and all packet/paging paths"),
             SdrMode::Pager => ("PAGER", "data", "POCSAG+FLEX bank walked across the 25 kHz paging channels around the tuned frequency"),
             SdrMode::Flex => ("FLEX", "data", "Dedicated Motorola FLEX demodulator with symbol eye and discriminator scope"),
+            SdrMode::Ais => ("AIS", "data", "Marine AIS: positions, names and voyages of ships, base stations and aids to navigation, both channels (161.975 and 162.025 MHz) at once"),
             SdrMode::Ft8 => ("FT8", "data", "FT8 on upper sideband: every signal in the filter's passband above the dial (100–3100 Hz unless widened, up to 5 kHz), decoded at the end of every 15 s UTC slot"),
             SdrMode::Ft4 => ("FT4", "data", "FT4 on upper sideband: every signal in the filter's passband above the dial (100–3100 Hz unless widened, up to 5 kHz), decoded at the end of every 7.5 s UTC slot"),
             SdrMode::Wefax => ("WEFAX", "data", "HF radiofax on upper sideband: the 1900 Hz subcarrier decoded row by row into a picture, started by the station's tones"),
@@ -900,7 +909,7 @@ impl SdrMode {
             // Every mode streams something audible: the data modes carry
             // their live channel (PAGER's walking-bank channel audio, FLEX's
             // gated monitor) so the operator can hear what is being decoded.
-            delivers_audio: true,
+            delivers_audio: self != SdrMode::Ais,
             // WFM's are RDS: the station's name and RadioText.
             delivers_decode_events: true,
             bandwidth_hz: self.default_bandwidth_hz(),
@@ -921,7 +930,7 @@ impl SdrMode {
                 SdrMode::Usb | SdrMode::Lsb | SdrMode::Ft8 | SdrMode::Ft4 | SdrMode::Wefax | SdrMode::Rtty | SdrMode::Navtex | SdrMode::Psk31 | SdrMode::Sitor | SdrMode::Dsc | SdrMode::Hfdl | SdrMode::Pactor | SdrMode::Stanag | SdrMode::Ale | SdrMode::Cw | SdrMode::Js8 | SdrMode::Sstv | SdrMode::Wspr | SdrMode::Olivia | SdrMode::Mfsk | SdrMode::Hell => &["iq", "voice"],
                 SdrMode::Am | SdrMode::Wwv | SdrMode::Drm | SdrMode::P25 | SdrMode::Dmr | SdrMode::Nxdn | SdrMode::Scan => &["iq"],
                 // WFM's I/Q is 256 kHz and unreplayable; PAGER walks a bank.
-                SdrMode::Wfm | SdrMode::Pager => &[],
+                SdrMode::Wfm | SdrMode::Pager | SdrMode::Ais => &[],
             },
         }
     }
@@ -940,6 +949,7 @@ impl SdrMode {
             SdrMode::Packet,
             SdrMode::Pager,
             SdrMode::Flex,
+            SdrMode::Ais,
             SdrMode::Ft8,
             SdrMode::Ft4,
             SdrMode::Wefax,
@@ -2758,9 +2768,10 @@ impl Demod {
             SdrMode::Flex => Demod::Flex {
                 flex: FlexDecoder::new(fs_out),
             },
-            SdrMode::Pager => Demod::Packet {
+            SdrMode::Pager | SdrMode::Ais => Demod::Packet {
                 // The per-channel decoders are idle here: PAGER decodes from
-                // the wide span through the walking bank instead.
+                // the wide span through the walking bank instead, AIS through
+                // its own two-channel receiver.
                 aprs: AprsDecoder::new(fs_out),
                 pocsag: Vec::new(),
                 flex: FlexDecoder::idle(),
@@ -3167,6 +3178,109 @@ fn packet_event(packet: &scannerd_engine::aprs::AprsPacket) -> DecodeEvent {
         kind: "AX.25 UI frame".into(),
         summary: format!("{} > {}{} · {}", packet.from, packet.to, via, packet.text),
         // Only frames whose FCS checked out are handed back by the decoder.
+        valid: true,
+        fields,
+    }
+}
+
+/// An AIS message as a decode: what it says in a line, and every field it
+/// carried, positions as decimal degrees in `lat` and `lon` for the map.
+fn ais_event(f: &scannerd_engine::ais::AisFrame) -> DecodeEvent {
+    use scannerd_engine::ais::{kind_name, ship_type_name, status_name};
+    let m = &f.msg;
+    let mut fields = std::collections::BTreeMap::new();
+    let mut put = |k: &str, v: String| {
+        fields.insert(k.to_string(), v);
+    };
+    let mmsi = format!("{:09}", m.mmsi);
+    put("mmsi", mmsi.clone());
+    put("from", mmsi.clone());
+    put("channel", format!("{} {}", f.channel, if f.channel == 'A' { "161.975" } else { "162.025" }));
+    put("type", m.kind.to_string());
+    if let (Some(lat), Some(lon)) = (m.lat, m.lon) {
+        put("lat", format!("{lat:.5}"));
+        put("lon", format!("{lon:.5}"));
+    }
+    if let Some(v) = m.sog_kn {
+        put("sog", format!("{v:.1}"));
+    }
+    if let Some(v) = m.cog {
+        put("cog", format!("{v:.1}"));
+    }
+    if let Some(v) = m.heading {
+        put("heading", v.to_string());
+    }
+    if let Some(v) = m.status.map(status_name).filter(|s| !s.is_empty()) {
+        put("status", v.to_string());
+    }
+    if let Some(v) = &m.name {
+        put("name", v.clone());
+    }
+    if let Some(v) = &m.callsign {
+        put("callsign", v.clone());
+    }
+    if let Some(t) = m.ship_type {
+        put("shipType", t.to_string());
+        if !ship_type_name(t).is_empty() {
+            put("shipKind", ship_type_name(t).to_string());
+        }
+    }
+    if let Some(v) = &m.destination {
+        put("destination", v.clone());
+    }
+    if let Some(v) = m.imo {
+        put("imo", v.to_string());
+    }
+    if let Some(v) = &m.eta {
+        put("eta", v.clone());
+    }
+    if let Some(v) = m.draught_m {
+        put("draught", format!("{v:.1}"));
+    }
+    if let Some((bow, stern, port, stbd)) = m.dims
+        && bow + stern > 0
+    {
+        put("length", (bow + stern).to_string());
+        put("beam", (u16::from(port) + u16::from(stbd)).to_string());
+    }
+    if let Some(v) = m.altitude_m {
+        put("altitude", v.to_string());
+    }
+    if let Some(v) = &m.utc {
+        put("utc", v.clone());
+    }
+    let who = m.name.clone().unwrap_or_else(|| mmsi.clone());
+    let mut parts = vec![who];
+    match m.kind {
+        5 | 24 => {
+            if let Some(c) = &m.callsign {
+                parts.push(c.clone());
+            }
+            if let Some(t) = m.ship_type.map(ship_type_name).filter(|t| !t.is_empty()) {
+                parts.push(t.to_string());
+            }
+            if let Some(d) = &m.destination {
+                parts.push(format!("to {d}"));
+            }
+        }
+        4 => parts.extend(m.utc.clone()),
+        _ => {
+            if let Some(v) = m.sog_kn {
+                parts.push(format!("{v:.1} kn"));
+            }
+            if let Some(v) = m.cog {
+                parts.push(format!("{v:.0}°"));
+            }
+            if let Some(v) = m.status.map(status_name).filter(|s| !s.is_empty()) {
+                parts.push(v.to_string());
+            }
+        }
+    }
+    DecodeEvent {
+        protocol: "AIS".into(),
+        kind: kind_name(m.kind).into(),
+        summary: parts.join(" · "),
+        // Only frames whose FCS checked out are handed back.
         valid: true,
         fields,
     }
@@ -4116,6 +4230,10 @@ fn run_sdr(
     // PAGER: walking POCSAG+FLEX bank over the recorded span. Built lazily on
     // first Pager frame, rebuilt when the span rate changes.
     let mut pager_bank: Option<scannerd_engine::pager_bank::PagerBank> = None;
+    let mut ais_rx: Option<scannerd_engine::ais::AisReceiver> = None;
+    let mut ais_key: Option<(f64, f64)> = None;
+    let mut ais_frames: Vec<scannerd_engine::ais::AisFrame> = Vec::new();
+    let mut ais_logged = Instant::now();
     let mut pager_rate_cache = 0.0f64;
     let mut pager_live_audio: Vec<f32> = Vec::new();
     // Whether the pager sweep readout needs republishing (dwell stepped or
@@ -5485,6 +5603,21 @@ fn run_sdr(
             pager_bank = None;
         }
 
+        // AIS: both channels from the span, rebuilt when the span or the
+        // tuner's center moves. Out of the span, nothing is decoded.
+        if current_mode == SdrMode::Ais {
+            let center = tuned_freq + lo_offset_for(current_rate, lo_offset, current_mode);
+            let key = (current_rate, center);
+            if ais_key != Some(key) {
+                ais_key = Some(key);
+                ais_rx = scannerd_engine::ais::AisReceiver::hears(center, current_rate)
+                    .then(|| scannerd_engine::ais::AisReceiver::new(current_rate, scannerd_engine::ais::AIS_MID_HZ - center));
+            }
+        } else {
+            ais_rx = None;
+            ais_key = None;
+        }
+
         // A spur inside the channel corrupts the decode, not just the picture.
         // The inspect chain has already mixed the channel to DC, so a spur at
         // display offset `s` lands at `s - channel_offset` here.
@@ -5532,6 +5665,28 @@ fn run_sdr(
         // — ppm drift plus click imprecision — rides one skirt of the channel
         // filter and POCSAG/FLEX syncs get missed.
         let classification = match current_mode {
+            SdrMode::Ais => {
+                if let Some(rx) = ais_rx.as_mut() {
+                    ais_frames.clear();
+                    rx.process(&clean, &mut ais_frames);
+                    // Each channel's health in the journal every 30 s: what
+                    // tells "no ships in range" from "not hearing them".
+                    if ais_logged.elapsed() >= Duration::from_secs(30) {
+                        ais_logged = Instant::now();
+                        let [a, b] = rx.levels();
+                        eprintln!(
+                            "AIS: A {} ok, {} bad crc, {} implausible, {:.1}/{:.1} dBFS mean/peak · B {} ok, {} bad crc, {} implausible, {:.1}/{:.1} dBFS",
+                            a.good, a.bad, a.odd, a.mean_dbfs, a.peak_dbfs, b.good, b.bad, b.odd, b.mean_dbfs, b.peak_dbfs
+                        );
+                    }
+                    for f in ais_frames.drain(..) {
+                        let hz = if f.channel == 'A' { scannerd_engine::ais::AIS_A_HZ } else { scannerd_engine::ais::AIS_B_HZ };
+                        decode_history.note(hz, "AIS");
+                        let _ = events.send(SdrEvent::Decode { inspect_hz: hz, event: ais_event(&f) });
+                    }
+                }
+                ClassificationResult::default()
+            }
             SdrMode::Pager => {
                 // Feed the span into the walking bank; emit decoded pages.
                 if let Some(bank) = pager_bank.as_mut() {

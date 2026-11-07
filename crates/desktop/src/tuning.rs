@@ -15,7 +15,7 @@ pub fn mode_raster_hz(mode: Mode, near_hz: f64) -> f64 {
         Mode::Wwv | Mode::Drm => 1_000.0,
         Mode::Wfm => 100_000.0,
         Mode::Packet | Mode::Flex => 2_500.0,
-        Mode::Pager => 25_000.0,
+        Mode::Pager | Mode::Ais => 25_000.0,
         // Airband is on the 8.33 kHz raster; everything else AM on 10 kHz.
         Mode::Am if (118e6..=137e6).contains(&near_hz) => 8_333.333_333,
         Mode::Am => 10_000.0,

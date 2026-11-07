@@ -6,6 +6,7 @@ pub mod afc;
 pub mod agc;
 pub mod am;
 pub mod afsk;
+pub mod ais;
 pub mod aprs;
 pub mod biquad;
 pub mod channel;

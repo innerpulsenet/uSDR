@@ -268,6 +268,11 @@ fn decodes(app: &mut App, ui: &mut Ui) {
         hf_data(app, ui, &visible);
         return;
     }
+    // AIS: the vessels heard, on their own chart and in a table.
+    if app.status.mode == Mode::Ais && app.decode_chip.is_none() && family.is_none_or(|f| f == Family::Packet) {
+        crate::aisview::show(app, ui);
+        return;
+    }
     let total = app.decodes.len();
     let avail = ui.available_size();
     let list_w = if app.selected_decode.is_some() { avail.x * 0.58 } else { avail.x };
