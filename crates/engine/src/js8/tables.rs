@@ -187,6 +187,9 @@ pub const NM: [[u8; 7]; 87] = [
 ];
 
 /// The three checks each bit takes part in.
+/// The layered decoder walks the checks alone; the tests hold this list
+/// against them.
+#[cfg(test)]
 pub const MN: [[u8; 3]; 174] = [
     [1, 25, 69],
     [2, 5, 73],

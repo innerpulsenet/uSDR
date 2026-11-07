@@ -388,3 +388,27 @@ fn threshold_sweep() {
         eprintln!("{} crashes {n}x{ms}ms@{gain}: TOTAL {total_ok}/{total_sent}, {total_false} false, {:?} per slot", p.label(), time / 84);
     }
 }
+
+/// Slots of noise alone, half of them with crashes: anything that decodes
+/// is false.
+/// `cargo test --release -p scannerd-engine ft8::tests::false_decodes -- --ignored --nocapture`
+#[test]
+#[ignore]
+fn false_decodes() {
+    for p in [Protocol::Ft8, Protocol::Ft4] {
+        let mut n = 0;
+        let slots = 60u64;
+        for seed in 0..slots {
+            let mut audio = slot_with(p, &[], 0.0, 1000 + seed);
+            if seed % 2 == 1 {
+                add_crashes(&mut audio, 4, 15.0, 30.0, seed);
+            }
+            let d = decode_slot_budget(p, &audio, &mut CallHashes::default(), F_MIN_HZ, F_MAX_HZ, std::time::Duration::MAX);
+            for d in &d {
+                eprintln!("{} seed {seed}: {}", p.label(), d.text);
+            }
+            n += d.len();
+        }
+        eprintln!("{}: {n} false decodes in {slots} slots of noise", p.label());
+    }
+}
