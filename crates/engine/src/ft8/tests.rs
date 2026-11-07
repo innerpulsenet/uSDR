@@ -412,3 +412,57 @@ fn false_decodes() {
         eprintln!("{}: {n} false decodes in {slots} slots of noise", p.label());
     }
 }
+
+/// A crowded band: strong signals with weaker ones partly under them, as on
+/// 20 m on a good afternoon, counting how many of each decode:
+/// `cargo test --release -p scannerd-engine ft8::tests::crowded_sweep -- --ignored --nocapture`
+#[test]
+#[ignore]
+fn crowded_sweep() {
+    const TO: [&str; 6] = ["K1ABC", "W9XYZ", "N0AB", "G4ABC", "JA1XYZ", "VK2DEF"];
+    const DE: [&str; 6] = ["KA9Q", "DL1ABC", "F5XYZ", "W1AW", "OH2BH", "PY2AB"];
+    let p = if std::env::var("SWEEP_FT4").is_ok() { Protocol::Ft4 } else { Protocol::Ft8 };
+    let shift = if p == Protocol::Ft4 { 4.0 } else { 0.0 };
+    let len = p.slot_secs() as f32;
+    let mut time = std::time::Duration::ZERO;
+    let mut slots = 0;
+    for weak_db in [-20.0f32, -18.0, -16.0, -14.0] {
+        let (mut strong_ok, mut weak_ok, mut bad, mut n) = (0, 0, 0, 0);
+        for slot in 0..10u64 {
+            let mut noise = Noise(slot * 104_729 + 3);
+            let mut audio: Vec<f32> = (0..(len * RATE_HZ) as usize).map(|_| noise.gauss()).collect();
+            let mut texts = Vec::new();
+            for i in 0..6 {
+                let base = 300.0 + i as f32 * 440.0 + slot as f32 * 7.3;
+                // Under the strong one by a few tones, starting a little later.
+                let offset = [12.5f32, 18.75, 25.0, 31.25, 9.4, 21.9][(i + slot as usize) % 6] * if p == Protocol::Ft4 { 3.33 } else { 1.0 };
+                for (k, (freq, dt, db)) in [(base, -0.1, -4.0 + shift), (base + offset, 0.2 + 0.05 * i as f32, weak_db + shift)].into_iter().enumerate() {
+                    let text = format!("{} {} -{:02}", TO[(i + slot as usize + k) % 6], DE[(i + k * 3) % 6], 10 + i + 7 * k);
+                    let wave = synthesize(p, &text, freq, p.nominal_start_s() + dt, len).expect("packs");
+                    let a = amplitude(db, RATE_HZ);
+                    for (x, w) in audio.iter_mut().zip(wave) {
+                        *x += a * w;
+                    }
+                    texts.push((text, k));
+                }
+            }
+            let t = std::time::Instant::now();
+            let d = decode_slot_budget(p, &audio, &mut CallHashes::default(), F_MIN_HZ, F_MAX_HZ, std::time::Duration::MAX);
+            time += t.elapsed();
+            slots += 1;
+            n += 6;
+            for d in &d {
+                match texts.iter().find(|(t, _)| *t == d.text) {
+                    Some((_, 0)) => strong_ok += 1,
+                    Some(_) => weak_ok += 1,
+                    None => {
+                        bad += 1;
+                        eprintln!("  false: {}", d.text);
+                    }
+                }
+            }
+        }
+        eprintln!("{} crowded, weak at {weak_db:+}: strong {strong_ok}/{n}, weak {weak_ok}/{n}, {bad} false", p.label());
+    }
+    eprintln!("{} crowded: {:?} per slot", p.label(), time / slots);
+}

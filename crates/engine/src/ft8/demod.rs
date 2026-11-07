@@ -366,6 +366,12 @@ fn erf(x: f32) -> f32 {
 /// Continuous-phase Gaussian-filtered FSK for a tone sequence, unit
 /// amplitude, at `rate`, the first and last symbols ramped.
 pub fn gfsk(protocol: Protocol, tones: &[u8], f0: f32, rate: f32) -> Vec<f32> {
+    gfsk_complex(protocol, tones, f0, rate).into_iter().map(|c| c.im).collect()
+}
+
+/// [`gfsk`] as a complex exponential, whose imaginary part is the
+/// transmission: the reference a decoded signal is subtracted with.
+pub fn gfsk_complex(protocol: Protocol, tones: &[u8], f0: f32, rate: f32) -> Vec<Complex32> {
     let sps = (rate * protocol.symbol_period()).round() as usize;
     let n = tones.len() * sps;
     let bt = protocol.gfsk_bt();
@@ -392,7 +398,7 @@ pub fn gfsk(protocol: Protocol, tones: &[u8], f0: f32, rate: f32) -> Vec<f32> {
     let mut phi = 0.0f64;
     let mut out = Vec::with_capacity(n);
     for k in 0..n {
-        out.push(phi.sin() as f32);
+        out.push(Complex32::new(phi.cos() as f32, phi.sin() as f32));
         phi = (phi + dphi[k + sps] as f64) % std::f64::consts::TAU;
     }
     let ramp = sps / 8;
