@@ -2253,6 +2253,11 @@ fn lo_offset_for(rate_hz: f64, on: bool, mode: SdrMode) -> f64 {
 /// residue is a hump about ±15 kHz wide (see [`zero_if_offset`]).
 const DC_NOTCH_HZ: f64 = 15_000.0;
 
+/// How much of each end of the sampled band the tuner's IF filter rolls off:
+/// at 8 MS/s with the RSP1A's 8 MHz filter the noise floor is flat from about
+/// 420 kHz in from either edge. A zoomed window is placed inside that.
+const EDGE_SKIRT_FRACTION: f64 = 0.06;
+
 /// Where to put the tuner so the LO's DC residue, and the display notch
 /// over it, stay out of a zoomed window. `None` when they already do, when
 /// there is nothing to move (no offset, not zoomed, an RTL's plan whose
@@ -2270,19 +2275,39 @@ fn lo_clear_freq(rate_hz: f64, lo_on: bool, mode: SdrMode, zoom: f64, current_fr
     if lo_off == 0.0 || zoom <= 1.0 || !lo_plan_zero_if() {
         return None;
     }
+    // The window is where it was asked to be (not clamped against the span's
+    // edge) and clear of the tuner's filter skirt.
+    let fits = |freq: f64| {
+        let w = ShownWindow::new(rate_hz, lo_on, mode, zoom, freq, view_hz);
+        (w.shown_centre - view_hz).abs() < 1.0
+            && (view_hz - (freq + lo_off)).abs() + w.shown_rate / 2.0 <= rate_hz / 2.0 - rate_hz * EDGE_SKIRT_FRACTION
+    };
     let clear = |freq: f64| {
         let w = ShownWindow::new(rate_hz, lo_on, mode, zoom, freq, view_hz);
-        (freq + lo_off - w.shown_centre).abs() > w.shown_rate / 2.0 + DC_NOTCH_HZ
+        fits(freq) && (freq + lo_off - w.shown_centre).abs() > w.shown_rate / 2.0 + DC_NOTCH_HZ
     };
     if clear(current_freq) {
         return None;
     }
     let display = display_rate_for(rate_hz, lo_on, mode);
+    let keeps = |f: f64| receivers.iter().all(|r| (r - f).abs() <= display * 0.45);
     let half = display / zoom / 2.0;
     let margin = (display / zoom * 0.1).max(10e3);
     let d = (half + DC_NOTCH_HZ + margin).max(lo_off);
     let side = if current_freq + lo_off >= view_hz { 1.0 } else { -1.0 };
-    [side, -side].into_iter().map(|s| view_hz + s * d - lo_off).find(|&f| clear(f) && receivers.iter().all(|r| (r - f).abs() <= display * 0.45))
+    if let Some(f) = [side, -side].into_iter().map(|s| view_hz + s * d - lo_off).find(|&f| clear(f) && keeps(f)) {
+        return Some(f);
+    }
+    // No placement keeps DC out (a wide window, 2x): the notch stays in view
+    // as it does at 1x. Pushing DC out anyway shoved the window against the
+    // span's edge, its first quarter the filter's skirt and the receiver off
+    // center. If an earlier move left it there, put the tuner back on the
+    // receiver.
+    if fits(current_freq) {
+        return None;
+    }
+    let f = view_hz - lo_off;
+    (fits(f) && keeps(f)).then_some(f)
 }
 
 /// What a mode change does to the LO.
@@ -8161,12 +8186,24 @@ mod tests {
         assert!(f + lo - view > ShownWindow::new(rate, true, mode, zoom, f, view).shown_rate / 2.0 + DC_NOTCH_HZ);
         // A second receiver the move would leave outside the span stops it.
         assert_eq!(lo_clear_freq(rate, true, mode, 2.0, view - lo, view, &[view, view + 3.7e6]).is_some_and(|f| (view + 3.7e6 - f).abs() > 3.6e6), false);
+        // At 2x DC cannot leave the window without pushing it into the
+        // band edge (the 159.3 MHz DMR case): the tuner stays, centered.
+        let (view, lo) = (159.309e6, lo_offset_for(rate, true, SdrMode::Dmr));
+        assert_eq!(lo_clear_freq(rate, true, SdrMode::Dmr, 2.0, view - lo, view, &[view]), None);
+        // Left at the edge by an earlier move, it goes back to the receiver.
+        let pushed = view + 2.355e6 - lo;
+        assert!(ShownWindow::new(rate, true, SdrMode::Dmr, 2.0, pushed, view).shown_centre - view > 0.2e6, "the old move clamped the window");
+        assert_eq!(lo_clear_freq(rate, true, SdrMode::Dmr, 2.0, pushed, view, &[view]), Some(view - lo));
+        let lo = lo_offset_for(rate, true, mode);
         // Every zoom from 2x: a window onto DC is moved off it, receivers kept.
         for z in [2.0, 4.0, 8.0, 16.0, 32.0] {
             let view = 7.074e6;
             let f = lo_clear_freq(rate, true, mode, z, view - lo, view, &[view]).unwrap_or(view - lo);
             let w = ShownWindow::new(rate, true, mode, z, f, view);
-            assert!((f + lo - w.shown_centre).abs() > w.shown_rate / 2.0, "{z}x: DC in the window");
+            assert!((w.shown_centre - view).abs() < 1.0, "{z}x: window not on the receiver");
+            if z >= 4.0 {
+                assert!((f + lo - w.shown_centre).abs() > w.shown_rate / 2.0, "{z}x: DC in the window");
+            }
             assert!((view - f).abs() <= display_rate_for(rate, true, mode) * 0.45, "{z}x: receiver left the span");
         }
     }
