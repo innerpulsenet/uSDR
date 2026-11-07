@@ -144,39 +144,81 @@ pub fn fit_symbols(samples: &[f32], ideal: &[f32]) -> (f32, f32) {
     ((slope * DEV_OUTER_HZ).abs().max(100.0), offset)
 }
 
-/// Two-times linear resampler: 8 kHz vocoder PCM to the 16 kHz audio rate.
+/// Two-times interpolator: 8 kHz vocoder PCM to the 16 kHz audio rate.
 ///
-/// The same trivial interpolator the P25 voice follower uses; the leveler
-/// downstream smooths whatever imaging survives.
+/// Doubling the rate mirrors the vocoder's 0–4 kHz speech into 4–8 kHz,
+/// and nothing downstream low-passes it away. Linear interpolation (the
+/// old filter here) left a 3 kHz sibilant's image only 7 dB down and drooped
+/// the sibilant itself by 3 dB: the metallic edge on P25, DMR and NXDN
+/// voice. This is a Kaiser-windowed halfband instead, 47 taps long: the
+/// input samples pass through untouched on the even outputs, and each odd
+/// output is a symmetric 24-sample sum — 12 multiplies per input sample.
+/// Flat to 0.1 dB through 3.3 kHz, images at least 58 dB down from 4.7 kHz
+/// up (the mirror of 3.3 kHz), and 12 input samples (1.5 ms) of delay.
 pub struct Resampler8k {
-    prev: i16,
-    started: bool,
+    /// The last `2 · HB_HALF` input samples, oldest first, as a ring.
+    hist: [f32; 2 * HB_HALF],
+    head: usize,
+    coeffs: [f32; HB_HALF],
 }
+
+/// Odd-phase taps on each side of the interpolated point.
+const HB_HALF: usize = 12;
 
 impl Resampler8k {
     pub fn new() -> Self {
         Self {
-            prev: 0,
-            started: false,
+            hist: [0.0; 2 * HB_HALF],
+            head: 0,
+            coeffs: halfband_coeffs(),
         }
     }
 
     pub fn process(&mut self, pcm: &[i16]) -> Vec<f32> {
+        let n = self.hist.len();
         let mut out = Vec::with_capacity(pcm.len() * 2);
         for &s in pcm {
-            if self.started {
-                // i16 + i16 overflows at full-scale extremes (the vocoder
-                // can emit both samples near ±32767); widen before adding.
-                out.push((i32::from(self.prev) + i32::from(s)) as f32 / 65536.0);
-            } else {
-                out.push(f32::from(s) / 32768.0);
-                self.started = true;
+            self.hist[self.head] = f32::from(s) / 32768.0;
+            self.head = (self.head + 1) % n;
+            // `head` now indexes the oldest sample; the interpolated point
+            // sits between ring offsets HB_HALF - 1 and HB_HALF from it.
+            let at = |k: usize| self.hist[(self.head + k) % n];
+            let mut mid = 0.0;
+            for (j, &c) in self.coeffs.iter().enumerate() {
+                mid += c * (at(HB_HALF - 1 - j) + at(HB_HALF + j));
             }
-            out.push(f32::from(s) / 32768.0);
-            self.prev = s;
+            out.push(at(HB_HALF - 1));
+            out.push(mid);
         }
         out
     }
+}
+
+/// The halfband's odd-phase taps, nearest the center first: `sinc(n / 2)`
+/// at odd `n` under a Kaiser window (β = 5.7, about 60 dB), scaled so the
+/// interpolated phase has unit gain at DC like the pass-through phase.
+fn halfband_coeffs() -> [f32; HB_HALF] {
+    const BETA: f64 = 5.7;
+    // Zeroth-order modified Bessel function of the first kind, by series.
+    fn i0(x: f64) -> f64 {
+        let (mut sum, mut term) = (1.0, 1.0);
+        for k in 1..30 {
+            term *= (x / (2.0 * k as f64)).powi(2);
+            sum += term;
+        }
+        sum
+    }
+    let half_len = (2 * HB_HALF) as f64;
+    let mut c = [0f64; HB_HALF];
+    for (j, v) in c.iter_mut().enumerate() {
+        let n = (2 * j + 1) as f64;
+        let x = std::f64::consts::PI * n / 2.0;
+        let sinc = x.sin() / x;
+        let w = i0(BETA * (1.0 - (n / half_len).powi(2)).sqrt()) / i0(BETA);
+        *v = sinc * w;
+    }
+    let dc: f64 = 2.0 * c.iter().sum::<f64>();
+    std::array::from_fn(|j| (c[j] / dc) as f32)
 }
 
 impl Default for Resampler8k {
@@ -188,6 +230,49 @@ impl Default for Resampler8k {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Power of `x` at `hz` (sample rate `fs`), by single-bin DFT.
+    fn power_at(x: &[f32], hz: f64, fs: f64) -> f64 {
+        let (mut re, mut im) = (0.0f64, 0.0f64);
+        for (n, &v) in x.iter().enumerate() {
+            let a = std::f64::consts::TAU * hz * n as f64 / fs;
+            re += f64::from(v) * a.cos();
+            im -= f64::from(v) * a.sin();
+        }
+        (re * re + im * im) / (x.len() as f64).powi(2)
+    }
+
+    /// (passband gain, image level relative to the tone) in dB for a tone at
+    /// `hz` through the 8→16 kHz upsampler.
+    fn upsample_response(hz: f64) -> (f64, f64) {
+        // A whole number of cycles over the measured window keeps the DFT
+        // bins clean: 8000 input samples is one second.
+        let pcm: Vec<i16> = (0..8_400)
+            .map(|n| (16_000.0 * (std::f64::consts::TAU * hz * n as f64 / 8_000.0).sin()) as i16)
+            .collect();
+        let mut rs = Resampler8k::new();
+        let out = rs.process(&pcm);
+        let window = &out[400..400 + 16_000];
+        let tone = power_at(window, hz, 16_000.0);
+        let image = power_at(window, 8_000.0 - hz, 16_000.0);
+        let ideal = (16_000.0f64 / 32_768.0).powi(2) / 4.0;
+        (10.0 * (tone / ideal).log10(), 10.0 * (image / tone).log10())
+    }
+
+    /// The vocoder's 0–4 kHz speech mirrors into 4–8 kHz when it is doubled
+    /// to the 16 kHz audio rate. Linear interpolation left those images
+    /// only 7 dB under a 3 kHz sibilant and drooped the tone itself by 3 dB;
+    /// nothing downstream low-passes, so the images reached the listener as
+    /// a metallic edge on every P25, DMR and NXDN call.
+    #[test]
+    fn the_upsampler_rejects_its_images_and_keeps_the_voice_band_flat() {
+        for hz in [300.0, 1_000.0, 2_000.0, 3_000.0, 3_300.0] {
+            let (gain, image) = upsample_response(hz);
+            eprintln!("{hz:>6.0} Hz: gain {gain:+.2} dB, image {image:.1} dB");
+            assert!(gain.abs() < 0.5, "{hz} Hz: passband gain {gain:.2} dB");
+            assert!(image < -50.0, "{hz} Hz: image only {image:.1} dB down");
+        }
+    }
 
     #[test]
     fn the_dibit_map_round_trips_through_the_slicer() {
