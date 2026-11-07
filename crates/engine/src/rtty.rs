@@ -487,6 +487,9 @@ const BLANK_MAX_S: f32 = 0.3;
 /// Power floor of a bin, per sample in the frame: digital silence must not
 /// make every whisper an impulse.
 const BLANK_MIN_POWER: f32 = 1e-12;
+/// How far below a frame's strongest bin another can be and still count as
+/// lit: 40 dB.
+const BLANK_RANGE: f32 = 1e-4;
 
 /// Finds impulse noise (lightning crashes, power-line bursts) in sideband
 /// audio and blanks it, delaying the audio by three quarters of a frame
@@ -631,6 +634,14 @@ impl Blanker {
             *w = Complex32::new(self.ring[(start + k) & self.mask] * self.win[k], 0.0);
         }
         self.fft.process_with_scratch(&mut self.work, &mut self.scratch);
+        // Digital silence teaches nothing: floors learned from it sit at
+        // the minimum, and the first signal after it, a clean tone's own
+        // window leakage, would light every bin for as long as the floors
+        // take to climb. They are learned from the first frame with
+        // something in it.
+        if !self.started && (self.lo..=self.hi).all(|k| self.work[k].norm_sqr() <= self.min_power) {
+            return;
+        }
         if !self.started {
             self.started = true;
             self.learn = self.learn_frames;
@@ -639,6 +650,13 @@ impl Blanker {
             }
             self.pair_floor = self.pair.map_or(0.0, |(a, b)| self.floor[a..=b].iter().sum());
         }
+        // A bin far below the frame's strongest is not lit, however far it
+        // stands over its own floor: an impulse spreads its power across
+        // the band, while the window's leakage from a clean tone falls away
+        // tens of dB within a few bins, and with no noise under it (a
+        // synthetic or digitally quiet input) its floors are that leakage,
+        // which every change of tone multiplies.
+        let peak = (self.lo..=self.hi).map(|k| self.work[k].norm_sqr()).fold(0.0f32, f32::max);
         let (mut voted, mut lit, mut pair_p) = (0u32, 0u32, 0.0f32);
         for k in self.lo..=self.hi {
             let p = self.work[k].norm_sqr();
@@ -646,7 +664,7 @@ impl Blanker {
                 pair_p += p;
             } else {
                 voted += 1;
-                lit += u32::from(p > BLANK_BIN_K * self.floor[k]);
+                lit += u32::from(p > BLANK_BIN_K * self.floor[k] && p > BLANK_RANGE * peak);
             }
         }
         let lit = lit as f32;

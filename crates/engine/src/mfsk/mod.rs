@@ -568,6 +568,9 @@ pub struct MfskDecoder {
     cfg: MfskConfig,
     resampler: Resampler,
     tmp: Vec<f32>,
+    /// Static crashes zeroed before anything else sees them (the RTTY
+    /// decoder's blanker, told where the tones are once the copy is in).
+    blanker: crate::rtty::Blanker,
     /// Samples at 8 kHz taken in.
     n: u64,
     l: usize,
@@ -709,6 +712,7 @@ impl MfskDecoder {
             cfg,
             resampler: Resampler::new(fs, RATE as f32, 3000.0, 5000.0),
             tmp: Vec::with_capacity(4096),
+            blanker: crate::rtty::Blanker::new(RATE as f32),
             n: 0,
             l,
             search,
@@ -767,9 +771,13 @@ impl MfskDecoder {
         self.resampler.process(audio, &mut self.tmp);
         let tmp = std::mem::take(&mut self.tmp);
         for &x in &tmp {
-            self.sample(x);
+            if let Some((y, _)) = self.blanker.push(x) {
+                self.sample(y);
+            }
         }
         self.tmp = tmp;
+        let half = self.cfg.mode.bandwidth_hz() as f64 / 2.0;
+        self.blanker.set_pair(self.center.filter(|_| self.open).map(|c| ((c - half) as f32, (c + half) as f32)));
         if !self.lines.is_empty() && self.now_s() - self.last_char > FLUSH_S {
             self.flush_text();
         }

@@ -810,6 +810,10 @@ pub struct OliviaDecoder {
     /// to show it fits the signal better.
     hold: u64,
     tmp: Vec<f32>,
+    /// Static crashes zeroed before any receiver sees them (the RTTY
+    /// decoder's blanker, told where the signal is once one is locked).
+    blanker: crate::rtty::Blanker,
+    blanked: Vec<f32>,
     events: Vec<OliviaEvent>,
 }
 
@@ -846,6 +850,8 @@ impl OliviaDecoder {
             chains: cfgs.into_iter().map(Chain::new).collect(),
             hold,
             tmp: Vec::with_capacity(4096),
+            blanker: crate::rtty::Blanker::new(RATE),
+            blanked: Vec::with_capacity(4096),
             events: Vec::new(),
         }
     }
@@ -853,9 +859,20 @@ impl OliviaDecoder {
     pub fn push(&mut self, audio: &[f32]) {
         self.tmp.clear();
         self.resampler.process(audio, &mut self.tmp);
-        for c in self.chains.iter_mut() {
-            c.push(&self.tmp);
+        self.blanked.clear();
+        for &x in &self.tmp {
+            if let Some((y, _)) = self.blanker.push(x) {
+                self.blanked.push(y);
+            }
         }
+        for c in self.chains.iter_mut() {
+            c.push(&self.blanked);
+        }
+        let band = self.chains.iter().find(|c| c.locked()).map(|c| {
+            let center = c.found_center.unwrap_or(c.cfg.center_hz);
+            (center - c.cfg.bandwidth_hz / 2.0, center + c.cfg.bandwidth_hz / 2.0)
+        });
+        self.blanker.set_pair(band);
         let now = self.chains[0].samples;
         self.release(now.saturating_sub(self.hold));
         for c in self.chains.iter_mut() {
@@ -1139,6 +1156,35 @@ mod tests {
                 (snr, worst)
             })
             .collect()
+    }
+
+    /// Character errors under static crashes (two and five a second, 20 to
+    /// 35 dB over the signal), with the blanker and, under
+    /// `USDR_NO_BLANK`, without:
+    /// `cargo test --release -p scannerd-engine olivia::tests::impulse_sweep -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn impulse_sweep() {
+        let fs = 47_904.0;
+        let long: String = TEXT.repeat(2);
+        for cfg in [OliviaConfig::default(), OliviaConfig::new(16, 500.0, 1500.0), OliviaConfig::new(32, 1000.0, 1500.0)] {
+            for snr in [0.0f32, -6.0, -10.0] {
+                for rate in [0.0f32, 2.0, 5.0] {
+                    let mut total = 0.0;
+                    for seed in 1..=3u64 {
+                        let mut rng = Rng::new(seed * 101);
+                        let mut x = olivia_tx(&long, cfg, fs, 60.0, 30.0, 0.3, &mut rng);
+                        add_noise(&mut x, 0.3, snr, fs, &mut rng);
+                        if rate > 0.0 {
+                            crate::rtty::testsig::add_impulses(&mut x, 0.3, fs, rate, &mut rng);
+                        }
+                        let mut dec = OliviaDecoder::new(fs, cfg);
+                        total += cer(&long, &run(&mut dec, &x)).min(1.0);
+                    }
+                    eprintln!("{} {snr:+} dB, {rate} crashes/s: CER {:.3}", cfg.label(), total / 3.0);
+                }
+            }
+        }
     }
 
     /// The SNR at which 8/500 copies with under 2% character errors.

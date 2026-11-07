@@ -223,7 +223,13 @@ pub fn measure(bb: &Baseband, f0: f32, start_s: f32, sent: &[u8]) -> (f32, f32, 
 /// refined frequency and start.
 pub fn decode(bb: &Baseband, f0: f32, start_s: f32, iters: usize) -> Option<([u8; 10], f32, f32)> {
     let p = bb.protocol;
-    let Aligned { cs, freq, start } = align(bb, f0, start_s);
+    let Aligned { mut cs, freq, start } = align(bb, f0, start_s);
+    // Symbols a crash struck, brought down as in the first pass
+    // ([`super::demod::loud_symbol_gains`]).
+    let rms: Vec<f32> = cs.iter().map(|row| (row.iter().take(p.tones()).map(|c| c.norm_sqr()).sum::<f32>() / p.tones() as f32).sqrt()).collect();
+    for (row, g) in cs.iter_mut().zip(super::demod::loud_symbol_gains(&rms)) {
+        row.iter_mut().for_each(|c| *c *= g);
+    }
     for nsym in 1..=3 {
         let llr = metrics(p, &cs, nsym);
         let (cw, errors) = ldpc::bp_decode(&llr, iters);

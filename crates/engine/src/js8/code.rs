@@ -5,7 +5,9 @@
 //! 87 parity bits and the last 29 the message, three bits a symbol, most
 //! significant first, with no Gray mapping.
 
-use super::tables::{GENERATOR, MN, NM};
+use super::tables::{GENERATOR, NM};
+#[cfg(test)]
+use super::tables::MN;
 use crate::ft8::ldpc;
 
 pub use ldpc::N;
@@ -57,7 +59,7 @@ pub fn encode(payload: &[u8; 9], flags: u8) -> [u8; N] {
 /// Belief propagation, then the CRC: the payload and flag bits, and the
 /// codeword they came from, or `None` if either check fails.
 pub fn decode(llr: &[f32; N], iters: usize) -> Option<([u8; 9], u8, [u8; N])> {
-    let (cw, errors) = ldpc::bp_decode_with(llr, iters, &MN, &NM);
+    let (cw, errors) = ldpc::bp_decode_with(llr, iters, &NM);
     if errors > 0 {
         return None;
     }

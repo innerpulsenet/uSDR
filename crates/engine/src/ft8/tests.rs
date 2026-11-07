@@ -321,3 +321,148 @@ fn sensitivity() {
     let d = decode_slot(Protocol::Ft8, &audio, &mut CallHashes::default());
     eprintln!("busy band: {} of {} decoded in {:?}", d.len(), signals.len(), t.elapsed());
 }
+
+/// Broadband static crashes: `n` bursts of `ms` milliseconds at `gain`
+/// times the noise's own amplitude, spread over the slot.
+fn add_crashes(audio: &mut [f32], n: usize, ms: f32, gain: f32, seed: u64) {
+    let mut r = Noise(seed ^ 0x9e37_79b9_7f4a_7c15);
+    let len = (ms / 1000.0 * RATE_HZ) as usize;
+    for _ in 0..n {
+        let at = (r.uniform() * (audio.len() - len) as f64) as usize;
+        for x in &mut audio[at..at + len] {
+            *x += gain * r.gauss();
+        }
+    }
+}
+
+/// A fixed-seed sweep around the threshold, in quiet and under static
+/// crashes, counting decodes, false decodes and decode time:
+/// `cargo test --release -p scannerd-engine ft8::tests::threshold_sweep -- --ignored --nocapture`
+#[test]
+#[ignore]
+fn threshold_sweep() {
+    const TO: [&str; 6] = ["K1ABC", "W9XYZ", "N0AB", "G4ABC", "JA1XYZ", "VK2DEF"];
+    const DE: [&str; 5] = ["KA9Q", "DL1ABC", "F5XYZ", "W1AW", "OH2BH"];
+    let crashes = [(0usize, 0.0f32, 0.0f32), (4, 15.0, 30.0), (12, 8.0, 60.0)];
+    let p = if std::env::var("SWEEP_FT4").is_ok() { Protocol::Ft4 } else { Protocol::Ft8 };
+    // FT4's threshold sits some 4 dB above FT8's.
+    let shift = if p == Protocol::Ft4 { 4.0 } else { 0.0 };
+    let only: Option<usize> = std::env::var("SWEEP_CASE").ok().and_then(|v| v.parse().ok());
+    let crashes: Vec<_> = crashes.into_iter().enumerate().filter(|(i, _)| only.is_none_or(|o| o == *i)).map(|(_, c)| c).collect();
+    for (n, ms, gain) in crashes {
+        let (mut total_ok, mut total_false, mut total_sent) = (0, 0, 0);
+        let mut time = std::time::Duration::ZERO;
+        for snr in [-24.0f32, -23.0, -22.0, -21.0, -20.0, -19.0, -18.0] {
+            let snr = snr + shift;
+            let (mut ok, mut bad, mut sent) = (0, 0, 0);
+            for slot in 0..12u64 {
+                let texts: Vec<String> = (0..5).map(|i| format!("{} {} -{:02}", TO[(i + slot as usize) % 6], DE[i], 5 + i + slot as usize)).collect();
+                let leaked: Vec<&'static str> = texts.into_iter().map(|t| &*Box::leak(t.into_boxed_str())).collect();
+                let signals: Vec<Signal> = leaked
+                    .iter()
+                    .enumerate()
+                    .map(|(i, t)| Signal { text: t, freq: 400.0 + i as f32 * 480.0 + slot as f32 * 13.7, dt: ((i + slot as usize) % 7) as f32 * 0.15 - 0.3 })
+                    .collect();
+                let mut audio = slot_with(p, &signals, snr, slot * 7919 + 17);
+                if n > 0 {
+                    add_crashes(&mut audio, n, ms, gain, slot * 31 + 5);
+                }
+                let t = std::time::Instant::now();
+                let d = decode_slot_budget(p, &audio, &mut CallHashes::default(), F_MIN_HZ, F_MAX_HZ, std::time::Duration::MAX);
+                time += t.elapsed();
+                sent += signals.len();
+                for d in &d {
+                    if signals.iter().any(|s| s.text == d.text) {
+                        ok += 1
+                    } else {
+                        bad += 1;
+                        eprintln!("  false: {} (sent {:?})", d.text, signals.iter().map(|s| s.text).collect::<Vec<_>>());
+                    }
+                }
+            }
+            eprintln!("{} crashes {n}x{ms}ms@{gain}: {snr:+} dB {ok}/{sent} decoded, {bad} false", p.label());
+            total_ok += ok;
+            total_false += bad;
+            total_sent += sent;
+        }
+        eprintln!("{} crashes {n}x{ms}ms@{gain}: TOTAL {total_ok}/{total_sent}, {total_false} false, {:?} per slot", p.label(), time / 84);
+    }
+}
+
+/// Slots of noise alone, half of them with crashes: anything that decodes
+/// is false.
+/// `cargo test --release -p scannerd-engine ft8::tests::false_decodes -- --ignored --nocapture`
+#[test]
+#[ignore]
+fn false_decodes() {
+    for p in [Protocol::Ft8, Protocol::Ft4] {
+        let mut n = 0;
+        let slots = 60u64;
+        for seed in 0..slots {
+            let mut audio = slot_with(p, &[], 0.0, 1000 + seed);
+            if seed % 2 == 1 {
+                add_crashes(&mut audio, 4, 15.0, 30.0, seed);
+            }
+            let d = decode_slot_budget(p, &audio, &mut CallHashes::default(), F_MIN_HZ, F_MAX_HZ, std::time::Duration::MAX);
+            for d in &d {
+                eprintln!("{} seed {seed}: {}", p.label(), d.text);
+            }
+            n += d.len();
+        }
+        eprintln!("{}: {n} false decodes in {slots} slots of noise", p.label());
+    }
+}
+
+/// A crowded band: strong signals with weaker ones partly under them, as on
+/// 20 m on a good afternoon, counting how many of each decode:
+/// `cargo test --release -p scannerd-engine ft8::tests::crowded_sweep -- --ignored --nocapture`
+#[test]
+#[ignore]
+fn crowded_sweep() {
+    const TO: [&str; 6] = ["K1ABC", "W9XYZ", "N0AB", "G4ABC", "JA1XYZ", "VK2DEF"];
+    const DE: [&str; 6] = ["KA9Q", "DL1ABC", "F5XYZ", "W1AW", "OH2BH", "PY2AB"];
+    let p = if std::env::var("SWEEP_FT4").is_ok() { Protocol::Ft4 } else { Protocol::Ft8 };
+    let shift = if p == Protocol::Ft4 { 4.0 } else { 0.0 };
+    let len = p.slot_secs() as f32;
+    let mut time = std::time::Duration::ZERO;
+    let mut slots = 0;
+    for weak_db in [-20.0f32, -18.0, -16.0, -14.0] {
+        let (mut strong_ok, mut weak_ok, mut bad, mut n) = (0, 0, 0, 0);
+        for slot in 0..10u64 {
+            let mut noise = Noise(slot * 104_729 + 3);
+            let mut audio: Vec<f32> = (0..(len * RATE_HZ) as usize).map(|_| noise.gauss()).collect();
+            let mut texts = Vec::new();
+            for i in 0..6 {
+                let base = 300.0 + i as f32 * 440.0 + slot as f32 * 7.3;
+                // Under the strong one by a few tones, starting a little later.
+                let offset = [12.5f32, 18.75, 25.0, 31.25, 9.4, 21.9][(i + slot as usize) % 6] * if p == Protocol::Ft4 { 3.33 } else { 1.0 };
+                for (k, (freq, dt, db)) in [(base, -0.1, -4.0 + shift), (base + offset, 0.2 + 0.05 * i as f32, weak_db + shift)].into_iter().enumerate() {
+                    let text = format!("{} {} -{:02}", TO[(i + slot as usize + k) % 6], DE[(i + k * 3) % 6], 10 + i + 7 * k);
+                    let wave = synthesize(p, &text, freq, p.nominal_start_s() + dt, len).expect("packs");
+                    let a = amplitude(db, RATE_HZ);
+                    for (x, w) in audio.iter_mut().zip(wave) {
+                        *x += a * w;
+                    }
+                    texts.push((text, k));
+                }
+            }
+            let t = std::time::Instant::now();
+            let d = decode_slot_budget(p, &audio, &mut CallHashes::default(), F_MIN_HZ, F_MAX_HZ, std::time::Duration::MAX);
+            time += t.elapsed();
+            slots += 1;
+            n += 6;
+            for d in &d {
+                match texts.iter().find(|(t, _)| *t == d.text) {
+                    Some((_, 0)) => strong_ok += 1,
+                    Some(_) => weak_ok += 1,
+                    None => {
+                        bad += 1;
+                        eprintln!("  false: {}", d.text);
+                    }
+                }
+            }
+        }
+        eprintln!("{} crowded, weak at {weak_db:+}: strong {strong_ok}/{n}, weak {weak_ok}/{n}, {bad} false", p.label());
+    }
+    eprintln!("{} crowded: {:?} per slot", p.label(), time / slots);
+}

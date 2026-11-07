@@ -484,3 +484,32 @@ fn speed() {
         );
     }
 }
+
+/// Character errors under static crashes (two a second, 20 to 35 dB over
+/// the signal), with the blanker and, under `USDR_NO_BLANK`, without:
+/// `cargo test --release -p scannerd-engine mfsk::tests::impulse_sweep -- --ignored --nocapture`
+#[test]
+#[ignore]
+fn impulse_sweep() {
+    let fs = 47_904.0;
+    let text = TEXT.repeat(2);
+    for mode in [MfskMode::Mfsk16, MfskMode::Mfsk32] {
+        for snr in [0.0f32, -4.0, -8.0, -10.0] {
+            for rate in [0.0f32, 2.0, 5.0] {
+                let mut total = 0.0;
+                for seed in 1..=3u64 {
+                    let mut rng = Rng::new(seed * 131);
+                    let mut x = send_text(mode, &text).audio(fs, 1234.0, 20.0, 0.3);
+                    add_noise(&mut x, 0.3, snr, fs, &mut rng);
+                    if rate > 0.0 {
+                        crate::rtty::testsig::add_impulses(&mut x, 0.3, fs, rate, &mut rng);
+                    }
+                    let mut dec = MfskDecoder::new(fs, MfskConfig { mode, center_hz: None });
+                    let (got, _) = run(&mut dec, &x);
+                    total += cer(&text, &got).min(1.0);
+                }
+                eprintln!("{} {snr:+} dB, {rate} crashes/s: CER {:.3}", mode.name(), total / 3.0);
+            }
+        }
+    }
+}

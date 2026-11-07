@@ -327,3 +327,59 @@ fn sensitivity_sweep() {
         eprintln!("{snr:+} dB: {ok}/{all} decoded ({:.0}%), {extra} false, {:?} a slot", 100.0 * ok as f64 / all as f64, took / slots as u32);
     }
 }
+
+/// Weak signals a few hertz from strong ones at about the same start,
+/// where the second pass has to find them under what the first took out:
+/// `cargo test --release -p scannerd-engine wspr::tests::overlap_sweep -- --ignored --nocapture`
+#[test]
+#[ignore]
+fn overlap_sweep() {
+    let texts = messages(64);
+    let mut time = std::time::Duration::ZERO;
+    let mut runs = 0;
+    // WSPR_STRONG sets the strong signals' level, -10 dB unless given.
+    let strong_db: f64 = std::env::var("WSPR_STRONG").ok().and_then(|v| v.parse().ok()).unwrap_or(-10.0);
+    for weak_db in [-26.0f64, -24.0, -22.0, -20.0] {
+        let (mut strong, mut weak, mut bad, mut n) = (0, 0, 0, 0);
+        for slot in 0..6u64 {
+            let mut txs = Vec::new();
+            let mut levels = Vec::new();
+            for i in 0..4usize {
+                let base = 1410.0 + 48.0 * i as f64 + slot as f64 * 0.37;
+                let offset = [1.5, 2.5, 3.5, 4.5][(i + slot as usize) % 4] * if (i + slot as usize).is_multiple_of(2) { 1.0 } else { -1.0 };
+                let k = (slot as usize * 8 + i * 2) % 64;
+                txs.push(tx(&texts[k], base, (i as f64 - 1.5) * 0.8, (i as f64 - 1.5) * 0.3));
+                levels.push(strong_db);
+                txs.push(tx(&texts[k + 1], base + offset, (1.5 - i as f64) * 0.6, (i as f64 - 1.5) * 0.3 + 0.2));
+                levels.push(weak_db);
+            }
+            let len = (SLOT_KEEP_S * BASEBAND_HZ) as usize;
+            // Noise at the -30 dB reference, each signal scaled up from it.
+            let mut z = baseband_slot(&[], -30.0, 7000 + slot);
+            for (j, (t, db)) in txs.iter().zip(&levels).enumerate() {
+                let gain = 10f64.powf((db + 30.0) / 20.0) as f32;
+                let one = baseband_slot(std::slice::from_ref(t), 200.0, slot * 131 + j as u64);
+                for (v, s) in z.iter_mut().zip(one).take(len) {
+                    *v += s * gain;
+                }
+            }
+            let t = std::time::Instant::now();
+            let d = decode_baseband(&z, &mut CallHashes::default());
+            time += t.elapsed();
+            runs += 1;
+            n += 4;
+            for d in &d {
+                match txs.iter().position(|t| t.text == d.text) {
+                    Some(j) if j % 2 == 0 => strong += 1,
+                    Some(_) => weak += 1,
+                    None => {
+                        bad += 1;
+                        eprintln!("  false: {}", d.text);
+                    }
+                }
+            }
+        }
+        eprintln!("WSPR overlap, weak at {weak_db:+}: strong {strong}/{n}, weak {weak}/{n}, {bad} false");
+    }
+    eprintln!("WSPR overlap: {:?} a slot", time / runs);
+}

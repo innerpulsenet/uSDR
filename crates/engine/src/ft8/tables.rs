@@ -188,6 +188,9 @@ pub const NM: [[u8; 7]; 83] = [
 ];
 
 /// Each codeword bit: the three parity checks (1-origin) it takes part in.
+/// The layered decoder walks the checks alone; the tests hold this list
+/// against them.
+#[cfg(test)]
 pub const MN: [[u8; 3]; 174] = [
     [16, 45, 73],
     [25, 51, 62],
