@@ -20,8 +20,13 @@ const MARK: f32 = 1200.0;
 #[cfg(test)]
 const SPACE: f32 = 1800.0;
 const BAUD: f32 = 1200.0;
-/// One lane per sample across a baud at 16 kHz (≈13.3 samples/bit).
+/// Lanes across one baud, evenly spaced: one per sample at 16 kHz (≈13.3
+/// samples/bit), where the channel receiver runs.
 const PHASES: usize = 16;
+/// Top of the band the polarity is read from. MDC's tones are 1200 and
+/// 1800 Hz; above them the discriminator carries only FM noise, which
+/// rises with frequency.
+const LOWPASS_HZ: f32 = 2_000.0;
 
 /// The 40-bit sync word, transmitted MSB first: 0x07 then 0x092A446F.
 const SYNC: u64 = 0x07_09_2A_44_6F;
@@ -215,21 +220,32 @@ fn packet(word: [u8; 4], extra: Option<[u8; 4]>) -> MdcPacket {
 pub struct MdcDecoder {
     lanes: Vec<Lane>,
     highpass: Cascade,
+    /// Fourth-order Butterworth at [`LOWPASS_HZ`]. The slicer reads the
+    /// sign of one sample per bit, so without it every hertz of
+    /// discriminator noise up to Nyquist reached the decision: through an
+    /// FM channel at 16 kS/s, half the bursts were lost at 5 dB C/N, and
+    /// with it half are copied at about 1 dB.
+    lowpass: Cascade,
 }
 
 impl MdcDecoder {
     pub fn new(fs: f64) -> Self {
-        let n = PHASES.min((fs / f64::from(BAUD)).round().max(1.0) as usize);
+        let spb = fs / f64::from(BAUD);
+        let n = PHASES.min(spb.round().max(1.0) as usize);
         Self {
-            lanes: (0..n).map(|d| Lane::new(fs, d)).collect(),
+            lanes: (0..n)
+                .map(|d| Lane::new(fs, (d as f64 * spb / n as f64).round() as usize))
+                .collect(),
             // Receiver discriminator audio can carry a large mistuning offset
             // and CTCSS/DCS. Neither belongs in the polarity decision.
             highpass: Cascade::highpass(300.0, fs as f32, 2),
+            lowpass: Cascade::butterworth_lowpass(LOWPASS_HZ, fs as f32, 2),
         }
     }
 
     pub fn reset(&mut self) {
         self.highpass.reset();
+        self.lowpass.reset();
         for lane in &mut self.lanes {
             lane.reset();
         }
@@ -241,6 +257,7 @@ impl MdcDecoder {
         let mut out = None;
         for &x in audio {
             let x = self.highpass.process(x);
+            let x = self.lowpass.process(x);
             let mut decoded = false;
             for lane in &mut self.lanes {
                 let Some(bit) = lane.slicer.push(x) else {
@@ -458,6 +475,58 @@ mod tests {
             .collect();
         let mut dec = MdcDecoder::new(16_000.0);
         assert_eq!(dec.push(&audio), None);
+    }
+
+    /// Through an FM channel at 3 dB C/N (in the 16 kHz the receiver
+    /// delivers), with the lowpass ahead of the slicer, MDC is copied nearly
+    /// every time; reading the unfiltered discriminator's sign it was one
+    /// burst in two hundred.
+    #[test]
+    fn bursts_through_a_noisy_fm_channel_decode() {
+        let fs = 16_000.0f64;
+        let mut seed = 0x2545_F491_4F6C_DD1Du64;
+        let mut uniform = move || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            ((seed >> 11) as f64 + 0.5) / (1u64 << 53) as f64
+        };
+        let mut gauss = move || {
+            (-2.0 * uniform().ln()).sqrt() * (std::f64::consts::TAU * uniform()).cos()
+        };
+        let sigma = (10f64.powf(-3.0 / 10.0) / 2.0).sqrt();
+        let mut nbfm = crate::nbfm::NbfmDemod::new(fs);
+        let mut demod = crate::nbfm::Demodulated::default();
+        let mut dec = MdcDecoder::new(fs);
+        let mut phase = 0.0f64;
+        let mut copied = 0;
+        for k in 0..20u16 {
+            let unit = 0x2000 + k;
+            let mut audio = vec![0.0f32; 1600 + usize::from(k) * 7];
+            audio.extend(burst(&[[0x01, 0x00, (unit >> 8) as u8, unit as u8]], false));
+            audio.extend(vec![0.0f32; 1600]);
+            let iq: Vec<num_complex::Complex32> = audio
+                .iter()
+                .map(|&a| {
+                    // burst() peaks at 0.8: 2.4 kHz deviation.
+                    phase += std::f64::consts::TAU * 3000.0 * f64::from(a) / fs;
+                    num_complex::Complex32::new(
+                        (phase.cos() + sigma * gauss()) as f32,
+                        (phase.sin() + sigma * gauss()) as f32,
+                    )
+                })
+                .collect();
+            let mut hit = false;
+            for block in iq.chunks(320) {
+                nbfm.process(block, &mut demod);
+                if let Some(p) = dec.push(&demod.raw) {
+                    assert_eq!(p.unit_id, unit, "a burst decoded as another unit");
+                    hit = true;
+                }
+            }
+            copied += usize::from(hit);
+        }
+        assert!(copied >= 18, "only {copied} of 20 bursts copied at 3 dB C/N");
     }
 
     /// One flipped bit in the payload must not cost the packet: the FEC fixes

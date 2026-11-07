@@ -7570,6 +7570,13 @@ fn run_sdr(
                 // spectrum — the figure the squelch and the receivers see
                 // until the next frame, and the same measurement the
                 // candidate finder judged the carrier by.
+                //
+                // These read the full-span `smoothed`, not `shown`, so the
+                // shared sorted copy (made from `shown`) is not theirs:
+                // `channel_level` re-sorts only when the length differs, and
+                // a zoomed window as many bins as the span would otherwise
+                // hand every slot the zoom window's noise floor.
+                sorted_scratch.clear();
                 for slot in scan_slots.iter_mut().flatten() {
                     let (ch, nz) = channel_level(
                         &smoothed,

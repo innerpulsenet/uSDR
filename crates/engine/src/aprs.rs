@@ -1,6 +1,7 @@
 //! 1200-baud Bell 202 APRS (AX.25 UI) after NBFM.
 
 use crate::afsk::ToneSlicer;
+use crate::biquad::Cascade;
 
 const MARK: f32 = 1200.0;
 const SPACE: f32 = 2200.0;
@@ -9,7 +10,12 @@ const BAUD: f32 = 1200.0;
 /// and are comfortably inside normal APRS TX-delay preambles, while making a
 /// random discriminator collision exponentially less likely to arm a lane.
 const OPENING_FLAGS: u8 = 4;
-/// One lane per sample across a baud at 16 kHz (≈13.3 samples/bit).
+/// Band the tones are taken from: Bell 202 is 1200 and 2200 Hz, with the
+/// keying sidebands a few hundred hertz either side.
+const BAND_LO_HZ: f32 = 600.0;
+const BAND_HI_HZ: f32 = 3_000.0;
+/// Lanes across one baud, evenly spaced: one per sample at 16 kHz (≈13.3
+/// samples/bit), every five samples at 96 kHz.
 const PHASES: usize = 16;
 
 struct Lane {
@@ -46,6 +52,17 @@ pub struct AprsDiagnostics {
 }
 
 pub struct AprsDecoder {
+    /// Butterworth edges either side of the tones, second order below and
+    /// fourth above. The one-baud Goertzel is a poor filter on its own (its
+    /// Hann sidelobes reach the whole discriminator band), and an FM
+    /// discriminator's noise rises with frequency, so the noise above the
+    /// tones reached the mark/space decision. With pre-emphasized audio,
+    /// the usual case on air, this band copied about a fifth more packets
+    /// at the threshold; flat audio was unchanged. The low edge is kept
+    /// gentle: a fourth-order one there delays 1200 Hz against 2200 Hz
+    /// enough to lose a frame the FM-chain test sends.
+    band_hp: Cascade,
+    band_lp: Cascade,
     lanes: Vec<Lane>,
     dc_x1: f32,
     dc_y1: f32,
@@ -73,15 +90,22 @@ pub struct AprsPacket {
 
 impl AprsDecoder {
     pub fn new(fs: f64) -> Self {
-        let n = PHASES.min(
-            ToneSlicer::new(fs, MARK, SPACE, BAUD)
-                .samples_per_bit()
-                .max(1),
-        );
+        let spb = ToneSlicer::new(fs, MARK, SPACE, BAUD).samples_per_bit_f();
+        let n = PHASES.min((spb.round() as usize).max(1));
+        let fs32 = fs as f32;
         Self {
+            band_hp: Cascade::butterworth_highpass(BAND_LO_HZ, fs32, 1),
+            band_lp: Cascade::butterworth_lowpass(BAND_HI_HZ.min(0.45 * fs32), fs32, 2),
             lanes: (0..n)
                 .map(|d| Lane {
-                    slicer: ToneSlicer::new(fs, MARK, SPACE, BAUD).with_delay(d),
+                    // Lanes spread evenly over one baud. Stepping them one
+                    // sample apart covered the whole baud only at 16 kHz; at
+                    // the 96 kHz the packet chain runs at, sixteen lanes
+                    // spanned the first fifth of it, and a burst whose
+                    // symbol edges fell in that fifth had every lane hunting
+                    // its flags across a transition.
+                    slicer: ToneSlicer::new(fs, MARK, SPACE, BAUD)
+                        .with_delay((d as f32 * spb / n as f32).round() as usize),
                     last_mark: true,
                     ones: 0,
                     byte: 0,
@@ -105,6 +129,8 @@ impl AprsDecoder {
     }
 
     pub fn reset(&mut self) {
+        self.band_hp.reset();
+        self.band_lp.reset();
         self.dc_x1 = 0.0;
         self.dc_y1 = 0.0;
         self.dc_offset_hz = 0.0;
@@ -143,6 +169,7 @@ impl AprsDecoder {
     pub fn process(&mut self, audio: &[f32]) -> Vec<AprsPacket> {
         let mut out = Vec::new();
         for &x in audio {
+            let x = self.band_lp.process(self.band_hp.process(x));
             // Single-pole DC blocker (cutoff ~38 Hz at 16 kHz): removes carrier mistuning offset
             let clean_x = x - self.dc_x1 + 0.985 * self.dc_y1;
             self.dc_x1 = x;
@@ -207,10 +234,24 @@ impl Lane {
                 self.bits = 0;
                 self.byte = 0;
                 self.ones = 0;
-                if self.in_frame {
+                let closed_good = matches!(
+                    pkt,
+                    Some(Ax25Frame::Packet(_) | Ax25Frame::Unsupported)
+                );
+                if self.in_frame && (closed_good || self.since_flag <= 9) {
                     // A closing flag is also a legal opening flag for the
                     // next frame, so remain armed across a flag train.
                     self.opening_flags = OPENING_FLAGS;
+                } else if self.in_frame {
+                    // A flag after junk: noise, or the end of a frame that
+                    // failed its check. Staying armed here kept a lane in
+                    // frame for good once it had copied one packet, because
+                    // noise makes a flag every hundred-odd bits and each one
+                    // re-armed it: the lane never went back to hunting, its
+                    // clock steered on noise, and the whole bank sat on the
+                    // last burst's phase. This flag may still open a train.
+                    self.in_frame = false;
+                    self.opening_flags = 1;
                 } else {
                     self.opening_flags = if self.since_flag <= 9 {
                         self.opening_flags.saturating_add(1)
@@ -778,6 +819,48 @@ mod tests {
                 dec.diagnostics()
             );
         }
+    }
+
+    /// A channel carries one burst after another, with noise between, and
+    /// every one of them must decode, not only the first. Once a lane had
+    /// copied a packet it never left the frame (each noise flag re-armed
+    /// it), its clock steered on noise and the whole bank collapsed onto the
+    /// last burst's phase; the next burst decoded only if its symbol edges
+    /// happened to fall elsewhere. At 96 kHz, where the packet chain runs,
+    /// the sixteen lanes also covered only the first fifth of a baud.
+    #[test]
+    fn every_burst_of_a_busy_channel_decodes() {
+        let fs = 96_000.0f32;
+        let mut seed = 0x9E37_79B9_7F4A_7C15u64;
+        let mut rng = move || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            (seed >> 11) as f32 / (1u64 << 53) as f32
+        };
+        let mut dec = AprsDecoder::new(f64::from(fs));
+        let mut missed = Vec::new();
+        for k in 0..30 {
+            // Between 0.30 and 0.31 s of receiver noise: an arbitrary phase.
+            let gap = (fs * 0.3) as usize + (rng() * 1000.0) as usize;
+            let noise: Vec<f32> = (0..gap).map(|_| (rng() * 2.0 - 1.0) * 30_000.0).collect();
+            dec.process(&noise);
+            let frame = build_ui("APRS", "N1TEST-9", &format!("!4134.62N/07324.48W-burst {k}"));
+            let mut audio = crate::afsk::marks_to_audio(
+                &nrzi_tones(&stuff_nrzi(&frame)),
+                fs,
+                BAUD,
+                MARK,
+                SPACE,
+                2500.0,
+            );
+            audio.extend(std::iter::repeat_n(0.0, 400));
+            let want = format!("burst {k}");
+            if !dec.process(&audio).iter().any(|p| p.text.ends_with(&want)) {
+                missed.push(k);
+            }
+        }
+        assert!(missed.is_empty(), "bursts lost: {missed:?}");
     }
 
     #[test]
