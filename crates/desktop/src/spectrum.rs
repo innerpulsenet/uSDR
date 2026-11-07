@@ -578,7 +578,7 @@ impl Panafall {
     }
     fn y_for(&self, db: f32, r: Rect) -> f32 {
         let t = (db - self.min_db) / (self.max_db - self.min_db).max(1.0);
-        (r.bottom() - t * r.height()).clamp(r.top(), r.bottom())
+        (r.bottom() - t * r.height()).clamp(r.top(), r.bottom().max(r.top()))
     }
 
     pub fn range(&self) -> (f32, f32) {

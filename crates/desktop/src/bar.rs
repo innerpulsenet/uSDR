@@ -104,7 +104,7 @@ pub fn receiver_bar(app: &mut App, ui: &mut Ui) {
         Some(_) => Some(
             ui.horizontal_top(|ui| {
                 switch(app, ui);
-                readout_sized(app, ui, 40.0);
+                readout_sized(app, ui, 48.0);
                 tuning(app, ui);
                 modes(app, ui);
                 filter(app, ui, 140.0);
@@ -212,8 +212,11 @@ fn start_b(app: &mut App) {
     app.active_b = true;
 }
 
+/// The LCD's height: the bay's, so the glass fills it top to bottom.
+const READOUT_H: f32 = 84.0;
+
 fn readout(app: &mut App, ui: &mut Ui) {
-    readout_sized(app, ui, 46.0);
+    readout_sized(app, ui, 56.0);
 }
 
 fn readout_sized(app: &mut App, ui: &mut Ui, digits_px: f32) {
@@ -221,23 +224,31 @@ fn readout_sized(app: &mut App, ui: &mut Ui, digits_px: f32) {
     let hz = app.active_hz();
     let mut acts = Vec::new();
     let rm = app.reduce_motion();
-    bay(ui, if b.is_some() { "RECEIVER B" } else { "RECEIVER A" }, |ui| {
-        ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = 8.0;
-            let (mode, bw) = match &b {
-                Some(b) => (b.mode, b.bandwidth_hz),
-                None => (app.status.mode, app.status.bandwidth_hz),
-            };
-            ui.label(RichText::new(mode.label()).font(theme::mono_bold(10.0)).color(if b.is_some() { theme::VIOLET } else { theme::AMBER }));
-            ui.label(small(crate::tuning::fmt_hz(bw)));
-            let agc = match (app.status.gain_db, app.status.tuner_agc) {
-                (None, true) => if app.status.is_sdrplay() { "IF AGC".to_string() } else { "TUNER AGC".into() },
-                (None, false) => "AGC".into(),
-                (Some(g), _) => format!("MAN {g:.0} dB"),
-            };
-            ui.label(small(agc));
-        });
-        app.vfo.tint = Some(if b.is_some() { theme::VIOLET } else { theme::AMBER });
+    // No label over this bay: the receiver, its mode, width and gain are
+    // the LCD's own annunciators, and the glass takes the bay's height.
+    bay_with(ui, |_| {}, |ui| {
+        let (mode, bw) = match &b {
+            Some(b) => (b.mode, b.bandwidth_hz),
+            None => (app.status.mode, app.status.bandwidth_hz),
+        };
+        let gain = match (app.status.gain_db, app.status.tuner_agc) {
+            (None, true) => if app.status.is_sdrplay() { "IF AGC".to_string() } else { "TUNER AGC".into() },
+            (None, false) => "AGC".into(),
+            (Some(g), _) => format!("MAN {g:.0} dB"),
+        };
+        let is_b = b.is_some();
+        let tint = if is_b { theme::VIOLET } else { theme::AMBER };
+        let rec = if is_b { app.player_b.reading().recording.is_some() } else { app.player.reading().recording.is_some() };
+        app.vfo.tint = Some(tint);
+        app.vfo.annun = crate::vfo::Annunciators {
+            rx: if is_b { "B" } else { "A" },
+            mode: mode.label().to_string(),
+            bw: crate::tuning::fmt_hz(bw),
+            gain,
+            // Only what is worth seeing beside the frequency: a recording.
+            flags: vec![("● REC", rec, theme::EMBER)],
+        };
+        app.vfo.well_h = READOUT_H;
         app.vfo.ui(ui, hz, digits_px, rm, &mut acts);
     });
     for a in acts {
@@ -1231,7 +1242,7 @@ fn meter(app: &mut App, ui: &mut Ui, min_w: f32, max_w: f32) {
         if is_b {
             app.meter_b.ui_bar(ui, rm, mark);
             let snr = app.meter_b.snr.map_or(format!("{:>4} dB", "—"), |s| format!("{s:>4.1} dB"));
-            ui.label(small(format!("SNR {snr} · measured from the spectrum")));
+            ui.add(egui::Label::new(small(format!("SNR {snr} · measured from the spectrum"))).truncate());
             return;
         }
         app.meter.ui_bar(ui, rm, mark);

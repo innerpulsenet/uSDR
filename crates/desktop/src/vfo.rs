@@ -35,12 +35,29 @@ pub struct Vfo {
     roll: [Option<(f64, char, i8)>; DIGITS],
     /// The tint of the well's edge: the receiver the readout belongs to.
     pub tint: Option<Color32>,
+    /// The status line inside the glass, over the digits; empty for none.
+    pub annun: Annunciators,
+    /// The display's height, the digits centered in what the strip leaves;
+    /// 0 for just what they need.
+    pub well_h: f32,
+}
+
+/// The LCD's annunciators: which receiver, its mode, width and gain at the
+/// left, and flags at the right that are lit when on and ghosts when off.
+#[derive(Default, Clone)]
+pub struct Annunciators {
+    pub rx: &'static str,
+    pub mode: String,
+    pub bw: String,
+    pub gain: String,
+    /// Name, whether lit, and its lit color.
+    pub flags: Vec<(&'static str, bool, Color32)>,
 }
 
 impl Default for Vfo {
     fn default() -> Self {
         // The 10 kHz digit.
-        Self { selected: 5, entry: None, focus_entry: false, scroll_accum: 0.0, open_entry_request: false, cells: Vec::new(), shown: None, roll: [None; DIGITS], tint: None }
+        Self { selected: 5, entry: None, focus_entry: false, scroll_accum: 0.0, open_entry_request: false, cells: Vec::new(), shown: None, roll: [None; DIGITS], tint: None, annun: Annunciators::default(), well_h: 0.0 }
     }
 }
 
@@ -110,25 +127,37 @@ impl Vfo {
         // Seven-segment digits, drawn rather than set in type: taller than a
         // font's figures in the same width, with the unlit segments faintly
         // there, as on a radio's LCD.
-        let big = Seg { h: height * 0.74, w: height * 0.38 };
-        let small = Seg { h: height * 0.52, w: height * 0.27 };
-        let pitch = |g: &Seg| g.w + height * 0.09;
+        let big = Seg { h: height * 0.76, w: height * 0.36 };
+        let small = Seg { h: height * 0.54, w: height * 0.255 };
+        let pitch = |g: &Seg| g.w + height * 0.075;
         let (dw, sw) = (pitch(&big), pitch(&small));
         // `1 090.000 000`: the decimal point after the MHz digits, and a
         // thin gap at each thousands group either side of it.
-        let point = dw * 0.42;
-        let gap = dw * 0.30;
+        let point = dw * 0.40;
+        let gap = dw * 0.28;
         let widths: Vec<f32> = (0..DIGITS).map(|i| if i >= 7 { sw } else { dw }).collect();
         let shown_w: f32 = if no_ghz { widths[1..].iter().sum::<f32>() + gap } else { widths.iter().sum::<f32>() + 2.0 * gap };
+        let strip = !self.annun.rx.is_empty();
         let unit_font = theme::mono_bold(height * 0.24);
-        let unit_w = ui.painter().layout_no_wrap("MHz".into(), unit_font.clone(), theme::text_3()).size().x;
+        // With a strip the unit rides in it; without, after the digits.
+        let unit_w = if strip { 0.0 } else { ui.painter().layout_no_wrap("MHz".into(), unit_font.clone(), theme::text_3()).size().x + 10.0 };
+        let strip_h = if strip { 17.0 } else { 0.0 };
         // The glass sits in a bezel, the digits inset from its edges.
         let (pad_x, pad_y) = (14.0, 5.0);
-        let total = shown_w + point + 10.0 + unit_w + 2.0 * pad_x;
-        let (outer, resp) = ui.allocate_exact_size(vec2(total, height + 2.0 * pad_y), Sense::click());
+        let natural_h = height + 2.0 * pad_y + strip_h;
+        let outer_h = self.well_h.max(natural_h);
+        let total = shown_w + point + unit_w + 2.0 * pad_x;
+        let (outer, resp) = ui.allocate_exact_size(vec2(total, outer_h), Sense::click());
+        // Named for the receiver it reads, its label now being inside it.
+        if strip {
+            let name = format!("RECEIVER {}", self.annun.rx);
+            resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, &name));
+        }
         let tint = self.tint.unwrap_or(theme::AMBER);
         lcd_back(ui.painter(), outer, tint);
-        let rect = outer.shrink2(vec2(pad_x, pad_y));
+        // The digits' own band: under the strip, centered in what is left.
+        let spare = outer_h - natural_h;
+        let rect = Rect::from_min_size(pos2(outer.left() + pad_x, outer.top() + pad_y + strip_h + spare * 0.55), vec2(total - 2.0 * pad_x, height));
         let painter = ui.painter_at(outer.expand(2.0));
         let first_sig = s.find(|c: char| c != '0').unwrap_or(DIGITS - 1).min(3);
         let now = ui.input(|i| i.time);
@@ -210,14 +239,18 @@ impl Vfo {
             }
             if i == self.selected {
                 painter.rect_filled(
-                    Rect::from_min_max(pos2(cell.left() + 1.0, rect.bottom() - 1.0), pos2(cell.right() - 1.0, rect.bottom() + 1.0)),
+                    Rect::from_min_max(pos2(cell.left() + 1.0, rect.bottom() + 1.0), pos2(cell.right() - 1.0, rect.bottom() + 3.0)),
                     CornerRadius::same(1),
                     tint,
                 );
             }
             x += w;
         }
-        painter.text(pos2(x + 10.0, baseline), Align2::LEFT_BOTTOM, "MHz", unit_font, theme::alpha(lit_hz, 0.75));
+        if strip {
+            self.paint_strip(&painter, outer, pad_x, tint, lit, lit_hz);
+        } else {
+            painter.text(pos2(x + 10.0, baseline), Align2::LEFT_BOTTOM, "MHz", unit_font, theme::alpha(lit_hz, 0.75));
+        }
         lcd_glass(&painter, outer);
         if rolling {
             crate::anim::more(ui.ctx());
@@ -249,6 +282,63 @@ impl Vfo {
             self.open_entry(hz, None);
         }
         resp.on_hover_text("Wheel or click a digit to turn it · double-click or start typing to enter a frequency");
+    }
+
+    /// The annunciator strip across the top of the glass: the receiver's
+    /// letter as an inverse block, its mode, width and gain, and at the
+    /// right the flags and the unit.
+    fn paint_strip(&self, p: &egui::Painter, outer: Rect, pad_x: f32, tint: Color32, lit: Color32, lit_hz: Color32) {
+        let a = &self.annun;
+        let y = outer.top() + 5.0 + 7.0;
+        let f = theme::mono_bold(10.0);
+        let mut x = outer.left() + pad_x - 2.0;
+        // The receiver: a block of lit segment with the letter cut out.
+        let g = p.layout_no_wrap(format!("RX {}", a.rx), f.clone(), Color32::PLACEHOLDER);
+        let block = Rect::from_min_size(pos2(x, y - 7.0), vec2(g.size().x + 8.0, 14.0));
+        p.rect_filled(block.expand(1.5), CornerRadius::same(3), theme::alpha(tint, 0.12));
+        p.rect_filled(block, CornerRadius::same(2), theme::alpha(tint, 0.85));
+        p.galley(pos2(block.left() + 4.0, y - g.size().y / 2.0), g, theme::lerp(theme::ink(), Color32::BLACK, 0.4));
+        x = block.right() + 8.0;
+        // The unit's room at the right, which the words never reach into.
+        let unit_w = p.layout_no_wrap("MHz".into(), f.clone(), lit_hz).size().x;
+        let limit = outer.right() - pad_x + 2.0 - unit_w - 8.0;
+        let word = |t: &str, c: Color32, x: &mut f32| {
+            if t.is_empty() {
+                return;
+            }
+            let g = p.layout_no_wrap(t.to_string(), f.clone(), c);
+            if *x + g.size().x > limit {
+                return;
+            }
+            p.galley(pos2(*x, y - g.size().y / 2.0), g.clone(), c);
+            *x += g.size().x + 9.0;
+        };
+        word(&a.mode, lit, &mut x);
+        word(&a.bw, lit_hz, &mut x);
+        word(&a.gain, lit_hz, &mut x);
+        let left_end = x;
+        // From the right: the unit, then each flag, lit or a ghost.
+        let mut r = outer.right() - pad_x + 2.0;
+        let unit = p.layout_no_wrap("MHz".into(), f.clone(), lit_hz);
+        p.galley(pos2(r - unit.size().x, y - unit.size().y / 2.0), unit.clone(), theme::alpha(lit_hz, 0.8));
+        r -= unit.size().x + 10.0;
+        for (name, on, c) in a.flags.iter().rev() {
+            let g = p.layout_no_wrap(name.to_string(), theme::mono_bold(9.0), Color32::PLACEHOLDER);
+            let w = g.size().x;
+            if r - w < left_end {
+                break;
+            }
+            let col = if *on { *c } else { theme::alpha(lit, 0.08) };
+            if *on {
+                let glow = Rect::from_min_size(pos2(r - w, y - g.size().y / 2.0), g.size()).expand2(vec2(3.0, 1.0));
+                p.rect_filled(glow, CornerRadius::same(2), theme::alpha(*c, 0.12));
+            }
+            p.galley(pos2(r - w, y - g.size().y / 2.0), g, col);
+            r -= w + 8.0;
+        }
+        // A hairline under the strip, as the glass's printed rule.
+        let rule_y = outer.top() + 5.0 + 17.0 - 1.5;
+        p.line_segment([pos2(outer.left() + pad_x - 2.0, rule_y), pos2(outer.right() - pad_x + 2.0, rule_y)], Stroke::new(1.0, theme::alpha(lit, 0.07)));
     }
 
     pub fn step_selected(&self, dir: f64) -> f64 {
@@ -439,7 +529,7 @@ fn vgrad(p: &egui::Painter, r: Rect, top: Color32, bottom: Color32) {
 /// The display behind the digits: a bezel cut into the panel, and a panel
 /// of dark glass lit from behind in the receiver's color, brightest at its
 /// middle as a backlight falls off toward the frame.
-fn lcd_back(p: &egui::Painter, r: Rect, tint: Color32) {
+pub fn lcd_back(p: &egui::Painter, r: Rect, tint: Color32) {
     let cr = CornerRadius::same(5);
     // The bezel: a dark lip outside the glass and a catch of light below.
     let bezel = r.expand(2.0);
@@ -465,7 +555,7 @@ fn lcd_back(p: &egui::Painter, r: Rect, tint: Color32) {
 /// The glass over the digits: a frosted sheen across the top, a fine row
 /// texture like an LCD's cells, a shadow under the bezel's upper lip, and
 /// the glass's own edge.
-fn lcd_glass(p: &egui::Painter, r: Rect) {
+pub fn lcd_glass(p: &egui::Painter, r: Rect) {
     let cp = p.with_clip_rect(r.shrink(1.0));
     // Rows: a faint dark line every third point.
     let mut y = r.top() + 2.0;

@@ -1325,6 +1325,12 @@ impl App {
                 ui.label(egui::RichText::new(format!("{utc} UTC")).font(theme::mono(12.0)).color(theme::text_2()));
                 self.connection_chip(ui);
                 self.presence_badge(ui);
+                // The dial scale takes the middle the two ends leave.
+                let room = ui.available_width() - 28.0;
+                if self.have_status && room >= crate::dialscale::MIN_W {
+                    ui.add_space(14.0);
+                    crate::dialscale::show(self, ui, room);
+                }
             });
         });
         // The clock: a frame every half second whatever else is quiet.
@@ -2912,6 +2918,9 @@ mod tests {
                     app.status.passband_offset_hz = (lo + hi) / 2.0;
                     app.status.filter_custom = true;
                     app.status.filter_shape = proto::FilterShape::Soft;
+                    (app.status.tune_min_hz, app.status.tune_max_hz) = (1e3, 2e9);
+                    app.pan.center_hz = app.status.inspect_hz;
+                    app.pan.span_hz = 2e6;
                     if b {
                         app.status.rx2 = Some(proto::SubRx { freq_hz: 14.2e6, mode: Mode::Usb, bandwidth_hz: 2_500.0, passband_offset_hz: 1_550.0, ..Default::default() });
                         app.active_b = true;
@@ -3151,6 +3160,7 @@ mod tests {
             app.status.freq_hz = 7_074_000.0;
             app.status.inspect_hz = 7_074_000.0;
             app.status.bandwidth_hz = 3_000.0;
+            (app.status.tune_min_hz, app.status.tune_max_hz) = (1e3, 2e9);
             app.dock_tab = DockTab::Decodes;
             app.decode_family = Some(crate::decoders::Family::HfData);
         }

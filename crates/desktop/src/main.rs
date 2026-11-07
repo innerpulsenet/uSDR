@@ -17,6 +17,7 @@ mod bench;
 mod brand;
 mod chrome;
 mod colormap;
+mod dialscale;
 mod decoders;
 mod directory;
 mod fax;
