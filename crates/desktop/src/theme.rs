@@ -678,19 +678,17 @@ pub fn edge_light(painter: &egui::Painter, r: egui::Rect, color: Color32, travel
 }
 
 /// How far a surface stands from the panel. Sunken parts are wells
-/// (`well`); raised parts are cards and keys, which cast a short close
-/// shadow; floating parts are windows, menus and toasts, which cast a long
-/// soft one. Overlays drawn on the spectrum float by their frosted glass
+/// (`well`); raised parts are plates (`plate_shape`), which draw their own
+/// short shadow; floating parts are windows, menus and toasts, which cast a
+/// long soft one. Overlays drawn on the spectrum float by their frosted glass
 /// and rim alone: a shadow there would darken the data around them.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Depth {
-    Raised,
     Floating,
 }
 
 pub fn shadow(d: Depth) -> egui::Shadow {
     match d {
-        Depth::Raised => egui::Shadow { offset: [0, 2], blur: 7, spread: 0, color: Color32::from_black_alpha(95) },
         Depth::Floating => egui::Shadow { offset: [0, 10], blur: 28, spread: 0, color: Color32::from_black_alpha(160) },
     }
 }

@@ -79,7 +79,12 @@ pub fn side(app: &mut App, ui: &mut Ui) {
 /// cards under it never move while it fills in. Everything shown passed
 /// its checkwords on the server; a row with nothing confirmed for it says
 /// so in its own place.
+/// The station's RDS on its own display, as a car radio shows it.
 fn station(app: &App, ui: &mut Ui) {
+    widgets::glass(ui, egui::Id::new("rds-glass"), widgets::protocol_color("RDS"), |ui| station_body(app, ui));
+}
+
+fn station_body(app: &App, ui: &mut Ui) {
     let r = app.rds();
     let w = ui.available_width();
     let dim = r.is_none_or(|r| !r.locked);
@@ -242,7 +247,8 @@ fn activity(app: &App, ui: &mut Ui, live: bool) {
     let w = ui.available_width();
     let (r, _) = ui.allocate_exact_size(vec2(w, 30.0), egui::Sense::hover());
     let p = ui.painter();
-    p.rect_filled(r, egui::CornerRadius::same(3), theme::ink());
+    // On the recorder's glass: a faint floor line, no well of its own.
+    p.line_segment([egui::pos2(r.left(), r.bottom() - 1.5), egui::pos2(r.right(), r.bottom() - 1.5)], egui::Stroke::new(1.0, alpha(theme::text_3(), 0.25)));
     let now = ui.input(|i| i.time);
     let x_at = |t: f64| r.right() - ((now - t) / 20.0).clamp(0.0, 1.0) as f32 * r.width();
     // 0–40 dB over the floor, bottom to top.
@@ -411,7 +417,7 @@ fn gain(app: &mut App, ui: &mut Ui) {
         app.post("/api/sdr/gain", json!({ "gain_db": v }));
     }
     if s.is_sdrplay() {
-        gain_staging(ui, &s);
+        widgets::glass(ui, egui::Id::new("gain-glass"), theme::CYAN, |ui| gain_staging(ui, &s));
     }
     if let Some(sp) = s.agc_setpoint_dbfs {
         let mut v = sp;
@@ -467,7 +473,8 @@ fn gain_staging(ui: &mut Ui, s: &usdr_proto::Status) {
         p.text(egui::pos2(rect.left(), rect.center().y), egui::Align2::LEFT_CENTER, label, theme::mono(10.5), theme::text_3());
         p.text(egui::pos2(rect.right(), rect.center().y), egui::Align2::RIGHT_CENTER, value, theme::mono_bold(11.0), value_c);
         let track = egui::Rect::from_min_max(egui::pos2(rect.left() + label_w, rect.center().y - 5.0), egui::pos2(rect.right() - value_w, rect.center().y + 5.0));
-        theme::well(p, track, None);
+        // On the glass, a faint channel for the cells to light in.
+        p.rect_filled(track, egui::CornerRadius::same(2), alpha(theme::ink(), 0.5));
         draw(p, track.shrink2(vec2(3.0, 2.5)));
         resp.on_hover_text(tip);
     };
@@ -533,7 +540,7 @@ fn gain_staging(ui: &mut Ui, s: &usdr_proto::Status) {
         }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             if s.overload == Some(true) {
-                widgets::chip(ui, Tone::Err, "OVERLOAD").on_hover_text("The radio reports its front end overloaded: strong signals are being mixed into false ones across the band.");
+                widgets::lcd_tag(ui, "OVERLOAD", theme::ERR, true).on_hover_text("The radio reports its front end overloaded: strong signals are being mixed into false ones across the band.");
             } else if let Some(p) = past.filter(|_| fits) {
                 ui.label(small(p));
             }
@@ -608,7 +615,8 @@ fn front_end(app: &mut App, ui: &mut Ui) {
         let label = if s.if_bandwidth_manual { crate::tuning::fmt_hz(cur) } else { format!("AUTO · {}", crate::tuning::fmt_hz(cur)) };
         ui.horizontal(|ui| {
             ui.label(small("IF FILTER"));
-            widgets::selector(ui, "iffilter", &label, theme::text(), 0.0, |ui| {
+            let w = (ui.painter().layout_no_wrap(label.clone(), theme::mono_bold(12.0), egui::Color32::PLACEHOLDER).size().x + 32.0).max(90.0);
+            widgets::lcd_selector(ui, "iffilter", "", &label, theme::AMBER, w, |ui| {
                 if ui.selectable_label(!s.if_bandwidth_manual, "Auto · follow the span").clicked() {
                     app.post("/api/sdr/frontend", json!({ "if_bandwidth": 0 }));
                     ui.close();
@@ -696,18 +704,22 @@ fn recorder(app: &mut App, ui: &mut Ui) {
     let kinds: Vec<String> = app.mode_caps().map(|c| c.capture.clone()).unwrap_or_else(|| vec!["iq".into(), "voice".into(), "discriminator".into()]);
     let has = |k: &str| app.modes.is_empty() || kinds.iter().any(|x| x == k);
     let receiving = app.status.error.is_none() && app.status.rate_hz > 0.0 && !kinds.is_empty();
-    ui.horizontal(|ui| {
-        widgets::chip(ui, if receiving { Tone::Ok } else { Tone::Idle }, if receiving { "FILLING" } else { "OFF" });
-        let head = if !receiving {
-            format!("{} keeps no buffer", app.status.mode.label())
-        } else {
-            format!("{} · {}S/s", crate::tuning::fmt_mhz(app.inspect_hz(), 3), crate::tuning::fmt_short_hz(app.status.inspect_rate_hz))
-        };
-        ui.label(small(head));
+    // What the ring holds, on its display: filling or not, the channel and
+    // its rate, and the last 20 s of level over the floor.
+    widgets::glass(ui, egui::Id::new("recorder-glass"), theme::AMBER, |ui| {
+        ui.horizontal(|ui| {
+            widgets::lcd_tag(ui, if receiving { "FILLING" } else { "OFF" }, theme::OK, receiving);
+            let head = if !receiving {
+                format!("{} keeps no buffer", app.status.mode.label())
+            } else {
+                format!("{} · {}S/s", crate::tuning::fmt_mhz(app.inspect_hz(), 3), crate::tuning::fmt_short_hz(app.status.inspect_rate_hz))
+            };
+            ui.label(small(head));
+        });
+        // Drawn whether or not this mode keeps a buffer, so the card keeps
+        // its height when the mode or the radio's state changes it.
+        activity(app, ui, receiving);
     });
-    // Drawn whether or not this mode keeps a buffer, so the card keeps its
-    // height when the mode or the radio's state changes it.
-    activity(app, ui, receiving);
     let dir = app.prefs.record_dir();
     let busy = app.recorder_busy.clone();
     ui.horizontal_wrapped(|ui| {
@@ -780,7 +792,7 @@ fn radio(app: &mut App, ui: &mut Ui) {
         // space of its own: a truncating combo box fills whatever room its
         // row has, and a row wider than the column shifts every card in it.
         let w = (ui.available_width() - 34.0).max(100.0);
-        widgets::selector(ui, "device", &cur, theme::text(), w, |ui| {
+        widgets::lcd_selector(ui, "device", "", &cur, theme::AMBER, w, |ui| {
             for d in app.devices.clone() {
                 if ui.selectable_label(d.serial == s.serial, device_label(&d)).clicked() {
                     if d.serial != s.serial {

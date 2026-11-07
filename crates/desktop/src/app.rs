@@ -3313,6 +3313,28 @@ mod tests {
         h.render().expect("render").save(dir.join("laptop-lo.png")).expect("save");
     }
 
+    /// The side panel with a station's RDS and an RSP's gain staging, for a
+    /// look by eye: `USDR_QA_DIR=<dir> cargo test -p usdr-desktop
+    /// qa_renders_the_side_panel -- --ignored`.
+    #[test]
+    #[ignore]
+    fn qa_renders_the_side_panel() {
+        let Some(dir) = std::env::var_os("USDR_QA_DIR").map(std::path::PathBuf::from) else { return };
+        let mut h = harness_wh(1600.0, 1500.0);
+        {
+            let app = &mut h.state_mut().app;
+            app.status.mode = Mode::Wfm;
+            app.status.driver = "sdrplay".into();
+            app.status.lna_steps_db = vec![0.0, 6.0, 12.0, 18.0, 37.0, 42.0, 61.0];
+            app.status.rfgr_db = Some(2.0);
+            app.status.ifgr_db = Some(38.0);
+            app.status.lna_auto = true;
+            app.status.rds = Some(proto::Rds { pi: "1234".into(), pi_call: Some("WTST".into()), ps: Some("TEST FM".into()), ps_steady: true, pty: Some(10), pty_name: Some("Country".into()), rt: Some("Test RadioText: an artist and a song title, as a station sends it".into()), locked: true, pilot: true, bler: 0.04, ..Default::default() });
+        }
+        h.run_steps(6);
+        h.render().expect("render").save(dir.join("side-panel.png")).expect("save");
+    }
+
     /// The AIS workspace with test vessels around a station, for a look by
     /// eye: `USDR_QA_DIR=<dir> cargo test -p usdr-desktop qa_renders_ais -- --ignored`.
     #[test]

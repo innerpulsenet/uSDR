@@ -41,16 +41,12 @@ pub fn applet_folded<R>(ui: &mut Ui, id: &str, title: &str, extra: impl FnOnce(&
 fn applet_opened<R>(ui: &mut Ui, id: &str, title: &str, first_open: bool, extra: impl FnOnce(&mut Ui), add: impl FnOnce(&mut Ui) -> R) -> Option<R> {
     let open_id = ui.make_persistent_id(("applet", id));
     let mut open = ui.data_mut(|d| *d.get_persisted_mut_or_insert_with(open_id, || first_open));
-    let frame = egui::Frame::new()
-        .fill(theme::surface_2())
-        .stroke(Stroke::new(1.0, theme::line()))
-        .corner_radius(CornerRadius::same(theme::RADIUS))
-        .shadow(theme::shadow(theme::Depth::Raised))
-        .inner_margin(egui::Margin::symmetric(10, 8));
-    let out = frame
+    // A raised plate, as the bar's sections are: set behind the card once
+    // its height is known.
+    let slot = ui.painter().add(egui::Shape::Noop);
+    let frame = egui::Frame::new().inner_margin(egui::Margin::symmetric(10, 8));
+    let shown = frame
         .show(ui, |ui| {
-            let card = ui.max_rect().expand2(vec2(10.0, 8.0));
-            theme::glass_top(ui.painter(), egui::Rect::from_min_size(card.min, vec2(card.width(), 40.0_f32.min(card.height()))));
             ui.set_width(ui.available_width());
             ui.horizontal(|ui| {
                 let t = fold(ui, open_id, open);
@@ -93,8 +89,9 @@ fn applet_opened<R>(ui: &mut Ui, id: &str, title: &str, first_open: bool, extra:
                 crate::anim::more(ui.ctx());
             }
             Some(r)
-        })
-        .inner;
+        });
+    ui.painter().set(slot, theme::plate_shape(ui.ctx(), shown.response.rect));
+    let out = shown.inner;
     ui.data_mut(|d| d.insert_persisted(open_id, open));
     out
 }
@@ -191,6 +188,26 @@ pub fn selector<R>(ui: &mut Ui, id: &str, text: &str, color: Color32, width: f32
         p.rect_stroke(rect.expand(1.5), CornerRadius::same(theme::RADIUS + 1), Stroke::new(1.0, theme::EMBER), egui::StrokeKind::Outside);
     }
     egui::Popup::menu(&resp).id(egui::Id::new(("selector", id))).width(w.max(160.0)).show(add).map(|r| r.inner)
+}
+
+/// A display window of backlit glass the panel's width, `add` laid out in
+/// it: as tall as what it holds last frame (a frame whose height moved is
+/// laid out again before it is shown).
+pub fn glass<R>(ui: &mut Ui, id: egui::Id, tint: Color32, add: impl FnOnce(&mut Ui) -> R) -> R {
+    let h_id = id.with("glass-h");
+    let h: f32 = ui.data(|d| d.get_temp(h_id)).unwrap_or(40.0);
+    let w = ui.available_width();
+    let (rect, _) = ui.allocate_exact_size(vec2(w, h + 12.0), Sense::hover());
+    crate::vfo::lcd_back(ui.painter(), rect, tint);
+    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect.shrink2(vec2(9.0, 6.0))).layout(egui::Layout::top_down(egui::Align::Min)));
+    let r = add(&mut child);
+    let used = child.min_rect().height();
+    if (used - h).abs() > 0.5 {
+        ui.data_mut(|d| d.insert_temp(h_id, used));
+        ui.ctx().request_discard("a glass window changed height");
+    }
+    crate::vfo::lcd_glass(ui.painter(), rect);
+    r
 }
 
 /// A selector as a small LCD window: `caption` printed faint, `value` lit,
