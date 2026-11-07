@@ -26,8 +26,10 @@
 //!   so the residual hiss stays where the floor put it. A soft limiter keeps
 //!   the restored peaks under full scale.
 //!
-//! Latency is one frame plus one hop, about 16 ms at 48 kHz. `Off` passes the
-//! audio straight through with no latency at all.
+//! Latency is exactly one frame, 512 samples (10.7 ms) at 48 kHz; a signal
+//! that must stay in step with the audio (the squelch's noise band) goes
+//! through [`Denoise::delay_side`]. `Off` passes the audio straight through
+//! with no latency at all.
 
 use num_complex::Complex32;
 use rustfft::{Fft, FftPlanner};
@@ -108,6 +110,9 @@ pub struct Denoise {
     /// each frame.
     acc: Vec<f32>,
     out: VecDeque<f32>,
+    /// The side signal held back by the frame's latency; empty until the
+    /// first side sample arrives, see `delay_side`.
+    side: VecDeque<f32>,
     spec: Vec<Complex32>,
     /// Per bin, 0..=n/2.
     smooth: Vec<f32>,
@@ -141,8 +146,11 @@ pub struct Denoise {
 impl Denoise {
     pub fn new(fs: f64) -> Self {
         // About 10 ms: long enough to resolve voice harmonics (~94 Hz bins at
-        // 48 kHz), short enough that a syllable's onset is not smeared.
-        let n = ((fs * 0.0107).round() as usize).next_power_of_two().clamp(64, 2048);
+        // 48 kHz), short enough that a syllable's onset is not smeared. The
+        // nearest power of two, not the next one up: 10.7 ms at 48 kHz is
+        // 513.6 samples, which `next_power_of_two` turned into 1024, a 21 ms
+        // frame that doubled the latency and the noise window.
+        let n = (1usize << (fs * 0.0107).max(1.0).log2().round() as u32).clamp(64, 2048);
         let hop = n / 2;
         let bins = n / 2 + 1;
         let hop_s = hop as f32 / fs as f32;
@@ -165,6 +173,7 @@ impl Denoise {
             since_frame: 0,
             acc: vec![0.0; n],
             out: VecDeque::from(vec![0.0; hop]),
+            side: VecDeque::with_capacity(n + 1),
             spec: vec![Complex32::new(0.0, 0.0); n],
             smooth: vec![0.0; bins],
             sub_min: vec![f32::MAX; bins],
@@ -198,6 +207,37 @@ impl Denoise {
         self.level
     }
 
+    /// Samples the cleaned audio trails its input by: one frame, or none
+    /// when off.
+    pub fn latency(&self) -> usize {
+        if self.level == NrLevel::Off { 0 } else { self.n }
+    }
+
+    /// Delays `side` by [`Self::latency`] into `out` (cleared first), so a
+    /// signal measured on the undelayed audio lines up with what `process`
+    /// returns. The NFM gate needs it: keyed on the discriminator's noise
+    /// band while the voice ran a frame late, it opened a frame before the
+    /// voice arrived (letting the pre-key hiss through) and closed a frame
+    /// before the last of it left. The line starts filled with the first
+    /// side sample rather than zeros, because a zero noise band reads as a
+    /// perfectly quieted carrier.
+    pub fn delay_side(&mut self, side: &[f32], out: &mut Vec<f32>) {
+        out.clear();
+        if self.level == NrLevel::Off {
+            out.extend_from_slice(side);
+            return;
+        }
+        if self.side.is_empty()
+            && let Some(&first) = side.first()
+        {
+            self.side.extend(std::iter::repeat_n(first, self.n));
+        }
+        for &v in side {
+            self.side.push_back(v);
+            out.push(self.side.pop_front().unwrap_or(v));
+        }
+    }
+
     /// Change the strength. Turning it on starts from a clean slate, so the
     /// first second learns the band rather than applying a stale estimate.
     pub fn set_level(&mut self, level: NrLevel) {
@@ -213,6 +253,7 @@ impl Denoise {
         self.acc.fill(0.0);
         self.out.clear();
         self.out.extend(std::iter::repeat_n(0.0, self.hop));
+        self.side.clear();
         self.smooth.fill(0.0);
         self.sub_min.fill(f32::MAX);
         for h in &mut self.hist {
@@ -393,6 +434,32 @@ mod tests {
 
     fn rms(x: &[f32]) -> f32 {
         (x.iter().map(|v| v * v).sum::<f32>() / x.len() as f32).sqrt()
+    }
+
+    /// The frame at 48 kHz is the 512 samples the design calls for, and the
+    /// audio and a side signal leave it exactly that late.
+    #[test]
+    fn latency_is_one_frame_and_the_side_signal_matches_it() {
+        let mut nr = Denoise::new(48_000.0);
+        nr.set_level(NrLevel::Low);
+        assert_eq!(nr.latency(), 512);
+        // A loud click after a second of hiss: well over the noise, so it
+        // passes near unity and its position is easy to find.
+        let mut x = noise(48_000 * 2, 0.01);
+        let at = 48_000 + 123;
+        x[at] = 0.7;
+        let side: Vec<f32> = (0..x.len()).map(|i| if i == at { 1.0 } else { 0.0 }).collect();
+        let mut delayed = Vec::new();
+        let mut side_out = Vec::new();
+        for (a, b) in x.chunks_mut(480).zip(side.chunks(480)) {
+            nr.process(a);
+            nr.delay_side(b, &mut delayed);
+            side_out.extend_from_slice(&delayed);
+        }
+        let peak = (0..x.len()).max_by(|&i, &j| x[i].abs().total_cmp(&x[j].abs())).unwrap();
+        let side_peak = side_out.iter().position(|&v| v == 1.0).unwrap();
+        assert_eq!(peak, at + 512, "audio delayed {} samples", peak as i64 - at as i64);
+        assert_eq!(side_peak, at + 512);
     }
 
     #[test]

@@ -4362,6 +4362,8 @@ fn run_sdr(
     let mut mon_notch = AutoNotch::new(inspect_chain.fs_out());
     let mut mon_denoise = Denoise::new(inspect_chain.fs_out());
     mon_denoise.set_level(processing.nr);
+    // The NFM gate's noise band, held back by noise reduction's latency.
+    let mut mon_noise_aligned: Vec<f32> = Vec::new();
     let mut mon_rate_cache = inspect_chain.fs_out();
     let mut scope_disc: Vec<f32> = Vec::new();
     // Whatever this frame's scope trace is, normalised to ±1.
@@ -5885,7 +5887,10 @@ fn run_sdr(
                         mon_notch.process(voice);
                     }
                     mon_denoise.process(voice);
-                    mon_gate.process(voice, classifier.monitor_noise());
+                    // Noise reduction delays the voice by a frame; the gate
+                    // keys on the noise band, so it is delayed to match.
+                    mon_denoise.delay_side(classifier.monitor_noise(), &mut mon_noise_aligned);
+                    mon_gate.process(voice, &mon_noise_aligned);
                     mon_leveler.process(voice);
                 }
                 {
