@@ -4,7 +4,7 @@ use super::{CHANNEL_RATE, NXDN_BANDWIDTH_HZ, NxdnReceiver, Rate};
 use super::{ControlMessage, decode_control};
 use crate::afc::Afc;
 use crate::channel::{AUDIO_RATE, CallEvent, CallSummary, DigitalCallTelemetry};
-use crate::dmr::Resampler8k;
+use crate::dmr::{Concealer, Resampler8k};
 use crate::leveler::Leveler;
 use num_complex::Complex32;
 use scannerd_dsp::DecodeChain;
@@ -42,6 +42,7 @@ pub struct NxdnChannelReceiver {
     rx48: NxdnReceiver,
     rx96: NxdnReceiver,
     vocoder: rmbe::Decoder,
+    concealer: Concealer,
     resampler: Resampler8k,
     leveler: Leveler,
     baseband: Vec<Complex32>,
@@ -95,6 +96,7 @@ impl NxdnChannelReceiver {
             rx48: NxdnReceiver::new(Rate::Nxdn48, fs_chan),
             rx96: NxdnReceiver::new(Rate::Nxdn96, fs_chan),
             vocoder: rmbe::Decoder::new(),
+            concealer: Concealer::new(),
             resampler: Resampler8k::new(),
             leveler: Leveler::new(AUDIO_RATE),
             baseband: Vec::new(),
@@ -122,6 +124,7 @@ impl NxdnChannelReceiver {
         self.rx48.reset();
         self.rx96.reset();
         self.vocoder = rmbe::Decoder::new();
+        self.concealer = Concealer::new();
         self.resampler = Resampler8k::new();
         self.leveler.reset();
         self.out.clear();
@@ -214,11 +217,11 @@ impl NxdnChannelReceiver {
             for voice in frame.voice_blocks {
                 if !encrypted && voice.valid && voice.errors <= 4 {
                     if let Ok(samples) = self.vocoder.decode(&voice.data) {
-                        pcm.extend(samples);
+                        self.concealer.good(&samples, &mut pcm);
                         continue;
                     }
                 }
-                pcm.extend([0i16; rmbe::SAMPLES_PER_FRAME]);
+                self.concealer.erased(&mut pcm);
             }
             let mut audio = self.resampler.process(&pcm);
             self.leveler.process(&mut audio);

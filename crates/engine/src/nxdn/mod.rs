@@ -117,6 +117,24 @@ pub struct NxdnReceiver {
     prev: Complex32,
     hz_per_rad: f32,
     dc: OnePole,
+    /// Samples per symbol, `fs / symbol_rate` — not necessarily whole.
+    ///
+    /// The 2.048 MS/s span decimates to 47 627.9 Hz, 9.92 samples per
+    /// NXDN96 symbol and 19.85 per NXDN48 one. A whole-sample stride slipped
+    /// 1.5 symbols across a 192-symbol frame, so the LICH near the sync read
+    /// and the voice blocks at the far end did not. Symbols are read at
+    /// `start + n · spb` with linear interpolation, as the DMR framer does.
+    spb: f64,
+    /// One-symbol integrate-and-dump ahead of the slicer (running sum over
+    /// `box_buf`). The discriminator's noise rises with frequency across
+    /// the whole channel filter, and the symbol occupies only the bottom
+    /// 1.2–2.4 kHz of it: point-sampling one discriminator sample a symbol
+    /// sliced all of that noise, while a boxcar the length of the symbol
+    /// is the matched filter for its near-rectangular frequency pulse — the
+    /// same front end DMR and P25 run.
+    box_buf: Vec<f32>,
+    box_head: usize,
+    box_sum: f32,
     raw: Vec<f32>,
     consumed: u64,
     next_abs: u64,
@@ -137,12 +155,18 @@ pub struct NxdnReceiver {
 
 impl NxdnReceiver {
     pub fn new(rate: Rate, fs: f64) -> Self {
+        let spb = fs / rate.symbol_rate();
+        let boxcar = spb.round().max(1.0) as usize;
         Self {
             rate,
             fs,
             prev: Complex32::new(0.0, 0.0),
             hz_per_rad: (fs / TAU as f64) as f32,
             dc: OnePole::new((fs * 0.05) as f32),
+            spb,
+            box_buf: vec![0.0; boxcar],
+            box_head: 0,
+            box_sum: 0.0,
             raw: Vec::new(),
             consumed: 0,
             next_abs: 0,
@@ -171,9 +195,18 @@ impl NxdnReceiver {
             } else {
                 0.0
             };
-            self.raw.push(hz - self.dc.process(hz));
+            self.integrate(hz);
         }
         self.scan()
+    }
+
+    /// Boxcar one discriminator sample in, then strip the carrier offset.
+    fn integrate(&mut self, hz: f32) {
+        self.box_sum += hz - self.box_buf[self.box_head];
+        self.box_buf[self.box_head] = hz;
+        self.box_head = (self.box_head + 1) % self.box_buf.len();
+        let acc = self.box_sum / self.box_buf.len() as f32;
+        self.raw.push(acc - self.dc.process(acc));
     }
 
     /// Run the receiver over pre-discriminated Hz, for callers that
@@ -181,7 +214,7 @@ impl NxdnReceiver {
     /// carrier tracker still runs here, on the discriminated samples.
     pub fn process_hz(&mut self, hz: &[f32]) -> Vec<Frame> {
         for &h in hz {
-            self.raw.push(h - self.dc.process(h));
+            self.integrate(h);
         }
         self.scan()
     }
@@ -189,8 +222,14 @@ impl NxdnReceiver {
     /// Correlate the FSW across the retained buffer; the shared tail of both
     /// input paths.
     fn scan(&mut self) -> Vec<Frame> {
-        let sps = self.rate.samples_per_symbol();
-        let needed = FRAME_SYMBOLS * sps;
+        let spb = self.spb;
+        let sps = spb.round().max(1.0) as usize;
+        // Samples a frame spans, plus the one the interpolator reads past
+        // its last symbol; and the frame-to-frame stride, rounded down so a
+        // step never lands past the next sync (the alignment probe only
+        // looks forward).
+        let needed = (FRAME_SYMBOLS as f64 * spb).ceil() as usize + 1;
+        let period = (FRAME_SYMBOLS as f64 * spb).floor() as usize;
         let mut out = Vec::new();
         let mut start = 0usize;
         // Resume past positions earlier blocks already judged. Computed once:
@@ -203,8 +242,8 @@ impl NxdnReceiver {
                 continue;
             }
             let mut sync = [0.0f32; FSW_SYMBOLS];
-            for n in 0..FSW_SYMBOLS {
-                sync[n] = self.raw[start + n * sps];
+            for (n, v) in sync.iter_mut().enumerate() {
+                *v = symbol_at(&self.raw, start, n, spb);
             }
             let (corr, scale, offset) = fit_sync(&sync);
             if corr < 0.82 || scale.abs() < 250.0 {
@@ -217,8 +256,8 @@ impl NxdnReceiver {
                     break;
                 }
                 let mut probe = [0.0f32; FSW_SYMBOLS];
-                for n in 0..FSW_SYMBOLS {
-                    probe[n] = self.raw[start + phase + n * sps];
+                for (n, v) in probe.iter_mut().enumerate() {
+                    *v = symbol_at(&self.raw, start + phase, n, spb);
                 }
                 let (c, a, o) = fit_sync(&probe);
                 if c > best.0 {
@@ -229,27 +268,27 @@ impl NxdnReceiver {
             if aligned + needed > self.raw.len() {
                 break;
             }
-            let hard_errors = sync_hard_errors(&self.raw, aligned, sps, scale, offset);
+            let hard_errors = sync_hard_errors(&self.raw, aligned, spb, scale, offset);
             if correlation < 0.90 || hard_errors > 2 {
                 start += 1;
                 continue;
             }
             let mut dibits: Vec<u8> = (FSW_SYMBOLS..FRAME_SYMBOLS)
-                .map(|n| slice((self.raw[aligned + n * sps] - offset) / scale))
+                .map(|n| slice((symbol_at(&self.raw, aligned, n, spb) - offset) / scale))
                 .collect();
             pn95(&mut dibits, 0xe4);
             if let Some(frame) = parse_frame(self.rate, dibits, correlation, scale.abs(), offset) {
                 let abs = self.consumed + aligned as u64;
                 self.last_offset_hz = offset;
-                self.next_abs = self.consumed + (aligned + needed - sps) as u64;
+                self.next_abs = self.consumed + (aligned + period - sps) as u64;
                 let tolerance = (sps * 3) as u64;
                 if self.locked && abs.abs_diff(self.expected_abs) <= tolerance {
-                    self.expected_abs = abs + needed as u64;
+                    self.expected_abs = abs + period as u64;
                     out.push(frame);
                 } else if let Some((candidate_abs, candidate)) = self.candidate.take() {
-                    if abs.abs_diff(candidate_abs + needed as u64) <= tolerance {
+                    if abs.abs_diff(candidate_abs + period as u64) <= tolerance {
                         self.locked = true;
-                        self.expected_abs = abs + needed as u64;
+                        self.expected_abs = abs + period as u64;
                         out.push(candidate);
                         out.push(frame);
                     } else {
@@ -260,7 +299,7 @@ impl NxdnReceiver {
                     self.locked = false;
                     self.candidate = Some((abs, frame));
                 }
-                start = aligned + needed - sps;
+                start = aligned + period - sps;
             } else {
                 start += 1;
             }
@@ -297,19 +336,35 @@ fn fit_sync(samples: &[f32]) -> (f32, f32, f32) {
     (corr, scale, offset)
 }
 
-fn sync_hard_errors(samples: &[f32], start: usize, sps: usize, scale: f32, offset: f32) -> u32 {
+/// Symbol `n` of a frame starting at `start`, `spb` samples apart,
+/// linearly interpolated between the two samples it falls between.
+fn symbol_at(samples: &[f32], start: usize, n: usize, spb: f64) -> f32 {
+    let pos = n as f64 * spb;
+    let i = pos.floor();
+    let frac = (pos - i) as f32;
+    let at = start + i as usize;
+    let a = samples[at];
+    match samples.get(at + 1) {
+        Some(&b) if frac > 0.0 => a + frac * (b - a),
+        _ => a,
+    }
+}
+
+fn sync_hard_errors(samples: &[f32], start: usize, spb: f64, scale: f32, offset: f32) -> u32 {
     let received = (0..FSW_SYMBOLS).fold(0u32, |value, n| {
-        (value << 2) | u32::from(slice((samples[start + n * sps] - offset) / scale))
+        (value << 2) | u32::from(slice((symbol_at(samples, start, n, spb) - offset) / scale))
     });
     (received ^ 0xC_DF_59).count_ones()
 }
 
+/// The dibit for a sample normalized by the sync fit, whose levels are
+/// ±1 (inner) and ±3 (outer): the decisions sit midway, at 0 and ±2.
 fn slice(normalized: f32) -> u8 {
-    if normalized > 0.66 {
+    if normalized > 2.0 {
         0b01
     } else if normalized > 0.0 {
         0b00
-    } else if normalized > -0.66 {
+    } else if normalized > -2.0 {
         0b10
     } else {
         0b11
@@ -500,5 +555,148 @@ mod tests {
         }
         assert!(frames_direct.len() >= 2, "baseline decoded nothing");
         assert_eq!(frames_direct, frames_hz);
+    }
+
+    /// Deterministic LCG so the noise fixtures are the same on every run.
+    fn lcg(seed: &mut u64) -> f32 {
+        *seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        ((*seed >> 33) as f32 / (1u64 << 31) as f32) * 2.0 - 1.0
+    }
+
+    /// Approximately Gaussian, unit variance, via the sum of twelve uniforms.
+    fn gauss(seed: &mut u64) -> f32 {
+        (0..12).map(|_| lcg(seed)).sum::<f32>() / 2.0
+    }
+
+    /// `frames` back-to-back NXDN frames with pseudorandom payload under a
+    /// valid voice LICH, FM-modulated at the rate's standard deviation on a
+    /// sample clock of `fs` (sample `n` carries the symbol on the air at
+    /// `n / fs`). Returns the IQ and each frame's descrambled payload.
+    fn on_air(rate: Rate, fs: f64, frames: usize, seed: u64) -> (Vec<Complex32>, Vec<Vec<u8>>) {
+        let lich = 0x57u8;
+        let parity = ((lich >> 6) ^ (lich >> 5) ^ (lich >> 4) ^ (lich >> 3)) & 1;
+        let lich_full = (lich << 1) | parity;
+        let fsw: Vec<u8> = (0..FSW_SYMBOLS)
+            .map(|i| ((0xC_DF_59 >> (18 - i * 2)) & 3) as u8)
+            .collect();
+        let mut state = seed;
+        let mut dibits = Vec::new();
+        let mut sent = Vec::new();
+        for _ in 0..frames {
+            let mut payload: Vec<u8> = (0..FRAME_SYMBOLS - FSW_SYMBOLS)
+                .map(|_| ((lcg(&mut state) + 1.0) * 2.0).min(3.0) as u8)
+                .collect();
+            for (i, dibit) in payload.iter_mut().take(8).enumerate() {
+                *dibit = (((lich_full >> (7 - i)) & 1) << 1) | 1;
+            }
+            sent.push(payload.clone());
+            pn95(&mut payload, 0xe4);
+            dibits.extend(&fsw);
+            dibits.extend(payload);
+        }
+        // Outer deviation: 1050 Hz for NXDN48, 2400 Hz for NXDN96.
+        let unit = match rate {
+            Rate::Nxdn48 => 350.0,
+            Rate::Nxdn96 => 800.0,
+        };
+        let n = (dibits.len() as f64 * fs / rate.symbol_rate()) as usize;
+        let mut phase = 0.0f64;
+        let iq = (0..n)
+            .map(|i| {
+                let sym = ((i as f64 * rate.symbol_rate() / fs) as usize).min(dibits.len() - 1);
+                let level = match dibits[sym] {
+                    0 => 1.0,
+                    1 => 3.0,
+                    2 => -1.0,
+                    _ => -3.0,
+                };
+                phase += TAU as f64 * level * unit / fs;
+                Complex32::new(phase.cos() as f32, phase.sin() as f32)
+            })
+            .collect();
+        (iq, sent)
+    }
+
+    /// Frames recovered and payload dibit errors over them, for `frames`
+    /// frames at `cnr_db` carrier-to-noise in the 12.5 kHz channel, run
+    /// through the same channel filter the live receiver rides.
+    fn run(rate: Rate, fs: f64, frames: usize, cnr_db: f32, seed: u64) -> (usize, usize) {
+        let (clean, sent) = on_air(rate, fs, frames, seed);
+        let sigma = (10f32.powf(-cnr_db / 10.0) * fs as f32 / NXDN_BANDWIDTH_HZ / 2.0).sqrt();
+        let mut state = seed ^ 0x9e37_79b9;
+        let noisy: Vec<Complex32> = clean
+            .iter()
+            .map(|&x| x + Complex32::new(gauss(&mut state), gauss(&mut state)) * sigma)
+            .collect();
+        let mut chain = scannerd_dsp::DecodeChain::new(fs, NXDN_BANDWIDTH_HZ, CHANNEL_RATE);
+        let mut rx = NxdnReceiver::new(rate, chain.fs_out());
+        let mut baseband = Vec::new();
+        let mut got = Vec::new();
+        for block in noisy.chunks(960) {
+            chain.process(block, &mut baseband);
+            got.extend(rx.process(&baseband));
+        }
+        let errors = got
+            .iter()
+            .map(|frame| {
+                sent.iter()
+                    .map(|p| p.iter().zip(&frame.payload).filter(|(a, b)| a != b).count())
+                    .min()
+                    .unwrap_or(0)
+            })
+            .sum();
+        (got.len(), errors)
+    }
+
+    /// At 10 dB CNR in the channel, at the exact 48 kHz rate and at the
+    /// 47 627.9 Hz the 2.048 MS/s span delivers, both rates must find
+    /// nearly every frame and read its payload at under 3 % dibit errors.
+    /// Before the integrator, the fractional stride and the inner-level
+    /// threshold, NXDN48 found 6/40 frames at 48 kHz and none at 47.6 kHz,
+    /// and NXDN96 read its payload at a 38 % dibit error rate even when it
+    /// found the frame.
+    #[test]
+    fn both_rates_decode_at_10_db_on_every_span_rate() {
+        for rate in [Rate::Nxdn48, Rate::Nxdn96] {
+            for fs in [CHANNEL_RATE, 2_048_000.0 / 43.0] {
+                let (found, errors) = run(rate, fs, 40, 10.0, 7);
+                let ber = errors as f32 / (found.max(1) * (FRAME_SYMBOLS - FSW_SYMBOLS)) as f32;
+                assert!(found >= 36, "{} fs {fs:.1}: {found}/40 frames", rate.label());
+                assert!(ber < 0.03, "{} fs {fs:.1}: dibit error rate {ber:.4}", rate.label());
+                let (_, clean) = run(rate, fs, 6, 30.0, 3);
+                assert_eq!(clean, 0, "{} fs {fs:.1}: errors at 30 dB", rate.label());
+            }
+        }
+    }
+
+    /// The slicer's decision points sit midway between the fitted levels:
+    /// ±2 in units of the inner deviation. At ±0.66 every inner symbol read
+    /// as an outer one, so the LICH (all outer) survived while the voice
+    /// and control payload behind it came out garbage.
+    #[test]
+    fn inner_symbols_slice_as_inner() {
+        assert_eq!(slice(3.0), 0b01);
+        assert_eq!(slice(1.0), 0b00);
+        assert_eq!(slice(-1.0), 0b10);
+        assert_eq!(slice(-3.0), 0b11);
+    }
+
+    /// Measurement sweep, not a pass/fail check: `cargo test -p
+    /// scannerd-engine --lib nxdn_sensitivity_sweep -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn nxdn_sensitivity_sweep() {
+        for rate in [Rate::Nxdn48, Rate::Nxdn96] {
+            for fs in [CHANNEL_RATE, 2_048_000.0 / 43.0] {
+                for cnr in [6.0, 8.0, 10.0, 12.0, 14.0, 18.0, 30.0] {
+                    let (found, errors) = run(rate, fs, 40, cnr, 7);
+                    let ber = errors as f32 / (found.max(1) * (FRAME_SYMBOLS - FSW_SYMBOLS)) as f32;
+                    eprintln!(
+                        "{} fs {fs:.1} CNR {cnr:>4.1} dB: {found:>2}/40 frames, dibit error rate {ber:.4}",
+                        rate.label()
+                    );
+                }
+            }
+        }
     }
 }

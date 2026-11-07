@@ -9,7 +9,7 @@ use super::framer::{self, Burst, BurstKind, DmrReceiver};
 use super::voice;
 use super::{
     CHANNEL_RATE, DMR_BANDWIDTH_HZ, DataAssembler, DataPdu, DecodedData, EmbeddedLcAssembler,
-    LinkControl, PrivacyHeader, Resampler8k, decode_data_pdu,
+    Concealer, LinkControl, PrivacyHeader, Resampler8k, decode_data_pdu,
 };
 use crate::afc::Afc;
 use crate::channel::{AUDIO_RATE, CallEvent, CallSummary, DigitalCallTelemetry, ToneCode};
@@ -41,6 +41,7 @@ pub struct DmrChannelReceiver {
     afc: Afc,
     rx: DmrReceiver,
     vocoder: rmbe::Decoder,
+    concealer: Concealer,
     resampler: Resampler8k,
     leveler: Leveler,
     baseband: Vec<Complex32>,
@@ -91,6 +92,7 @@ impl DmrChannelReceiver {
             afc: Afc::new(0.0, 2_500.0),
             rx: DmrReceiver::new(fs_chan),
             vocoder: rmbe::Decoder::new(),
+            concealer: Concealer::new(),
             resampler: Resampler8k::new(),
             leveler: Leveler::new(AUDIO_RATE),
             baseband: Vec::new(),
@@ -121,6 +123,7 @@ impl DmrChannelReceiver {
     }
 
     pub fn reset(&mut self) {
+        self.concealer = Concealer::new();
         self.in_call = false;
         self.call_samples = 0;
         self.peak_snr_db = f32::NEG_INFINITY;
@@ -351,11 +354,11 @@ impl DmrChannelReceiver {
                     decryptor.apply_ambe49(&mut data);
                 }
                 if let Ok(samples) = self.vocoder.decode(&data) {
-                    pcm.extend(samples);
+                    self.concealer.good(&samples, &mut pcm);
                     continue;
                 }
             }
-            pcm.extend([0i16; rmbe::SAMPLES_PER_FRAME]);
+            self.concealer.erased(&mut pcm);
         }
         let mut audio = self.resampler.process(&pcm);
         self.leveler.process(&mut audio);

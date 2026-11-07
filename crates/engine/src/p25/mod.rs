@@ -537,9 +537,14 @@ impl C4fmFrontEnd {
     }
 
     pub fn with_filter(fs: f64, filter: MatchedFilter) -> Self {
+        // The nearest whole number of samples to one symbol. The span rates
+        // are not all multiples of 4800 (2.048 MS/s gives 9.92 samples), and
+        // a boxcar a fraction of a sample short of the symbol still matches
+        // it; the fractional *spacing* is the detector's job.
+        let sps = (fs / SYMBOL_RATE).round().max(1.0) as usize;
         let taps = match filter {
-            MatchedFilter::Boxcar => vec![1.0 / SPS as f32; SPS],
-            MatchedFilter::Rrc => rrc_taps(SPS, 8, 0.2),
+            MatchedFilter::Boxcar => vec![1.0 / sps as f32; sps],
+            MatchedFilter::Rrc => rrc_taps(sps, 8, 0.2),
         };
         Self {
             prev: Complex32::new(0.0, 0.0),
@@ -638,21 +643,34 @@ pub struct FrameDetector {
     /// computed eight times. A sample's correlation cannot change once its
     /// window has arrived, so a position evaluated is a position finished.
     scanned_abs: u64,
+    /// Samples per symbol, `fs / 4800` — not necessarily a whole number.
+    ///
+    /// The analog scanner's 2.048 MS/s span decimates by 43 to 47 627.9 Hz,
+    /// 9.92 samples per symbol. Stepping a whole ten walked 6.7 symbols off
+    /// the end of every 864-symbol LDU, so a voice frame decoded its first
+    /// few dozen symbols and nothing after; at 1.024 MS/s (48 761.9 Hz) the
+    /// sync itself smeared and no frame was found at all. Symbols are read at
+    /// `start + n · spb` with linear interpolation, as the DMR framer does.
+    spb: f64,
     /// Wait for complete HDU/LDU/TDULC units and retain their payload.
     capture_payload: bool,
     /// Classifiers need MPDU headers but should report voice NIDs immediately.
     capture_only_pdu: bool,
 }
 
-/// Samples spanned by that, with room for the status symbols interleaved.
-const NEEDED: usize = (864 + 8) * SPS;
+/// Symbols the detector retains: the longest voice unit, with room for the
+/// status symbols interleaved.
+const NEEDED_SYMBOLS: usize = 864 + 8;
 /// Maximum on-air span of a 127-block MPDU, including sync/NID and status
 /// symbols. Packet-payload detectors retain this much while a long unit is
 /// still arriving instead of dropping its sync from the rolling buffer.
-const MAX_PDU_NEEDED: usize = (13_200 + 8) * SPS;
+const MAX_PDU_SYMBOLS: usize = 13_200 + 8;
+/// [`MAX_PDU_SYMBOLS`] in samples at the 48 kHz channel rate.
+#[cfg(test)]
+const MAX_PDU_NEEDED: usize = MAX_PDU_SYMBOLS * SPS;
 
 /// The shortest distance to the next possible sync: past this frame's header.
-const HEADER_SKIP: usize = (SYNC_SYMBOLS + NID_SYMBOLS + 2) * SPS;
+const HEADER_SKIP_SYMBOLS: usize = SYNC_SYMBOLS + NID_SYMBOLS + 2;
 
 /// Sliced sync symbols allowed to disagree with the pattern.
 const MAX_SYNC_ERRORS: usize = 2;
@@ -693,6 +711,7 @@ impl FrameDetector {
             consumed: 0,
             next_abs: 0,
             scanned_abs: 0,
+            spb: SPS as f64,
             capture_payload: false,
             capture_only_pdu: false,
         }
@@ -715,6 +734,42 @@ impl FrameDetector {
         detector
     }
 
+    /// Read symbols at the spacing of a channel sampled at `fs`. Without it
+    /// the detector assumes the exact 48 kHz [`CHANNEL_RATE`].
+    pub fn at_rate(mut self, fs: f64) -> Self {
+        self.spb = fs / SYMBOL_RATE;
+        self
+    }
+
+    /// Whole samples spanning `symbols` symbol periods, rounded up.
+    fn samples(&self, symbols: usize) -> usize {
+        (symbols as f64 * self.spb).ceil() as usize
+    }
+
+    /// The highest buffer offset (past a frame's `start`) that reading
+    /// symbol `sym` touches: the sample it falls on, or the one after when
+    /// it falls between two.
+    fn reach(&self, sym: usize) -> usize {
+        let pos = sym as f64 * self.spb;
+        let i = pos.floor();
+        if pos - i > 1e-9 { i as usize + 1 } else { i as usize }
+    }
+
+    /// Symbol `sym` of the frame whose sync starts at `start`, linearly
+    /// interpolated between the two samples it falls between.
+    fn sym(&self, start: usize, sym: usize) -> f32 {
+        let pos = sym as f64 * self.spb;
+        let i = pos.floor();
+        let frac = pos - i;
+        let at = self.head + start + i as usize;
+        let a = self.buf[at];
+        if frac > 1e-9 {
+            a + frac as f32 * (self.buf[at + 1] - a)
+        } else {
+            a
+        }
+    }
+
     /// Feed samples; returns any frames whose sync and NID are fully present.
     pub fn push(&mut self, samples: &[f32]) -> Vec<Frame> {
         self.buf.extend_from_slice(samples);
@@ -726,7 +781,9 @@ impl FrameDetector {
 
         // A sync ending at `i` needs SYNC_SYMBOLS symbols before it and the NID
         // after, so only positions with both available are considered.
-        let first = (SYNC_SYMBOLS - 1) * SPS;
+        let first = self.reach(SYNC_SYMBOLS - 1);
+        let sps = self.spb.round().max(1.0) as usize;
+        let nid_span = self.samples(NID_SYMBOLS);
         // Start where the last call stopped rather than at the head of the
         // retained tail. `evaluated` only advances past positions that were
         // actually decided; one that needed data still to arrive is left to be
@@ -735,14 +792,14 @@ impl FrameDetector {
         if self.scanned_abs > self.consumed {
             i = (self.scanned_abs - self.consumed) as usize;
         }
-        while i + NID_SYMBOLS * SPS < buf_len {
+        while i + nid_span < buf_len {
             let abs = self.consumed + i as u64;
             if i < first || abs < self.next_abs || abs < self.scanned_abs {
                 evaluated = evaluated.max(abs + 1);
                 i += 1;
                 continue;
             }
-            let start = i - (SYNC_SYMBOLS - 1) * SPS;
+            let start = i - first;
             let (corr, amp, offset) = self.correlate(start);
             if corr >= SYNC_THRESHOLD && amp > 100.0 {
                 // Take the best alignment in this neighbourhood, not the first
@@ -751,8 +808,8 @@ impl FrameDetector {
                 // crossing is routinely off-centre — where the NID's *inner*
                 // levels, which have half the margin, no longer slice reliably.
                 let mut best = (corr, amp, offset, start);
-                for probe in 1..SPS {
-                    if start + probe + (SYNC_SYMBOLS - 1) * SPS >= buf_len {
+                for probe in 1..sps {
+                    if start + probe + first >= buf_len {
                         break;
                     }
                     let (c, a, o) = self.correlate(start + probe);
@@ -765,14 +822,15 @@ impl FrameDetector {
                     i += 1;
                     continue;
                 }
-                let last_needed = start + data_symbol_index(SYNC_SYMBOLS + NID_SYMBOLS - 1) * SPS;
+                let last_needed =
+                    start + self.reach(data_symbol_index(SYNC_SYMBOLS + NID_SYMBOLS - 1));
                 if last_needed >= buf_len {
                     break;
                 }
                 let mut bits = 0u64;
                 for k in 0..NID_SYMBOLS {
                     let sym = data_symbol_index(SYNC_SYMBOLS + k);
-                    let s = self.buf[self.head + start + sym * SPS] - offset;
+                    let s = self.sym(start, sym) - offset;
                     bits = (bits << 2) | u64::from(slice_dibit(s, amp));
                 }
                 // Correct before reading: the NAC and DUID are only meaningful
@@ -798,13 +856,13 @@ impl FrameDetector {
                 if full_unit && duid == Duid::Pdu {
                     let header_last =
                         data_symbol_index(SYNC_SYMBOLS + NID_SYMBOLS + tsbk::TSBK_DIBITS - 1);
-                    if start + header_last * SPS >= buf_len {
+                    if start + self.reach(header_last) >= buf_len {
                         break;
                     }
                     let header_payload: Vec<u8> = (0..tsbk::TSBK_DIBITS)
                         .map(|k| {
                             let sym = data_symbol_index(SYNC_SYMBOLS + NID_SYMBOLS + k);
-                            slice_dibit(self.buf[self.head + start + sym * SPS] - offset, amp)
+                            slice_dibit(self.sym(start, sym) - offset, amp)
                         })
                         .collect();
                     if let Some(header) = data::decode_pdu_header(&header_payload) {
@@ -815,7 +873,7 @@ impl FrameDetector {
                     }
                 }
                 if full_unit {
-                    let last_air = start + (unit_symbols - 1) * SPS;
+                    let last_air = start + self.reach(unit_symbols - 1);
                     if last_air >= buf_len {
                         break;
                     }
@@ -831,19 +889,19 @@ impl FrameDetector {
                     // the next push re-finds it with the payload present.
                     let first_end =
                         data_symbol_index(SYNC_SYMBOLS + NID_SYMBOLS + tsbk::TSBK_DIBITS - 1);
-                    if start + first_end * SPS >= buf_len {
+                    if start + self.reach(first_end) >= buf_len {
                         break;
                     }
                     for block in 0..3 {
                         let first = SYNC_SYMBOLS + NID_SYMBOLS + block * tsbk::TSBK_DIBITS;
                         let last = data_symbol_index(first + tsbk::TSBK_DIBITS - 1);
-                        if start + last * SPS >= buf_len {
+                        if start + self.reach(last) >= buf_len {
                             break;
                         }
                         let samples: Vec<f32> = (0..tsbk::TSBK_DIBITS)
                             .map(|k| {
                                 let sym = data_symbol_index(first + k);
-                                self.buf[self.head + start + sym * SPS] - offset
+                                self.sym(start, sym) - offset
                             })
                             .collect();
                         match Tsbk::decode_soft(&samples, amp, self.convention) {
@@ -873,7 +931,7 @@ impl FrameDetector {
                     (SYNC_SYMBOLS + NID_SYMBOLS..data_count)
                         .map(|nth| {
                             let sym = data_symbol_index(nth);
-                            slice_dibit(self.buf[self.head + start + sym * SPS] - offset, amp)
+                            slice_dibit(self.sym(start, sym) - offset, amp)
                         })
                         .collect()
                 } else {
@@ -908,7 +966,11 @@ impl FrameDetector {
                 } else {
                     duid.max_symbols().min(SYNC_SYMBOLS + NID_SYMBOLS)
                 };
-                let skip = (consumed_symbols * SPS).max(HEADER_SKIP);
+                // Rounded down: at a fractional spacing, stepping the
+                // rounded-up span lands a sample past the next sync, and the
+                // alignment probe only looks forward.
+                let skip = ((consumed_symbols as f64 * self.spb).floor() as usize)
+                    .max(self.samples(HEADER_SKIP_SYMBOLS));
                 self.next_abs = self.consumed + (start + skip) as u64;
                 evaluated = evaluated.max(self.consumed + (i + skip) as u64);
                 i += skip;
@@ -920,9 +982,9 @@ impl FrameDetector {
         self.scanned_abs = self.scanned_abs.max(evaluated);
 
         let keep = if self.capture_only_pdu {
-            MAX_PDU_NEEDED
+            self.samples(MAX_PDU_SYMBOLS)
         } else {
-            NEEDED + SPS
+            self.samples(NEEDED_SYMBOLS + 1)
         };
         let live = self.buf.len() - self.head;
         if live > keep {
@@ -949,7 +1011,7 @@ impl FrameDetector {
     fn sync_errors(&self, start: usize, amp: f32, offset: f32) -> usize {
         let mut errors = 0;
         for k in 0..SYNC_SYMBOLS {
-            let got = slice_dibit(self.buf[self.head + start + k * SPS] - offset, amp);
+            let got = slice_dibit(self.sym(start, k) - offset, amp);
             let want = slice_dibit(self.levels[k], DEV_OUTER_HZ);
             if got != want {
                 errors += 1;
@@ -974,7 +1036,7 @@ impl FrameDetector {
         let n = SYNC_SYMBOLS as f32;
         let (mut sx, mut sy, mut sxy, mut sxx, mut syy) = (0.0, 0.0, 0.0, 0.0, 0.0);
         for k in 0..SYNC_SYMBOLS {
-            let y = self.buf[self.head + start + k * SPS];
+            let y = self.sym(start, k);
             let x = self.levels[k];
             sx += x;
             sy += y;
@@ -1271,8 +1333,7 @@ mod tests {
                 iq.push(Complex32::new(phase.cos(), phase.sin()));
             }
         }
-        let mut cqpsk =
-            crate::cqpsk::CqpskDemodulator::new(CHANNEL_RATE, 4_800.0).with_tracking(0.0, 0.0);
+        let mut cqpsk = crate::cqpsk::CqpskDemodulator::new(CHANNEL_RATE, 4_800.0);
         let mut equivalent = Vec::new();
         cqpsk.process(&iq, &mut equivalent);
         let frames = FrameDetector::new().push(&equivalent);
@@ -1480,5 +1541,86 @@ mod tests {
         assert_eq!(Duid::from_bits(0x5), Duid::Ldu1);
         assert!(!Duid::from_bits(0x9).is_known());
         assert_eq!(Duid::from_bits(0x7).label(), "TSDU");
+    }
+
+    /// Modulate dibits as C4FM at 4800 symbols/s on a sample clock that need
+    /// not be a whole multiple of it: sample `n` carries the symbol that is on
+    /// the air at `n / fs`, so a 47 627.9 Hz channel holds each symbol for
+    /// 9.92 samples on average, the way the 2.048 MS/s span delivers it.
+    fn modulate_at(dibits: &[u8], fs: f64) -> Vec<Complex32> {
+        let n = (dibits.len() as f64 * fs / SYMBOL_RATE).floor() as usize;
+        let mut phase = 0.0f64;
+        (0..n)
+            .map(|i| {
+                let sym = ((i as f64 * SYMBOL_RATE / fs) as usize).min(dibits.len() - 1);
+                phase += TAU as f64 * f64::from(dibit_level(dibits[sym])) / fs;
+                Complex32::new(phase.cos() as f32, phase.sin() as f32)
+            })
+            .collect()
+    }
+
+    /// One LDU1 on the air — sync, NID, pseudorandom data, status symbols —
+    /// and the data dibits the detector's `payload` should return.
+    fn ldu1(nac: u16, seed: u32) -> (Vec<u8>, Vec<u8>) {
+        let unit = Duid::Ldu1.max_symbols();
+        let data_count = (0..unit).filter(|air| (air + 1) % STATUS_SYMBOL_EVERY != 0).count();
+        let nid: u64 = bch_encode((nac << 4) | 0x5) << 1;
+        let mut data = sync_dibits();
+        for k in 0..NID_SYMBOLS {
+            data.push(((nid >> (62 - 2 * k)) & 0b11) as u8);
+        }
+        let payload = prng(data_count - data.len(), seed);
+        data.extend(&payload);
+        let mut air = Vec::with_capacity(unit);
+        let mut taken = 0;
+        for idx in 0..unit {
+            if (idx + 1) % STATUS_SYMBOL_EVERY == 0 {
+                air.push(0b01);
+            } else {
+                air.push(data[taken]);
+                taken += 1;
+            }
+        }
+        (air, payload)
+    }
+
+    /// Decode a run of LDU1s at `fs`; returns (frames found, payload dibit
+    /// errors over the frames found).
+    fn ldu_run(fs: f64, frames: usize) -> (usize, usize) {
+        let mut air = Vec::new();
+        let mut sent = Vec::new();
+        for f in 0..frames {
+            let (a, p) = ldu1(0x293, 500 + f as u32);
+            air.extend(a);
+            sent.push(p);
+        }
+        let iq = modulate_at(&padded(air), fs);
+        let mut fe = C4fmFrontEnd::new(fs);
+        let mut det = FrameDetector::with_payload().at_rate(fs);
+        let mut hz = Vec::new();
+        let mut got = Vec::new();
+        for block in iq.chunks(960) {
+            fe.process(block, &mut hz);
+            got.extend(det.push(&hz).into_iter().filter(|f| f.bch_ok && f.duid == Duid::Ldu1));
+        }
+        let errors = got
+            .iter()
+            .zip(&sent)
+            .map(|(f, p)| f.payload.iter().zip(p).filter(|(a, b)| a != b).count())
+            .sum();
+        (got.len(), errors)
+    }
+
+    /// The 2.048 MS/s span decimates by 43 to 47 627.9 Hz: 9.92 samples per
+    /// symbol, not ten. A whole-sample stride walked 6.7 symbols off the end
+    /// of every 864-symbol voice frame; every rate the spans produce has to
+    /// return each LDU's payload intact.
+    #[test]
+    fn voice_frames_survive_every_span_channel_rate() {
+        for fs in [CHANNEL_RATE, 2_048_000.0 / 43.0, 1_024_000.0 / 21.0, 250_000.0 / 5.0, 51_200.0] {
+            let (found, errors) = ldu_run(fs, 6);
+            assert_eq!(found, 6, "fs {fs:.1}: {found} of 6 LDUs");
+            assert_eq!(errors, 0, "fs {fs:.1}: {errors} payload dibit errors");
+        }
     }
 }
