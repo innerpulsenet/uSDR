@@ -134,9 +134,14 @@ pub struct WfmAudio {
     deemph: OnePole,
     lp: Cascade,
     dc: OnePole,
-    /// The difference, after the subcarrier is taken off.
+    /// The difference, after the subcarrier is taken off, and the same AC
+    /// coupling the sum has: S needs none of its own (the carrier offset
+    /// lands at 38 kHz in it), but without it the sum's coupler leads S in
+    /// phase at the bottom of the band, which leaks bass across the
+    /// channels (a left-only 40 Hz note came out 28 dB down on the right).
     deemph_s: OnePole,
     lp_s: Cascade,
+    dc_s: OnePole,
     /// The subcarrier's quadrature, through the same filters as S, and its
     /// power averaged like the probe's.
     deemph_q: OnePole,
@@ -191,6 +196,7 @@ impl WfmAudio {
             dc: OnePole::new(WFM_DC_TAU_S * fs as f32),
             deemph_s: OnePole::new(tau_s * fs as f32),
             lp_s: wfm_audio_filter(fs),
+            dc_s: OnePole::new(WFM_DC_TAU_S * fs as f32),
             deemph_q: OnePole::new(tau_s * fs as f32),
             lp_q: wfm_audio_filter(fs),
             sq_pow: 0.0,
@@ -290,7 +296,8 @@ impl WfmAudio {
                 let quad = (c * c - s * s) as f32;
                 let sq = self.lp_q.process(self.deemph_q.process(2.0 * x * quad)) as f64;
                 let sub = -2.0 * s * c;
-                let si = self.lp_s.process(self.deemph_s.process(2.0 * x * sub as f32)) as f64;
+                let si = self.lp_s.process(self.deemph_s.process(2.0 * x * sub as f32));
+                let si = (si - self.dc_s.process(si)) as f64;
                 // A subcarrier a degree or two off the pilot puts sin(skew)
                 // of the program into the quadrature, which then reads as
                 // noise and holds a strong station short of full stereo.
@@ -541,6 +548,25 @@ mod tests {
         let sep = 20.0 * (tone(&r, 3_000.0) / tone(&l, 3_000.0)).log10();
         println!("separation R at 3 kHz {sep:.1} dB");
         assert!(sep >= 30.0, "separation {sep:.1} dB");
+    }
+
+    /// Bass keeps its place too. The sum is AC-coupled against the carrier
+    /// offset; with the difference left uncoupled, the coupler's phase lead
+    /// on M alone (3.7 degrees at 50 Hz) leaked a left-only bass note into
+    /// the right channel at about -30 dB.
+    #[test]
+    fn a_left_only_bass_note_stays_left() {
+        for hz in [40.0, 60.0] {
+            let x = mpx(4.0, true, move |t| 0.5 * (TAU * hz * t).sin(), |_| 0.0);
+            let disc = on_air(&x, sigma_for(70.0), 5);
+            let mut dec = WfmAudio::new(FS, DECIM, DEV, TAU_S);
+            let (_, stereo, st) = run(&mut dec, &disc);
+            assert!(st.pilot && st.blend == 1.0, "{st:?}");
+            let (l, r) = (channel(&stereo, 0, 1.0), channel(&stereo, 1, 1.0));
+            let sep = 20.0 * (tone(&l, hz) / tone(&r, hz)).log10();
+            println!("separation at {hz} Hz {sep:.1} dB");
+            assert!(sep >= 40.0, "separation at {hz} Hz {sep:.1} dB");
+        }
     }
 
     #[test]
