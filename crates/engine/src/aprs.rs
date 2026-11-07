@@ -33,6 +33,12 @@ struct Lane {
     /// eight bits apart; without this, unrelated noise flags would eventually
     /// accumulate to the opening threshold.
     since_flag: u16,
+    /// Set on the first junk after a copied packet, for
+    /// `AprsDecoder::process` to put the clock back on this lane's phase.
+    rephase: bool,
+    /// This lane copied a packet and has not closed junk since: its clock
+    /// still sits on that burst's phase.
+    copied: bool,
     skip_flag_zero: bool,
     buf: Vec<u8>,
 }
@@ -110,9 +116,14 @@ impl AprsDecoder {
                     ones: 0,
                     byte: 0,
                     bits: 0,
-                    in_frame: false,
+                    // Armed from the start, as a lane on a noisy channel
+                    // is anyway: the first packet heard is often opened
+                    // by a single flag too.
+                    in_frame: true,
                     opening_flags: 0,
                     since_flag: u16::MAX,
+                    rephase: false,
+                    copied: false,
                     skip_flag_zero: false,
                     buf: Vec::new(),
                 })
@@ -140,7 +151,9 @@ impl AprsDecoder {
             lane.slicer.reset();
             lane.ones = 0;
             lane.bits = 0;
-            lane.in_frame = false;
+            lane.in_frame = true;
+            lane.copied = false;
+            lane.rephase = false;
             lane.opening_flags = 0;
             lane.since_flag = u16::MAX;
             lane.skip_flag_zero = false;
@@ -189,6 +202,9 @@ impl AprsDecoder {
                 let bit = mark == lane.last_mark;
                 lane.last_mark = mark;
                 let frame = lane.push_nrzi(bit);
+                if std::mem::take(&mut lane.rephase) {
+                    lane.slicer.reacquire();
+                }
                 if was_in_frame && !lane.in_frame {
                     // The frame aborted. Whatever rate the loop learned
                     // belonged to it, so hunt the next one from nominal.
@@ -234,24 +250,32 @@ impl Lane {
                 self.bits = 0;
                 self.byte = 0;
                 self.ones = 0;
-                let closed_good = matches!(
-                    pkt,
-                    Some(Ax25Frame::Packet(_) | Ax25Frame::Unsupported)
-                );
-                if self.in_frame && (closed_good || self.since_flag <= 9) {
+                let good = matches!(pkt, Some(Ax25Frame::Packet(_) | Ax25Frame::Unsupported));
+                if self.in_frame {
                     // A closing flag is also a legal opening flag for the
-                    // next frame, so remain armed across a flag train.
+                    // next frame, so remain armed across a flag train, and
+                    // after junk too: noise between bursts keeps a lane in
+                    // junk frames, and the flag that closes one is the flag
+                    // a real packet opens with. On 144.390 that single flag
+                    // is the only clean one ahead of every packet copied
+                    // (the preamble before it does not slice as flags), so
+                    // a lane that dropped out there to hunt for a fresh
+                    // flag train missed them all.
                     self.opening_flags = OPENING_FLAGS;
-                } else if self.in_frame {
-                    // A flag after junk: noise, or the end of a frame that
-                    // failed its check. Staying armed here kept a lane in
-                    // frame for good once it had copied one packet, because
-                    // noise makes a flag every hundred-odd bits and each one
-                    // re-armed it: the lane never went back to hunting, its
-                    // clock steered on noise, and the whole bank sat on the
-                    // last burst's phase. This flag may still open a train.
-                    self.in_frame = false;
-                    self.opening_flags = 1;
+                    if good {
+                        self.copied = true;
+                    } else if self.since_flag > 9 && std::mem::take(&mut self.copied) {
+                        // The first junk after a copied packet is the noise
+                        // behind that burst, not the start of the next, so
+                        // the clock can go back to this lane's own phase
+                        // there: copying the burst steered every lane onto
+                        // its eye, and a bank left on one phase loses the
+                        // next burst whenever its symbol edges fall there.
+                        // Any later junk flag may open a real frame, so the
+                        // clock is left alone then; resetting even its rate
+                        // there lost a live packet.
+                        self.rephase = true;
+                    }
                 } else {
                     self.opening_flags = if self.since_flag <= 9 {
                         self.opening_flags.saturating_add(1)
@@ -725,6 +749,8 @@ mod tests {
             in_frame: false,
             opening_flags: 0,
             since_flag: u16::MAX,
+            rephase: false,
+            copied: false,
             skip_flag_zero: false,
             buf: Vec::new(),
         };
@@ -822,14 +848,37 @@ mod tests {
     }
 
     /// A channel carries one burst after another, with noise between, and
-    /// every one of them must decode, not only the first. Once a lane had
-    /// copied a packet it never left the frame (each noise flag re-armed
-    /// it), its clock steered on noise and the whole bank collapsed onto the
-    /// last burst's phase; the next burst decoded only if its symbol edges
-    /// happened to fall elsewhere. At 96 kHz, where the packet chain runs,
-    /// the sixteen lanes also covered only the first fifth of a baud.
+    /// every one of them must decode, not only the first. At 96 kHz, where
+    /// the packet chain runs, the sixteen lanes once covered only the first
+    /// fifth of a baud.
+    ///
+    /// Measured: 29 of 30, burst 15 lost; the decoder before the bank fixes
+    /// lost the same one.
     #[test]
     fn every_burst_of_a_busy_channel_decodes() {
+        let missed = busy_channel(16);
+        assert!(missed.len() <= 1, "bursts lost: {missed:?}");
+    }
+
+    /// The same channel with each packet opened by a single flag after a
+    /// zero-filled preamble, as many trackers key up. Noise between bursts
+    /// leaves lanes inside junk frames, and the one opening flag is what
+    /// closes them, so a lane has to take that flag as the start of the
+    /// next frame. Dropping out to hunt for a fresh flag train there lost
+    /// every live packet, and all 30 of these.
+    ///
+    /// Measured: 28 of 30 (bursts 7 and 15); the decoder before the bank
+    /// fixes copied 26.
+    #[test]
+    fn a_packet_opened_by_one_flag_after_noise_decodes() {
+        let missed = busy_channel(1);
+        assert!(missed.len() <= 2, "bursts lost: {missed:?}");
+    }
+
+    /// Thirty bursts with noise between, each led by `flags` opening flags
+    /// (padded with zero bytes to the usual 16-flag preamble length).
+    /// Returns the ones that did not decode.
+    fn busy_channel(flags: usize) -> Vec<usize> {
         let fs = 96_000.0f32;
         let mut seed = 0x9E37_79B9_7F4A_7C15u64;
         let mut rng = move || {
@@ -846,8 +895,14 @@ mod tests {
             let noise: Vec<f32> = (0..gap).map(|_| (rng() * 2.0 - 1.0) * 30_000.0).collect();
             dec.process(&noise);
             let frame = build_ui("APRS", "N1TEST-9", &format!("!4134.62N/07324.48W-burst {k}"));
+            let mut bits = stuff_nrzi(&frame);
+            // `stuff_nrzi` leads with 16 flags; turn all but `flags` of them
+            // into zero bytes.
+            for b in &mut bits[..(16 - flags) * 8] {
+                *b = false;
+            }
             let mut audio = crate::afsk::marks_to_audio(
-                &nrzi_tones(&stuff_nrzi(&frame)),
+                &nrzi_tones(&bits),
                 fs,
                 BAUD,
                 MARK,
@@ -860,7 +915,7 @@ mod tests {
                 missed.push(k);
             }
         }
-        assert!(missed.is_empty(), "bursts lost: {missed:?}");
+        missed
     }
 
     #[test]
