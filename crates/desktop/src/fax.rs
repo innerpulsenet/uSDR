@@ -478,7 +478,7 @@ fn canvas(app: &mut App, ui: &mut Ui, h: f32) {
         p.line_segment([pos2(outer.left(), y), pos2(outer.right(), y)], Stroke::new(2.0, alpha(theme::AMBER, glow)));
         p.rect_filled(egui::Rect::from_min_max(pos2(outer.left(), y - 10.0), pos2(outer.right(), y)), CornerRadius::ZERO, alpha(theme::AMBER, 0.05 * glow));
         if !rm {
-            ui.ctx().request_repaint_after(std::time::Duration::from_millis(120));
+            crate::anim::after(ui.ctx(), std::time::Duration::from_millis(120));
         }
     }
     // The scroll position, when the picture is longer than the view.

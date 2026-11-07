@@ -399,7 +399,7 @@ fn reporter_card(app: &App, ui: &mut Ui, st: &Station, rep: &ReporterStatus, com
             }
             if rep.state != ReporterState::Off {
                 // The card counts down while it is open.
-                ui.ctx().request_repaint_after(std::time::Duration::from_secs(1));
+                crate::anim::after(ui.ctx(), std::time::Duration::from_secs(1));
             }
             if normalize_callsign(&st.callsign).is_ok() {
                 ui.add_space(4.0);

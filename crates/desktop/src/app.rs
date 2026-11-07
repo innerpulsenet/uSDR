@@ -1587,7 +1587,7 @@ impl App {
             self.settings_open = true;
         }
         // The countdown moves once a second.
-        ui.ctx().request_repaint_after(std::time::Duration::from_secs(1));
+        crate::anim::after(ui.ctx(), std::time::Duration::from_secs(1));
     }
 
     fn toasts_ui(&mut self, ctx: &egui::Context) {

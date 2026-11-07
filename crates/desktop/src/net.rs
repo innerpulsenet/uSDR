@@ -344,17 +344,21 @@ fn ws_loop(
                                     stats.audio_frames.fetch_add(1, Ordering::Relaxed);
                                     audio.push(&a);
                                 }
+                                // A picture's rows and a ribbon's columns
+                                // are drawn into what is already laid out:
+                                // one paint each, held clear of the last,
+                                // as a spectrum frame is.
                                 Ok(proto::Binary::FaxLine(l)) => {
                                     let _ = ev.send(NetEvent::FaxLine(l));
-                                    crate::anim::now(&ctx);
+                                    crate::anim::frame(&ctx);
                                 }
                                 Ok(proto::Binary::HellColumns(h)) => {
                                     let _ = ev.send(NetEvent::HellColumns(h));
-                                    crate::anim::now(&ctx);
+                                    crate::anim::frame(&ctx);
                                 }
                                 Ok(proto::Binary::ImageLine(l)) => {
                                     let _ = ev.send(NetEvent::ImageLine(l));
-                                    crate::anim::now(&ctx);
+                                    crate::anim::frame(&ctx);
                                 }
                                 Err(_) => {
                                     stats.decode_errors.fetch_add(1, Ordering::Relaxed);
