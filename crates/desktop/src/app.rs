@@ -2685,8 +2685,8 @@ mod tests {
     fn memory_slots_hold_their_places() {
         let mut h = harness();
         h.run_steps(3);
-        // Slot 8 is "FM BC" in the default bank.
-        let before = h.get_by_label("FM BC").rect();
+        // Slot 1 is "AIR" in the default bank.
+        let before = h.get_by_label("AIR").rect();
         let list = vec![
             crate::prefs::Memory { name: "NOAA WX".into(), freq_hz: 162.475e6, mode: Mode::Nfm },
             crate::prefs::Memory { name: "A".into(), freq_hz: 1.0e6, mode: Mode::Am },
@@ -2694,8 +2694,13 @@ mod tests {
         ];
         h.state_mut().app.save_memories(list);
         h.run_steps(3);
-        // Three slots of other lengths, the rest empty: slot 8 has not moved.
-        assert_eq!(h.get_by_label("empty slot 8").rect(), before);
+        // Three slots of other lengths: slot 1 has not moved, and the one
+        // free slot follows the three at a stored slot's pitch.
+        assert_eq!(h.get_by_label("NOAA WX").rect(), before);
+        let free = h.get_by_label("empty slot 4").rect();
+        let third = h.get_by_label("A long name for a memory").rect();
+        assert!(free.left() > third.right() && (third.width() - crate::bar::SLOT_W).abs() < 0.5);
+        assert!(h.query_by_label("empty slot 5").is_none());
     }
 
     #[test]
@@ -3129,6 +3134,60 @@ mod tests {
                 h.render().expect("render").save(dir.join(name.replace(".png", "-inspect.png"))).expect("save");
             }
         }
+    }
+
+    /// The window at a laptop's 1280×800 on FT8, a crowded slot in the
+    /// scope and a signal under the slice flag, and the classifier tab, for
+    /// a look by eye: `USDR_QA_DIR=<dir> cargo test -p usdr-desktop
+    /// qa_renders_the_laptop_window -- --ignored`.
+    #[test]
+    #[ignore]
+    fn qa_renders_the_laptop_window() {
+        let Some(dir) = std::env::var_os("USDR_QA_DIR").map(std::path::PathBuf::from) else { return };
+        let mut h = harness_wh(1280.0, 800.0);
+        {
+            let app = &mut h.state_mut().app;
+            app.status.mode = Mode::Ft8;
+            app.status.freq_hz = 7_074_000.0;
+            app.status.inspect_hz = 7_074_000.0;
+            app.status.bandwidth_hz = 3_000.0;
+            app.dock_tab = DockTab::Decodes;
+            app.decode_family = Some(crate::decoders::Family::HfData);
+        }
+        // A noise floor with the FT8 sub-band lit just above the dial.
+        let n = 2048usize;
+        let (center, rate) = (7_074_000.0, 48_000.0);
+        let pwr: Vec<f32> = (0..n)
+            .map(|i| {
+                let hz = center - rate / 2.0 + i as f64 / n as f64 * rate - 7_074_000.0;
+                let tone = (200.0..2_800.0).contains(&hz) && (i * 7919) % 11 < 4;
+                if tone { -55.0 } else { -105.0 + ((i * 31) % 7) as f32 }
+            })
+            .collect();
+        for (df, de) in [(1_180.0, "PA3MUB"), (1_215.0, "K8OD"), (1_240.0, "K5DCW"), (1_262.0, "W1AW"), (1_410.0, "JA1XYZ"), (1_430.0, "VK2ABC"), (1_980.0, "EA8TL"), (2_400.0, "DL1ABC")] {
+            let mut fields = std::collections::BTreeMap::new();
+            fields.insert("df".to_string(), format!("{df}"));
+            fields.insert("de".to_string(), de.to_string());
+            fields.insert("slotMs".to_string(), "1000".to_string());
+            let ev = proto::DecodeEvent { protocol: "FT8".into(), kind: "cq".into(), summary: format!("CQ {de}"), valid: true, fields };
+            h.state().wire.events.send(NetEvent::Decode { inspect_hz: 7_074_000.0, event: ev, at: std::time::SystemTime::now() }).unwrap();
+        }
+        for _ in 0..4 {
+            // The audio: a tone at each decode, for the scope's spectrum.
+            let scope: Vec<i16> = (0..4096)
+                .map(|i| {
+                    let t = i as f64 / 12_000.0;
+                    let v: f64 = [1_205.0, 1_240.0, 1_265.0, 1_287.0, 1_435.0, 1_455.0, 2_005.0, 2_425.0].iter().map(|f| (std::f64::consts::TAU * f * t).sin()).sum();
+                    (v * 2_000.0) as i16
+                })
+                .collect();
+            h.state().wire.events.send(NetEvent::Fft(Box::new(FftFrame { center_hz: center, rate_hz: rate, inspect_hz: 7_074_000.0, pwr: pwr.clone(), scope, scope_rate_hz: 12_000.0, ..Default::default() }))).unwrap();
+            h.run_steps(2);
+        }
+        h.render().expect("render").save(dir.join("laptop-ft8.png")).expect("save");
+        h.state_mut().app.dock_tab = DockTab::Classifier;
+        h.run_steps(4);
+        h.render().expect("render").save(dir.join("laptop-classifier.png")).expect("save");
     }
 
     /// Renders the HF windows and views to PNGs for a look by eye, with a

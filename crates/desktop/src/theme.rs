@@ -130,10 +130,11 @@ pub fn line_2() -> Color32 {
 
 pub const EMBER: Color32 = rgb(0xf43a2a);
 pub const ACTION: Color32 = rgb(0xd12c1e);
-pub const ACTION_HOVER: Color32 = rgb(0xbd2417);
 
 /// uSDR's family accent: the VFO, the passband, the live trace.
 pub const AMBER: Color32 = rgb(0xffb347);
+/// A primary key's amber under the pointer.
+pub const AMBER_HOVER: Color32 = rgb(0xffc56e);
 /// Secondary data color: peak hold, the second series.
 pub const CYAN: Color32 = rgb(0x52e3ff);
 pub const VIOLET: Color32 = rgb(0xb38cff);

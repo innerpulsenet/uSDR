@@ -335,15 +335,18 @@ pub fn action(ui: &mut Ui, label: &str) -> Response {
 
 /// The one filled call to action in a view.
 pub fn primary(ui: &mut Ui, label: &str) -> Response {
-    let galley = ui.painter().layout_no_wrap(label.to_uppercase(), theme::sans_semibold(12.0), Color32::WHITE);
+    // Amber, the house accent: crimson stays for recording, live and
+    // destructive keys, so a SAVE or Connect never reads as a stop.
+    let text = Color32::from_rgb(0x1e, 0x14, 0x06);
+    let galley = ui.painter().layout_no_wrap(label.to_uppercase(), theme::sans_semibold(12.0), text);
     let (rect, resp) = ui.allocate_exact_size(vec2(galley.size().x + 32.0, 32.0), Sense::click());
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, label));
     let hover = ui.ctx().animate_bool_with_time(resp.id.with("hv"), resp.hovered(), 0.12);
     let p = ui.painter();
-    p.rect_filled(rect, CornerRadius::same(theme::RADIUS), theme::lerp(theme::ACTION, theme::ACTION_HOVER, hover));
+    p.rect_filled(rect, CornerRadius::same(theme::RADIUS), theme::lerp(theme::AMBER, theme::AMBER_HOVER, hover));
     let press = pressed(ui, &resp);
     theme::key_face(p, rect, theme::RADIUS, press);
-    p.galley(rect.center() - galley.size() / 2.0 + vec2(0.0, press), galley, Color32::WHITE);
+    p.galley(rect.center() - galley.size() / 2.0 + vec2(0.0, press), galley, text);
     resp
 }
 

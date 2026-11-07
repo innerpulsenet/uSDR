@@ -1247,6 +1247,23 @@ fn meter(app: &mut App, ui: &mut Ui, min_w: f32, max_w: f32) {
         if !s.spurs_hz.is_empty() {
             notches.push(format!("SPUR {}", s.spurs_hz.len()));
         }
+        // An HF data decoder owns the channel: the voice classifier has
+        // nothing to say about it, so the bay reports the decoder instead.
+        if s.mode.is_hf_data() {
+            let (busy, line) = hf_decoder_line(app);
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 6.0;
+                widgets::chip(ui, if busy { Tone::Ok } else { Tone::Idle }, if busy { "DECODING" } else { "LISTENING" });
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.label(small(format!("SNR {snr}")));
+                    ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                        let col = if busy { widgets::protocol_color(s.mode.label()) } else { theme::text_3() };
+                        ui.add(egui::Label::new(RichText::new(&line).font(theme::sans(12.0)).color(col)).truncate()).on_hover_text(&line);
+                    });
+                });
+            });
+            return;
+        }
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 6.0;
             let (c, word) = app.shown_class();
@@ -1289,6 +1306,41 @@ fn meter(app: &mut App, ui: &mut Ui, min_w: f32, max_w: f32) {
     });
     if calibrate && let Some(l) = &app.link {
         l.post_get("/api/sdr/calibrate", json!({}), Get::Calibrate);
+    }
+}
+
+/// The SIGNAL bay's line for an HF data decoder, from its own decodes:
+/// whether it has copied anything lately, and what. Slotted modes count the
+/// last slot and give the time to the next; the rest count the last minute.
+fn hf_decoder_line(app: &App) -> (bool, String) {
+    let mode = app.status.mode;
+    let name = mode.label();
+    let now = std::time::SystemTime::now();
+    let ago = |d: &crate::app::DecodeRow| now.duration_since(d.at).map_or(0.0, |x| x.as_secs_f64());
+    let mine = |d: &&crate::app::DecodeRow| d.ev.protocol == name || (d.family == Some(crate::decoders::Family::HfData) && (d.freq_hz - app.status.freq_hz).abs() < 3_000.0);
+    let slot_s = match mode {
+        Mode::Ft8 => Some(15.0),
+        Mode::Ft4 => Some(7.5),
+        Mode::Wspr => Some(120.0),
+        _ => None,
+    };
+    if let Some(slot) = slot_s {
+        let unix = now.duration_since(std::time::UNIX_EPOCH).map_or(0.0, |d| d.as_secs_f64());
+        let next = slot - unix % slot;
+        // A slot is decoded after it ends, so its decodes land in the slot
+        // after: the last slot's copy is what arrived within one slot length.
+        let n = app.decodes.iter().filter(mine).take_while(|d| ago(d) < slot * 1.5).count();
+        // Short enough for the bay: the mode key already names the mode.
+        let line = if n > 0 { format!("{n} heard · next {next:.0} s") } else { format!("next slot in {next:.0} s") };
+        return (n > 0, line);
+    }
+    let recent: Vec<&crate::app::DecodeRow> = app.decodes.iter().filter(mine).take_while(|d| ago(d) < 60.0).collect();
+    match recent.first() {
+        Some(last) => {
+            let what: String = last.ev.summary.chars().take(40).collect();
+            (true, format!("{} this minute · {what}", recent.len()))
+        }
+        None => (false, crate::app::mode_idle_text(mode).to_string()),
     }
 }
 
@@ -1492,14 +1544,13 @@ pub fn memory_row(app: &mut App, ui: &mut Ui) {
     ui.horizontal(|ui| memory_chips(app, ui));
 }
 
-/// Every memory slot's width, filled or empty, so a slot is always in the
-/// same place: storing one never moves the slots after it.
+/// Every stored slot's width, so a slot is always in the same place:
+/// storing or renaming one never moves the slots after it.
 pub const SLOT_W: f32 = 108.0;
 
 /// A memory slot: its number (Ctrl+number recalls it), the frequency and
-/// its name in the mode's color, the name cut to the slot; an empty slot is
-/// a dashed outline with its number, which brightens while STORE is waiting
-/// for a slot.
+/// its name in the mode's color, the name cut to the slot; the free slot
+/// after them is a short dashed "+ N" that stores the receiver there.
 fn memory_pill(ui: &mut Ui, slot: usize, m: Option<&crate::prefs::Memory>, lit: bool, armed: bool) -> egui::Response {
     let num_f = theme::mono(10.0);
     let font = theme::mono_bold(10.5);
@@ -1513,7 +1564,9 @@ fn memory_pill(ui: &mut Ui, slot: usize, m: Option<&crate::prefs::Memory>, lit: 
         let name = widgets::ellipsize(&p, &m.name, theme::mono_bold(10.0), room);
         (f, p.layout_no_wrap(name, theme::mono_bold(10.0), egui::Color32::PLACEHOLDER), mode_tally(m.mode))
     });
-    let (rect, resp) = ui.allocate_exact_size(vec2(SLOT_W, 22.0), Sense::click());
+    let plus = m.is_none().then(|| p.layout_no_wrap(format!("+ {slot}"), theme::mono(10.0), egui::Color32::PLACEHOLDER));
+    let w = plus.as_ref().map_or(SLOT_W, |g| g.size().x + 20.0);
+    let (rect, resp) = ui.allocate_exact_size(vec2(w, 22.0), Sense::click());
     let name = m.map_or_else(|| format!("empty slot {slot}"), |m| m.name.clone());
     resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, lit, &name));
     let hover = ui.ctx().animate_bool_with_time(resp.id.with("hv"), resp.hovered(), 0.12);
@@ -1536,7 +1589,8 @@ fn memory_pill(ui: &mut Ui, slot: usize, m: Option<&crate::prefs::Memory>, lit: 
             let r = rect.shrink(0.5);
             let pts = [r.left_top(), r.right_top(), r.right_bottom(), r.left_bottom(), r.left_top()];
             p.extend(egui::Shape::dashed_line(&pts, Stroke::new(1.0, c), 3.0, 2.0));
-            p.galley(rect.center() - num.size() / 2.0, num, if armed { theme::AMBER } else { theme::text_3() });
+            let g = plus.unwrap_or(num);
+            p.galley(rect.center() - g.size() / 2.0, g, if armed || hover > 0.5 { theme::AMBER } else { theme::text_3() });
         }
     }
     resp
@@ -1555,17 +1609,20 @@ pub fn memory_chips(app: &mut App, ui: &mut Ui) {
             app.memory_armed = !armed;
         }
         let mut store_at = None;
-        let slots = list.len().max(8);
+        // The stored slots, then the one free slot after them: memories are
+        // kept in order, so that is the only empty slot a store can fill,
+        // and a row of empty outlines would only take the strip's width.
+        let slots = list.len() + 1;
         for i in 0..slots {
             let m = list.get(i);
             let lit = m.is_some_and(|m| m.mode == app.status.mode && (m.freq_hz - inspect).abs() <= (crate::tuning::mode_raster_hz(m.mode, m.freq_hz) / 2.0).max(1000.0));
             let r = memory_pill(ui, i + 1, m, lit, app.memory_armed);
             let r = match m {
                 Some(m) => r.on_hover_text(format!("{} · {} MHz · {} · Ctrl+{}", m.name, crate::tuning::fmt_mhz(m.freq_hz, 5), m.mode.label(), i + 1)),
-                None => r.on_hover_text(format!("Slot {} is empty: STORE, then this slot", i + 1)),
+                None => r.on_hover_text(format!("Store {:.4} MHz {} in slot {}", inspect / 1e6, app.status.mode.label(), i + 1)),
             };
             if r.clicked() {
-                if app.memory_armed || ui.input(|i| i.modifiers.shift) {
+                if m.is_none() || app.memory_armed || ui.input(|i| i.modifiers.shift) {
                     store_at = Some(i);
                 } else if let Some(m) = m {
                     let (hz, mode) = (m.freq_hz, m.mode);

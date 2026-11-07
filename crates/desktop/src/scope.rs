@@ -551,22 +551,51 @@ impl Scope {
         }
         // What was decoded in the last slot, each at its audio frequency:
         // a tick in the plot, its callsign on the ruler where it fits.
+        // Packed left to right in frequency order: a call that would land on
+        // its neighbor slides right (a leader line back to its tick) by up
+        // to its own width, and past that it folds into a +N at the end.
+        // Every call stays in the cursor readout.
         if tagged {
             let c = crate::widgets::protocol_color(mode.label());
-            for (hz, name) in tags {
-                if *hz <= span.lo || *hz >= span.hi {
-                    continue;
-                }
+            let mut order: Vec<&(f32, String)> = tags.iter().filter(|(hz, _)| *hz > span.lo && *hz < span.hi).collect();
+            order.sort_by(|a, b| a.0.total_cmp(&b.0));
+            let mut last_right = ruler.left() - 4.0;
+            let mut folded = 0usize;
+            for (hz, name) in order {
                 let x = x_of(*hz);
                 painter.line_segment([pos2(x, spec.top() + 1.0), pos2(x, spec.top() + 6.0)], Stroke::new(1.5, c));
                 let g = painter.layout_no_wrap(name.clone(), theme::mono(10.0), c);
-                let r = Rect::from_center_size(pos2(x, ruler.center().y + 0.5), g.size());
-                if r.left() >= ruler.left() && r.right() <= ruler.right() && !names.iter().any(|p| p.intersects(r.expand(2.0))) {
+                let w = g.size().x;
+                let want = x - w / 2.0;
+                let mut left = want.max(ruler.left() + 2.0).max(last_right + 4.0);
+                // Clear the bands' and marks' names too.
+                for _ in 0..4 {
+                    let r = Rect::from_min_size(pos2(left, ruler.center().y + 0.5 - g.size().y / 2.0), g.size());
+                    match names.iter().find(|p| p.intersects(r.expand(2.0))) {
+                        Some(p) => left = p.right() + 4.0,
+                        None => break,
+                    }
+                }
+                let r = Rect::from_min_size(pos2(left, ruler.center().y + 0.5 - g.size().y / 2.0), g.size());
+                let clear = !names.iter().any(|p| p.intersects(r.expand(2.0)));
+                if clear && r.right() <= ruler.right() - 2.0 && left - want <= w {
                     painter.rect_filled(r.expand2(vec2(2.0, 0.0)), CornerRadius::same(2), theme::ink());
+                    if (r.center().x - x).abs() > 1.5 {
+                        painter.line_segment([pos2(r.center().x, r.bottom()), pos2(x, spec.top() + 1.0)], Stroke::new(1.0, alpha(c, 0.6)));
+                    }
                     painter.galley(r.min, g, c);
                     names.push(r);
+                    last_right = r.right();
                 } else {
-                    painter.circle_filled(pos2(x, ruler.center().y + 0.5), 1.8, c);
+                    folded += 1;
+                }
+            }
+            if folded > 0 {
+                let g = painter.layout_no_wrap(format!("+{folded}"), theme::mono_bold(10.0), c);
+                let r = Rect::from_min_size(pos2((last_right + 4.0).max(ruler.left() + 2.0), ruler.center().y + 0.5 - g.size().y / 2.0), g.size());
+                if r.right() <= ruler.right() - 2.0 && !names.iter().any(|p| p.intersects(r.expand(2.0))) {
+                    painter.rect(r.expand2(vec2(3.0, 0.0)), CornerRadius::same(2), alpha(c, 0.18), Stroke::new(1.0, alpha(c, 0.6)), egui::StrokeKind::Inside);
+                    painter.galley(r.min, g, c);
                 }
             }
         }
@@ -644,7 +673,16 @@ impl Scope {
                 let x = p.x.clamp(spec.left(), spec.right());
                 painter.line_segment([pos2(x, spec.top()), pos2(x, if with_mini { mini.bottom() } else { spec.bottom() })], Stroke::new(1.0, alpha(theme::text(), 0.35)));
                 let i = self.bin_of(hz, &span, from_pass);
-                format!("{} · {:.1} dB · peak {:.1}", fmt_hz(hz, span.signed), self.spectrum[i], self.peak[i])
+                // The calls decoded within a few pixels of the cursor, so a
+                // folded or crowded call is still read by pointing at it.
+                let near = (6.0 / spec.width() * (span.hi - span.lo)).max(10.0);
+                let calls: Vec<&str> = if tagged { tags.iter().filter(|(t, _)| (t - hz).abs() <= near).map(|(_, n)| n.as_str()).collect() } else { Vec::new() };
+                let mut out = format!("{} · {:.1} dB · peak {:.1}", fmt_hz(hz, span.signed), self.spectrum[i], self.peak[i]);
+                if !calls.is_empty() {
+                    out = format!("{} · {}", fmt_hz(hz, span.signed), calls.join(" "));
+                    out += &format!(" · {:.1} dB", self.spectrum[i]);
+                }
+                out
             }
             _ => self.measure(status, sub, &span, from_pass),
         };

@@ -17,9 +17,11 @@ fn mono(t: impl Into<String>, c: egui::Color32) -> RichText {
 pub fn dock(app: &mut App, ui: &mut Ui) {
     // The scope: always in view beside the logs.
     if app.prefs.show_scope {
-        // The logs keep at least 390 px beside the scope, so their four tabs
-        // and their counts never run under its title.
-        let scope_max = (ui.available_width() - 390.0).clamp(240.0, 800.0);
+        // The logs keep the measured width of their tab row (and the
+        // decode keys at its end) beside the scope, so a tab never runs
+        // under the scope's title however many tabs there are.
+        let need = tabs_width(ui) + 64.0;
+        let scope_max = (ui.available_width() - need).clamp(240.0, 800.0);
         let resp = egui::Panel::right("dock-scope")
             .resizable(true)
             .default_size(app.prefs.scope_width.min(scope_max))
@@ -31,11 +33,11 @@ pub fn dock(app: &mut App, ui: &mut Ui) {
     let row = ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 4.0;
         let tabs = [
-            (DockTab::Decodes, "Decodes", Some(app.decodes.len())),
-            (DockTab::Classifier, "Classifier", Some(app.class_log.len())),
-            (DockTab::Calls, "Last heard", Some(app.calls.len())),
-            (DockTab::Scan, "Scan", None),
-            (DockTab::Map, "Map", None),
+            (DockTab::Decodes, TAB_LABELS[0], Some(app.decodes.len())),
+            (DockTab::Classifier, TAB_LABELS[1], Some(app.class_log.len())),
+            (DockTab::Calls, TAB_LABELS[2], Some(app.calls.len())),
+            (DockTab::Scan, TAB_LABELS[3], None),
+            (DockTab::Map, TAB_LABELS[4], None),
         ];
         let mut under: Option<egui::Rect> = None;
         for (t, label, count) in tabs {
@@ -52,21 +54,13 @@ pub fn dock(app: &mut App, ui: &mut Ui) {
         // room: a row of the dock's height given back to the log.
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.spacing_mut().item_spacing.x = 3.0;
-            match app.dock_tab {
-                // Below the menu's own width the keys ride the family row.
-                DockTab::Decodes => {
-                    let room = ui.available_width() - 12.0;
-                    app.decode_keys_below = room < 56.0;
-                    if !app.decode_keys_below {
-                        decode_keys(app, ui, room);
-                    }
+            // Below the menu's own width the keys ride the family row.
+            if app.dock_tab == DockTab::Decodes {
+                let room = ui.available_width() - 12.0;
+                app.decode_keys_below = room < 56.0;
+                if !app.decode_keys_below {
+                    decode_keys(app, ui, room);
                 }
-                DockTab::Classifier => {
-                    if widgets::action_small(ui, "CLEAR").clicked() {
-                        app.class_log.clear();
-                    }
-                }
-                _ => {}
             }
         });
         // The amber underline slides to the tab that was chosen.
@@ -91,6 +85,20 @@ pub fn dock(app: &mut App, ui: &mut Ui) {
         DockTab::Scan => scan(app, ui),
         DockTab::Map => crate::map::show(app, ui),
     }
+}
+
+/// The dock's tabs, in order; the first three keep a log and show a count.
+const TAB_LABELS: [&str; 5] = ["Decodes", "Classifier", "Last heard", "Scan", "Map"];
+
+/// The width the tab row takes, measured the way [`tab`] lays each one out.
+fn tabs_width(ui: &Ui) -> f32 {
+    let p = ui.painter();
+    let pill = p.layout_no_wrap("999".into(), theme::mono_bold(10.0), egui::Color32::PLACEHOLDER).size().x + 10.0 + 6.0;
+    TAB_LABELS
+        .iter()
+        .enumerate()
+        .map(|(i, l)| p.layout_no_wrap(l.to_string(), theme::sans_semibold(12.0), egui::Color32::PLACEHOLDER).size().x + 16.0 + if i < 3 { pill } else { 0.0 } + 4.0)
+        .sum()
 }
 
 /// A dock tab: its name and, when it keeps a log, a pill with the count.
@@ -652,7 +660,18 @@ fn signal_details(app: &App, ui: &mut Ui) {
 
 fn classifier(app: &mut App, ui: &mut Ui) {
     signal_details(app, ui);
-    ui.label(mono(format!("{} detections", app.class_log.len()), theme::text_3()));
+    // The count and its CLEAR key share a row inside the log, so the tab
+    // row above never has to find room for the key.
+    ui.horizontal(|ui| {
+        ui.label(mono(format!("{} detections", app.class_log.len()), theme::text_3()));
+        if !app.class_log.is_empty() {
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if widgets::action_small(ui, "CLEAR").clicked() {
+                    app.class_log.clear();
+                }
+            });
+        }
+    });
     let mut tune_to = None;
     if app.class_log.is_empty() {
         egui::ScrollArea::vertical().id_salt("class").auto_shrink([false, false]).min_scrolled_height(0.0).show(ui, |ui| {

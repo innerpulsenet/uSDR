@@ -1894,7 +1894,10 @@ impl Panafall {
         // ---- slice flag at the carrier
         if on_screen {
             let active_a = !self.rx_b.as_ref().is_some_and(|b| b.active);
-            self.flags[0] = Some(flag.paint(&painter, &frost, pan, pos2(ix, line_y_at(&line, ix).unwrap_or(pan.center().y)), active_a));
+            // The trace's highest point over a span of x, for the flag to
+            // judge whether its card would cover the signal.
+            let peak_top = |x0: f32, x1: f32| line.iter().filter(|p| p.x >= x0 && p.x <= x1).map(|p| p.y).fold(f32::INFINITY, f32::min);
+            self.flags[0] = Some(flag.paint(&painter, &frost, pan, pos2(ix, line_y_at(&line, ix).unwrap_or(pan.center().y)), active_a, &peak_top));
         } else {
             self.flags[0] = None;
         }
@@ -1915,7 +1918,8 @@ impl Panafall {
                     theme::VIOLET,
                     Stroke::NONE,
                 ));
-                self.flags[1] = Some(paint_b_flag(&painter, &frost, pan, bx, &b));
+                let b_top = self.flags[0].map_or(pan.top() + 8.0, |a| a.bottom() + 8.0);
+                self.flags[1] = Some(paint_b_flag(&painter, &frost, pan, bx, &b, b_top));
             }
         }
 
@@ -2470,10 +2474,24 @@ pub struct FlagRds {
 
 impl SliceFlag {
     /// `at`: the carrier's x and the trace's height there.
-    fn paint(&self, painter: &egui::Painter, frost: &Frost, pan: Rect, at: Pos2, active: bool) -> Rect {
+    /// `peak_top(x0, x1)`: the trace's highest y over that span.
+    fn paint(&self, painter: &egui::Painter, frost: &Frost, pan: Rect, at: Pos2, active: bool, peak_top: &dyn Fn(f32, f32) -> f32) -> Rect {
         let (x, trace_y) = (at.x, at.y);
+        // The card goes on the side of the carrier the signal is not: left
+        // of it on upper sideband, right of it on lower, right otherwise.
+        let prefer_left = self.mode == Mode::Usb || self.mode.is_sideband_data();
+        let full_h = if self.rds.is_some() { 84.0 } else { 62.0 };
+        let full_w = if self.rds.is_some() { 296.0 } else { 248.0 };
+        let (side_left, _) = flag_side(x, full_w, pan, prefer_left);
+        // A short panadapter, or a trace that rises into where the card
+        // would sit, gets the one-line flag pinned to the top instead.
+        let card_x0 = if side_left { x - 10.0 - full_w } else { x + 10.0 };
+        let card_bottom = pan.top() + 8.0 + full_h;
+        if pan.height() < 220.0 || peak_top(card_x0, card_x0 + full_w) < card_bottom + 4.0 {
+            return self.paint_compact(painter, frost, pan, x, active, prefer_left);
+        }
         if let Some(rds) = &self.rds {
-            return self.paint_rds(painter, frost, pan, at, active, rds);
+            return self.paint_rds(painter, frost, pan, at, active, rds, prefer_left);
         }
         let bottom = match (&self.protocol, self.snr_db) {
             (Some(p), Some(s)) => format!("{p} · SNR {s:.1} dB"),
@@ -2487,8 +2505,8 @@ impl SliceFlag {
         let rec_w = if self.recording { 16.0 } else { 0.0 };
         let w = 248.0;
         let h = 62.0;
-        let right_side = x + 10.0 + w < pan.right() - 4.0;
-        let left = if right_side { x + 10.0 } else { x - 10.0 - w };
+        let (on_left, left) = flag_side(x, w, pan, prefer_left);
+        let right_side = !on_left;
         // Keep the card clear of the trace where there is room above it.
         let top = (pan.top() + 8.0).max((trace_y - h - 14.0).min(pan.top() + 8.0));
         let r = Rect::from_min_size(pos2(left, top), vec2(w, h));
@@ -2521,7 +2539,8 @@ impl SliceFlag {
     /// The flag for a broadcast station with RDS: a line for who it is and
     /// its program type with the SNR beside them, and a line for what is on,
     /// a text still arriving shown with its gaps and a bar of how much is in.
-    fn paint_rds(&self, painter: &egui::Painter, frost: &Frost, pan: Rect, at: Pos2, active: bool, rds: &FlagRds) -> Rect {
+    #[allow(clippy::too_many_arguments)]
+    fn paint_rds(&self, painter: &egui::Painter, frost: &Frost, pan: Rect, at: Pos2, active: bool, rds: &FlagRds, prefer_left: bool) -> Rect {
         let (x, trace_y) = (at.x, at.y);
         let rec_w = if self.recording { 16.0 } else { 0.0 };
         let fade = |c: Color32| if rds.locked { c } else { theme::text_3() };
@@ -2535,8 +2554,8 @@ impl SliceFlag {
         // station's text comes in.
         let w = 296.0;
         let h = 84.0;
-        let right_side = x + 10.0 + w < pan.right() - 4.0;
-        let left = if right_side { x + 10.0 } else { x - 10.0 - w };
+        let (on_left, left) = flag_side(x, w, pan, prefer_left);
+        let right_side = !on_left;
         let top = (pan.top() + 8.0).max((trace_y - h - 14.0).min(pan.top() + 8.0));
         let r = Rect::from_min_size(pos2(left, top), vec2(w, h));
         frost.plate(painter, r, 4, alpha(theme::AMBER, 0.45));
@@ -2589,6 +2608,58 @@ impl SliceFlag {
         }
         r
     }
+}
+
+impl SliceFlag {
+    /// The one-line flag, pinned to the top of the panadapter beside the
+    /// carrier: receiver, frequency, mode and width, S-units, and the meter
+    /// as a rule along its foot. Used where the full card would cover the
+    /// trace it describes.
+    fn paint_compact(&self, painter: &egui::Painter, frost: &Frost, pan: Rect, x: f32, active: bool, prefer_left: bool) -> Rect {
+        let h = 22.0;
+        let what = match &self.rds {
+            Some(r) if !r.station.is_empty() => r.station.clone(),
+            _ => format!("{} · {}", self.mode.label(), crate::tuning::fmt_short_hz(self.bandwidth_hz)),
+        };
+        let what = crate::widgets::ellipsize(painter, &what, theme::mono(10.0), 110.0);
+        let wg = painter.layout_no_wrap(what, theme::mono(10.0), theme::AMBER);
+        let sg = painter.layout_no_wrap(self.s_label.clone(), theme::mono_bold(10.5), theme::text());
+        let fw = painter.layout_no_wrap(crate::tuning::fmt_mhz(self.freq_hz, 4), theme::mono_bold(12.5), Color32::PLACEHOLDER).size().x;
+        let rec_w = if self.recording { 12.0 } else { 0.0 };
+        let w = 24.0 + fw + 10.0 + wg.size().x + 10.0 + sg.size().x + rec_w + 8.0;
+        let (on_left, left) = flag_side(x, w, pan, prefer_left);
+        let r = Rect::from_min_size(pos2(left, pan.top() + 4.0), vec2(w, h));
+        frost.plate(painter, r, 4, alpha(theme::AMBER, 0.45));
+        // The letter tab, set to this height.
+        let tab = Rect::from_min_size(r.left_top() + vec2(5.0, 4.0), vec2(14.0, 14.0));
+        painter.rect_filled(tab, CornerRadius::same(3), alpha(theme::AMBER, if active { 0.9 } else { 0.3 }));
+        painter.text(tab.center(), Align2::CENTER_CENTER, "A", theme::mono_bold(10.0), if active { theme::ink() } else { theme::text() });
+        let anchor = if on_left { r.right() } else { r.left() };
+        painter.line_segment([pos2(x, r.center().y), pos2(anchor, r.center().y)], Stroke::new(1.0, alpha(theme::AMBER, 0.5)));
+        let y = r.center().y - 1.0;
+        crate::widgets::rolling_text(painter, egui::Id::new("flag-a-freq"), pos2(r.left() + 24.0, y - 8.0), Align2::LEFT_TOP, &crate::tuning::fmt_mhz(self.freq_hz, 4), theme::mono_bold(12.5), theme::text());
+        let mut cx = r.left() + 24.0 + fw + 10.0;
+        painter.galley(pos2(cx, y - wg.size().y / 2.0), wg.clone(), theme::AMBER);
+        cx += wg.size().x + 10.0;
+        painter.galley(pos2(cx, y - sg.size().y / 2.0), sg, theme::text());
+        if self.recording {
+            painter.circle_filled(pos2(r.right() - 10.0, y), 3.5, theme::EMBER);
+        }
+        // The meter along the foot.
+        let bar = Rect::from_min_max(pos2(r.left() + 4.0, r.bottom() - 3.0), pos2(r.right() - 4.0, r.bottom() - 1.5));
+        painter.rect_filled(bar, CornerRadius::same(1), alpha(theme::OK, 0.15));
+        painter.rect_filled(Rect::from_min_size(bar.min, vec2(bar.width() * self.meter.clamp(0.0, 1.0), bar.height())), CornerRadius::same(1), if self.meter >= crate::meter::frac(crate::meter::S9_DBFS) { theme::AMBER } else { theme::OK });
+        r
+    }
+}
+
+/// Which side of the carrier at `x` a flag `w` wide goes, and its left
+/// edge: the preferred side where it fits, else the other.
+fn flag_side(x: f32, w: f32, pan: Rect, prefer_left: bool) -> (bool, f32) {
+    let fits_left = x - 10.0 - w > pan.left() + 4.0;
+    let fits_right = x + 10.0 + w < pan.right() - 4.0;
+    let on_left = if prefer_left { fits_left || !fits_right } else { !fits_right && fits_left };
+    (on_left, if on_left { x - 10.0 - w } else { x + 10.0 })
 }
 
 /// The color the app gives RDS everywhere it shows.
@@ -2659,11 +2730,11 @@ fn resample(old: &[f32], (oc, os): (f64, f64), n: usize, (nc, ns): (f64, f64)) -
 
 /// Receiver B's flag: smaller than A's, in violet, set below it so the two
 /// never cover each other when the receivers are close.
-fn paint_b_flag(painter: &egui::Painter, frost: &Frost, pan: Rect, x: f32, b: &RxB) -> Rect {
+fn paint_b_flag(painter: &egui::Painter, frost: &Frost, pan: Rect, x: f32, b: &RxB, top: f32) -> Rect {
     let (w, h) = (150.0, 44.0);
     let right = x + 10.0 + w < pan.right() - 4.0;
     let left = if right { x + 10.0 } else { x - 10.0 - w };
-    let r = Rect::from_min_size(pos2(left, pan.top() + 78.0), vec2(w, h));
+    let r = Rect::from_min_size(pos2(left, top), vec2(w, h));
     frost.plate(painter, r, 4, alpha(theme::VIOLET, 0.55));
     if b.active {
         painter.rect_filled(Rect::from_min_size(r.left_top(), vec2(16.0, 2.0)), CornerRadius::ZERO, theme::EMBER);
@@ -2691,6 +2762,17 @@ fn paint_b_flag(painter: &egui::Painter, frost: &Frost, pan: Rect, x: f32, b: &R
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_flag_sits_off_the_sideband_where_it_fits() {
+        let pan = Rect::from_min_size(pos2(0.0, 0.0), vec2(1000.0, 300.0));
+        // Upper sideband: left of the carrier, unless that runs off the pan.
+        assert_eq!(flag_side(500.0, 200.0, pan, true), (true, 290.0));
+        assert_eq!(flag_side(100.0, 200.0, pan, true), (false, 110.0));
+        // Otherwise right, unless that runs off the pan.
+        assert_eq!(flag_side(500.0, 200.0, pan, false), (false, 510.0));
+        assert_eq!(flag_side(900.0, 200.0, pan, false), (true, 690.0));
+    }
     use egui::{Event, Modifiers, PointerButton, TouchPhase};
     use egui_kittest::Harness;
 
