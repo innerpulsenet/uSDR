@@ -3067,10 +3067,10 @@ mod tests {
         h.state_mut().app.status.mode = Mode::Ft8;
         h.state_mut().app.status.inspect_hz = 14_074_000.0;
         h.run_steps(3);
-        h.get_by_label("HF").click();
+        h.get_by_label("DATA").click();
         h.run_steps(4);
         h.render().expect("render").save(dir.join("hf-menu.png")).expect("save");
-        h.get_by_label("HF").click();
+        h.get_by_label("DATA").click();
         h.run_steps(2);
         {
             let app = &mut h.state_mut().app;

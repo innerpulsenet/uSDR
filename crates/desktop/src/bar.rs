@@ -361,13 +361,24 @@ fn mode_tally(m: Mode) -> egui::Color32 {
     }
 }
 
-/// The HF data modes as the HF key's menu lays them out: four domains, by
-/// who sends them, each a card of tiles.
-const HF_DOMAINS: &[(&str, &[Mode])] = &[
+/// The modes a person listens to; every other mode is a decoder, behind
+/// the DATA key.
+const VOICE: [Mode; 5] = [Mode::Nfm, Mode::Am, Mode::Usb, Mode::Lsb, Mode::Wfm];
+
+fn is_data(m: Mode) -> bool {
+    !VOICE.contains(&m)
+}
+
+/// The decoders as the DATA key's menu lays them out: by who is on the
+/// air, a card of tiles each, two cards to a row.
+const DATA_DOMAINS: &[(&str, &[Mode])] = &[
+    ("VHF · UHF DIGITAL VOICE", &[Mode::P25, Mode::Dmr, Mode::Nxdn]),
+    ("PAGING & PACKET", &[Mode::Packet, Mode::Pager, Mode::Flex]),
     ("AMATEUR · WEAK SIGNAL & KEYBOARD", &[Mode::Ft8, Mode::Ft4, Mode::Wspr, Mode::Js8, Mode::Psk31, Mode::Rtty, Mode::Cw, Mode::Olivia, Mode::Mfsk, Mode::Hell, Mode::Sstv]),
     ("MARITIME & WEATHER", &[Mode::Wefax, Mode::Navtex, Mode::Sitor, Mode::Dsc]),
     ("AVIATION, MILITARY & DATA LINKS", &[Mode::Hfdl, Mode::Ale, Mode::Stanag, Mode::Pactor]),
     ("TIME & BROADCAST", &[Mode::Wwv, Mode::Drm]),
+    ("SEARCH", &[Mode::Auto, Mode::Scan]),
 ];
 
 /// A mode's tile line under its name: what it is on the air, in a few
@@ -395,31 +406,33 @@ fn hf_spec(m: Mode) -> &'static str {
         Mode::Pactor => "PACTOR-I",
         Mode::Wwv => "100 Hz code",
         Mode::Drm => "OFDM · AAC",
+        Mode::P25 => "Phase 1 · C4FM",
+        Mode::Dmr => "Tier II · TDMA",
+        Mode::Nxdn => "4-FSK · 6.25k",
+        Mode::Packet => "AX.25 · APRS",
+        Mode::Pager => "POCSAG",
+        Mode::Flex => "FLEX paging",
+        Mode::Auto => "every decoder",
+        Mode::Scan => "voice scanner",
         _ => "",
     }
 }
 
-/// One key on the mode board: a mode, or the key that lists the HF data
-/// modes.
+/// One key on the mode board: a mode, or the key that lists the decoders.
 #[derive(Clone, Copy, PartialEq)]
 enum Key {
     Mode(Mode),
-    Hf,
+    Data,
 }
 
-/// The mode board for receiver A: rows of tracks, one family to a track.
-/// The first row listens (and AUTO and SCAN, which pick for you); the
-/// second decodes, the HF data modes behind one key. Only the modes the
-/// server offers, so an older one is never asked for one it lacks.
+/// The mode board for receiver A: one row of tall keys, the five modes a
+/// person listens to and DATA, which opens every decoder. Only the modes
+/// the server offers, so an older one is never asked for one it lacks.
 fn board_a(app: &App) -> Vec<Vec<Vec<Key>>> {
     let offered = |m: Mode| app.modes.is_empty() || app.modes.iter().any(|c| c.mode == m);
-    let track = |ms: &[Mode]| ms.iter().copied().filter(|m| offered(*m)).map(Key::Mode).collect::<Vec<_>>();
-    let hf: Vec<Key> = if Mode::ALL.iter().any(|m| m.is_hf_data() && offered(*m)) { vec![Key::Hf] } else { vec![] };
-    let rows = vec![
-        vec![track(&[Mode::Nfm, Mode::Am, Mode::Usb, Mode::Lsb, Mode::Wfm]), track(&[Mode::Auto, Mode::Scan])],
-        vec![track(&[Mode::P25, Mode::Dmr, Mode::Nxdn]), track(&[Mode::Packet, Mode::Pager, Mode::Flex]), hf],
-    ];
-    rows.into_iter().map(|r| r.into_iter().filter(|t| !t.is_empty()).collect()).collect()
+    let voice: Vec<Key> = VOICE.iter().copied().filter(|m| offered(*m)).map(Key::Mode).collect();
+    let data: Vec<Key> = if Mode::ALL.iter().any(|m| is_data(*m) && offered(*m)) { vec![Key::Data] } else { vec![] };
+    vec![vec![voice, data].into_iter().filter(|t| !t.is_empty()).collect()]
 }
 
 /// Receiver B listens only: one track.
@@ -434,21 +447,29 @@ const TRACK_PAD: f32 = 2.0;
 const TRACK_GAP: f32 = 6.0;
 const ROW_GAP: f32 = 4.0;
 
-fn key_label(k: Key, current: Mode) -> String {
+fn key_label(k: Key, _current: Mode) -> String {
     match k {
         Key::Mode(m) => m.label().to_string(),
-        // The key keeps its name, so it reads as the HF modes' menu.
-        Key::Hf if current.is_hf_data() => format!("HF·{} ▾", current.label()),
-        Key::Hf => "HF ▾".into(),
+        Key::Data => "DATA ▾".into(),
     }
 }
 
-/// A key's own width: its label, or for the HF key the widest it gets.
+/// A tall key's second line: a voice mode's own filter width, or the
+/// decoder DATA has running.
+fn key_sub(app: &App, k: Key, current: Mode) -> String {
+    match k {
+        Key::Mode(m) => app.modes.iter().find(|c| c.mode == m).map(|c| crate::tuning::fmt_short_hz(c.bandwidth_hz as f64)).unwrap_or_default(),
+        Key::Data if is_data(current) => current.label().to_string(),
+        Key::Data => "decoders".into(),
+    }
+}
+
+/// A key's own width: its label, or for DATA the widest its lines get.
 fn key_width(ui: &Ui, k: Key) -> f32 {
     let w = |t: String| ui.painter().layout_no_wrap(t, theme::mono_bold(KEY_FONT), egui::Color32::PLACEHOLDER).size().x + KEY_PAD;
     match k {
         Key::Mode(m) => w(m.label().to_string()),
-        Key::Hf => Mode::ALL.iter().filter(|m| m.is_hf_data()).map(|m| w(format!("HF·{} ▾", m.label()))).fold(w("HF ▾".into()), f32::max),
+        Key::Data => Mode::ALL.iter().filter(|m| is_data(**m)).map(|m| w(m.label().to_string())).fold(w("DATA ▾".into()), f32::max),
     }
 }
 
@@ -507,36 +528,39 @@ fn modes_inner(app: &mut App, ui: &mut Ui, b: Option<usdr_proto::SubRx>, width: 
 /// given), glides to the choice across rows and tracks, so the change is
 /// seen as a move and not a blink.
 fn mode_board(app: &App, ui: &mut Ui, id: &str, rows: &[Vec<Vec<Key>>], current: Mode, width: f32, tint: egui::Color32) -> Option<Key> {
+    // Receiver A's one row stands the height of two, its keys two lines.
+    let tall = id == "a";
+    let key_h = if tall { 2.0 * KEY_H + ROW_GAP } else { KEY_H };
     let id = egui::Id::new(("mode-board", id));
-    let font = theme::mono_bold(KEY_FONT);
-    let h = rows.len() as f32 * KEY_H + ROW_GAP * rows.len().saturating_sub(1) as f32;
+    let font = theme::mono_bold(if tall { 12.0 } else { KEY_FONT });
+    let h = rows.len() as f32 * key_h + ROW_GAP * rows.len().saturating_sub(1) as f32;
     let (area, _) = ui.allocate_exact_size(vec2(width, h), Sense::hover());
     let p = ui.painter().clone();
     let tally_of = |k: Key| match k {
         Key::Mode(m) => mode_tally(m),
-        Key::Hf => mode_tally(Mode::Ft8),
+        Key::Data => mode_tally(if is_data(current) { current } else { Mode::Ft8 }),
     };
     // Lay out every key: the stretch is shared evenly by a row's keys.
     let mut cells: Vec<(Key, egui::Rect)> = Vec::new();
     for (r, row) in rows.iter().enumerate() {
         let keys = row.iter().map(Vec::len).sum::<usize>().max(1) as f32;
         let extra = ((width - row_width(ui, row)) / keys).max(0.0);
-        let top = area.top() + r as f32 * (KEY_H + ROW_GAP);
+        let top = area.top() + r as f32 * (key_h + ROW_GAP);
         let mut x = area.left();
         for track in row {
             let tw = track.iter().map(|k| key_width(ui, *k) + extra).sum::<f32>() + 2.0 * TRACK_PAD;
-            let tr = egui::Rect::from_min_size(egui::pos2(x, top), vec2(tw, KEY_H));
+            let tr = egui::Rect::from_min_size(egui::pos2(x, top), vec2(tw, key_h));
             theme::well(&p, tr, None);
             let mut kx = tr.left() + TRACK_PAD;
             for k in track {
                 let kw = key_width(ui, *k) + extra;
-                cells.push((*k, egui::Rect::from_min_size(egui::pos2(kx, tr.top() + TRACK_PAD), vec2(kw, KEY_H - 2.0 * TRACK_PAD))));
+                cells.push((*k, egui::Rect::from_min_size(egui::pos2(kx, tr.top() + TRACK_PAD), vec2(kw, key_h - 2.0 * TRACK_PAD))));
                 kx += kw;
             }
             x += tw + TRACK_GAP;
         }
     }
-    let lit_key = if current.is_hf_data() { Key::Hf } else { Key::Mode(current) };
+    let lit_key = if tall && is_data(current) { Key::Data } else { Key::Mode(current) };
     let lit = cells.iter().find(|(k, _)| *k == lit_key).map(|(k, r)| (*k, *r));
     if let Some((k, c)) = lit {
         let reduce = ui.data(|d| d.get_temp::<bool>(egui::Id::new("usdr-reduce-motion")).unwrap_or(false));
@@ -559,7 +583,7 @@ fn mode_board(app: &App, ui: &mut Ui, id: &str, rows: &[Vec<Vec<Key>>], current:
         let on = *k == lit_key;
         let shown = match k {
             Key::Mode(m) => m.label(),
-            Key::Hf => "HF",
+            Key::Data => "DATA",
         };
         resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::RadioButton, true, on, shown));
         let hover = ui.ctx().animate_bool_with_time(resp.id.with("hv"), resp.hovered() && !on, 0.12);
@@ -582,7 +606,15 @@ fn mode_board(app: &App, ui: &mut Ui, id: &str, rows: &[Vec<Vec<Key>>], current:
         // families read apart before a label is.
         let family = theme::lerp(theme::text_3(), tally_of(*k), 0.28);
         let c = if on { theme::text() } else { theme::lerp(family, theme::text_2(), 0.35 + 0.65 * hover) };
-        p.text(cell.center() + vec2(0.0, if on { -0.5 } else { 0.0 }), egui::Align2::CENTER_CENTER, &label, font.clone(), c);
+        if tall {
+            // The name, and under it the width or the decoder running.
+            p.text(cell.center() + vec2(0.0, -7.0), egui::Align2::CENTER_CENTER, &label, font.clone(), c);
+            let sub = key_sub(app, *k, current);
+            let sc = if on { alpha(theme::text(), 0.75) } else { theme::text_3() };
+            p.text(cell.center() + vec2(0.0, 9.0), egui::Align2::CENTER_CENTER, sub, theme::mono(9.5), sc);
+        } else {
+            p.text(cell.center() + vec2(0.0, if on { -0.5 } else { 0.0 }), egui::Align2::CENTER_CENTER, &label, font.clone(), c);
+        }
         let desc = |m: Mode| app.modes.iter().find(|c| c.mode == m).map(|c| c.description.clone()).filter(|d| !d.is_empty());
         match k {
             Key::Mode(m) => {
@@ -594,8 +626,8 @@ fn mode_board(app: &App, ui: &mut Ui, id: &str, rows: &[Vec<Vec<Key>>], current:
                     out = Some(*k);
                 }
             }
-            Key::Hf => {
-                if let Some(m) = egui::Popup::menu(&resp).show(|ui| hf_matrix(app, ui, current)).and_then(|r| r.inner) {
+            Key::Data => {
+                if let Some(m) = egui::Popup::menu(&resp).show(|ui| data_matrix(app, ui, current)).and_then(|r| r.inner) {
                     out = Some(Key::Mode(m));
                 }
             }
@@ -604,27 +636,30 @@ fn mode_board(app: &App, ui: &mut Ui, id: &str, rows: &[Vec<Vec<Key>>], current:
     out
 }
 
-/// The HF key's menu: the modes in four domain cards, a tile each with what
-/// the mode is, and under them the bands or stations of the mode the
+/// The DATA key's menu: every decoder in domain cards, a tile each with
+/// what the mode is, and under them the bands or stations of the mode the
 /// pointer is on, so a mode and where to hear it are one click. A tile
 /// returns its mode; a band or station key is left for the caller to tune
 /// (see [`take_quick_tune`]).
-fn hf_matrix(app: &App, ui: &mut Ui, current: Mode) -> Option<Mode> {
+fn data_matrix(app: &App, ui: &mut Ui, current: Mode) -> Option<Mode> {
     let offered = |m: Mode| app.modes.is_empty() || app.modes.iter().any(|c| c.mode == m);
     let desc = |m: Mode| app.modes.iter().find(|c| c.mode == m).map(|c| c.description.clone()).filter(|d| !d.is_empty());
     let hover_id = egui::Id::new("hf-matrix-hover");
-    let mut focus: Mode = ui.data(|d| d.get_temp(hover_id)).unwrap_or(if current.is_hf_data() { current } else { Mode::Ft8 });
+    let mut focus: Mode = ui.data(|d| d.get_temp(hover_id)).unwrap_or(if is_data(current) { current } else { Mode::Ft8 });
     let mut out = None;
     const TILE: f32 = 104.0;
     ui.set_width(2.0 * (4.0 * TILE + 3.0 * 4.0) + 3.0 * 10.0);
-    ui.label(RichText::new("HF · MF DATA").font(theme::mono_bold(11.0)).color(theme::text_2()));
+    ui.label(RichText::new("DATA · EVERY DECODER").font(theme::mono_bold(11.0)).color(theme::text_2()));
     ui.add_space(4.0);
-    for pair in HF_DOMAINS.chunks(2) {
+    // Cards with nothing the server offers are left out, and the rest
+    // paired up again so no row holds a gap.
+    let domains: Vec<&(&str, &[Mode])> = DATA_DOMAINS.iter().filter(|(_, ms)| ms.iter().any(|m| offered(*m))).collect();
+    for pair in domains.chunks(2) {
         ui.horizontal_top(|ui| {
-            for (title, modes) in pair {
+            for &&(title, modes) in pair {
                 egui::Frame::new().fill(theme::surface_2()).stroke(Stroke::new(1.0, theme::line())).corner_radius(egui::CornerRadius::same(4)).inner_margin(egui::Margin::same(6)).show(ui, |ui| ui.vertical(|ui| {
                     ui.set_width(4.0 * TILE + 3.0 * 4.0);
-                    ui.label(RichText::new(*title).font(theme::mono(9.5)).color(theme::text_3()).extra_letter_spacing(0.6));
+                    ui.label(RichText::new(title).font(theme::mono(9.5)).color(theme::text_3()).extra_letter_spacing(0.6));
                     ui.add_space(3.0);
                     // Four tiles to a row; a domain with more takes rows.
                     ui.horizontal_wrapped(|ui| {
