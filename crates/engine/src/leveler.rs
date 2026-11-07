@@ -14,8 +14,10 @@
 //!   boosted — gain can only move while something clearly audible is present.
 //!
 //! Gain changes are ramped (fast down, slow up) so loud transients are caught
-//! quickly without the level audibly pumping, and a final clamp at ±0.95 is
-//! the backstop for the few milliseconds a transient can outrun the attack.
+//! quickly without the level audibly pumping. The few milliseconds a loud
+//! onset outruns the attack are covered by a peak cap: the gain is never
+//! more than would put the signal's recent peak at the ceiling, so the
+//! output never reaches the final clamp at ±0.95.
 
 use scannerd_dsp::OnePole;
 
@@ -50,6 +52,11 @@ const RELEASE_S: f32 = 0.300;
 /// Output never exceeds this magnitude, whatever the envelope says.
 const CEILING: f32 = 0.95;
 
+/// The peak the cap measures falls back with this time constant: long
+/// against a voice's lowest pitch period, so the cap holds steady through
+/// a waveform instead of modulating it, short against the attack's ramp.
+const PEAK_RELEASE_S: f32 = 0.050;
+
 pub struct Leveler {
     hp: Biquad,
     /// One-pole over the squared high-passed signal; its square root is the
@@ -60,6 +67,10 @@ pub struct Leveler {
     gain: f32,
     attack_step: f32,
     release_step: f32,
+    /// Recent peak of the high-passed signal: jumps up to each new peak,
+    /// decays by `peak_decay` per sample.
+    peak: f32,
+    peak_decay: f32,
 }
 
 impl Leveler {
@@ -73,6 +84,8 @@ impl Leveler {
             gain: 1.0,
             attack_step: range / (ATTACK_S * fs).max(1.0),
             release_step: range / (RELEASE_S * fs).max(1.0),
+            peak: 0.0,
+            peak_decay: (-1.0 / (PEAK_RELEASE_S * fs).max(1.0)).exp(),
         }
     }
 
@@ -99,6 +112,16 @@ impl Leveler {
                 self.release_step
             };
             self.gain += (target - self.gain).clamp(-step, step);
+            // A loud call after a quiet one arrives with the gain still up
+            // (+12 dB at most), and the ramp takes a few milliseconds to
+            // bring it down: long enough to flat-top the first syllable
+            // against the clamp. Cap the gain at what puts the recent peak
+            // at the ceiling. Only the rise to the first peak is shaped by
+            // it; ordinary speech, steered to 0.1 RMS, never reaches it.
+            self.peak = y.abs().max(self.peak * self.peak_decay);
+            if self.peak * self.gain > CEILING {
+                self.gain = CEILING / self.peak;
+            }
             *s = (y * self.gain).clamp(-CEILING, CEILING);
         }
     }
@@ -107,6 +130,7 @@ impl Leveler {
         self.hp.reset();
         self.power = OnePole::new(self.power_tau);
         self.gain = 1.0;
+        self.peak = 0.0;
     }
 }
 
@@ -238,6 +262,42 @@ mod tests {
             low < mid * 0.25,
             "60 Hz survived at {low:.5} against 1 kHz at {mid:.5}"
         );
+    }
+
+    /// A loud call straight after a quiet one: the gain is still up at the
+    /// quiet speaker's +12 dB when the first syllable arrives. The 5 ms
+    /// attack let it slam into the ceiling for several milliseconds (36
+    /// samples at the ceiling here, the third harmonic only 24 dB down over
+    /// the first 10 ms). With the peak cap only the rise to the first peak
+    /// touches it.
+    #[test]
+    fn a_loud_onset_after_a_quiet_speaker_is_not_clipped() {
+        let mut leveler = Leveler::new(FS);
+        let mut quiet = tone(2.0, 1000.0, 0.02);
+        leveler.process(&mut quiet);
+        assert!(leveler.gain() > 3.5, "gain only reached {}", leveler.gain());
+        let mut loud = tone(0.2, 1000.0, 0.7);
+        leveler.process(&mut loud);
+        let flat = loud.iter().filter(|v| v.abs() >= CEILING - 1e-4).count();
+        // First 10 ms, Hann-windowed: the third harmonic against the tone.
+        let n = (0.010 * FS) as usize;
+        let seg: Vec<f32> = loud[..n]
+            .iter()
+            .enumerate()
+            .map(|(i, v)| v * (0.5 - 0.5 * (TAU * i as f32 / n as f32).cos()))
+            .collect();
+        let amp = |hz: f32| {
+            let (mut re, mut im) = (0.0f32, 0.0f32);
+            for (i, v) in seg.iter().enumerate() {
+                re += v * (TAU * hz * i as f32 / FS as f32).cos();
+                im += v * (TAU * hz * i as f32 / FS as f32).sin();
+            }
+            re.hypot(im)
+        };
+        let h3 = 20.0 * (amp(3000.0) / amp(1000.0)).log10();
+        eprintln!("onset: {flat} samples at the ceiling, third harmonic {h3:.1} dB");
+        assert!(flat <= 8, "{flat} samples clipped at the ceiling");
+        assert!(h3 < -40.0, "onset third harmonic {h3:.1} dB");
     }
 
     /// Gain is ramped per-sample: no step large enough to be a click.
