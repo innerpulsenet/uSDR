@@ -126,10 +126,12 @@ impl Meter {
         let dt = ui.input(|i| i.stable_dt).clamp(0.001, 0.05);
         let pos = self.tick(now, dt, reduce_motion);
         let w = ui.available_width();
-        let (rect, _) = ui.allocate_exact_size(vec2(w, 24.0), Sense::hover());
+        let (rect, _) = ui.allocate_exact_size(vec2(w, 28.0), Sense::hover());
         let p = ui.painter_at(rect.expand(3.0));
-        theme::well(&p, rect, None);
-        let bar = Rect::from_min_max(pos2(rect.left() + 6.0, rect.top() + 4.0), pos2(rect.right() - 6.0, rect.top() + 11.0));
+        // The same backlit glass as the frequency readout: a bezel, a dark
+        // panel lit from behind, and the segments as an LCD's cells.
+        crate::vfo::lcd_back(&p, rect, theme::AMBER);
+        let bar = Rect::from_min_max(pos2(rect.left() + 8.0, rect.top() + 4.0), pos2(rect.right() - 8.0, rect.top() + 13.0));
         let lit_to = bar.left() + bar.width() * pos;
         let at = |db: f32| bar.left() + bar.width() * frac(db);
         let (s9_x, p40_x) = (at(S9_DBFS), at(-20.0));
@@ -158,10 +160,16 @@ impl Meter {
                 theme::EMBER
             };
             if *g > 0.02 {
-                p.rect_filled(r.expand(1.0), CornerRadius::ZERO, theme::alpha(c, 0.16 * *g));
+                // The halo a lit cell throws into the glass.
+                p.rect_filled(r.expand2(vec2(1.0, 2.0)), CornerRadius::same(1), theme::alpha(c, 0.18 * *g));
             }
-            let lamp = if lit > 0.0 { 1.0 } else { 0.10 + 0.55 * *g };
+            // Unlit cells stay faintly there, as on an LCD.
+            let lamp = if lit > 0.0 { 1.0 } else { 0.12 + 0.55 * *g };
             p.rect_filled(r, CornerRadius::ZERO, theme::alpha(c, lamp));
+            if lit > 0.0 {
+                // A brighter core along the top of a lit cell.
+                p.rect_filled(Rect::from_min_size(r.min, vec2(r.width(), 2.0)), CornerRadius::ZERO, theme::alpha(theme::lerp(c, egui::Color32::WHITE, 0.45), 0.9));
+            }
         }
         if fading {
             // A quarter-second fade: the frames the spectrum brings carry it.
@@ -201,8 +209,9 @@ impl Meter {
                 continue;
             }
             last_right = x0 + g.size().x;
-            p.galley(pos2(x0, rect.bottom() - g.size().y), g, theme::text_3());
+            p.galley(pos2(x0, rect.bottom() - 1.0 - g.size().y), g, theme::text_3());
         }
+        crate::vfo::lcd_glass(&p, rect);
         // The needle on its way gets the motion rate; within a segment of
         // its reading it settles on the frames the spectrum brings.
         if !reduce_motion {

@@ -2300,6 +2300,44 @@ mod tests {
     }
 
     #[test]
+    fn the_dial_scale_tunes_where_it_is_clicked_and_dragged() {
+        let mut h = harness_wh(1900.0, 1000.0);
+        {
+            let app = &mut h.state_mut().app;
+            (app.status.tune_min_hz, app.status.tune_max_hz) = (1e3, 2e9);
+        }
+        h.run_steps(3);
+        drain(&h);
+        let r = h.get_by_label("dial scale").rect();
+        // Log scale, 1 kHz to 2 GHz: 10 MHz sits at this fraction.
+        let frac = |hz: f64| ((hz.log10() - 3.0) / (2e9f64.log10() - 3.0)) as f32;
+        let at = |hz: f64| egui::pos2(r.left() + frac(hz) * r.width(), r.center().y);
+        let p = at(10e6);
+        h.event(egui::Event::PointerMoved(p));
+        h.run_steps(1);
+        h.event(egui::Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE });
+        h.run_steps(1);
+        h.event(egui::Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE });
+        h.run_steps(2);
+        let tuned = |posts: &[(String, serde_json::Value)]| posts.iter().filter(|(p, _)| p == "/api/sdr/inspect").filter_map(|(_, b)| b["freq_hz"].as_f64()).last();
+        let hz = tuned(&drain(&h)).expect("a click tunes");
+        assert!((hz / 10e6 - 1.0).abs() < 0.03, "clicked near 10 MHz, tuned {hz}");
+        // A drag tunes once, where it is let go.
+        h.drag_at(at(1e6));
+        h.run_steps(1);
+        h.event(egui::Event::PointerMoved(at(3e6)));
+        h.run_steps(1);
+        h.event(egui::Event::PointerMoved(at(7e6)));
+        h.run_steps(1);
+        h.drop_at(at(7e6));
+        h.run_steps(2);
+        let posts = drain(&h);
+        let n = posts.iter().filter(|(p, _)| p == "/api/sdr/inspect").count();
+        let hz = tuned(&posts).expect("a drag tunes");
+        assert!(n == 1 && (hz / 7e6 - 1.0).abs() < 0.03, "dragged to 7 MHz: {n} tunes, last {hz}");
+    }
+
+    #[test]
     fn the_shade_strip_keeps_the_frequency_and_unrolls() {
         let mut h = harness();
         h.run_steps(2);

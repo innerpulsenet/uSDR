@@ -15,6 +15,7 @@ pub fn show(app: &mut App, ui: &mut Ui, width: f32) {
     let s = &app.status;
     let (lo, hi) = if s.tune_max_hz > s.tune_min_hz { (s.tune_min_hz.max(1e3), s.tune_max_hz) } else { return };
     let (rect, resp) = ui.allocate_exact_size(vec2(width, 24.0), Sense::click_and_drag());
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Slider, true, "dial scale"));
     let (llo, lhi) = (lo.log10(), hi.log10());
     let x_of = |hz: f64| rect.left() + ((hz.max(lo).log10() - llo) / (lhi - llo)) as f32 * rect.width();
     let hz_at = |x: f32| 10f64.powf(llo + ((x - rect.left()) / rect.width()).clamp(0.0, 1.0) as f64 * (lhi - llo));
@@ -74,20 +75,25 @@ pub fn show(app: &mut App, ui: &mut Ui, width: f32) {
 
     // A drag or click sets a needle that follows the pointer; it tunes on
     // release, so a sweep across the scale is one retune, not hundreds.
+    // (Kept as a plain f64: egui's store is keyed by type as well as id.)
     let drag_id = ui.id().with("dial-drag");
-    let mut preview: Option<f64> = ui.data(|d| d.get_temp(drag_id));
+    let mut preview: Option<f64> = ui.data(|d| d.get_temp::<f64>(drag_id));
     if (resp.dragged() || resp.is_pointer_button_down_on())
         && let Some(pp) = resp.interact_pointer_pos()
     {
-        preview = Some(hz_at(pp.x));
-        ui.data_mut(|d| d.insert_temp(drag_id, preview));
+        let hz = hz_at(pp.x);
+        preview = Some(hz);
+        ui.data_mut(|d| d.insert_temp(drag_id, hz));
     }
     if resp.drag_stopped() || resp.clicked() {
-        if let Some(hz) = preview.take() {
+        // A click lands on the frame it is let go, where the press may
+        // not have been seen: the pointer's own place then.
+        let hz = preview.take().or_else(|| resp.interact_pointer_pos().map(|p| hz_at(p.x)));
+        if let Some(hz) = hz {
             let step = crate::tuning::mode_raster_hz(app.status.mode, hz).max(if hz < 30e6 { 1e3 } else { 25e3 });
             app.tune(crate::tuning::snap(hz, step), false);
         }
-        ui.data_mut(|d| d.remove::<Option<f64>>(drag_id));
+        ui.data_mut(|d| d.remove::<f64>(drag_id));
     }
 
     // The needles: B in violet where it runs, then A (or the preview).
