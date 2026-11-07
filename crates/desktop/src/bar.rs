@@ -48,9 +48,11 @@ fn glass_bay<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
     r
 }
 
-/// Room the mode chips and the audio take, for sizing what is left.
+/// Room the mode keys and the step take on the second row, for sizing
+/// what is left.
 const MODES_W: f32 = 290.0;
-const AUDIO_W: f32 = 232.0;
+/// (The step bay closes the second row.)
+const STEP_W: f32 = 180.0;
 const GAP: f32 = 22.0;
 
 /// Where each one-band fit is first tried, widest first: estimates of the
@@ -80,8 +82,9 @@ pub fn receiver_bar(app: &mut App, ui: &mut Ui) {
     // Four fits, widest first. Each row ends in a section that takes what
     // is left, so no row trails off into empty space.
     // The display cluster first: the receivers, the frequency and the
-    // signal, read together as one instrument. Then the controls in the
-    // order they are used: tune, mode, filter, audio. The meter is the bay
+    // signal, read together as one instrument. Then the audio, the control
+    // reached for most, beside them; then mode and filter; the step, set
+    // least often, at the end. The meter is the bay
     // that takes the width the rest leave, so it is sized against what the
     // controls after it measured last frame.
     let row = match fit {
@@ -90,10 +93,10 @@ pub fn receiver_bar(app: &mut App, ui: &mut Ui) {
                 switch(app, ui);
                 readout(app, ui);
                 tail(app, ui, "t0", 300.0, 900.0, |app, ui| {
-                    tuning(app, ui);
+                    audio(app, ui, 220.0);
                     modes(app, ui);
                     filter(app, ui, 270.0);
-                    audio(app, ui, 220.0);
+                    tuning(app, ui);
                 });
             })
             .response
@@ -105,10 +108,10 @@ pub fn receiver_bar(app: &mut App, ui: &mut Ui) {
                 switch(app, ui);
                 readout(app, ui);
                 tail(app, ui, "t1", 0.0, 900.0, |app, ui| {
-                    tuning(app, ui);
+                    audio(app, ui, 200.0);
                     modes(app, ui);
                     filter(app, ui, 220.0);
-                    audio(app, ui, 200.0);
+                    tuning(app, ui);
                 });
             })
             .response
@@ -122,10 +125,10 @@ pub fn receiver_bar(app: &mut App, ui: &mut Ui) {
                 switch(app, ui);
                 readout_sized(app, ui, 48.0);
                 tail(app, ui, "t2", 0.0, 900.0, |app, ui| {
-                    tuning(app, ui);
+                    audio(app, ui, 160.0);
                     modes(app, ui);
                     filter(app, ui, 140.0);
-                    audio(app, ui, 160.0);
+                    tuning(app, ui);
                 });
             })
             .response
@@ -136,17 +139,16 @@ pub fn receiver_bar(app: &mut App, ui: &mut Ui) {
                 switch(app, ui);
                 readout(app, ui);
                 // A long bar is a finer one: on its own row the meter may run on.
-                tail(app, ui, "t3", 260.0, 900.0, tuning);
+                tail(app, ui, "t3", 260.0, 900.0, |app, ui| audio(app, ui, 220.0));
             });
             ui.add_space(4.0);
-            // A fader wider than this is a slab of empty track.
-            let filter_w = (w - MODES_W - AUDIO_W - 3.0 * GAP).clamp(230.0, 380.0);
+            // The filter takes what the row leaves: its passband reads finer
+            // the wider it is, so the row runs to the bar's end.
+            let filter_w = (w - MODES_W - STEP_W - 3.0 * GAP).max(230.0);
             ui.horizontal_top(|ui| {
                 modes(app, ui);
                 filter(app, ui, filter_w);
-                // The audio runs to the row's end, so it does not trail off.
-                let aw = (ui.available_width() - 22.0).clamp(220.0, 420.0);
-                audio(app, ui, aw);
+                tuning(app, ui);
             });
             None
         }
