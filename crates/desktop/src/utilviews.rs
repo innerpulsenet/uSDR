@@ -79,7 +79,7 @@ fn message_list(app: &mut App, ui: &mut Ui, protocol: &str, columns: &[(&str, &s
                     ui.label(mono(local_hms(d.at), theme::text_3()));
                     ui.add_sized(vec2(86.0, 16.0), egui::Label::new(RichText::new(d.ev.kind.to_uppercase()).font(theme::mono_bold(10.0)).color(if d.ev.valid { tally } else { theme::WARN })).truncate());
                     for (key, _, w) in columns {
-                        let v = d.ev.fields.get(*key).cloned().unwrap_or_default();
+                        let v = derived(&d.ev, key).unwrap_or_else(|| d.ev.fields.get(*key).cloned().unwrap_or_default());
                         ui.add_sized(vec2(*w, 16.0), egui::Label::new(mono(v, theme::text_2())).truncate());
                     }
                     ui.add(egui::Label::new(RichText::new(d.ev.summary.lines().next().unwrap_or("")).font(theme::mono(11.5)).color(theme::text())).truncate());
@@ -98,6 +98,25 @@ fn message_list(app: &mut App, ui: &mut Ui, protocol: &str, columns: &[(&str, &s
                         ui.add(egui::Label::new(RichText::new(&d.ev.summary).font(theme::mono(11.5)).color(theme::text())).wrap());
                         ui.add_space(4.0);
                     }
+                    // What its identifiers stand for, then every field.
+                    let words = translations(&d.ev);
+                    if !words.is_empty() {
+                        egui::Grid::new(("words", i)).num_columns(2).spacing(vec2(12.0, 1.0)).show(ui, |ui| {
+                            for (k, v, link) in &words {
+                                ui.label(mono(*k, theme::text_3()));
+                                ui.horizontal(|ui| {
+                                    ui.label(mono(v, theme::CYAN));
+                                    if let Some(url) = link
+                                        && widgets::action_small(ui, "LOOK UP ↗").on_hover_text(url.as_str()).clicked()
+                                    {
+                                        ui.ctx().open_url(egui::OpenUrl::new_tab(url));
+                                    }
+                                });
+                                ui.end_row();
+                            }
+                        });
+                        ui.add_space(4.0);
+                    }
                     egui::Grid::new(("fields", i)).num_columns(2).spacing(vec2(12.0, 1.0)).show(ui, |ui| {
                         for (k, v) in &d.ev.fields {
                             ui.label(mono(k, theme::text_3()));
@@ -112,6 +131,74 @@ fn message_list(app: &mut App, ui: &mut Ui, protocol: &str, columns: &[(&str, &s
     if let Some(i) = toggle {
         app.decodes[i].open = !app.decodes[i].open;
     }
+}
+
+/// A column worked out from the fields rather than read from one: the
+/// keys a view's columns name with an `@`.
+fn derived(ev: &usdr_proto::DecodeEvent, key: &str) -> Option<String> {
+    let f = |k: &str| ev.fields.get(k).cloned().filter(|v| !v.is_empty());
+    match key {
+        "@from" => f("from").map(|m| crate::lookups::mmsi_line(&m)),
+        "@to" => f("to").map(|m| crate::lookups::mmsi_line(&m)).or_else(|| f("area")),
+        "@gs" => f("gsId").map(|id| crate::stations_data::HFDL.iter().find(|s| s.call == id).map_or(id.clone(), |s| s.name.split(',').next().unwrap_or(s.name).to_string())),
+        "@aircraft" => Some(crate::lookups::describe_hfdl(ev)).filter(|s| *s != ev.summary),
+        "@reg" => f("reg").map(|r| {
+            let r = r.trim_start_matches('.').to_string();
+            match crate::lookups::registration_state(&r) {
+                // The state's short name: what comes before any bracket.
+                Some(st) => format!("{r} · {}", st.split(" (").next().unwrap_or(st)),
+                None => r,
+            }
+        }),
+        "@airline" => f("flight").and_then(|fl| crate::lookups::airline(&fl)).map(|(n, _)| n.to_string()),
+        _ => None,
+    }
+}
+
+/// What a decode's identifiers stand for, as (what, in words, a link to
+/// look it up): MMSIs, aircraft addresses and registrations, flight
+/// numbers, ACARS labels.
+fn translations(ev: &usdr_proto::DecodeEvent) -> Vec<(&'static str, String, Option<String>)> {
+    use crate::lookups as l;
+    let f = |k: &str| ev.fields.get(k).cloned().filter(|v| !v.is_empty());
+    let mut out = Vec::new();
+    for (k, what) in [("from", "from"), ("to", "to"), ("distressId", "in distress")] {
+        if ev.protocol == "DSC"
+            && let Some(m) = f(k).filter(|m| m.len() == 9)
+        {
+            let line = l::mmsi_line(&m);
+            if !line.is_empty() {
+                out.push((what, format!("{m} · {line}"), l::mmsi_link(&m)));
+            }
+        }
+    }
+    if ev.protocol == "HFDL" {
+        if let Some(fl) = f("flight")
+            && let Some((name, c)) = l::airline(&fl)
+        {
+            out.push(("airline", format!("{name} ({c})"), None));
+        }
+        if let Some(reg) = f("reg")
+            && let Some(s) = l::registration_state(reg.trim_start_matches('.'))
+        {
+            out.push(("registered", s.to_string(), None));
+        }
+        if let Some(icao) = f("icao") {
+            let state = l::icao_state(&icao).map_or(icao.clone(), |s| format!("{icao} · {s}"));
+            out.push(("ICAO address", state, l::aircraft_link(&icao)));
+        }
+        if let Some(lb) = f("label")
+            && let Some(m) = l::acars_label(&lb)
+        {
+            out.push(("label", format!("{lb}: {m}"), None));
+        }
+        if let Some(id) = f("gsId")
+            && let Some(st) = crate::stations_data::HFDL.iter().find(|s| s.call == id)
+        {
+            out.push(("ground station", format!("{id} · {}", st.name), None));
+        }
+    }
+    out
 }
 
 /// The column heads over a message list, lined up with its columns.
@@ -205,7 +292,7 @@ pub fn pactor(app: &mut App, ui: &mut Ui) {
 }
 
 pub fn dsc(app: &mut App, ui: &mut Ui) {
-    let cols: &[(&str, &str, f32)] = &[("formatName", "FORMAT", 110.0), ("categoryName", "CATEGORY", 80.0), ("from", "FROM", 80.0), ("to", "TO", 80.0)];
+    let cols: &[(&str, &str, f32)] = &[("formatName", "FORMAT", 100.0), ("categoryName", "CATEGORY", 70.0), ("from", "FROM", 80.0), ("@from", "WHO", 130.0), ("to", "TO", 80.0), ("@to", "", 110.0)];
     ui.horizontal_wrapped(|ui| {
         reading_strip(app, ui, Mode::Dsc, "LISTENING FOR CALLS");
     });
@@ -228,7 +315,7 @@ pub fn dsc(app: &mut App, ui: &mut Ui) {
 }
 
 pub fn hfdl(app: &mut App, ui: &mut Ui) {
-    let cols: &[(&str, &str, f32)] = &[("gsId", "GS", 30.0), ("flight", "FLIGHT", 70.0), ("reg", "REG", 70.0)];
+    let cols: &[(&str, &str, f32)] = &[("@gs", "GROUND", 76.0), ("flight", "FLIGHT", 60.0), ("@airline", "AIRLINE", 100.0), ("@reg", "AIRCRAFT", 130.0)];
     ui.horizontal_wrapped(|ui| {
         reading_strip(app, ui, Mode::Hfdl, "LISTENING FOR BURSTS");
     });
@@ -571,7 +658,13 @@ pub fn drm(app: &mut App, ui: &mut Ui) {
                 Some(f) => {
                     let name = f.get("label").cloned().unwrap_or_else(|| "(no label sent)".into());
                     ui.label(RichText::new(name).font(theme::headline(20.0)).color(theme::text()));
-                    let line: Vec<String> = ["codec", "audioMode", "language", "countryCode", "programType"].iter().filter_map(|k| f.get(*k).cloned()).filter(|v| !v.is_empty() && !v.starts_with("No ")).collect();
+                    // The SDC's ISO codes, by name where the tables have them.
+                    let named = |k: &str, look: fn(&str) -> Option<&'static str>| f.get(k).filter(|v| !v.is_empty()).map(|v| look(v).map_or(v.clone(), str::to_string));
+                    let line: Vec<String> = [f.get("codec").cloned(), f.get("audioMode").cloned(), named("languageCode", crate::lookups::language).or_else(|| f.get("language").cloned()), named("countryCode", crate::lookups::country), f.get("programType").cloned()]
+                        .into_iter()
+                        .flatten()
+                        .filter(|v| !v.is_empty() && !v.starts_with("No "))
+                        .collect();
                     ui.label(mono(line.join(" · "), theme::text_2()));
                 }
                 None => {

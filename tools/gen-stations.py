@@ -136,6 +136,12 @@ w("];")
 w("")
 w(f"pub const HFDL_TABLE_VERSION: u32 = {d['hfdl_systable_version']};")
 w("")
+w("/// Where each HFDL ground station is: (id, latitude, longitude).")
+w("pub const HFDL_POS: &[(u32, f64, f64)] = &[")
+for e in sorted(d["hfdl"], key=lambda e: e["gs_id"]):
+    w(f"    ({e['gs_id']}, {e['lat']:.4f}, {e['lon']:.4f}),")
+w("];")
+w("")
 
 # DSC.
 dsc = d["dsc"]

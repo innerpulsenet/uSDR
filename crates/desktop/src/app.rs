@@ -105,6 +105,8 @@ pub enum DockTab {
     Classifier,
     Calls,
     Scan,
+    /// Where the decodes come from.
+    Map,
 }
 
 /// The spur check walks three steps a second or so apart.
@@ -186,6 +188,7 @@ pub struct App {
     /// The radiofax viewer and the session's pictures.
     pub fax: crate::fax::Fax,
     pub sstv: crate::sstvview::Sstv,
+    pub map: crate::map::MapView,
     /// Feld Hell's columns, the newest last, `HELL_KEEP` at most.
     pub hell: std::collections::VecDeque<u8>,
     pub settings_page: crate::settings::Page,
@@ -330,6 +333,7 @@ impl App {
             settings_open: false,
             fax: crate::fax::Fax::new(),
             sstv: crate::sstvview::Sstv::default(),
+            map: crate::map::MapView::default(),
             hell: std::collections::VecDeque::new(),
             settings_page: Default::default(),
             station: None,
@@ -3039,6 +3043,29 @@ mod tests {
             h.ctx.data_mut(|d| d.insert_temp(egui::Id::new("psk-pick"), 2u32));
             h.run_steps(4);
             h.render().expect("render").save(dir.join("dock-psk-pick.png")).expect("save");
+        }
+
+        // The map, with what was heard on the air: `USDR_QA_VIEWS` (HFDL)
+        // and `USDR_QA_FT8`.
+        {
+            let mut h = harness_with(Prefs { auto_connect: false, dock_height: 520.0, ..Default::default() }, 1600.0, 1150.0);
+            h.run_steps(2);
+            let st = proto::Station { callsign: "N0CALL".into(), grid: "FN31pr".into(), antenna: String::new(), report_spots: false };
+            h.state().wire.events.send(NetEvent::Station(st, proto::ReporterStatus::default())).unwrap();
+            let mut feed = |path: Option<std::path::PathBuf>, key: &str| {
+                let Some(b) = path.and_then(|p| std::fs::read(p).ok()) else { return };
+                let v: serde_json::Value = serde_json::from_slice(&b).expect("json");
+                let list = if key.is_empty() { v.clone() } else { v[key].clone() };
+                for m in list.as_array().into_iter().flatten() {
+                    let ev: proto::DecodeEvent = serde_json::from_value(m["event"].clone()).expect("event");
+                    h.state().wire.events.send(NetEvent::Decode { inspect_hz: 0.0, event: ev, at: std::time::SystemTime::now() }).unwrap();
+                }
+            };
+            feed(std::env::var_os("USDR_QA_VIEWS").map(|d| std::path::PathBuf::from(d).join("view-hfdl.json")), "decodes");
+            feed(std::env::var_os("USDR_QA_FT8").map(std::path::PathBuf::from), "");
+            h.state_mut().app.dock_tab = DockTab::Map;
+            h.run_steps(4);
+            h.render().expect("render").save(dir.join("map.png")).expect("save");
         }
 
         // A mode's view as it was on the air: `USDR_QA_VIEWS=<dir>` holding

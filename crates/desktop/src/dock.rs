@@ -35,6 +35,7 @@ pub fn dock(app: &mut App, ui: &mut Ui) {
             (DockTab::Classifier, "Classifier", Some(app.class_log.len())),
             (DockTab::Calls, "Last heard", Some(app.calls.len())),
             (DockTab::Scan, "Scan", None),
+            (DockTab::Map, "Map", None),
         ];
         let mut under: Option<egui::Rect> = None;
         for (t, label, count) in tabs {
@@ -88,6 +89,7 @@ pub fn dock(app: &mut App, ui: &mut Ui) {
         DockTab::Classifier => classifier(app, ui),
         DockTab::Calls => calls(app, ui),
         DockTab::Scan => scan(app, ui),
+        DockTab::Map => crate::map::show(app, ui),
     }
 }
 

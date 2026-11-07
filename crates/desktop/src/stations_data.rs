@@ -57,6 +57,26 @@ pub const HFDL: &[Station] = &[
 
 pub const HFDL_TABLE_VERSION: u32 = 52;
 
+/// Where each HFDL ground station is: (id, latitude, longitude).
+pub const HFDL_POS: &[(u32, f64, f64)] = &[
+    (1, 38.3846, -121.7596),
+    (2, 21.1844, -157.1868),
+    (3, 63.8472, -22.4558),
+    (4, 40.8819, -72.6376),
+    (5, -37.0158, 174.8096),
+    (6, 6.9375, 100.3885),
+    (7, 52.7441, -8.9268),
+    (8, -26.1297, 28.2061),
+    (9, 71.2585, -156.5774),
+    (10, 35.0324, 126.2386),
+    (11, 9.0847, -79.3740),
+    (13, -17.6712, -63.1571),
+    (14, 56.1526, 92.5833),
+    (15, 26.3085, 50.4723),
+    (16, 13.4888, 144.8282),
+    (17, 27.9609, -15.4056),
+];
+
 pub const DSC: &[Station] = &[
     Station { call: "DSC", name: "Distress and safety calling (MF and HF)", region: Region::Worldwide, freqs_khz: &[2187.5, 4207.5, 6312.0, 8414.5, 12577.0, 16804.5], note: "Every ship and coast station keeps watch here; distress, urgency and safety calls and their acknowledgments.", schedule: &[], windows: &[] },
     Station { call: "003160023", name: "Iqaluit Coast Guard Radio (CCG MCTS), Nunavut - call sign VFF; seasonal, open approx. mid-May to mid-December", region: Region::NorthAmerica, freqs_khz: &[4207.5, 6312.0, 8414.5, 12577.0, 16804.5], note: "", schedule: &[], windows: &[] },
