@@ -1668,6 +1668,48 @@ impl Panafall {
             painter.text(pos2(x + 3.0, pan.top() + 10.0), Align2::LEFT_CENTER, "NOTCH", theme::mono(10.0), theme::ERR);
         }
 
+        // ---- the LO's notch: with the tuner parked off the receiver, the
+        // server blanks its DC residue ±15 kHz around the LO and draws a
+        // straight line across (crates/server, notch_display). Marked, so
+        // the line is never read as an empty band; zoomed, the server keeps
+        // it out of the window, so this is mostly seen at 1x.
+        if status.lo_offset && status.lo_offset_hz != 0.0 && status.freq_hz > 0.0 {
+            let dc = status.freq_hz + status.lo_offset_hz;
+            let (x0, x1) = (self.x_for(dc - LO_NOTCH_HZ, pan).max(pan.left()), self.x_for(dc + LO_NOTCH_HZ, pan).min(pan.right()));
+            if x1 - x0 >= 1.0 {
+                let c = theme::text_3();
+                // The spectrum and the waterfall, not the scale between them.
+                let bands = [Rect::from_min_max(pos2(x0, pan.top()), pos2(x1, pan.bottom())), Rect::from_min_max(pos2(x0, wf.top()), pos2(x1, wf.bottom()))];
+                for band in bands {
+                    painter.rect_filled(band, CornerRadius::ZERO, alpha(theme::ink(), 0.35));
+                    // Hatched, the way a drawing marks what is not there.
+                    let hp = painter.with_clip_rect(band);
+                    let mut x = band.left() - band.height();
+                    while x < band.right() {
+                        hp.line_segment([pos2(x, band.bottom()), pos2(x + band.height(), band.top())], Stroke::new(1.0, alpha(c, 0.16)));
+                        x += 7.0;
+                    }
+                    if x1 - x0 >= 3.0 {
+                        dashed_v(&painter, x0, band.top(), band.bottom(), alpha(c, 0.45));
+                        dashed_v(&painter, x1, band.top(), band.bottom(), alpha(c, 0.45));
+                    }
+                }
+                let band = bands[0].union(bands[1]);
+                if x1 - x0 >= 20.0 {
+                    let g = painter.layout_no_wrap("LO".into(), theme::mono_bold(9.5), c);
+                    let r = Rect::from_center_size(pos2((x0 + x1) / 2.0, pan.top() + 30.0), g.size() + vec2(6.0, 2.0));
+                    painter.rect_filled(r, CornerRadius::same(2), theme::ink());
+                    painter.galley(r.center() - g.size() / 2.0, g, c);
+                }
+                if resp.hover_pos().is_some_and(|p| band.contains(p)) {
+                    resp.clone().on_hover_text_at_pointer(format!(
+                        "LO notch · {} MHz ± 15 kHz\nThe tuner's own DC residue, blanked for display: what is on the air here is not shown. Zoom in and the tuner moves it out of the window.",
+                        crate::tuning::fmt_mhz(dc, 4)
+                    ));
+                }
+            }
+        }
+
         // ---- scan marks
         if let Some(scan) = &status.scan {
             for &hz in &scan.testing {
@@ -2443,6 +2485,10 @@ impl Frost {
         theme::glass(painter, r);
     }
 }
+
+/// How far either side of the LO the server blanks the display (its
+/// `DC_NOTCH_HZ`).
+const LO_NOTCH_HZ: f64 = 15_000.0;
 
 #[derive(Default, Clone)]
 pub struct SliceFlag {

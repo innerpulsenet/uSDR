@@ -2239,6 +2239,42 @@ fn lo_offset_for(rate_hz: f64, on: bool, mode: SdrMode) -> f64 {
     }
 }
 
+/// How far either side of the LO the display notch blanks: the RSP's DC
+/// residue is a hump about ±15 kHz wide (see [`zero_if_offset`]).
+const DC_NOTCH_HZ: f64 = 15_000.0;
+
+/// Where to put the tuner so the LO's DC residue, and the display notch
+/// over it, stay out of a zoomed window. `None` when they already do, when
+/// there is nothing to move (no offset, not zoomed, an RTL's plan whose
+/// window never holds DC), or when no placement keeps the receivers in the
+/// span.
+///
+/// At 1x the residue is always somewhere in the span: notched, 30 kHz of
+/// several MHz. Zoomed onto a receiver away from the tuner, it can land in
+/// the middle of the window, a dead band where a signal may be. Moving the
+/// tuner so DC sits just past the window's edge (on the side it is on now,
+/// and never nearer the receiver than the plan's own offset) costs one
+/// retune and hides nothing that is being looked at.
+fn lo_clear_freq(rate_hz: f64, lo_on: bool, mode: SdrMode, zoom: f64, current_freq: f64, view_hz: f64, receivers: &[f64]) -> Option<f64> {
+    let lo_off = lo_offset_for(rate_hz, lo_on, mode);
+    if lo_off == 0.0 || zoom <= 1.0 || !lo_plan_zero_if() {
+        return None;
+    }
+    let clear = |freq: f64| {
+        let w = ShownWindow::new(rate_hz, lo_on, mode, zoom, freq, view_hz);
+        (freq + lo_off - w.shown_centre).abs() > w.shown_rate / 2.0 + DC_NOTCH_HZ
+    };
+    if clear(current_freq) {
+        return None;
+    }
+    let display = display_rate_for(rate_hz, lo_on, mode);
+    let half = display / zoom / 2.0;
+    let margin = (display / zoom * 0.1).max(10e3);
+    let d = (half + DC_NOTCH_HZ + margin).max(lo_off);
+    let side = if current_freq + lo_off >= view_hz { 1.0 } else { -1.0 };
+    [side, -side].into_iter().map(|s| view_hz + s * d - lo_off).find(|&f| clear(f) && receivers.iter().all(|r| (r - f).abs() <= display * 0.45))
+}
+
 /// What a mode change does to the LO.
 #[derive(Debug, PartialEq, Eq)]
 enum LoMove {
@@ -4863,6 +4899,35 @@ fn run_sdr(
             );
         }
 
+        // Zoomed, keep the LO's notched DC residue out of the window: the
+        // tuner moves so it sits just past the window's edge. Not while the
+        // scanner owns the tuner.
+        if scanner.is_none() {
+            let view = if zoom_view.hold && current_zoom > 1.0 { zoom_view.center_hz } else { inspect_hz };
+            let mut receivers = vec![inspect_hz];
+            receivers.extend(sub_rx.as_ref().map(|r| r.status().freq_hz));
+            if let Some(f) = lo_clear_freq(current_rate, lo_offset, current_mode, current_zoom, current_freq, view, &receivers) {
+                current_freq = f;
+                pending_tune = Some(f);
+                remix_inspect(
+                    &mut InspectParts {
+                        inspect_chain: &mut inspect_chain,
+                        classifier: &mut classifier,
+                        demod: &mut demod,
+                        scope_fm: &mut scope_fm,
+                        capture: &capture,
+                        afc: &mut afc,
+                        afc_last_reported: &mut afc_last_reported,
+                    },
+                    current_rate,
+                    current_freq,
+                    inspect_hz,
+                    lo_offset_for(current_rate, lo_offset, current_mode),
+                    current_mode,
+                );
+            }
+        }
+
         // Apply at most one queued tuner write per interval, carrying whatever
         // the latest request was. A burst of clicks or a dragged slider is one
         // write, not thirty, which is the difference between a tuner that
@@ -7128,7 +7193,7 @@ fn run_sdr(
             // notching it would hide the very signal being received.
             let dc_rel = tuned_freq + lo_off - shown_centre;
             // The residue is a hump about ±15 kHz wide (see zero_if_offset).
-            let dc_guard = (shown_rate / shown_buf.len().max(1) as f64 * 1.5).max(15_000.0);
+            let dc_guard = (shown_rate / shown_buf.len().max(1) as f64 * 1.5).max(DC_NOTCH_HZ);
             if lo_off != 0.0 {
                 notch_display(&mut shown_buf, shown_rate, &[dc_rel], dc_guard);
             }
@@ -7917,6 +7982,40 @@ mod tests {
         assert!(by(SdrMode::Wfm).capture.is_empty() && by(SdrMode::Pager).capture.is_empty());
     }
 
+    /// The 80 m case that showed a dead band: tuner at 3.573 MHz, LO 100 kHz
+    /// up at 3.673, zoomed 32x onto a receiver at 3.715.
+    fn lo_clear_keeps_the_notch_out_of_a_zoomed_window() {
+        let (rate, mode, zoom) = (8e6, SdrMode::Lsb, 32.0);
+        let lo = lo_offset_for(rate, true, mode);
+        assert_eq!(lo, 100e3);
+        let view = 3.715e6;
+        let f = lo_clear_freq(rate, true, mode, zoom, 3.573e6, view, &[view]).expect("the notch was in the window");
+        let w = ShownWindow::new(rate, true, mode, zoom, f, view);
+        let dc = f + lo;
+        assert!((dc - w.shown_centre).abs() > w.shown_rate / 2.0 + DC_NOTCH_HZ, "DC {dc} still in {w:?}");
+        // On the side it was on (below), and no nearer than the plan's offset.
+        assert!(dc < view && view - dc >= lo, "DC {dc} for a receiver at {view}");
+        // Once clear, it stays put: no retune on every block.
+        assert_eq!(lo_clear_freq(rate, true, mode, zoom, f, view, &[view]), None);
+        // Not zoomed, LO off, or nothing in the way: nothing moves.
+        assert_eq!(lo_clear_freq(rate, true, mode, 1.0, 3.573e6, view, &[view]), None);
+        assert_eq!(lo_clear_freq(rate, false, mode, zoom, 3.573e6, view, &[view]), None);
+        // Even tuned dead on, the 100 kHz offset is inside a 244 kHz window:
+        // zoomed at all, the notch was always in view. It moves out too.
+        let f = lo_clear_freq(rate, true, mode, zoom, view, view, &[view]).expect("DC 100 kHz out is inside the window");
+        assert!(f + lo - view > ShownWindow::new(rate, true, mode, zoom, f, view).shown_rate / 2.0 + DC_NOTCH_HZ);
+        // A second receiver the move would leave outside the span stops it.
+        assert_eq!(lo_clear_freq(rate, true, mode, 2.0, view - lo, view, &[view, view + 3.7e6]).is_some_and(|f| (view + 3.7e6 - f).abs() > 3.6e6), false);
+        // Every zoom from 2x: a window onto DC is moved off it, receivers kept.
+        for z in [2.0, 4.0, 8.0, 16.0, 32.0] {
+            let view = 7.074e6;
+            let f = lo_clear_freq(rate, true, mode, z, view - lo, view, &[view]).unwrap_or(view - lo);
+            let w = ShownWindow::new(rate, true, mode, z, f, view);
+            assert!((f + lo - w.shown_centre).abs() > w.shown_rate / 2.0, "{z}x: DC in the window");
+            assert!((view - f).abs() <= display_rate_for(rate, true, mode) * 0.45, "{z}x: receiver left the span");
+        }
+    }
+
     #[test]
     fn the_zero_if_lo_plan_keeps_dc_out_of_the_channel_and_most_of_the_span() {
         LO_PLAN_ZERO_IF.store(true, Ordering::Relaxed);
@@ -7943,7 +8042,10 @@ mod tests {
         assert_eq!(lo_move(8e6, true, SdrMode::Nfm, SdrMode::Am), LoMove::Stay);
         assert_eq!(lo_move(8e6, true, SdrMode::Wfm, SdrMode::Scan), LoMove::Reopen);
         assert_eq!(lo_move(8e6, false, SdrMode::Nfm, SdrMode::Wfm), LoMove::Stay);
+        // Run here, under the zero-IF plan this test holds.
+        lo_clear_keeps_the_notch_out_of_a_zoomed_window();
         LO_PLAN_ZERO_IF.store(false, Ordering::Relaxed);
+        assert_eq!(lo_clear_freq(8e6, true, SdrMode::Lsb, 32.0, 3.573e6, 3.673e6, &[3.673e6]), None, "the RTL plan's window never holds DC");
         // The RTL plan's offset is a fraction of the span, whatever the mode.
         assert_eq!(lo_move(2.4e6, true, SdrMode::Nfm, SdrMode::Usb), LoMove::Stay);
         assert_eq!(lo_move_between((2.4e6, SdrMode::Nfm), (1.2e6, SdrMode::Nfm), true), LoMove::Retune);

@@ -3198,6 +3198,19 @@ mod tests {
         h.state_mut().app.dock_tab = DockTab::Classifier;
         h.run_steps(4);
         h.render().expect("render").save(dir.join("laptop-classifier.png")).expect("save");
+        // The LO's notch in a wider span: tuner at 7.0 MHz, LO 100 kHz up.
+        {
+            let app = &mut h.state_mut().app;
+            app.status.freq_hz = 7_000_000.0;
+            app.status.lo_offset = true;
+            app.status.lo_offset_hz = 100_000.0;
+        }
+        let wide: Vec<f32> = (0..n).map(|i| -105.0 + ((i * 31) % 7) as f32).collect();
+        for _ in 0..4 {
+            h.state().wire.events.send(NetEvent::Fft(Box::new(FftFrame { center_hz: 7_074_000.0, rate_hz: 200_000.0, inspect_hz: 7_074_000.0, pwr: wide.clone(), ..Default::default() }))).unwrap();
+            h.run_steps(2);
+        }
+        h.render().expect("render").save(dir.join("laptop-lo.png")).expect("save");
     }
 
     /// Renders the HF windows and views to PNGs for a look by eye, with a
