@@ -10,7 +10,7 @@
 //! `146520`, `146520000`, `146.520.000` and `7.2m` alike.
 
 use crate::theme;
-use egui::{Align2, Color32, CornerRadius, Rect, Sense, Stroke, Ui, pos2, vec2};
+use egui::{Align2, Color32, CornerRadius, Pos2, Rect, Sense, Shape, Stroke, Ui, pos2, vec2};
 
 
 pub enum VfoAct {
@@ -107,24 +107,29 @@ impl Vfo {
         if no_ghz && self.selected == 0 {
             self.selected = 1;
         }
-        let big = theme::mono_bold(height * 0.78);
-        let small = theme::mono_bold(height * 0.56);
-        let dw = ui.painter().layout_no_wrap("0".into(), big.clone(), theme::text()).size().x;
-        let sw = ui.painter().layout_no_wrap("0".into(), small.clone(), theme::text()).size().x;
+        // Seven-segment digits, drawn rather than set in type: taller than a
+        // font's figures in the same width, with the unlit segments faintly
+        // there, as on a radio's LCD.
+        let big = Seg { h: height * 0.74, w: height * 0.38 };
+        let small = Seg { h: height * 0.52, w: height * 0.27 };
+        let pitch = |g: &Seg| g.w + height * 0.09;
+        let (dw, sw) = (pitch(&big), pitch(&small));
         // `1 090.000 000`: the decimal point after the MHz digits, and a
         // thin gap at each thousands group either side of it.
-        let point = dw * 0.38;
-        let gap = dw * 0.24;
+        let point = dw * 0.42;
+        let gap = dw * 0.30;
         let widths: Vec<f32> = (0..DIGITS).map(|i| if i >= 7 { sw } else { dw }).collect();
         let shown_w: f32 = if no_ghz { widths[1..].iter().sum::<f32>() + gap } else { widths.iter().sum::<f32>() + 2.0 * gap };
-        let unit_w = ui.painter().layout_no_wrap("MHz".into(), theme::mono(height * 0.26), theme::text_3()).size().x;
-        // The digits sit in a well, inset from its edges.
-        let (pad_x, pad_y) = (10.0, 3.0);
-        let total = shown_w + point + 8.0 + unit_w + 2.0 * pad_x;
+        let unit_font = theme::mono_bold(height * 0.24);
+        let unit_w = ui.painter().layout_no_wrap("MHz".into(), unit_font.clone(), theme::text_3()).size().x;
+        // The glass sits in a bezel, the digits inset from its edges.
+        let (pad_x, pad_y) = (14.0, 5.0);
+        let total = shown_w + point + 10.0 + unit_w + 2.0 * pad_x;
         let (outer, resp) = ui.allocate_exact_size(vec2(total, height + 2.0 * pad_y), Sense::click());
-        theme::well(ui.painter(), outer, self.tint);
+        let tint = self.tint.unwrap_or(theme::AMBER);
+        lcd_back(ui.painter(), outer, tint);
         let rect = outer.shrink2(vec2(pad_x, pad_y));
-        let painter = ui.painter_at(outer);
+        let painter = ui.painter_at(outer.expand(2.0));
         let first_sig = s.find(|c: char| c != '0').unwrap_or(DIGITS - 1).min(3);
         let now = ui.input(|i| i.time);
         // Which digits changed since the last draw, and which way: each
@@ -141,6 +146,11 @@ impl Vfo {
             }
         }
         self.shown = Some(s.clone());
+        // The lit segments: the receiver's tint washed toward white, so the
+        // figures read first and the color second; the Hz group a step down.
+        let lit = theme::lerp(theme::text(), tint, 0.28);
+        let lit_hz = theme::lerp(theme::text_2(), tint, 0.22);
+        let baseline = rect.bottom() - height * 0.10;
         let mut x = rect.left();
         let mut hovered_digit = None;
         let mut rolling = false;
@@ -155,7 +165,12 @@ impl Vfo {
             if i == 1 && !no_ghz {
                 x += gap;
             } else if i == 4 {
-                painter.text(pos2(x + point / 2.0, rect.bottom() - height * 0.16), Align2::CENTER_BOTTOM, ".", big.clone(), theme::text_2());
+                // The decimal point: a segment-sized square on the baseline.
+                let t = big.t();
+                let c = pos2(x + point / 2.0 - t * 0.2, baseline - t / 2.0);
+                let dot = Rect::from_center_size(c, vec2(t * 1.05, t * 1.05));
+                painter.rect_filled(dot.expand(t * 0.35), CornerRadius::same(2), theme::alpha(lit, 0.10));
+                painter.rect_filled(dot, CornerRadius::same(1), lit);
                 x += point;
             } else if i == 7 {
                 x += gap;
@@ -166,45 +181,44 @@ impl Vfo {
             let hot = pointer.is_some_and(|p| cell.contains(p));
             if hot {
                 hovered_digit = Some(i);
-                painter.rect_filled(cell.expand2(vec2(1.0, -2.0)), CornerRadius::same(3), theme::alpha(theme::AMBER, 0.10));
+                painter.rect_filled(cell.expand2(vec2(1.0, -1.0)), CornerRadius::same(3), theme::alpha(tint, 0.09));
             }
             let lead = i < first_sig;
-            let color = if lead {
-                theme::surface_4()
-            } else if i >= 7 {
-                theme::text_2()
-            } else {
-                theme::text()
-            };
-            let font = if i >= 7 { small.clone() } else { big.clone() };
-            let base = pos2(cell.center().x, rect.bottom() - height * 0.12);
+            let g = if i >= 7 { &small } else { &big };
+            let color = if i >= 7 { lit_hz } else { lit };
+            // Each digit centered in its cell, on the shared baseline.
+            let origin = pos2(cell.center().x - g.w / 2.0, baseline - g.h);
+            let digit = |p: &egui::Painter, o: Pos2, c: char| g.paint(p, o, if lead { None } else { c.to_digit(10) }, color);
             let roll = self.roll[i].filter(|(t0, _, _)| !reduce_motion && now - t0 < ROLL_S);
             match roll {
                 Some((t0, old, dir)) => {
                     let t = ((now - t0) / ROLL_S) as f32;
                     let e = 1.0 - (1.0 - t).powi(3);
-                    let shift = height * 0.55 * dir as f32;
-                    let clip = Rect::from_min_max(pos2(cell.left() - 1.0, rect.top()), pos2(cell.right() + 1.0, rect.bottom()));
+                    let shift = height * 0.62 * dir as f32;
+                    let clip = Rect::from_min_max(pos2(cell.left() - 2.0, rect.top() - 2.0), pos2(cell.right() + 2.0, rect.bottom() + 2.0));
                     let cp = painter.with_clip_rect(clip);
-                    cp.text(base - vec2(0.0, e * shift), Align2::CENTER_BOTTOM, old.to_string(), font.clone(), color);
-                    cp.text(base + vec2(0.0, (1.0 - e) * shift), Align2::CENTER_BOTTOM, ch.to_string(), font, color);
+                    // The ghost stays put; only the lit figures roll.
+                    g.paint(&cp, origin, None, color);
+                    g.paint_lit(&cp, origin - vec2(0.0, e * shift), old.to_digit(10), color);
+                    g.paint_lit(&cp, origin + vec2(0.0, (1.0 - e) * shift), ch.to_digit(10), color);
                     rolling = true;
                 }
                 None => {
                     self.roll[i] = None;
-                    painter.text(base, Align2::CENTER_BOTTOM, ch.to_string(), font, color);
+                    digit(&painter, origin, ch);
                 }
             }
             if i == self.selected {
                 painter.rect_filled(
-                    Rect::from_min_max(pos2(cell.left() + 1.0, rect.bottom() - 3.0), pos2(cell.right() - 1.0, rect.bottom() - 1.0)),
-                    CornerRadius::ZERO,
-                    theme::AMBER,
+                    Rect::from_min_max(pos2(cell.left() + 1.0, rect.bottom() - 1.0), pos2(cell.right() - 1.0, rect.bottom() + 1.0)),
+                    CornerRadius::same(1),
+                    tint,
                 );
             }
             x += w;
         }
-        painter.text(pos2(x + 8.0, rect.bottom() - height * 0.16), Align2::LEFT_BOTTOM, "MHz", theme::mono(height * 0.26), theme::text_3());
+        painter.text(pos2(x + 10.0, baseline), Align2::LEFT_BOTTOM, "MHz", unit_font, theme::alpha(lit_hz, 0.75));
+        lcd_glass(&painter, outer);
         if rolling {
             crate::anim::more(ui.ctx());
         }
@@ -331,6 +345,153 @@ pub fn tune_strip(ui: &mut Ui, hz: f64, step: f64, width: f32, height: f32) -> O
     (out != 0.0).then_some(out)
 }
 
+
+/// One seven-segment digit's size: its height and width, before the slant.
+struct Seg {
+    h: f32,
+    w: f32,
+}
+
+/// Segments a–g lit for each figure, a the top, then clockwise, g the middle.
+const SEGMENTS: [u8; 10] = [0b0111111, 0b0000110, 0b1011011, 0b1001111, 0b1100110, 0b1101101, 0b1111101, 0b0000111, 0b1111111, 0b1101111];
+
+/// The forward slant of an LCD's figures, as a run over rise.
+const SLANT: f32 = 0.07;
+
+impl Seg {
+    /// The stroke of a segment.
+    fn t(&self) -> f32 {
+        (self.h * 0.12).max(2.0)
+    }
+
+    /// The seven segments as hexagons, slanted about the baseline, in
+    /// order a–g, with `o` the digit's top-left before the slant.
+    fn shapes(&self, o: Pos2) -> [[Pos2; 6]; 7] {
+        let (w, h, t) = (self.w, self.h, self.t());
+        let g = t * 0.16;
+        let half = t / 2.0;
+        let horiz = |y: f32| {
+            let (a, b) = (half + g, w - half - g);
+            [pos2(a, y), pos2(a + half, y - half), pos2(b - half, y - half), pos2(b, y), pos2(b - half, y + half), pos2(a + half, y + half)]
+        };
+        let vert = |x: f32, y0: f32, y1: f32| {
+            let (a, b) = (y0 + g, y1 - g);
+            [pos2(x, a), pos2(x + half, a + half), pos2(x + half, b - half), pos2(x, b), pos2(x - half, b - half), pos2(x - half, a + half)]
+        };
+        let mid = h / 2.0;
+        let raw = [
+            horiz(half),
+            vert(w - half, half, mid),
+            vert(w - half, mid, h - half),
+            horiz(h - half),
+            vert(half, mid, h - half),
+            vert(half, half, mid),
+            horiz(mid),
+        ];
+        raw.map(|seg| seg.map(|p| pos2(o.x + p.x + (h - p.y) * SLANT, o.y + p.y)))
+    }
+
+    /// The digit with its unlit segments as a ghost; `None` draws the ghost
+    /// alone, for a leading zero.
+    fn paint(&self, p: &egui::Painter, o: Pos2, d: Option<u32>, color: Color32) {
+        let ghost = theme::alpha(color, 0.07);
+        let mask = d.map_or(0, |d| SEGMENTS[d as usize % 10]);
+        for (k, seg) in self.shapes(o).into_iter().enumerate() {
+            if mask & (1 << k) == 0 {
+                p.add(Shape::convex_polygon(seg.to_vec(), ghost, Stroke::NONE));
+            }
+        }
+        self.paint_lit(p, o, d, color);
+    }
+
+    /// The lit segments alone, each with a soft halo, as backlit glass
+    /// spreads it.
+    fn paint_lit(&self, p: &egui::Painter, o: Pos2, d: Option<u32>, color: Color32) {
+        let Some(d) = d else { return };
+        let mask = SEGMENTS[d as usize % 10];
+        let shapes = self.shapes(o);
+        let halo = Stroke::new(self.t() * 0.9, theme::alpha(color, 0.10));
+        for (k, seg) in shapes.iter().enumerate() {
+            if mask & (1 << k) != 0 {
+                p.add(Shape::convex_polygon(seg.to_vec(), Color32::TRANSPARENT, halo));
+            }
+        }
+        for (k, seg) in shapes.iter().enumerate() {
+            if mask & (1 << k) != 0 {
+                p.add(Shape::convex_polygon(seg.to_vec(), color, Stroke::NONE));
+            }
+        }
+    }
+}
+
+/// A vertical gradient over `r`, `top` to `bottom`.
+fn vgrad(p: &egui::Painter, r: Rect, top: Color32, bottom: Color32) {
+    let mut m = egui::Mesh::default();
+    m.colored_vertex(r.left_top(), top);
+    m.colored_vertex(r.right_top(), top);
+    m.colored_vertex(r.left_bottom(), bottom);
+    m.colored_vertex(r.right_bottom(), bottom);
+    m.add_triangle(0, 1, 2);
+    m.add_triangle(2, 1, 3);
+    p.add(Shape::mesh(m));
+}
+
+/// The display behind the digits: a bezel cut into the panel, and a panel
+/// of dark glass lit from behind in the receiver's color, brightest at its
+/// middle as a backlight falls off toward the frame.
+fn lcd_back(p: &egui::Painter, r: Rect, tint: Color32) {
+    let cr = CornerRadius::same(5);
+    // The bezel: a dark lip outside the glass and a catch of light below.
+    let bezel = r.expand(2.0);
+    p.rect_filled(bezel, CornerRadius::same(7), Color32::from_black_alpha(150));
+    p.line_segment([bezel.left_bottom() + vec2(6.0, 0.5), bezel.right_bottom() + vec2(-6.0, 0.5)], Stroke::new(1.0, Color32::from_white_alpha(16)));
+    let base = theme::lerp(theme::ink(), Color32::BLACK, 0.35);
+    p.rect_filled(r, cr, base);
+    // The backlight: a wash of the tint, an ellipse fading from the middle.
+    let mut m = egui::Mesh::default();
+    let c = r.center();
+    m.colored_vertex(c, theme::alpha(tint, 0.11));
+    let n = 40;
+    for k in 0..=n {
+        let a = k as f32 / n as f32 * std::f32::consts::TAU;
+        m.colored_vertex(pos2(c.x + a.cos() * r.width() * 0.56, c.y + a.sin() * r.height() * 0.95), Color32::TRANSPARENT);
+    }
+    for k in 1..=n as u32 {
+        m.add_triangle(0, k, k + 1);
+    }
+    p.with_clip_rect(r.shrink(1.0)).add(Shape::mesh(m));
+}
+
+/// The glass over the digits: a frosted sheen across the top, a fine row
+/// texture like an LCD's cells, a shadow under the bezel's upper lip, and
+/// the glass's own edge.
+fn lcd_glass(p: &egui::Painter, r: Rect) {
+    let cp = p.with_clip_rect(r.shrink(1.0));
+    // Rows: a faint dark line every third point.
+    let mut y = r.top() + 2.0;
+    while y < r.bottom() - 1.0 {
+        cp.line_segment([pos2(r.left(), y), pos2(r.right(), y)], Stroke::new(1.0, Color32::from_black_alpha(18)));
+        y += 3.0;
+    }
+    // The lip's shadow, then the frost: light caught in the upper half,
+    // gone by the middle, and a brighter band where the glass curves.
+    vgrad(&cp, Rect::from_min_size(r.min, vec2(r.width(), 6.0)), Color32::from_black_alpha(120), Color32::TRANSPARENT);
+    vgrad(&cp, Rect::from_min_max(pos2(r.left(), r.top() + 1.0), pos2(r.right(), r.center().y)), Color32::from_white_alpha(16), Color32::TRANSPARENT);
+    // A slanted sheen across the left of the glass.
+    let w = r.width();
+    let sheen = [pos2(r.left() + w * 0.08, r.top()), pos2(r.left() + w * 0.22, r.top()), pos2(r.left() + w * 0.12, r.bottom()), pos2(r.left() - w * 0.02, r.bottom())];
+    let mut m = egui::Mesh::default();
+    m.colored_vertex(sheen[0], Color32::from_white_alpha(9));
+    m.colored_vertex(sheen[1], Color32::from_white_alpha(9));
+    m.colored_vertex(sheen[2], Color32::TRANSPARENT);
+    m.colored_vertex(sheen[3], Color32::TRANSPARENT);
+    m.add_triangle(0, 1, 2);
+    m.add_triangle(0, 2, 3);
+    cp.add(Shape::mesh(m));
+    let cr = CornerRadius::same(5);
+    p.rect_stroke(r, cr, Stroke::new(1.0, Color32::from_white_alpha(22)), egui::StrokeKind::Inside);
+    p.line_segment([r.left_top() + vec2(5.0, 1.5), r.right_top() + vec2(-5.0, 1.5)], Stroke::new(1.0, Color32::from_white_alpha(26)));
+}
 
 #[cfg(test)]
 mod tests {

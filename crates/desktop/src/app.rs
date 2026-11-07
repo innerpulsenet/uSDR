@@ -2919,7 +2919,7 @@ mod tests {
                 }
                 h.run_steps(6);
                 let img = h.render().expect("render");
-                let crop = image::imageops::crop_imm(&img, 0, 0, img.width(), ((if w < 1500.0 { 230.0 } else { 150.0 }) * img.height() as f32 / 400.0) as u32).to_image();
+                let crop = image::imageops::crop_imm(&img, 0, 0, img.width(), ((if w < 1500.0 { 250.0 } else { 170.0 }) * img.height() as f32 / 400.0) as u32).to_image();
                 crop.save(dir.join(format!("bar-{name}-{w}.png"))).expect("save");
                 if name == "usb" && w == 1900.0 {
                     // The shape menu, open.

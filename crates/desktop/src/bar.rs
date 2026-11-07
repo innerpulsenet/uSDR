@@ -77,7 +77,7 @@ pub fn receiver_bar(app: &mut App, ui: &mut Ui) {
                 readout(app, ui);
                 tuning(app, ui);
                 modes(app, ui);
-                filter(app, ui, 310.0);
+                filter(app, ui, 270.0);
                 audio(app, ui, 220.0);
                 meter(app, ui, 300.0, 560.0);
             })
@@ -104,7 +104,7 @@ pub fn receiver_bar(app: &mut App, ui: &mut Ui) {
         Some(_) => Some(
             ui.horizontal_top(|ui| {
                 switch(app, ui);
-                readout_sized(app, ui, 32.0);
+                readout_sized(app, ui, 40.0);
                 tuning(app, ui);
                 modes(app, ui);
                 filter(app, ui, 140.0);
@@ -213,7 +213,7 @@ fn start_b(app: &mut App) {
 }
 
 fn readout(app: &mut App, ui: &mut Ui) {
-    readout_sized(app, ui, 40.0);
+    readout_sized(app, ui, 46.0);
 }
 
 fn readout_sized(app: &mut App, ui: &mut Ui, digits_px: f32) {
