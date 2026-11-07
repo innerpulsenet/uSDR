@@ -286,6 +286,12 @@ pub struct Player {
     /// The WAV being written, under a lock of its own: the sound card's
     /// callback never waits on a disk write.
     recorder: Mutex<Option<WavWriter>>,
+    /// Nothing is meant to play through it: the output is closed.
+    idle: std::sync::atomic::AtomicBool,
+    /// The output device asked for, to open when it is next wanted.
+    device: Mutex<Option<String>>,
+    /// Built without a sound card (tests): it never opens one.
+    silent: bool,
 }
 
 // cpal's Stream is not Send on every host; it is only ever touched from the
@@ -323,11 +329,25 @@ impl Player {
             device_name: Mutex::new("none".into()),
             error: Mutex::new(None),
             recorder: Mutex::new(None),
+            idle: Default::default(),
+            device: Mutex::new(None),
+            silent: true,
         })
     }
 
     pub fn new(device: Option<&str>) -> Arc<Player> {
-        let p = Arc::new(Player {
+        let p = Self::unopened(device, false);
+        p.open(device);
+        p
+    }
+
+    /// A player with its output closed until [`Player::set_idle`] wants it.
+    pub fn new_idle(device: Option<&str>) -> Arc<Player> {
+        Self::unopened(device, true)
+    }
+
+    fn unopened(device: Option<&str>, idle: bool) -> Arc<Player> {
+        Arc::new(Player {
             shared: Arc::new(Mutex::new(Shared {
                 volume: 0.8,
                 priming: true,
@@ -343,9 +363,10 @@ impl Player {
             device_name: Mutex::new(String::new()),
             error: Mutex::new(None),
             recorder: Mutex::new(None),
-        });
-        p.open(device);
-        p
+            idle: idle.into(),
+            device: Mutex::new(device.map(str::to_string)),
+            silent: false,
+        })
     }
 
     pub fn devices() -> Vec<String> {
@@ -361,6 +382,10 @@ impl Player {
     /// (Re)open the output on the named device, or the default.
     pub fn open(&self, want: Option<&str>) {
         *self.stream.lock().unwrap() = None;
+        *self.device.lock().unwrap() = want.map(str::to_string);
+        if self.silent || self.idle.load(std::sync::atomic::Ordering::Relaxed) {
+            return;
+        }
         let host = cpal::default_host();
         let device = want
             .and_then(|w| {
@@ -447,11 +472,33 @@ impl Player {
     pub fn set_fold(&self, fold: bool) {
         self.shared.lock().unwrap().fold = fold;
     }
+    /// Close the output while nothing is meant to play through it (the
+    /// second receiver, off), and open it again when something is: an
+    /// idle stream still woke an audio thread of its own and the sound
+    /// server's every few milliseconds to limit and mix silence. (ALSA
+    /// through PipeWire refused to pause one.) Opened again, it starts
+    /// from what arrives next. From the UI thread, which builds streams.
+    pub fn set_idle(&self, idle: bool) {
+        if self.idle.swap(idle, std::sync::atomic::Ordering::Relaxed) == idle {
+            return;
+        }
+        if idle {
+            *self.stream.lock().unwrap() = None;
+        } else {
+            self.flush();
+            let want = self.device.lock().unwrap().clone();
+            self.open(want.as_deref());
+        }
+    }
+
     /// Forget what is queued: after a retune the old channel is not worth hearing.
     pub fn flush(&self) {
         let mut s = self.shared.lock().unwrap();
         s.queue.clear();
         s.priming = true;
+        // The wait for the stream that follows is the reconnect's, not the
+        // link's: it is not measured as a gap.
+        s.last_push = None;
     }
 
     /// Play a recording instead of the live audio until it ends.
@@ -534,10 +581,15 @@ impl Player {
         {
             let mut s = self.shared.lock().unwrap();
             let now = std::time::Instant::now();
-            if let Some(prev) = s.last_push.replace(now) {
+            let rate_change = rate_hz > 0 && (s.in_rate - rate_hz as f64).abs() > 0.5;
+            // The pause a mode change leaves in the stream is the server
+            // switching over, not the link: it is not measured as a gap.
+            if let Some(prev) = s.last_push.replace(now)
+                && !rate_change
+            {
                 s.arrived(now.duration_since(prev).as_secs_f64());
             }
-            if rate_hz > 0 && (s.in_rate - rate_hz as f64).abs() > 0.5 {
+            if rate_change {
                 // A mode change: the queued audio is at the old rate.
                 s.in_rate = rate_hz as f64;
                 s.queue.clear();
@@ -667,8 +719,15 @@ fn fill(shared: &Mutex<Shared>, out: &mut [f32], channels: usize) {
     }
     let sinc = s.sinc.take().expect("built above");
     let fold = s.fold || channels < 2;
+    // The queue read as one slice, and what was played off its front let
+    // go once, after the callback, rather than the ring buffer indexed tap
+    // by tap (a wrap test on every one) and drained sample by sample. What
+    // plays is the same to the bit.
+    let s = &mut *s;
+    let q = s.queue.make_contiguous();
+    let mut read = 0usize;
     for f in 0..frames {
-        let (l, r) = if s.priming || s.queue.len() < TAPS {
+        let (l, r) = if s.priming || q.len() - read < TAPS {
             if !s.priming {
                 s.priming = true;
                 s.underruns += 1;
@@ -678,18 +737,17 @@ fn fill(shared: &Mutex<Shared>, out: &mut [f32], channels: usize) {
             }
             (0.0, 0.0)
         } else {
-            let q = &s.queue;
-            // The point read sits between q[TAPS/2 − 1] and q[TAPS/2]:
+            let w: &[[f32; 2]; TAPS] = q[read..read + TAPS].try_into().expect("TAPS long");
+            // The point read sits between w[TAPS/2 − 1] and w[TAPS/2]:
             // half a filter's length of delay, about half a millisecond.
             // One channel's taps when the two agree, which mono always does.
-            let l = sinc.at(|k| q[k][0], s.phase);
-            let stereo = q.range(..TAPS).any(|p| p[0] != p[1]);
-            let r = if stereo { sinc.at(|k| q[k][1], s.phase) } else { l };
+            let l = sinc.at(|k| w[k][0], s.phase);
+            let stereo = w.iter().any(|p| p[0] != p[1]);
+            let r = if stereo { sinc.at(|k| w[k][1], s.phase) } else { l };
             s.phase += step;
             let whole = s.phase.floor() as usize;
             if whole > 0 {
-                let n = whole.min(s.queue.len());
-                s.queue.drain(..n);
+                read = (read + whole).min(q.len());
                 s.phase -= whole as f64;
             }
             if fold { ((l + r) * 0.5, (l + r) * 0.5) } else { (l, r) }
@@ -706,6 +764,7 @@ fn fill(shared: &Mutex<Shared>, out: &mut [f32], channels: usize) {
             out[base] = limiter.process(l * gain, l * gain).0;
         }
     }
+    s.queue.drain(..read);
     s.sinc = Some(sinc);
     s.limiter = Some(limiter);
     let rms = (sum / frames.max(1) as f32).sqrt();
@@ -922,6 +981,39 @@ mod tests {
     }
 
     #[test]
+    fn an_output_opened_again_starts_from_what_arrives_next() {
+        let p = Player::silent();
+        p.set_idle(true);
+        p.push(48_000, 1, &[100i16; 4_800]);
+        p.set_idle(false);
+        let s = p.shared.lock().unwrap();
+        assert!(s.queue.is_empty() && s.priming);
+        assert!(s.last_push.is_none(), "the wait before it is not the link's");
+    }
+
+    #[test]
+    fn a_flush_or_a_mode_change_is_not_measured_as_a_gap() {
+        let p = Player::silent();
+        let frame = vec![0i16; 640];
+        p.push(48_000, 1, &frame);
+        p.push(48_000, 1, &frame);
+        let settled = p.shared.lock().unwrap().gap_peak_s;
+        // A reconnect: the stream comes back 300 ms after the flush.
+        p.flush();
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        p.push(48_000, 1, &frame);
+        assert_eq!(p.shared.lock().unwrap().gap_peak_s, settled);
+        // A mode change: the first frame at the new rate, 300 ms on.
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        p.push(16_000, 1, &frame);
+        assert_eq!(p.shared.lock().unwrap().gap_peak_s, settled);
+        // A late frame within a stream is still the link's.
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        p.push(16_000, 1, &frame);
+        assert!(p.shared.lock().unwrap().gap_peak_s >= 0.3);
+    }
+
+    #[test]
     fn an_underrun_deepens_the_queue_and_a_measured_target_is_held() {
         let shared = Mutex::new(Shared { in_rate: 48_000.0, out_rate: 48_000.0, volume: 1.0, priming: true, ..Default::default() });
         shared.lock().unwrap().arrived(0.020);
@@ -1023,6 +1115,51 @@ mod tests {
                 assert!(db > least, "{hz} Hz at a {target} s queue: residue only {db:.1} dB down");
             }
         }
+    }
+
+    /// Program that blends between mono and stereo every few frames, with
+    /// a stall long enough to run the queue dry, through `fill` at callback
+    /// sizes that do not divide the frames. With `wrap` the queue's ring
+    /// buffer starts part way round, so it wraps as it fills.
+    fn blended_through_fill(wrap: bool) -> (Vec<f32>, u64) {
+        let shared = Mutex::new(Shared { in_rate: 51_200.0, out_rate: 48_000.0, volume: 1.0, priming: true, target_s: 0.06, ..Default::default() });
+        if wrap {
+            let mut s = shared.lock().unwrap();
+            s.queue = VecDeque::with_capacity(8_192);
+            s.queue.extend(std::iter::repeat_n([0.0; 2], 5_000));
+            s.queue.drain(..5_000);
+        }
+        let mut out_all = Vec::new();
+        let mut n_in = 0u64;
+        for k in 0..400usize {
+            if !(200..215).contains(&k) {
+                let mut s = shared.lock().unwrap();
+                let right = if (k / 20) % 2 == 0 { 1.0 } else { 0.5 };
+                for _ in 0..683 {
+                    let v = 0.5 * (std::f64::consts::TAU * 1_000.0 * n_in as f64 / 51_200.0).sin() as f32;
+                    s.queue.push_back([v, v * right]);
+                    n_in += 1;
+                }
+            }
+            let mut buf = vec![0f32; 2 * if k % 3 == 0 { 600 } else { 660 }];
+            fill(&shared, &mut buf, 2);
+            out_all.extend_from_slice(&buf);
+        }
+        let underruns = shared.lock().unwrap().underruns;
+        (out_all, underruns)
+    }
+
+    #[test]
+    fn where_the_queue_wraps_changes_nothing_played() {
+        let (straight, u1) = blended_through_fill(false);
+        let (wrapped, u2) = blended_through_fill(true);
+        assert!(u1 >= 1, "the stall runs the queue dry");
+        assert_eq!(u1, u2);
+        assert!(straight.iter().zip(&wrapped).all(|(a, b)| a.to_bits() == b.to_bits()));
+        // A digest of every sample's bits: the same before and after the
+        // queue was read as a slice rather than tap by tap.
+        let digest = straight.iter().fold(0xcbf2_9ce4_8422_2325u64, |h, v| (h ^ v.to_bits() as u64).wrapping_mul(0x100_0000_01b3));
+        println!("fill digest {digest:016x}, {} samples", straight.len());
     }
 
     #[test]
