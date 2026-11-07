@@ -16,6 +16,11 @@ use blip25_vocoder::vocoder::{FrameStatus, Rate, Vocoder};
 use num_complex::Complex32;
 use scannerd_dsp::DecodeChain;
 
+/// Baseband blocks (~1 s) without a valid C4FM frame before the linear
+/// CQPSK receiver takes over: long enough to ride out damaged frames, short
+/// enough that a true CQPSK signal takes over quickly.
+const CQPSK_IDLE_LIMIT: u32 = 50;
+
 const HANG_S: f32 = 0.72;
 const VOICE_OFFSETS: [usize; 9] = [0, 72, 164, 256, 348, 440, 532, 624, 712];
 const SIGNAL_OFFSETS: [usize; 6] = [144, 236, 328, 420, 512, 604];
@@ -98,8 +103,10 @@ pub struct P25ChannelReceiver {
     offset_sum: f64,
     offset_n: usize,
     /// Baseband blocks since the C4FM path last produced a BCH-valid frame.
-    /// Past a threshold the parallel linear CQPSK receiver is paused, because
-    /// while C4FM is healthy its symbols are never used.
+    /// The parallel linear CQPSK receiver runs only past
+    /// [`CQPSK_IDLE_LIMIT`]: while C4FM is healthy its symbols are never
+    /// used. Starts at the limit, so a channel C4FM cannot read gets the
+    /// linear receiver from the first block rather than a second later.
     cqpsk_idle_blocks: u32,
     /// Band plan learned from IDEN updates plus the most recent grant seen.
     plan: crate::p25::ChannelPlan,
@@ -161,12 +168,17 @@ impl P25ChannelReceiver {
             call_decrypted: false,
             offset_sum: 0.0,
             offset_n: 0,
-            cqpsk_idle_blocks: 0,
+            cqpsk_idle_blocks: CQPSK_IDLE_LIMIT,
             plan: crate::p25::ChannelPlan::new(),
             latest_grant: None,
             grants: std::collections::VecDeque::new(),
             spec,
         }
+    }
+
+    /// Whether the parallel linear CQPSK receiver is running this block.
+    fn cqpsk_running(&self) -> bool {
+        self.cqpsk_idle_blocks >= CQPSK_IDLE_LIMIT
     }
 
     pub fn retune(&mut self, span_center_hz: f64) {
@@ -196,7 +208,7 @@ impl P25ChannelReceiver {
         self.call_decrypted = false;
         self.offset_sum = 0.0;
         self.offset_n = 0;
-        self.cqpsk_idle_blocks = 0;
+        self.cqpsk_idle_blocks = CQPSK_IDLE_LIMIT;
         self.plan = crate::p25::ChannelPlan::new();
         self.latest_grant = None;
         self.grants.clear();
@@ -267,17 +279,24 @@ impl P25ChannelReceiver {
         let c4fm_healthy = frames
             .iter()
             .any(|frame| frame.bch_ok && frame.duid.is_known());
+        let was_running = self.cqpsk_running();
         if c4fm_healthy {
             self.cqpsk_idle_blocks = 0;
         } else {
             self.cqpsk_idle_blocks = self.cqpsk_idle_blocks.saturating_add(1);
         }
-        // ~1 s of baseband without a valid C4FM frame: long enough to ride
-        // out damaged frames, short enough that a true CQPSK signal takes
-        // over quickly.
-        const CQPSK_IDLE_LIMIT: u32 = 50;
+        // The comparison here was once inverted: the linear receiver ran for
+        // the second after each good C4FM frame, when its output is thrown
+        // away, and paused for good a second after C4FM stopped reading —
+        // the one case it exists for.
         let mut cqpsk_frames = Vec::new();
-        if self.cqpsk_idle_blocks < CQPSK_IDLE_LIMIT {
+        if self.cqpsk_running() {
+            if !was_running {
+                // Re-armed after a pause: the samples in its filters and
+                // detector are from before the gap and belong to no frame.
+                self.cqpsk.reset();
+                self.cqpsk_detector = FrameDetector::with_payload().at_rate(self.chain.fs_out());
+            }
             self.cqpsk.process(&self.baseband, &mut self.cqpsk_symbols);
             cqpsk_frames = self.cqpsk_detector.push(&self.cqpsk_symbols);
         }
@@ -880,6 +899,31 @@ pub fn algorithm_name(id: u8) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The linear CQPSK receiver is for the channel C4FM cannot read. It
+    /// must run from the start on such a channel and keep running, and only
+    /// stand down while C4FM is producing valid frames.
+    #[test]
+    fn the_linear_receiver_runs_while_c4fm_reads_nothing() {
+        let mut receiver = P25ChannelReceiver::new_on_channel(
+            P25Spec { name: "lsm".into(), freq_hz: 154_860_000.0, nac: None },
+            48_000.0,
+        );
+        let mut seed = 0x1234_5678u32;
+        let mut noise = || {
+            seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            (seed >> 8) as f32 / (1u32 << 24) as f32 - 0.5
+        };
+        // Three seconds of noise in 20 ms blocks: no C4FM frame anywhere.
+        for _ in 0..150 {
+            let block: Vec<Complex32> = (0..960).map(|_| Complex32::new(noise(), noise())).collect();
+            receiver.process(&block, 0.0);
+            assert!(receiver.cqpsk_running(), "paused after {} blocks", receiver.cqpsk_idle_blocks);
+        }
+        // A valid C4FM frame stands it down.
+        receiver.cqpsk_idle_blocks = 0;
+        assert!(!receiver.cqpsk_running());
+    }
 
     #[test]
     fn configured_phase2_runs_through_live_channel_audio_and_call_summary() {

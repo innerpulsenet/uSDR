@@ -1333,8 +1333,7 @@ mod tests {
                 iq.push(Complex32::new(phase.cos(), phase.sin()));
             }
         }
-        let mut cqpsk =
-            crate::cqpsk::CqpskDemodulator::new(CHANNEL_RATE, 4_800.0).with_tracking(0.0, 0.0);
+        let mut cqpsk = crate::cqpsk::CqpskDemodulator::new(CHANNEL_RATE, 4_800.0);
         let mut equivalent = Vec::new();
         cqpsk.process(&iq, &mut equivalent);
         let frames = FrameDetector::new().push(&equivalent);
