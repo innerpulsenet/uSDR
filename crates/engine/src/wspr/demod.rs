@@ -9,7 +9,10 @@
 
 use super::fano::{self, FanoParams, NSYM};
 use super::{BASEBAND_HZ, NOMINAL_START, SPS};
-use rustfft::{FftPlanner, num_complex::Complex32};
+use rustfft::{
+    FftPlanner,
+    num_complex::{Complex32, Complex64},
+};
 use std::f32::consts::TAU;
 
 /// The sync bit of every channel symbol.
@@ -431,25 +434,76 @@ pub fn snr_db(t: &Tones, sent: &[u8; NSYM]) -> f32 {
     10.0 * (s / n * DF / 2500.0).log10()
 }
 
-/// Take a decoded signal out of `z`: each symbol's sent tone, at the phase
-/// and amplitude measured on it, so what was under it can be searched for.
-pub fn subtract(z: &mut [Complex32], fit: &Fit, sent: &[u8; NSYM], t: &Tones) {
+/// Width in samples of each of the two boxcars that smooth a decoded
+/// signal's amplitude for [`subtract`]: two symbols, a triangle four
+/// symbols wide once both have run.
+const SMOOTH: usize = 2 * SPS;
+
+/// Take a decoded signal out of `z`, so what was under it can be searched
+/// for. The transmission is rebuilt as a unit continuous-phase reference
+/// from the tones and the fit, `z` is mixed down by it, and what is left at
+/// 0 Hz, smoothed over a few symbols, is the signal's amplitude and phase
+/// as fading moves them; that times the reference is subtracted.
+///
+/// Measuring each symbol on its own instead, as this once did, also took
+/// out that symbol's share of the noise and of anything else in its tone,
+/// and left steps at the symbol edges; a weak signal a tone or two away
+/// came out of the second pass mangled, and so the second pass had to
+/// skip anything within 3.5 tones of a decode. On the overlap sweep in the
+/// tests (four strong signals a slot, each with a weaker one 1.5 to 4.5 Hz
+/// away at about the same start) the weaker ones went from 0 of 96 to 93
+/// with the strong ones at -10 dB and to 86 with them at +5 dB, nothing
+/// false. A narrower smoothing kept more under the +5 dB signals and fewer
+/// under the -10 dB ones; a wider one the other way round.
+pub fn subtract(z: &mut [Complex32], fit: &Fit, sent: &[u8; NSYM]) {
+    let len = NSYM * SPS;
+    let mut reference = Vec::with_capacity(len);
+    let mut ph = 0.0f64;
     for (k, &tone) in sent.iter().enumerate() {
-        let j = tone as usize;
-        let base = fit.start as i64 + (k * SPS) as i64;
-        let f = fit.freq_at(k) + (j as f32 - 1.5) * DF;
-        // The correlation was against a unit tone over SPS samples.
-        let amp = t.c[k][j] / SPS as f32;
-        let step = Complex32::from_polar(1.0, TAU * f / BASEBAND_HZ);
-        let mut rot = Complex32::new(1.0, 0.0);
-        for n in 0..SPS as i64 {
-            let i = base + n;
-            if i >= 0 && (i as usize) < z.len() {
-                z[i as usize] -= amp * rot;
-            }
-            rot *= step;
+        let f = (fit.freq_at(k) + (tone as f32 - 1.5) * DF) as f64;
+        let step = std::f64::consts::TAU * f / BASEBAND_HZ as f64;
+        for _ in 0..SPS {
+            reference.push(Complex64::new(ph.cos(), ph.sin()));
+            ph = (ph + step) % std::f64::consts::TAU;
         }
     }
+    // Mixed down, and how much of each smoothing window fell inside the
+    // slot, so the ends are not underestimated.
+    let mut mixed = vec![Complex64::default(); len];
+    let mut inside = vec![Complex64::default(); len];
+    for (m, r) in reference.iter().enumerate() {
+        let i = fit.start as i64 + m as i64;
+        if i >= 0
+            && let Some(v) = z.get(i as usize)
+        {
+            mixed[m] = Complex64::new(v.re as f64, v.im as f64) * r.conj();
+            inside[m] = Complex64::new(1.0, 0.0);
+        }
+    }
+    let mixed = boxcar(&boxcar(&mixed));
+    let inside = boxcar(&boxcar(&inside));
+    for (m, r) in reference.iter().enumerate() {
+        let i = fit.start as i64 + m as i64;
+        if i < 0 || i as usize >= z.len() || inside[m].re <= 1e-9 {
+            continue;
+        }
+        let h = mixed[m] / inside[m].re * r;
+        z[i as usize] -= Complex32::new(h.re as f32, h.im as f32);
+    }
+}
+
+/// A centered running sum [`SMOOTH`] samples wide, in double precision so
+/// the running total does not drift.
+fn boxcar(x: &[Complex64]) -> Vec<Complex64> {
+    let mut prefix = Vec::with_capacity(x.len() + 1);
+    let mut acc = Complex64::default();
+    prefix.push(acc);
+    for v in x {
+        acc += v;
+        prefix.push(acc);
+    }
+    let half = SMOOTH / 2;
+    (0..x.len()).map(|i| prefix[(i + SMOOTH - half).min(x.len())] - prefix[i.saturating_sub(half)]).collect()
 }
 
 /// Start of a transmission in seconds relative to the nominal 1 s into

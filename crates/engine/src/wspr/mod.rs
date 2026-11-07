@@ -192,12 +192,13 @@ pub fn decode_baseband(z: &[Complex32], hashes: &mut CallHashes) -> Vec<WsprDeco
         for (bin, _, drift, lag) in cands {
             let fit = demod::Fit { freq: bin as f32 * demod::BIN_HZ, drift, start: lag * (SPS / 2) as i32 };
             // A decoded signal also scores two tones either side of itself,
-            // where half its tones line up with the pattern, and what its
-            // subtraction leaves behind can be read as a confident, wrong
-            // message a tone away. Hidden signals that close to a decoded
-            // one, at the same start, are given up for that.
-            let near = |f: &demod::Fit| (f.freq - fit.freq).abs() < 3.5 * demod::DF && (f.start - fit.start).abs() < 2 * SPS as i32;
-            if new.iter().any(|(f, _)| near(&f.fit)) || found.iter().any(|f| near(&f.fit)) {
+            // where half its tones line up with the pattern, so in the pass
+            // that decodes it, candidates that close at the same start are
+            // given up. One decoded in an earlier pass has been taken out
+            // ([`demod::subtract`]); only what sits on its very frequency
+            // is skipped, so a weaker signal a tone away can be found.
+            let near = |f: &demod::Fit, tones: f32| (f.freq - fit.freq).abs() < tones * demod::DF && (f.start - fit.start).abs() < 2 * SPS as i32;
+            if new.iter().any(|(f, _)| near(&f.fit, 3.5)) || found.iter().any(|f| near(&f.fit, 0.5)) {
                 continue;
             }
             let (fit, sync) = demod::refine(&z, fit, &refs);
@@ -217,8 +218,7 @@ pub fn decode_baseband(z: &[Complex32], hashes: &mut CallHashes) -> Vec<WsprDeco
             break;
         }
         for (f, sent) in &new {
-            let t = demod::tone_correlations(&z, &f.fit, &refs);
-            demod::subtract(&mut z, &f.fit, sent, &t);
+            demod::subtract(&mut z, &f.fit, sent);
         }
         found.extend(new.into_iter().map(|(f, _)| f));
     }
