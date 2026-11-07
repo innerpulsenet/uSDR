@@ -221,6 +221,63 @@ fn halfband_coeffs() -> [f32; HB_HALF] {
     std::array::from_fn(|j| (c[j] / dc) as f32)
 }
 
+/// Edges for the vocoder frames a receiver has to drop.
+///
+/// An AMBE+2 frame that fails its FEC is replaced with 20 ms of silence,
+/// and `rmbe` has no erasure input to synthesize through the gap. A bare
+/// `[0; 160]` stepped from wherever the waveform was to zero and back, two
+/// broadband clicks per dropped frame — loudest exactly when the signal is
+/// marginal and frames are dropping often. This ramps the last good sample
+/// down to zero across the first few ms of the gap and fades the next good
+/// frame in, so a drop sounds like a short mute rather than a pop.
+pub(crate) struct Concealer {
+    last: f32,
+    erased: bool,
+}
+
+/// Ramp length: 5 ms at the vocoder's 8 kHz.
+const CONCEAL_FADE: usize = 40;
+
+impl Concealer {
+    pub(crate) fn new() -> Self {
+        // Starting "after a drop" fades the first frame of a call in too.
+        Self { last: 0.0, erased: true }
+    }
+
+    /// Ramp weight `k` samples into a fade, rising from 0 to 1.
+    fn rise(k: usize) -> f32 {
+        0.5 - 0.5 * (std::f32::consts::PI * k as f32 / CONCEAL_FADE as f32).cos()
+    }
+
+    /// A frame that decoded: faded in if the one before it was dropped.
+    pub(crate) fn good(&mut self, samples: &[i16], pcm: &mut Vec<i16>) {
+        let fade = if self.erased { CONCEAL_FADE.min(samples.len()) } else { 0 };
+        pcm.extend(samples.iter().enumerate().map(|(k, &s)| {
+            if k < fade { (f32::from(s) * Self::rise(k)) as i16 } else { s }
+        }));
+        if let Some(&s) = samples.last() {
+            self.last = f32::from(s);
+        }
+        self.erased = false;
+    }
+
+    /// A dropped frame: the last good sample eased to zero, then silence.
+    pub(crate) fn erased(&mut self, pcm: &mut Vec<i16>) {
+        let from = if self.erased { 0.0 } else { self.last };
+        pcm.extend((0..rmbe::SAMPLES_PER_FRAME).map(|k| {
+            if k < CONCEAL_FADE { (from * (1.0 - Self::rise(k + 1))) as i16 } else { 0 }
+        }));
+        self.last = 0.0;
+        self.erased = true;
+    }
+}
+
+impl Default for Concealer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Default for Resampler8k {
     fn default() -> Self {
         Self::new()
@@ -272,6 +329,59 @@ mod tests {
             assert!(gain.abs() < 0.5, "{hz} Hz: passband gain {gain:.2} dB");
             assert!(image < -50.0, "{hz} Hz: image only {image:.1} dB down");
         }
+    }
+
+    /// Ten frames of a 1012.5 Hz tone (each frame ends a quarter cycle on,
+    /// at a crest) with frames 2, 5 and 6 dropped. Returns the 8 kHz PCM
+    /// built with the concealer, and with bare zeros.
+    fn dropped_frames() -> (Vec<i16>, Vec<i16>) {
+        let n = rmbe::SAMPLES_PER_FRAME;
+        let mut concealer = Concealer::new();
+        let (mut smooth, mut hard) = (Vec::new(), Vec::new());
+        for f in 0..10 {
+            let frame: Vec<i16> = (0..n)
+                .map(|k| {
+                    let t = (f * n + k) as f64 / 8_000.0;
+                    (16_000.0 * (std::f64::consts::TAU * 1_012.5 * t).sin()) as i16
+                })
+                .collect();
+            if [2, 5, 6].contains(&f) {
+                concealer.erased(&mut smooth);
+                hard.extend([0i16; rmbe::SAMPLES_PER_FRAME]);
+            } else {
+                concealer.good(&frame, &mut smooth);
+                hard.extend(&frame);
+            }
+        }
+        (smooth, hard)
+    }
+
+    /// Energy 3.4–4 kHz, where the tone has none: what a click splatters.
+    fn splatter(pcm: &[i16]) -> f64 {
+        let x: Vec<f32> = pcm.iter().map(|&s| f32::from(s) / 32768.0).collect();
+        (0..13).map(|k| power_at(&x, 3_400.0 + 50.0 * k as f64, 8_000.0)).sum()
+    }
+
+    /// A dropped AMBE+2 frame used to be a bare 20 ms of zeros: a step from
+    /// the waveform to silence and back, two clicks. Eased edges keep the
+    /// gap's splatter well under the hard-edged version's, and never jump
+    /// further between samples than the tone itself does.
+    #[test]
+    fn dropped_frames_fade_instead_of_clicking() {
+        let (smooth, hard) = dropped_frames();
+        assert_eq!(smooth.len(), hard.len());
+        let gain_db = 10.0 * (splatter(&smooth) / splatter(&hard)).log10();
+        let max_step = |pcm: &[i16]| {
+            pcm.windows(2).map(|w| (i32::from(w[1]) - i32::from(w[0])).abs()).max().unwrap()
+        };
+        eprintln!(
+            "splatter {gain_db:.1} dB vs bare zeros; max step {} vs {}",
+            max_step(&smooth),
+            max_step(&hard)
+        );
+        assert!(gain_db < -15.0, "splatter only {gain_db:.1} dB below bare zeros");
+        // The tone's own steepest sample-to-sample change is about 12 700.
+        assert!(max_step(&smooth) < 13_000, "max step {}", max_step(&smooth));
     }
 
     #[test]
