@@ -12,7 +12,7 @@
 //! and Taylor.
 
 mod deep;
-mod demod;
+pub(crate) mod demod;
 pub(crate) mod ldpc;
 mod pack;
 mod stream;
@@ -123,6 +123,13 @@ pub fn decode_slot(protocol: Protocol, audio: &[f32], hashes: &mut CallHashes) -
 /// [`decode_slot`] searching `f_min..f_max` Hz of the audio for signals'
 /// lowest tones: the passband the receiver's filter lets through.
 pub fn decode_slot_in(protocol: Protocol, audio: &[f32], hashes: &mut CallHashes, f_min: f32, f_max: f32) -> Vec<Decode> {
+    decode_slot_budget(protocol, audio, hashes, f_min, f_max, DEEP_BUDGET)
+}
+
+/// [`decode_slot_in`] with the second pass given `budget` instead of
+/// [`DEEP_BUDGET`]: the sweeps that compare decoders give it all the time
+/// it wants, so a busy test machine does not change what decodes.
+fn decode_slot_budget(protocol: Protocol, audio: &[f32], hashes: &mut CallHashes, f_min: f32, f_max: f32, budget: std::time::Duration) -> Vec<Decode> {
     let f_max = f_max.min(F_LIMIT_HZ);
     let f_min = f_min.clamp(0.0, f_max - 100.0);
     // Brought to one level first. The waterfall's dB carries an absolute
@@ -166,7 +173,7 @@ pub fn decode_slot_in(protocol: Protocol, audio: &[f32], hashes: &mut CallHashes
     }
     let mut bb = None;
     for c in missed.into_iter().take(DEEP_CANDIDATES) {
-        if started.elapsed() > DEEP_BUDGET {
+        if started.elapsed() > budget {
             break;
         }
         if near(&found, &c) {

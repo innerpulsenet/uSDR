@@ -658,3 +658,62 @@ fn plausible_callsigns() {
         assert!(!varicode::plausible_call(c), "{c}");
     }
 }
+
+/// Broadband static crashes: `n` bursts of `ms` milliseconds at `gain`
+/// times the noise's own amplitude, spread over the slot.
+fn add_crashes(audio: &mut [f32], n: usize, ms: f32, gain: f32, seed: u64) {
+    let mut r = Noise(seed ^ 0x9e37_79b9_7f4a_7c15);
+    let len = (ms / 1000.0 * RATE_HZ) as usize;
+    for _ in 0..n {
+        let at = (r.uniform() * (audio.len() - len) as f64) as usize;
+        for x in &mut audio[at..at + len] {
+            *x += gain * r.gauss();
+        }
+    }
+}
+
+/// A fixed-seed sweep of Normal-speed frames around the threshold, in quiet
+/// and under static crashes, counting decodes, false decodes and time:
+/// `cargo test --release -p scannerd-engine js8::tests::threshold_sweep -- --ignored --nocapture`
+#[test]
+#[ignore]
+fn threshold_sweep() {
+    let speed = Js8Speed::Normal;
+    const FROM: [&str; 5] = ["KN4CRD", "K0OG", "W1AW", "DL1ABC", "VK2DEF"];
+    const TO: [&str; 3] = ["KA9Q", "G4ABC", "JA1XYZ"];
+    let crashes = [(0usize, 0.0f32, 0.0f32), (4, 15.0, 30.0), (12, 8.0, 60.0)];
+    let only: Option<usize> = std::env::var("SWEEP_CASE").ok().and_then(|v| v.parse().ok());
+    let crashes: Vec<_> = crashes.into_iter().enumerate().filter(|(i, _)| only.is_none_or(|o| o == *i)).map(|(_, c)| c).collect();
+    for (n, ms, gain) in crashes {
+        let (mut total_ok, mut total_false, mut total_sent) = (0, 0, 0);
+        let mut time = std::time::Duration::ZERO;
+        for snr in [-25.0f32, -24.0, -23.0, -22.0, -21.0, -20.0, -19.0] {
+            let (mut ok, mut bad, mut sent) = (0, 0, 0);
+            for slot in 0..12u64 {
+                let stations: Vec<Station> = (0..5)
+                    .map(|i| Station {
+                        frames: transmission(vec![(directed(FROM[i], TO[(i + slot as usize) % 3], " SNR?", None), 0)]),
+                        freq: 400.0 + i as f32 * 480.0 + slot as f32 * 13.7,
+                        dt: ((i + slot as usize) % 7) as f32 * 0.15 - 0.3,
+                    })
+                    .collect();
+                let mut audio = band(speed, &stations, 1, snr, slot * 7919 + 17).remove(0);
+                if n > 0 {
+                    add_crashes(&mut audio, n, ms, gain, slot * 31 + 5);
+                }
+                let t = std::time::Instant::now();
+                let d = demod::decode_slot_budget(speed, &audio, F_MIN_HZ, F_MAX_HZ, std::time::Duration::MAX);
+                time += t.elapsed();
+                sent += stations.len();
+                for f in &d {
+                    if stations.iter().any(|s| s.frames[0] == (f.payload, f.flags)) { ok += 1 } else { bad += 1 }
+                }
+            }
+            eprintln!("JS8 crashes {n}x{ms}ms@{gain}: {snr:+} dB {ok}/{sent} decoded, {bad} false");
+            total_ok += ok;
+            total_false += bad;
+            total_sent += sent;
+        }
+        eprintln!("JS8 crashes {n}x{ms}ms@{gain}: TOTAL {total_ok}/{total_sent}, {total_false} false, {:?} per slot", time / 84);
+    }
+}

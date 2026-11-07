@@ -266,16 +266,23 @@ impl Waterfall {
             Protocol::Ft8 => &FT8_GRAY,
             Protocol::Ft4 => &FT4_GRAY,
         };
-        for k in 0..nd {
+        // Amplitude at the tone each bit pattern is sent as, symbol by
+        // symbol; none where the transmission runs off the slot.
+        let mut ms = [[0f32; 8]; 87];
+        for (k, m) in ms.iter_mut().enumerate().take(nd) {
             let b = c.time_offset + p.data_symbol(k) as i32;
             if b < 0 || b as usize >= self.num_blocks {
                 continue;
             }
-            // Amplitude at the tone each bit pattern is sent as.
-            let mut m = [0f32; 8];
             for (j, v) in m.iter_mut().enumerate().take(p.tones()) {
                 *v = 10f32.powf(self.at(b as usize, c, gray[j] as usize) / 20.0);
             }
+        }
+        let rms: Vec<f32> = ms[..nd].iter().map(|m| (m.iter().map(|v| v * v).sum::<f32>() / p.tones() as f32).sqrt()).collect();
+        for (m, g) in ms.iter_mut().zip(loud_symbol_gains(&rms)) {
+            m.iter_mut().for_each(|v| *v *= g);
+        }
+        for (k, m) in ms.iter().enumerate().take(nd) {
             for i in 0..bps {
                 let mask = 1 << (bps - 1 - i);
                 let (mut one, mut zero) = (0f32, 0f32);
@@ -293,6 +300,36 @@ impl Waterfall {
         }
         llr
     }
+}
+
+/// Brings each symbol much louder than the transmission's median one down
+/// to a little above the median's level. A static crash or a strong
+/// neighbor's keying lights every tone of the few symbols it lands on; in
+/// amplitude those symbols' soft bits come out many times the size of the
+/// rest, and the scaling to a fixed spread then shrinks every clean bit
+/// toward nothing, so a few crashes sank codewords that were otherwise
+/// sound. Scaled down, the struck symbols say little either way, which is
+/// what they know.
+///
+/// The ceiling, 1.2 times the median, is from the fixed-seed sweeps in the
+/// tests (12 slots of 5 signals at each of 7 SNRs around the threshold):
+/// in steady noise FT8 decodes 174 of 420 with or without it, FT4 139, and
+/// JS8 117 against 115; under four 15 ms crashes FT8 126 instead of 85,
+/// FT4 96 instead of 31, JS8 65 instead of 40. Capping at the median
+/// itself gained a little more under crashes and lost a JS8 decode in
+/// steady noise; 1.5 times gave back some of the crash gain.
+///
+/// Takes each symbol's RMS tone amplitude; returns the gain for each. The
+/// deep pass and JS8 use it too.
+pub(crate) fn loud_symbol_gains(rms: &[f32]) -> Vec<f32> {
+    const CEILING: f32 = 1.2;
+    let mut sorted: Vec<f32> = rms.iter().copied().filter(|&r| r > 0.0).collect();
+    if sorted.is_empty() {
+        return vec![1.0; rms.len()];
+    }
+    let mid = sorted.len() / 2;
+    let ceiling = CEILING * *sorted.select_nth_unstable_by(mid, f32::total_cmp).1;
+    rms.iter().map(|&r| if r > ceiling { ceiling / r } else { 1.0 }).collect()
 }
 
 /// Decode one candidate to its 77-bit payload, or `None` if the code or

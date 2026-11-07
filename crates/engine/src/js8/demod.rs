@@ -240,14 +240,25 @@ impl Waterfall {
     /// Soft bits, log(P(1)/P(0)), from the tones' amplitudes: for each bit
     /// the strongest tone that would mean a one against the strongest that
     /// would mean a zero.
+    ///
+    /// Symbols louder than the median are brought down to it first, as in
+    /// FT8 ([`crate::ft8::demod::loud_symbol_gains`]), so a static crash
+    /// does not shrink every clean bit.
     fn llrs(&self, c: &Candidate) -> [f32; N] {
         let mut llr = [0f32; N];
-        for k in 0..58 {
+        let mut ms = [[0f32; 8]; 58];
+        for (k, m) in ms.iter_mut().enumerate() {
             let b = c.time_offset + data_symbol(k) as i32;
             if b < 0 || b as usize >= self.num_blocks {
                 continue;
             }
-            let m: [f32; 8] = std::array::from_fn(|t| 10f32.powf(self.at(b as usize, c, t) / 20.0));
+            *m = std::array::from_fn(|t| 10f32.powf(self.at(b as usize, c, t) / 20.0));
+        }
+        let rms: Vec<f32> = ms.iter().map(|m| (m.iter().map(|v| v * v).sum::<f32>() / 8.0).sqrt()).collect();
+        for (m, g) in ms.iter_mut().zip(crate::ft8::demod::loud_symbol_gains(&rms)) {
+            m.iter_mut().for_each(|v| *v *= g);
+        }
+        for (k, m) in ms.iter().enumerate() {
             for i in 0..3 {
                 let mask = 4 >> i;
                 let (mut one, mut zero) = (0f32, 0f32);
@@ -525,6 +536,15 @@ fn accept(llr: &[f32; N]) -> Option<([u8; 9], u8, u32)> {
 
 /// Decode one slot of one speed: audio at [`RATE_HZ`] from the slot's start.
 pub fn decode_slot(speed: Js8Speed, audio: &[f32], f_min: f32, f_max: f32) -> Vec<Js8Frame> {
+    // The second pass may take a twenty-fifth of the slot: the next one
+    // is already filling, and other speeds may be waiting their turn.
+    decode_slot_budget(speed, audio, f_min, f_max, std::time::Duration::from_secs_f64(speed.slot_secs() / 25.0))
+}
+
+/// [`decode_slot`] with the second pass given `budget`: the sweeps that
+/// compare decoders give it all the time it wants, so a busy test machine
+/// does not change what decodes.
+pub(super) fn decode_slot_budget(speed: Js8Speed, audio: &[f32], f_min: f32, f_max: f32, budget: std::time::Duration) -> Vec<Js8Frame> {
     let f_max = f_max.min(super::F_LIMIT_HZ);
     let f_min = f_min.clamp(0.0, f_max - 100.0);
     // Brought to one level first: the waterfall's dB has an absolute floor,
@@ -539,9 +559,6 @@ pub fn decode_slot(speed: Js8Speed, audio: &[f32], f_min: f32, f_max: f32) -> Ve
     if wf.num_blocks < SYMBOLS / 2 {
         return Vec::new();
     }
-    // The second pass may take a twenty-fifth of the slot: the next one
-    // is already filling, and other speeds may be waiting their turn.
-    let budget = std::time::Duration::from_secs_f64(speed.slot_secs() / 25.0);
     let started = std::time::Instant::now();
     let tone = speed.tone_spacing_hz();
     let period = speed.symbol_period();
@@ -574,7 +591,11 @@ pub fn decode_slot(speed: Js8Speed, audio: &[f32], f_min: f32, f_max: f32) -> Ve
             continue;
         }
         let bb = bb.get_or_insert_with(|| Baseband::new(speed, audio));
-        let a = align(bb, f, t);
+        let mut a = align(bb, f, t);
+        let rms: Vec<f32> = a.cs.iter().map(|row| (row.iter().map(|c| c.norm_sqr()).sum::<f32>() / 8.0).sqrt()).collect();
+        for (row, g) in a.cs.iter_mut().zip(crate::ft8::demod::loud_symbol_gains(&rms)) {
+            row.iter_mut().for_each(|c| *c *= g);
+        }
         for nsym in 1..=3 {
             if let Some((payload, flags, hard)) = accept(&metrics(&a.cs, nsym)) {
                 if !found.iter().any(|d| d.payload == payload && d.flags == flags) {
