@@ -44,12 +44,15 @@ impl Family {
         }
     }
 
-    /// The family a mode's decodes belong to, when it has just the one.
+    /// The family the log opens on in a mode: the one its decodes belong
+    /// to, or for PACKET the one it is named for. PACKET decodes pages too,
+    /// but it is picked for AX.25, and leaving the log on the previous
+    /// mode's family (VOICE after DMR) hid every APRS packet.
     pub fn for_mode(m: Mode) -> Option<Family> {
         match m {
             Mode::P25 | Mode::Dmr | Mode::Nxdn => Some(Family::Voice),
             Mode::Pager | Mode::Flex => Some(Family::Paging),
-            Mode::Ais => Some(Family::Packet),
+            Mode::Ais | Mode::Packet => Some(Family::Packet),
             Mode::Wfm => Some(Family::Broadcast),
             m if m.is_hf_data() => Some(Family::HfData),
             _ => None,
@@ -208,6 +211,13 @@ mod tests {
             assert_eq!(family_of(p), Some(f), "{p}");
         }
         assert_eq!(family_of("Analog FM"), None);
+    }
+
+    #[test]
+    fn packet_mode_opens_the_log_on_packet() {
+        assert_eq!(Family::for_mode(Mode::Packet), Some(Family::Packet));
+        assert_eq!(Family::for_mode(Mode::Dmr), Some(Family::Voice));
+        assert_eq!(Family::for_mode(Mode::Auto), None);
     }
 
     #[test]
