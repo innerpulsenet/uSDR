@@ -193,6 +193,31 @@ pub fn selector<R>(ui: &mut Ui, id: &str, text: &str, color: Color32, width: f32
     egui::Popup::menu(&resp).id(egui::Id::new(("selector", id))).width(w.max(160.0)).show(add).map(|r| r.inner)
 }
 
+/// A selector as a small LCD window: `caption` printed faint, `value` lit,
+/// a menu under it on a click. For a setting that is read as much as set.
+pub fn lcd_selector<R>(ui: &mut Ui, id: &str, caption: &str, value: &str, tint: Color32, width: f32, add: impl FnOnce(&mut Ui) -> R) -> Option<R> {
+    let (rect, resp) = ui.allocate_exact_size(vec2(width, 24.0), Sense::click());
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, true, format!("{caption} {value}")));
+    let hover = ui.ctx().animate_bool_with_time(resp.id.with("hv"), resp.hovered(), 0.12);
+    let p = ui.painter_at(rect.expand(3.0));
+    crate::vfo::lcd_back(&p, rect, tint);
+    let lit = theme::lerp(theme::text(), tint, 0.28);
+    let mut x = rect.left() + 8.0;
+    if !caption.is_empty() {
+        let g = p.layout_no_wrap(caption.to_string(), theme::mono(9.5), alpha(lit, 0.5));
+        p.galley(pos2(x, rect.center().y - g.size().y / 2.0), g.clone(), alpha(lit, 0.5));
+        x += g.size().x + 6.0;
+    }
+    let v = ellipsize(&p, value, theme::mono_bold(12.0), rect.right() - 18.0 - x);
+    p.text(pos2(x, rect.center().y), Align2::LEFT_CENTER, v, theme::mono_bold(12.0), lit);
+    p.text(pos2(rect.right() - 8.0, rect.center().y), Align2::RIGHT_CENTER, "▾", theme::mono(10.0), alpha(lit, 0.45 + 0.4 * hover));
+    crate::vfo::lcd_glass(&p, rect);
+    if resp.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    egui::Popup::menu(&resp).id(egui::Id::new(("selector", id))).width(width.max(160.0)).show(add).map(|r| r.inner)
+}
+
 /// A number the operator drags or types: egui's drag value in the house
 /// frame and the measuring mono, at a fixed width so rows do not shift.
 pub fn numeric(ui: &mut Ui, value: &mut f64, range: std::ops::RangeInclusive<f64>, speed: f64, decimals: usize, width: f32) -> Response {
@@ -281,20 +306,22 @@ pub fn chip_key_w(ui: &mut Ui, label: &str, on: bool, tally: Color32, width: f32
 
 /// A small outlined key for a header line, 18 px tall: the tally outlines
 /// it always, so it reads as something to press, and fills it when `lit`.
-pub fn mini_key(ui: &mut Ui, label: &str, tally: Color32, lit: bool) -> Response {
-    let galley = ui.painter().layout_no_wrap(label.to_string(), theme::mono_bold(10.0), Color32::PLACEHOLDER);
-    let (rect, resp) = ui.allocate_exact_size(vec2(galley.size().x + 12.0, 18.0), Sense::click());
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, label));
-    let hover = ui.ctx().animate_bool_with_time(resp.id.with("hv"), resp.hovered(), 0.12);
-    let t = ui.ctx().animate_bool_with_time(resp.id.with("lit"), lit, 0.2);
+/// An LCD's annunciator, for a display's glass: lit, a block of `color`
+/// with the word cut out of it; unlit, the word faintly there, as an
+/// unpowered segment is. Clickable where the display takes a touch.
+pub fn lcd_tag(ui: &mut Ui, text: &str, color: Color32, lit: bool) -> Response {
+    let font = theme::mono_bold(10.0);
+    let g = ui.painter().layout_no_wrap(text.to_string(), font, Color32::PLACEHOLDER);
+    let (r, resp) = ui.allocate_exact_size(vec2(g.size().x + 10.0, 16.0), Sense::click());
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, text));
     let p = ui.painter();
-    let bg = theme::lerp(alpha(tally, 0.06 + 0.10 * hover), alpha(tally, 0.24), t);
-    p.rect(rect, CornerRadius::same(3), bg, Stroke::new(1.0, alpha(tally, 0.45 + 0.4 * hover.max(t))), egui::StrokeKind::Inside);
-    let press = pressed(ui, &resp);
-    theme::key_face(p, rect, 3, press);
-    p.galley(rect.center() - galley.size() / 2.0 + vec2(0.0, press), galley, theme::lerp(alpha(tally, 0.85), theme::text(), t));
-    if resp.hovered() {
-        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    if lit {
+        p.rect_filled(r.expand(1.5), CornerRadius::same(3), alpha(color, 0.14));
+        p.rect_filled(r, CornerRadius::same(2), alpha(color, 0.88));
+        p.galley(r.center() - g.size() / 2.0, g, theme::lerp(theme::ink(), Color32::BLACK, 0.4));
+    } else {
+        p.rect_stroke(r, CornerRadius::same(2), Stroke::new(1.0, alpha(color, 0.18)), egui::StrokeKind::Inside);
+        p.galley(r.center() - g.size() / 2.0, g, alpha(color, 0.38));
     }
     resp
 }

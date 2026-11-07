@@ -7,7 +7,7 @@ use crate::app::App;
 use crate::net::Get;
 use crate::theme::{self, alpha};
 use crate::vfo::VfoAct;
-use crate::widgets::{self, Fader, Tone};
+use crate::widgets::{self, Fader};
 use egui::{RichText, Sense, Stroke, Ui, vec2};
 use serde_json::json;
 use usdr_proto::{FilterShape, Mode};
@@ -23,18 +23,27 @@ fn bay<R>(ui: &mut Ui, label: &str, add: impl FnOnce(&mut Ui) -> R) -> R {
     bay_with(ui, |ui| theme::engraved(ui, label, theme::mono(10.5), theme::text_3(), 1.0, egui::Sense::hover()), add)
 }
 
-/// A bay whose top line is more than its label.
+/// A bay whose top line is more than its label: a section of controls,
+/// on its own raised plate the height of the bar's displays.
 fn bay_with<R, H>(ui: &mut Ui, head: impl FnOnce(&mut Ui) -> H, add: impl FnOnce(&mut Ui) -> R) -> R {
-    let r = ui
-        .vertical(|ui| {
-            ui.spacing_mut().item_spacing.y = 4.0;
-            head(ui);
-            add(ui)
-        })
-        .inner;
-    let rect = ui.min_rect();
-    let x = ui.cursor().left() + 6.0;
-    ui.painter().line_segment([egui::pos2(x, rect.top() + 4.0), egui::pos2(x, rect.bottom() - 4.0)], Stroke::new(1.0, theme::line()));
+    // The plate goes behind what is laid out on it, so its place is kept
+    // and it is drawn once the bay's width is known.
+    let slot = ui.painter().add(egui::Shape::Noop);
+    let resp = ui.vertical(|ui| {
+        ui.spacing_mut().item_spacing.y = 4.0;
+        head(ui);
+        add(ui)
+    });
+    let c = resp.response.rect;
+    let plate = egui::Rect::from_min_max(egui::pos2(c.left() - 7.0, c.top() - 1.0), egui::pos2(c.right() + 7.0, c.top() - 1.0 + READOUT_H));
+    ui.painter().set(slot, theme::plate_shape(ui.ctx(), plate));
+    ui.add_space(12.0);
+    resp.inner
+}
+
+/// A bay that is a display: no plate, its glass is its face.
+fn glass_bay<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
+    let r = ui.vertical(add).inner;
     ui.add_space(12.0);
     r
 }
@@ -256,7 +265,7 @@ fn readout_sized(app: &mut App, ui: &mut Ui, digits_px: f32) {
     let rm = app.reduce_motion();
     // No label over this bay: the receiver, its mode, width and gain are
     // the LCD's own annunciators, and the glass takes the bay's height.
-    bay_with(ui, |_| {}, |ui| {
+    glass_bay(ui, |ui| {
         let (mode, bw) = match &b {
             Some(b) => (b.mode, b.bandwidth_hz),
             None => (app.status.mode, app.status.bandwidth_hz),
@@ -296,13 +305,12 @@ fn tuning(app: &mut App, ui: &mut Ui) {
     let hz = app.active_hz();
     bay(ui, "STEP", |ui| {
         let auto = crate::tuning::mode_raster_hz(app.status.mode, hz);
-        let label = match app.prefs.step_hz {
-            None => format!("AUTO {}", crate::tuning::fmt_short_hz(auto)),
-            Some(s) => crate::tuning::fmt_short_hz(s),
+        let (caption, value) = match app.prefs.step_hz {
+            None => ("AUTO", crate::tuning::fmt_short_hz(auto)),
+            Some(s) => ("SET", crate::tuning::fmt_short_hz(s)),
         };
-        let color = if app.prefs.step_hz.is_some() { theme::AMBER } else { theme::text() };
         let top = ui.horizontal(|ui| {
-            widgets::selector(ui, "step", &label, color, 118.0, |ui| {
+            widgets::lcd_selector(ui, "step", caption, &value, theme::AMBER, 118.0, |ui| {
                 if ui.selectable_label(app.prefs.step_hz.is_none(), format!("Auto · mode raster ({})", crate::tuning::fmt_short_hz(auto))).clicked() {
                     app.prefs.step_hz = None;
                     ui.close();
@@ -915,8 +923,9 @@ fn filter(app: &mut App, ui: &mut Ui, width_px: f32) {
     let custom = if b.is_some() { range.is_some() && (width - app.modes.iter().find(|c| c.mode == mode).map_or(0.0, |c| c.bandwidth_hz)).abs() > 1.0 } else { app.status.filter_custom };
     // With the shape key on the header line, a narrow bay moves the edges
     // into the width's readout.
-    let edges_in_head = !shaped || width_px >= 220.0;
-    let head = if edges_in_head { format!("FILTER  {} … {}", k(lo), k(hi)) } else { "FILTER".to_string() };
+    // The edges and width are read on the passband's glass; the plate
+    // carries the name, and the shape key where there is one.
+    let head = "FILTER".to_string();
     let mut new_shape = None;
     bay_with(
         ui,
@@ -1060,16 +1069,16 @@ fn filter(app: &mut App, ui: &mut Ui, width_px: f32) {
                 app.reset_filter();
             }
         }
-        let sideband = !range.symmetric;
-        // The passband itself, drawn to its shape and dragged by its edges.
-        let readout = if sideband && !edges_in_head {
+        // The passband itself, drawn to its shape and dragged by its edges,
+        // its edges and width read at the glass's end.
+        let edges = if range.symmetric {
+            format!("±{}", k(hi.abs().max(lo.abs())))
+        } else {
             let (l, h) = (lo.abs().min(hi.abs()), lo.abs().max(hi.abs()));
             format!("{}–{}", k(l).trim_end_matches('k'), k(h))
-        } else {
-            k(width)
         };
         let tint = if b.is_some() { theme::VIOLET } else { theme::AMBER };
-        if let Some(edges) = crate::passband::show(ui, lo, hi, &range, shaped.then_some(shape), tint, &readout, &around) {
+        if let Some(edges) = crate::passband::show(ui, lo, hi, &range, shaped.then_some(shape), tint, (&edges, &k(width)), &around) {
             set = Some(edges);
         }
         if let Some((l, h)) = set {
@@ -1272,111 +1281,108 @@ fn meter(app: &mut App, ui: &mut Ui, min_w: f32, max_w: f32, reserve: f32) {
     let err_warn = now < app.err_warn_until;
     let ((s_txt, s_col), (db_txt, db_col)) = if is_b { app.meter_b.readout() } else { app.meter.readout() };
     let mut calibrate = false;
-    // The header is the bay's label, with the reading beside it, so the
-    // bar below can have the bay's whole width.
-    let head = |ui: &mut Ui| {
-        // The bay's width is set here, before the CAL key is pushed to its
-        // right edge.
-        ui.set_min_width(w);
-        ui.set_max_width(w);
+    // One display, as the frequency is: the reading, the meter, what is
+    // heard and the SNR, all under one glass, lit as an LCD is.
+    let tint = if is_b { theme::VIOLET } else { theme::AMBER };
+    let lit = theme::lerp(theme::text(), tint, 0.28);
+    let dim = alpha(lit, 0.5);
+    let lcd = |t: String, size: f32, c: egui::Color32| RichText::new(t).font(theme::mono(size)).color(c);
+    glass_bay(ui, |ui| {
+        let (rect, _) = ui.allocate_exact_size(vec2(w, READOUT_H), Sense::hover());
+        crate::vfo::lcd_back(ui.painter(), rect, tint);
+        let inner = rect.shrink2(vec2(10.0, 5.0));
+        let mut ui = ui.new_child(egui::UiBuilder::new().max_rect(inner).layout(egui::Layout::top_down(egui::Align::Min)));
+        let ui = &mut ui;
+        ui.spacing_mut().item_spacing.y = 2.0;
+        // The reading: the bay's name printed small, the S-units and dBFS lit.
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 8.0;
-            theme::engraved(ui, if is_b { "SIGNAL B" } else { "SIGNAL" }, theme::mono(10.5), theme::text_3(), 1.0, egui::Sense::hover());
-            // Fixed widths in the mono face, so nothing after them moves
-            // while the numbers change.
-            fixed(ui, &s_txt, theme::mono_bold(15.0), s_col, "S9+60");
-            fixed(ui, &db_txt, theme::mono(11.0), db_col, "-100.0 dBFS");
+            ui.label(lcd(label.to_string(), 9.5, dim).extra_letter_spacing(1.0));
+            fixed(ui, &s_txt, theme::mono_bold(15.0), if s_txt.starts_with('S') && s_col == theme::text() { lit } else { s_col }, "S9+60");
+            fixed(ui, &db_txt, theme::mono(11.0), if db_col == theme::text() || db_col == theme::text_2() { lit } else { db_col }, "-100.0 dBFS");
             if let Some(e) = err {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     let t = if e.abs() >= 1_000.0 { format!("CAL {:+.1}k", e / 1000.0) } else { format!("CAL {e:+.0}") };
-                    let r = widgets::mini_key(ui, &t, theme::AMBER, err_warn)
+                    let r = widgets::lcd_tag(ui, &t, theme::AMBER, err_warn)
                         .on_hover_text("The carrier is this far from where the receiver put it: click to calibrate the ppm from it");
+                    if r.hovered() {
+                        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                    }
                     calibrate = r.clicked();
                 });
             }
         });
-    };
-    bay_with(ui, head, |ui| {
-        ui.spacing_mut().item_spacing.y = 3.0;
         if is_b {
-            app.meter_b.ui_bar(ui, rm, mark);
+            app.meter_b.ui_bar_bare(ui, rm, mark);
             let snr = app.meter_b.snr.map_or(format!("{:>4} dB", "—"), |s| format!("{s:>4.1} dB"));
-            ui.add(egui::Label::new(small(format!("SNR {snr} · measured from the spectrum"))).truncate());
-            return;
+            ui.add(egui::Label::new(lcd(format!("SNR {snr} · measured from the spectrum"), 10.5, dim)).truncate());
+        } else {
+            app.meter.ui_bar_bare(ui, rm, mark);
+            status_row(app, ui, rm, lit, dim);
         }
-        app.meter.ui_bar(ui, rm, mark);
-        let s = &app.status;
-        let snr = app.meter.snr.map_or(format!("{:>4} dB", "—"), |d| format!("{d:>4.1} dB"));
-        let mut notches = Vec::new();
-        if s.rf_notch == Some(true) {
-            notches.push("AM/FM".to_string());
-        }
-        if s.dab_notch == Some(true) {
-            notches.push("DAB".to_string());
-        }
-        if !s.spurs_hz.is_empty() {
-            notches.push(format!("SPUR {}", s.spurs_hz.len()));
-        }
-        // An HF data decoder owns the channel: the voice classifier has
-        // nothing to say about it, so the bay reports the decoder instead.
-        if s.mode.is_hf_data() || s.mode == Mode::Ais {
-            let (busy, line) = hf_decoder_line(app);
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = 6.0;
-                widgets::chip(ui, if busy { Tone::Ok } else { Tone::Idle }, if busy { "DECODING" } else { "LISTENING" });
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.label(small(format!("SNR {snr}")));
-                    ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                        let col = if busy { widgets::protocol_color(s.mode.label()) } else { theme::text_3() };
-                        ui.add(egui::Label::new(RichText::new(&line).font(theme::sans(12.0)).color(col)).truncate()).on_hover_text(&line);
-                    });
-                });
-            });
-            return;
-        }
-        ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = 6.0;
-            let (c, word) = app.shown_class();
-            let tone = match word {
-                "ACTIVE" => Tone::Ok,
-                "HELD" => Tone::Warn,
-                _ => Tone::Idle,
-            };
-            widgets::chip(ui, tone, word);
-            if s.mode == Mode::Wfm
-                && let Some(st) = app.player.reading().stereo
-            {
-                let mp = s.stereo.as_ref().and_then(|x| x.multipath_pct.map(|p| (p, x.equalizer)));
-                stereo_badge(ui, &st, mp, rm);
-            }
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.label(small(format!("SNR {snr}")));
-                if !notches.is_empty() {
-                    ui.label(RichText::new(format!("notch {}", notches.join(" "))).font(theme::mono(10.0)).color(theme::VIOLET));
-                }
-                ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                    // The protocol alone, without its qualifier, so it
-                    // fits; the whole of it and the modulation are a hover
-                    // away.
-                    let short = |p: &str| p.split(" (").next().unwrap_or(p).to_string();
-                    let rds = app.rds().and_then(|r| rds_line(r).map(|t| (t, r)));
-                    let (txt, tip, col) = match (&c, rds) {
-                        // A broadcast station's name and what it says is on.
-                        (_, Some((t, r))) => (t, Some(rds_tip(r)), if r.locked { widgets::protocol_color("RDS") } else { theme::text_3() }),
-                        (Some(c), None) if word != "IDLE" => (short(&c.protocol), Some(format!("{} · {}", c.protocol, c.modulation)), widgets::protocol_color(&c.protocol)),
-                        _ => (crate::app::mode_idle_text(app.status.mode).to_string(), None, theme::text_3()),
-                    };
-                    let r = ui.add(egui::Label::new(RichText::new(txt).font(theme::sans(12.0)).color(col)).truncate());
-                    if let Some(t) = tip {
-                        r.on_hover_text(t);
-                    }
-                });
-            });
-        });
+        crate::vfo::lcd_glass(ui.painter(), rect);
     });
     if calibrate && let Some(l) = &app.link {
         l.post_get("/api/sdr/calibrate", json!({}), Get::Calibrate);
     }
+}
+
+/// The display's last line: what is heard (the decoder's copy, the
+/// classifier's call, a station's RDS), the stereo pilot, the notches in,
+/// and the SNR, as annunciators and lit text.
+fn status_row(app: &App, ui: &mut Ui, rm: bool, lit: egui::Color32, dim: egui::Color32) {
+    let s = &app.status;
+    let snr = app.meter.snr.map_or(format!("{:>4} dB", "—"), |d| format!("{d:>4.1} dB"));
+    let small_lit = |t: String| RichText::new(t).font(theme::mono(10.5)).color(lit);
+    let mut notches = Vec::new();
+    if s.rf_notch == Some(true) {
+        notches.push("AM/FM".to_string());
+    }
+    if s.dab_notch == Some(true) {
+        notches.push("DAB".to_string());
+    }
+    if !s.spurs_hz.is_empty() {
+        notches.push(format!("SPUR {}", s.spurs_hz.len()));
+    }
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 6.0;
+        // A decoder owns the channel: the bay reports its copy.
+        let (word, on, color, txt, tip, col) = if s.mode.is_hf_data() || s.mode == Mode::Ais {
+            let (busy, line) = hf_decoder_line(app);
+            let col = if busy { widgets::protocol_color(s.mode.label()) } else { dim };
+            (if busy { "DECODING" } else { "LISTENING" }, busy, theme::OK, line.clone(), Some(line), col)
+        } else {
+            let (c, word) = app.shown_class();
+            let short = |p: &str| p.split(" (").next().unwrap_or(p).to_string();
+            let rds = app.rds().and_then(|r| rds_line(r).map(|t| (t, r)));
+            let (txt, tip, col) = match (&c, rds) {
+                (_, Some((t, r))) => (t, Some(rds_tip(r)), if r.locked { widgets::protocol_color("RDS") } else { dim }),
+                (Some(c), None) if word != "IDLE" => (short(&c.protocol), Some(format!("{} · {}", c.protocol, c.modulation)), widgets::protocol_color(&c.protocol)),
+                _ => (crate::app::mode_idle_text(s.mode).to_string(), None, dim),
+            };
+            let color = if word == "HELD" { theme::WARN } else { theme::OK };
+            (word, word != "IDLE", color, txt, tip, col)
+        };
+        widgets::lcd_tag(ui, word, color, on);
+        if s.mode == Mode::Wfm
+            && let Some(st) = app.player.reading().stereo
+        {
+            let mp = s.stereo.as_ref().and_then(|x| x.multipath_pct.map(|p| (p, x.equalizer)));
+            stereo_badge(ui, &st, mp, rm);
+        }
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.label(small_lit(format!("SNR {snr}")));
+            if !notches.is_empty() {
+                widgets::lcd_tag(ui, &format!("NOTCH {}", notches.join(" ")), theme::VIOLET, true);
+            }
+            ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                let r = ui.add(egui::Label::new(RichText::new(txt).font(theme::sans(12.0)).color(col)).truncate());
+                if let Some(t) = tip {
+                    r.on_hover_text(t);
+                }
+            });
+        });
+    });
 }
 
 /// The SIGNAL bay's line for an HF data decoder, from its own decodes:

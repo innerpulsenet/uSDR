@@ -581,6 +581,39 @@ pub fn paint_brushed(painter: &egui::Painter, r: egui::Rect) {
     }
 }
 
+/// A raised, machined plate for a section of controls, as one shape to set
+/// behind what was laid out on it: brushed steel a shade lighter than the
+/// panel (on Carbon; a flat lighter face elsewhere), a sheen along its top,
+/// a chamfer lit above and shadowed below, and a soft drop shadow under it.
+pub fn plate_shape(ctx: &egui::Context, r: egui::Rect) -> egui::Shape {
+    let cr = egui::CornerRadius::same(6);
+    let mut v = Vec::new();
+    // The shadow it casts on the panel.
+    v.push(egui::Shape::rect_filled(r.translate(egui::vec2(0.0, 2.0)).expand(1.0), egui::CornerRadius::same(7), Color32::from_black_alpha(70)));
+    v.push(egui::Shape::rect_filled(r, cr, lerp(surface_2(), surface_3(), 0.55)));
+    if let Some(t) = brushed(ctx) {
+        let uv = egui::Rect::from_min_max(egui::pos2(0.13, 0.0), egui::pos2(0.13 + r.width() / 512.0, r.height() / 64.0));
+        let mut m = egui::Mesh::with_texture(t.id());
+        m.add_rect_with_uv(r.shrink(1.0), uv, Color32::from_white_alpha(150));
+        v.push(egui::Shape::mesh(m));
+    }
+    // Light falling across the top third.
+    let sheen = egui::Rect::from_min_size(r.min, egui::vec2(r.width(), r.height() * 0.4));
+    let mut m = egui::Mesh::default();
+    m.colored_vertex(sheen.left_top(), Color32::from_white_alpha(14));
+    m.colored_vertex(sheen.right_top(), Color32::from_white_alpha(14));
+    m.colored_vertex(sheen.left_bottom(), Color32::TRANSPARENT);
+    m.colored_vertex(sheen.right_bottom(), Color32::TRANSPARENT);
+    m.add_triangle(0, 1, 2);
+    m.add_triangle(2, 1, 3);
+    v.push(egui::Shape::mesh(m));
+    // The chamfer: lit along the top edge, shadowed along the foot.
+    v.push(egui::Shape::line_segment([r.left_top() + egui::vec2(6.0, 0.5), r.right_top() + egui::vec2(-6.0, 0.5)], Stroke::new(1.0, Color32::from_white_alpha(34))));
+    v.push(egui::Shape::line_segment([r.left_bottom() + egui::vec2(6.0, -0.5), r.right_bottom() + egui::vec2(-6.0, -0.5)], Stroke::new(1.0, Color32::from_black_alpha(150))));
+    v.push(egui::Shape::rect_stroke(r, cr, Stroke::new(1.0, Color32::from_black_alpha(110)), egui::StrokeKind::Outside));
+    egui::Shape::Vec(v)
+}
+
 /// A key's relief over its face, `press` 0 up to 1 down. Up, it stands
 /// proud of the panel: a lit top edge and a dark foot under it. Down, it
 /// sits in the panel: shade falls into it from the top edge and the foot

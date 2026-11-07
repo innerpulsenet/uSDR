@@ -122,6 +122,15 @@ impl Meter {
     /// segments green to S9, amber to +40, ember past it; the floor caret,
     /// the peak pip and the scale inside the well under the segments.
     pub fn ui_bar(&mut self, ui: &mut Ui, reduce_motion: bool, mark: Option<f32>) {
+        self.bar(ui, reduce_motion, mark, true);
+    }
+
+    /// The cells and scale alone, for a display that is already glass.
+    pub fn ui_bar_bare(&mut self, ui: &mut Ui, reduce_motion: bool, mark: Option<f32>) {
+        self.bar(ui, reduce_motion, mark, false);
+    }
+
+    fn bar(&mut self, ui: &mut Ui, reduce_motion: bool, mark: Option<f32>, framed: bool) {
         let now = ui.input(|i| i.time);
         let dt = ui.input(|i| i.stable_dt).clamp(0.001, 0.05);
         let pos = self.tick(now, dt, reduce_motion);
@@ -130,7 +139,9 @@ impl Meter {
         let p = ui.painter_at(rect.expand(3.0));
         // The same backlit glass as the frequency readout: a bezel, a dark
         // panel lit from behind, and the segments as an LCD's cells.
-        crate::vfo::lcd_back(&p, rect, theme::AMBER);
+        if framed {
+            crate::vfo::lcd_back(&p, rect, theme::AMBER);
+        }
         let bar = Rect::from_min_max(pos2(rect.left() + 8.0, rect.top() + 4.0), pos2(rect.right() - 8.0, rect.top() + 13.0));
         let lit_to = bar.left() + bar.width() * pos;
         let at = |db: f32| bar.left() + bar.width() * frac(db);
@@ -211,7 +222,9 @@ impl Meter {
             last_right = x0 + g.size().x;
             p.galley(pos2(x0, rect.bottom() - 1.0 - g.size().y), g, theme::text_3());
         }
-        crate::vfo::lcd_glass(&p, rect);
+        if framed {
+            crate::vfo::lcd_glass(&p, rect);
+        }
         // The needle on its way gets the motion rate; within a segment of
         // its reading it settles on the frames the spectrum brings.
         if !reduce_motion {

@@ -29,19 +29,22 @@ fn skirt_hz(shape: Option<FilterShape>, width: f32) -> f32 {
 
 /// Draw the passband `lo`..`hi` (Hz from the carrier) and return new edges
 /// when the operator moved them. `shape` is `Some` for a shaped filter;
-/// `readout` goes after the glass; `around(width)` gives the edges a width
-/// keeps (the wheel's).
+/// `(edges, width)` are read at the glass's right end; `around(width)`
+/// gives the edges a width keeps (the wheel's).
 #[allow(clippy::too_many_arguments)]
-pub fn show(ui: &mut Ui, lo: f32, hi: f32, range: &FilterRange, shape: Option<FilterShape>, tint: Color32, readout: &str, around: &dyn Fn(f32) -> (f32, f32)) -> Option<(f32, f32)> {
-    let read_font = theme::mono_bold(11.0);
-    let rw = ui.painter().layout_no_wrap("10.0–10.0k".into(), read_font.clone(), Color32::PLACEHOLDER).size().x.min(ui.painter().layout_no_wrap(readout.into(), read_font.clone(), Color32::PLACEHOLDER).size().x.max(34.0));
+pub fn show(ui: &mut Ui, lo: f32, hi: f32, range: &FilterRange, shape: Option<FilterShape>, tint: Color32, (edges, width): (&str, &str), around: &dyn Fn(f32) -> (f32, f32)) -> Option<(f32, f32)> {
+    let (edge_font, width_font) = (theme::mono(9.0), theme::mono_bold(11.0));
+    let tw = |t: &str, f: &egui::FontId| ui.painter().layout_no_wrap(t.into(), f.clone(), Color32::PLACEHOLDER).size().x;
+    let rw = tw(edges, &edge_font).max(tw(width, &width_font)).max(30.0);
     let w = ui.available_width();
-    let (outer, resp) = ui.allocate_exact_size(vec2(w, 24.0), Sense::click_and_drag());
+    let (glass, resp) = ui.allocate_exact_size(vec2(w, 24.0), Sense::click_and_drag());
     resp.widget_info(|| egui::WidgetInfo::slider(true, (hi - lo) as f64, "WIDTH"));
-    let glass = Rect::from_min_max(outer.min, pos2(outer.right() - rw - 8.0, outer.bottom()));
+    let outer = glass;
     let p = ui.painter_at(outer.expand(3.0));
     crate::vfo::lcd_back(&p, glass, tint);
-    let plot = glass.shrink2(vec2(6.0, 3.0));
+    // The band to the left; the readout in the glass's right end, apart.
+    let read = Rect::from_min_max(pos2(glass.right() - rw - 10.0, glass.top()), glass.max);
+    let plot = Rect::from_min_max(pos2(glass.left() + 6.0, glass.top() + 3.0), pos2(read.left() - 4.0, glass.bottom() - 3.0));
 
     // The axis: the audio band either side of the carrier, or one side of
     // it for a sideband filter.
@@ -200,8 +203,11 @@ pub fn show(ui: &mut Ui, lo: f32, hi: f32, range: &FilterRange, shape: Option<Fi
         let on = held == Some(g) || hover == Some(g);
         cp.line_segment([pos2(x, top - 1.0), pos2(x, foot)], Stroke::new(if on { 2.0 } else { 1.25 }, if on { theme::text() } else { alpha(tint, 0.95) }));
     }
+    let lit = theme::lerp(theme::text(), tint, 0.28);
+    p.line_segment([pos2(read.left(), glass.top() + 4.0), pos2(read.left(), glass.bottom() - 4.0)], Stroke::new(1.0, alpha(lit, 0.12)));
+    p.text(pos2(read.right() - 6.0, glass.top() + 2.0), Align2::RIGHT_TOP, edges, edge_font, alpha(lit, 0.55));
+    p.text(pos2(read.right() - 6.0, glass.bottom() - 1.0), Align2::RIGHT_BOTTOM, width, width_font, lit);
     crate::vfo::lcd_glass(&p, glass);
-    p.text(pos2(outer.right(), outer.center().y), Align2::RIGHT_CENTER, readout, read_font, tint);
     let tip = if range.symmetric { "Drag an edge to set the width (both move together) · wheel to widen or narrow" } else { "Drag an edge to move it, or the band to slide it · wheel to widen or narrow" };
     resp.on_hover_text(tip);
     out
