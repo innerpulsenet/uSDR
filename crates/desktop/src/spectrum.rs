@@ -2482,7 +2482,11 @@ impl Frost {
             // What the glass shows is blurred anyway: the trace as the
             // crest of every 6 px, eased, so a dense noise floor does not
             // stack its wide strokes over and over into a bright band.
-            let raw: Vec<Pos2> = self.line.iter().copied().filter(|q| q.x >= r.left() - 30.0 && q.x <= r.right() + 30.0).collect();
+            // The trace runs left to right: the stretch behind the plate
+            // found by halves, not by reading the whole line for each plate.
+            let a = self.line.partition_point(|q| q.x < r.left() - 30.0);
+            let b = a + self.line[a..].partition_point(|q| q.x <= r.right() + 30.0);
+            let raw = &self.line[a..b];
             let mut pts: Vec<Pos2> = raw
                 .chunks(6)
                 .map(|c| {

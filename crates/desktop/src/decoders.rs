@@ -103,15 +103,17 @@ pub const DECODERS: &[Decoder] = &[
 ];
 
 impl Decoder {
-    pub fn takes(&self, protocol_upper: &str) -> bool {
-        self.matches.iter().any(|m| protocol_upper.contains(m))
+    /// Whether a protocol name, in any case, is this decoder's. Compared
+    /// in place: the log asks this of every row it holds, every frame.
+    pub fn takes(&self, protocol: &str) -> bool {
+        let p = protocol.as_bytes();
+        self.matches.iter().any(|m| m.is_empty() || p.windows(m.len()).any(|w| w.eq_ignore_ascii_case(m.as_bytes())))
     }
 }
 
 /// The decoder a protocol name belongs to, if the log knows it.
 pub fn decoder_of(protocol: &str) -> Option<&'static Decoder> {
-    let u = protocol.to_ascii_uppercase();
-    DECODERS.iter().find(|d| d.takes(&u))
+    DECODERS.iter().find(|d| d.takes(protocol))
 }
 
 pub fn family_of(protocol: &str) -> Option<Family> {
@@ -211,6 +213,11 @@ mod tests {
             assert_eq!(family_of(p), Some(f), "{p}");
         }
         assert_eq!(family_of("Analog FM"), None);
+        // In any case, anywhere in the name, and never past its end.
+        assert_eq!(family_of("pocsag-512"), Some(Family::Paging));
+        assert_eq!(family_of("2g ale"), Some(Family::HfData));
+        assert_eq!(family_of("FT"), None);
+        assert_eq!(family_of(""), None);
     }
 
     #[test]

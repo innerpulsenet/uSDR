@@ -244,7 +244,7 @@ impl App {
     pub fn new(cc: &eframe::CreationContext<'_>, server: Option<String>) -> App {
         let prefs = Prefs::load();
         let player = Player::new(prefs.audio_device.as_deref());
-        let player_b = Player::new(prefs.audio_device.as_deref());
+        let player_b = Player::new_idle(prefs.audio_device.as_deref());
         let mut app = App::build(&cc.egui_ctx, prefs, player, player_b, server.clone());
         let qa = std::env::var_os("USDR_QA_SIZE").is_some();
         app.chrome = crate::chrome::Chrome {
@@ -273,6 +273,8 @@ impl App {
         let split = prefs.pan <= -0.99 && prefs.pan_b >= 0.99;
         player.set_fold(split);
         player_b.set_fold(split);
+        // The second receiver's output is closed until there is one.
+        player_b.set_idle(true);
         let connect_input = server
             .clone()
             .or_else(|| prefs.last_server.clone())
@@ -480,6 +482,7 @@ impl App {
         let keep = self.status.rx2.as_ref().filter(|b| b.mode == mode).map(|b| (b.bandwidth_hz, b.passband_offset_hz, b.filter_shape));
         let (bw, off, filter_shape) = keep.unwrap_or((bhi - blo, (blo + bhi) / 2.0, proto::FilterShape::Normal));
         self.status.rx2 = Some(proto::SubRx { freq_hz: hz, mode, bandwidth_hz: bw, passband_offset_hz: off, filter_shape, note: None });
+        self.player_b.set_idle(false);
         self.post("/api/sdr/rx2", json!({ "freq_hz": hz, "mode": mode.wire() }));
     }
 
@@ -502,6 +505,7 @@ impl App {
         self.status.rx2 = None;
         self.active_b = false;
         self.player_b.flush();
+        self.player_b.set_idle(true);
         self.post("/api/sdr/rx2", json!({ "off": true }));
     }
 
@@ -853,6 +857,8 @@ impl App {
         if s.rx2.is_none() {
             self.active_b = false;
         }
+        // Another client may have opened or closed the second receiver.
+        self.player_b.set_idle(s.rx2.is_none());
         // A new mode opens the log on its own decodes, when it has a family.
         if (!self.have_status || s.mode != self.status.mode)
             && let Some(f) = crate::decoders::Family::for_mode(s.mode)
@@ -1587,7 +1593,7 @@ impl App {
             self.settings_open = true;
         }
         // The countdown moves once a second.
-        ui.ctx().request_repaint_after(std::time::Duration::from_secs(1));
+        crate::anim::after(ui.ctx(), std::time::Duration::from_secs(1));
     }
 
     fn toasts_ui(&mut self, ctx: &egui::Context) {

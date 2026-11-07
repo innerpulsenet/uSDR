@@ -344,17 +344,21 @@ fn ws_loop(
                                     stats.audio_frames.fetch_add(1, Ordering::Relaxed);
                                     audio.push(&a);
                                 }
+                                // A picture's rows and a ribbon's columns
+                                // are drawn into what is already laid out:
+                                // one paint each, held clear of the last,
+                                // as a spectrum frame is.
                                 Ok(proto::Binary::FaxLine(l)) => {
                                     let _ = ev.send(NetEvent::FaxLine(l));
-                                    crate::anim::now(&ctx);
+                                    crate::anim::frame(&ctx);
                                 }
                                 Ok(proto::Binary::HellColumns(h)) => {
                                     let _ = ev.send(NetEvent::HellColumns(h));
-                                    crate::anim::now(&ctx);
+                                    crate::anim::frame(&ctx);
                                 }
                                 Ok(proto::Binary::ImageLine(l)) => {
                                     let _ = ev.send(NetEvent::ImageLine(l));
-                                    crate::anim::now(&ctx);
+                                    crate::anim::frame(&ctx);
                                 }
                                 Err(_) => {
                                     stats.decode_errors.fetch_add(1, Ordering::Relaxed);
@@ -466,9 +470,11 @@ fn plain_error(e: &tungstenite::Error, base: &str) -> String {
 /// Which of a batch of queued requests to send: the newest of each control
 /// that a later one supersedes, everything else, all in send order.
 fn newest_only(batch: &[Req]) -> Vec<bool> {
-    (0..batch.len())
-        .map(|i| match batch[i].coalesce_key() {
-            Some(k) => !batch[i + 1..].iter().any(|r| r.coalesce_key().as_deref() == Some(&k)),
+    // Each key built once: a wheel spun fast queues dozens of posts.
+    let keys: Vec<Option<String>> = batch.iter().map(Req::coalesce_key).collect();
+    (0..keys.len())
+        .map(|i| match &keys[i] {
+            Some(k) => !keys[i + 1..].iter().any(|r| r.as_ref() == Some(k)),
             None => true,
         })
         .collect()

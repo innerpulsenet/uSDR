@@ -27,41 +27,71 @@ pub struct Picture {
     pub freq_hz: f64,
     pub mode: String,
     texture: Option<egui::TextureHandle>,
-    dirty: bool,
+    /// The texture's height: the rows grown into by doubling.
+    tex_rows: usize,
+    /// The first row changed since the texture was last brought up to
+    /// date; MAX when none has.
+    dirty_from: usize,
     pub saved: Option<std::path::PathBuf>,
 }
 
 impl Picture {
     fn new(id: u32, width: usize, freq_hz: f64) -> Self {
-        Picture { id, width, rgb: Vec::new(), rows: 0, started: SystemTime::now(), freq_hz, mode: String::new(), texture: None, dirty: true, saved: None }
+        Picture { id, width, rgb: Vec::new(), rows: 0, started: SystemTime::now(), freq_hz, mode: String::new(), texture: None, tex_rows: 0, dirty_from: usize::MAX, saved: None }
     }
 
     fn push(&mut self, line: usize, rgb: &[u8]) {
         if rgb.len() != 3 * self.width || line >= MAX_ROWS {
             return;
         }
+        // Rows skipped on the way are gray, and changed with this one.
+        self.dirty_from = self.dirty_from.min(line.min(self.rows));
         if line >= self.rows {
             self.rgb.resize(3 * self.width * (line + 1), 96);
             self.rows = line + 1;
         }
         self.rgb[3 * self.width * line..3 * self.width * (line + 1)].copy_from_slice(rgb);
-        self.dirty = true;
     }
 
+    /// Bring the texture up to the rows received: grow it by doubling, and
+    /// upload only the rows that changed otherwise. Uploading the whole
+    /// picture for every row was a megabyte or two a row by the end of a
+    /// tall one. The row under the last is a copy of it, so the filtered
+    /// edge looks as it did when the texture ended there.
     fn texture(&mut self, ctx: &egui::Context) -> Option<&egui::TextureHandle> {
         if self.rows == 0 {
             return None;
         }
-        if self.dirty || self.texture.is_none() {
-            let img = egui::ColorImage::from_rgb([self.width, self.rows], &self.rgb);
-            let opts = egui::TextureOptions::LINEAR;
+        let opts = egui::TextureOptions::LINEAR;
+        let row = 3 * self.width;
+        // Rows `from..rows` and the copy of the last after them, up to `to`.
+        let image = |from: usize, to: usize| {
+            let mut px = self.rgb[row * from..row * self.rows].to_vec();
+            for _ in self.rows..to {
+                px.extend_from_slice(&self.rgb[row * (self.rows - 1)..row * self.rows]);
+            }
+            egui::ColorImage::from_rgb([self.width, to - from], &px)
+        };
+        if self.texture.is_none() || self.rows > self.tex_rows {
+            self.tex_rows = self.rows.next_power_of_two().max(64);
+            let img = image(0, self.tex_rows);
             match &mut self.texture {
                 Some(t) => t.set(img, opts),
                 None => self.texture = Some(ctx.load_texture(format!("sstv-{}", self.id), img, opts)),
             }
-            self.dirty = false;
+        } else if self.dirty_from < self.rows {
+            let img = image(self.dirty_from, (self.rows + 1).min(self.tex_rows));
+            if let Some(t) = &mut self.texture {
+                t.set_partial([0, self.dirty_from], img, opts);
+            }
         }
+        self.dirty_from = usize::MAX;
         self.texture.as_ref()
+    }
+
+    /// The part of the texture the picture fills.
+    fn uv(&self) -> egui::Rect {
+        egui::Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, self.rows as f32 / self.tex_rows.max(1) as f32))
     }
 
     fn file_stem(&self) -> String {
@@ -194,7 +224,8 @@ fn canvas(app: &mut App, ui: &mut Ui, h: f32) {
     let rows = pic.rows;
     let width = pic.width;
     let (label, live) = (format!("{} · {:.3} MHz · {} rows{}", if pic.mode.is_empty() { "SSTV" } else { &pic.mode }, pic.freq_hz / 1e6, rows, if pic.saved.is_some() { " · saved" } else { "" }), receiving && newest);
-    if let Some(tex) = pic.texture(&ctx) {
+    if let Some(tex) = pic.texture(&ctx).map(|t| t.id()) {
+        let uv = pic.uv();
         // Fit the whole picture (its full height, rows still to come left
         // dark), square pixels.
         let total_rows = (full_h as usize).max(rows) as f32;
@@ -202,7 +233,7 @@ fn canvas(app: &mut App, ui: &mut Ui, h: f32) {
         let size = vec2(width as f32 * scale, rows as f32 * scale);
         let top_left = pos2(outer.center().x - size.x / 2.0, outer.top() + (outer.height() - total_rows * scale) / 2.0);
         let r = egui::Rect::from_min_size(top_left, size);
-        p.image(tex.id(), r, egui::Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), egui::Color32::WHITE);
+        p.image(tex, r, uv, egui::Color32::WHITE);
         p.rect_stroke(egui::Rect::from_min_size(top_left, vec2(size.x, total_rows * scale)), CornerRadius::same(2), Stroke::new(1.0, theme::line()), egui::StrokeKind::Outside);
         if live {
             let y = r.bottom();
@@ -226,8 +257,8 @@ fn strip(app: &mut App, ui: &mut Ui) {
                 let (r, resp) = ui.allocate_exact_size(vec2(84.0, 63.0), Sense::click());
                 let p = ui.painter_at(r);
                 p.rect_filled(r, CornerRadius::same(3), theme::ink());
-                if let Some(tex) = pic.texture(&ctx) {
-                    p.image(tex.id(), r.shrink(1.0), egui::Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), egui::Color32::WHITE);
+                if let Some(tex) = pic.texture(&ctx).map(|t| t.id()) {
+                    p.image(tex, r.shrink(1.0), pic.uv(), egui::Color32::WHITE);
                 }
                 let c = if shown == Some(k) { theme::AMBER } else if resp.hovered() { theme::text_2() } else { theme::line() };
                 p.rect_stroke(r, CornerRadius::same(3), Stroke::new(if shown == Some(k) { 2.0 } else { 1.0 }, c), egui::StrokeKind::Inside);
@@ -255,4 +286,72 @@ fn save(app: &mut App, ctx: &egui::Context, i: usize) {
         }
     });
     app.toast(ctx, Tone::Ok, format!("Saved {shown}"));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The texture as the GPU would hold it: every upload since the last
+    /// look applied in turn. Returns the bytes uploaded.
+    fn replay(ctx: &egui::Context, tex: &mut Vec<egui::Color32>, size: &mut [usize; 2]) -> usize {
+        let delta = ctx.tex_manager().write().take_delta();
+        let mut bytes = 0;
+        for (_, d) in delta.set {
+            let egui::ImageData::Color(img) = &d.image;
+            bytes += img.pixels.len() * 4;
+            match d.pos {
+                None => {
+                    *size = img.size;
+                    *tex = img.pixels.clone();
+                }
+                Some([x, y]) => {
+                    for r in 0..img.size[1] {
+                        for c in 0..img.size[0] {
+                            tex[(y + r) * size[0] + x + c] = img.pixels[r * img.size[0] + c];
+                        }
+                    }
+                }
+            }
+        }
+        bytes
+    }
+
+    #[test]
+    fn the_texture_holds_the_picture_and_only_new_rows_go_up() {
+        let ctx = egui::Context::default();
+        let width = 320;
+        let mut pic = Picture::new(1, width, 14.23e6);
+        let (mut tex, mut size) = (Vec::new(), [0usize; 2]);
+        let line = |n: usize| (0..3 * width).map(|i| ((i * 7 + n * 13) % 251) as u8).collect::<Vec<u8>>();
+        let mut late = 0;
+        for n in 0..256 {
+            // Row 100 is lost on the way, then arrives late, after 120.
+            if n != 100 {
+                pic.push(n, &line(n));
+            }
+            if n == 120 {
+                pic.push(100, &line(100));
+            }
+            pic.texture(&ctx);
+            let bytes = replay(&ctx, &mut tex, &mut size);
+            if n > 64 && !n.is_power_of_two() && n != 120 {
+                // A row (two where one was skipped), and the copy of the
+                // last under the picture.
+                assert!(bytes <= 3 * width * 4, "row {n}: {bytes} bytes");
+            }
+            if n == 120 {
+                late = bytes;
+            }
+            // Every row as received, and the last repeated under it.
+            let want = egui::ColorImage::from_rgb([width, pic.rows], &pic.rgb);
+            assert_eq!(&tex[..want.pixels.len()], &want.pixels[..], "after row {n}");
+            if pic.rows < size[1] {
+                assert_eq!(&tex[pic.rows * width..(pic.rows + 1) * width], &want.pixels[(pic.rows - 1) * width..], "edge after row {n}");
+            }
+            assert!((pic.uv().max.y * size[1] as f32 - pic.rows as f32).abs() < 1e-3);
+        }
+        // The late row went up with the ones after it, not the whole picture.
+        assert!(late <= 22 * width * 4, "{late}");
+    }
 }

@@ -190,7 +190,7 @@ fn decodes(app: &mut App, ui: &mut Ui) {
                 // chosen, so it stays one short row.
                 let current = app.status.mode.label();
                 let list: Vec<&crate::decoders::Decoder> = crate::decoders::in_family(f)
-                    .filter(|d| f != Family::HfData || d.chip == current || app.decode_chip == Some(d.chip) || app.decodes.iter().any(|r| r.family == Some(f) && d.takes(&r.ev.protocol.to_ascii_uppercase())))
+                    .filter(|d| f != Family::HfData || d.chip == current || app.decode_chip == Some(d.chip) || app.decodes.iter().any(|r| r.family == Some(f) && d.takes(&r.ev.protocol)))
                     .collect();
                 if list.len() > 1 || f == Family::HfData {
                     // A rule between the families and this one's decoders.
@@ -258,7 +258,7 @@ fn decodes(app: &mut App, ui: &mut Ui) {
         .iter()
         .enumerate()
         .filter(|(_, d)| family.is_none() || d.family == family)
-        .filter(|(_, d)| chip.is_none_or(|c| c.takes(&d.ev.protocol.to_ascii_uppercase())))
+        .filter(|(_, d)| chip.is_none_or(|c| c.takes(&d.ev.protocol)))
         .filter(|(_, d)| filter.is_empty() || d.key.contains(&filter))
         .map(|(i, _)| i)
         .collect();

@@ -392,7 +392,7 @@ fn clock(app: &App, ui: &mut Ui, rows: &[Row], filter: &mut Filter, has_call: bo
         });
     });
     // The bar moves on its own; a few frames a second is plenty.
-    ui.ctx().request_repaint_after(std::time::Duration::from_millis(200));
+    crate::anim::after(ui.ctx(), std::time::Duration::from_millis(200));
 }
 
 /// The band's activity: the last few slots, newest on top, each decode a

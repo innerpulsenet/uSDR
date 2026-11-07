@@ -91,11 +91,6 @@ impl Role {
     }
 }
 
-/// A vessel's name, from whichever of its reports carried one.
-pub fn name_of(app: &App, mmsi: &str) -> Option<String> {
-    app.decodes.iter().filter(|d| d.ev.protocol == "AIS" && d.ev.fields.get("mmsi").is_some_and(|m| m == mmsi)).find_map(|d| d.ev.fields.get("name").cloned())
-}
-
 /// Every vessel in the log, most recently heard first.
 fn vessels(app: &App) -> Vec<Vessel> {
     let mut out: Vec<Vessel> = Vec::new();
