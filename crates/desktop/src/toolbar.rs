@@ -211,7 +211,7 @@ fn waterfall(app: &mut App, ui: &mut Ui) {
             v.wf_auto_black = !v.wf_auto_black;
             v.wf_black = if v.wf_auto_black { -3.0 } else { floor };
         }
-        if widgets::key(ui, "WF PEAK", v.wf_peak, theme::VIOLET).on_hover_text("Paint from each frame's strongest segment, so bursts show at full level").clicked() {
+        if widgets::key(ui, "WF PEAK", v.wf_peak, theme::AMBER).on_hover_text("Paint from each frame's strongest segment, so bursts show at full level").clicked() {
             v.wf_peak = !v.wf_peak;
         }
     });

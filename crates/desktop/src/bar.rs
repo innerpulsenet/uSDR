@@ -361,16 +361,6 @@ fn tuning(app: &mut App, ui: &mut Ui) {
     });
 }
 
-fn mode_tally(m: Mode) -> egui::Color32 {
-    match m {
-        Mode::Nfm | Mode::Am | Mode::Usb | Mode::Lsb => theme::AMBER,
-        Mode::Wfm | Mode::Pager | Mode::Flex | Mode::Ais => theme::CYAN,
-        m if m.is_hf_data() => theme::CYAN,
-        Mode::P25 | Mode::Dmr | Mode::Nxdn | Mode::Packet => theme::OK,
-        _ => theme::VIOLET,
-    }
-}
-
 /// The modes a person listens to; every other mode is a decoder, behind
 /// the DATA key.
 const VOICE: [Mode; 5] = [Mode::Nfm, Mode::Am, Mode::Usb, Mode::Lsb, Mode::Wfm];
@@ -553,12 +543,8 @@ fn mode_board(app: &App, ui: &mut Ui, id: &str, rows: &[Vec<Vec<Key>>], current:
     let h = rows.len() as f32 * key_h + ROW_GAP * rows.len().saturating_sub(1) as f32;
     let (area, _) = ui.allocate_exact_size(vec2(width, h), Sense::hover());
     let p = ui.painter().clone();
-    let tally_of = |k: Key| match k {
-        Key::Mode(m) => mode_tally(m),
-        Key::Data => mode_tally(if is_data(current) { current } else { Mode::Ft8 }),
-    };
     // Lay out every key: the stretch is shared evenly by a row's keys.
-    let mut cells: Vec<(Key, egui::Rect)> = Vec::new();
+    let mut cells: Vec<(Key, egui::Rect, egui::CornerRadius)> = Vec::new();
     for (r, row) in rows.iter().enumerate() {
         let keys = row.iter().map(Vec::len).sum::<usize>().max(1) as f32;
         let extra = ((width - row_width(ui, row)) / keys).max(0.0);
@@ -567,34 +553,20 @@ fn mode_board(app: &App, ui: &mut Ui, id: &str, rows: &[Vec<Vec<Key>>], current:
         for track in row {
             let tw = track.iter().map(|k| key_width(ui, *k) + extra).sum::<f32>() + 2.0 * TRACK_PAD;
             let tr = egui::Rect::from_min_size(egui::pos2(x, top), vec2(tw, key_h));
-            theme::well(&p, tr, None);
             let mut kx = tr.left() + TRACK_PAD;
-            for k in track {
+            for (i, k) in track.iter().enumerate() {
                 let kw = key_width(ui, *k) + extra;
-                cells.push((*k, egui::Rect::from_min_size(egui::pos2(kx, tr.top() + TRACK_PAD), vec2(kw, key_h - 2.0 * TRACK_PAD))));
+                cells.push((*k, egui::Rect::from_min_size(egui::pos2(kx, tr.top() + TRACK_PAD), vec2(kw, key_h - 2.0 * TRACK_PAD)), widgets::joined_corners(i, track.len())));
                 kx += kw;
             }
             x += tw + TRACK_GAP;
         }
     }
     let lit_key = if tall && is_data(current) { Key::Data } else { Key::Mode(current) };
-    let lit = cells.iter().find(|(k, _)| *k == lit_key).map(|(k, r)| (*k, *r));
-    if let Some((k, c)) = lit {
-        let reduce = ui.data(|d| d.get_temp::<bool>(egui::Id::new("usdr-reduce-motion")).unwrap_or(false));
-        let t = if reduce { 0.0 } else { 0.18 };
-        let anim = |name: &str, v: f32| ui.ctx().animate_value_with_time(id.with(name), v, t);
-        let rect = egui::Rect::from_min_max(egui::pos2(anim("l", c.left()), anim("t", c.top())), egui::pos2(anim("r", c.right()), anim("b", c.bottom())));
-        let want = if tint == egui::Color32::TRANSPARENT { tally_of(k) } else { tint };
-        let col = egui::Color32::from_rgb(anim("cr", want.r() as f32) as u8, anim("cg", want.g() as f32) as u8, anim("cb", want.b() as f32) as u8);
-        p.rect(rect, egui::CornerRadius::same(3), alpha(col, 0.24), Stroke::new(1.0, alpha(col, 0.75)), egui::StrokeKind::Inside);
-        // A tally lamp along the lit key's foot.
-        let lamp = egui::Rect::from_min_max(egui::pos2(rect.left() + 5.0, rect.bottom() - 3.0), egui::pos2(rect.right() - 5.0, rect.bottom() - 1.5));
-        p.rect_filled(lamp.expand(1.0), egui::CornerRadius::same(2), alpha(col, 0.18));
-        p.rect_filled(lamp, egui::CornerRadius::same(1), alpha(col, 0.9));
-    }
-    let mut out = None;
-    let mut prev: Option<(Key, egui::Rect)> = None;
-    for (k, cell) in &cells {
+    // Every key up first, so the lit one can slide across them.
+    let want = if tint == egui::Color32::TRANSPARENT { theme::AMBER } else { theme::on_color(tint) };
+    let mut states = Vec::with_capacity(cells.len());
+    for (k, cell, corners) in &cells {
         let label = key_label(*k, current);
         let resp = ui.interact(*cell, id.with(label.as_str()), Sense::click());
         let on = *k == lit_key;
@@ -604,25 +576,26 @@ fn mode_board(app: &App, ui: &mut Ui, id: &str, rows: &[Vec<Vec<Key>>], current:
         };
         resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::RadioButton, true, on, shown));
         let hover = ui.ctx().animate_bool_with_time(resp.id.with("hv"), resp.hovered() && !on, 0.12);
-        if hover > 0.0 {
-            p.rect_filled(*cell, egui::CornerRadius::same(3), alpha(theme::surface_4(), 0.6 * hover));
-        }
+        let state = theme::KeyState { hover, on: 0.0, press: 0.0, color: want, focus: resp.has_focus() };
+        theme::key_body(&p, cell.shrink2(vec2(0.5, 0.0)), *corners, state);
+        states.push((resp, state));
+    }
+    if let Some((_, c, corners)) = cells.iter().find(|(k, _, _)| *k == lit_key) {
+        let reduce = ui.data(|d| d.get_temp::<bool>(egui::Id::new("usdr-reduce-motion")).unwrap_or(false));
+        let t = if reduce { 0.0 } else { 0.18 };
+        let anim = |name: &str, v: f32| ui.ctx().animate_value_with_time(id.with(name), v, t);
+        let rect = egui::Rect::from_min_max(egui::pos2(anim("l", c.left()), anim("t", c.top())), egui::pos2(anim("r", c.right()), anim("b", c.bottom())));
+        let col = egui::Color32::from_rgb(anim("cr", want.r() as f32) as u8, anim("cg", want.g() as f32) as u8, anim("cb", want.b() as f32) as u8);
+        theme::key_body(&p, rect.shrink2(vec2(0.5, 0.0)), *corners, theme::KeyState { hover: 0.0, on: 1.0, press: 0.0, color: col, focus: false });
+    }
+    let mut out = None;
+    for ((k, cell, _), (resp, state)) in cells.iter().zip(states) {
+        let label = key_label(*k, current);
+        let on = *k == lit_key;
         if resp.hovered() {
             ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
         }
-        // A hairline between two unlit neighbors in one track.
-        if let Some((pk, pr)) = prev
-            && (pr.right() - cell.left()).abs() < 0.5
-            && !on
-            && pk != lit_key
-        {
-            p.line_segment([egui::pos2(cell.left(), cell.top() + 4.0), egui::pos2(cell.left(), cell.bottom() - 4.0)], Stroke::new(1.0, theme::line()));
-        }
-        prev = Some((*k, *cell));
-        // Unlit labels carry a breath of their family's color, so the
-        // families read apart before a label is.
-        let family = theme::lerp(theme::text_3(), tally_of(*k), 0.28);
-        let c = if on { theme::text() } else { theme::lerp(family, theme::text_2(), 0.35 + 0.65 * hover) };
+        let c = theme::key_text(theme::KeyState { on: if on { 1.0 } else { 0.0 }, ..state }, true);
         if tall {
             // The name, and under it the width or the decoder running.
             p.text(cell.center() + vec2(0.0, -7.0), egui::Align2::CENTER_CENTER, &label, font.clone(), c);
@@ -759,12 +732,9 @@ pub fn take_quick_tune(ui: &Ui) -> Option<(Mode, crate::tunestrip::Dial)> {
 fn hf_tile(ui: &mut Ui, m: Mode, on: bool, w: f32) -> egui::Response {
     let (r, resp) = ui.allocate_exact_size(vec2(w, 36.0), Sense::click());
     resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::RadioButton, true, on, m.label()));
-    let tally = mode_tally(m);
-    let hover = ui.ctx().animate_bool_with_time(resp.id.with("hv"), resp.hovered(), 0.12);
+    let (press, c) = widgets::paint_key(ui, &resp, r, egui::CornerRadius::same(3), on, theme::AMBER);
     let p = ui.painter();
-    let bg = if on { alpha(tally, 0.22) } else { theme::lerp(theme::surface_3(), theme::surface_4(), hover) };
-    p.rect(r, egui::CornerRadius::same(3), bg, Stroke::new(1.0, if on { alpha(tally, 0.75) } else { theme::line() }), egui::StrokeKind::Inside);
-    p.text(r.left_top() + vec2(8.0, 5.0), egui::Align2::LEFT_TOP, m.label(), theme::mono_bold(11.5), if on { theme::text() } else { theme::lerp(theme::text_2(), theme::text(), hover) });
+    p.text(r.left_top() + vec2(8.0, 5.0 + press), egui::Align2::LEFT_TOP, m.label(), theme::mono_bold(11.5), c);
     p.text(r.left_bottom() + vec2(8.0, -5.0), egui::Align2::LEFT_BOTTOM, hf_spec(m), theme::mono(9.5), theme::text_3());
     if resp.hovered() {
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
@@ -819,12 +789,11 @@ fn shape_key(ui: &mut Ui, shape: FilterShape, height: f32) -> Option<FilterShape
     let (rect, resp) = ui.allocate_exact_size(vec2(18.0 + 5.0 + tw + 8.0, height), Sense::click());
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, true, format!("Filter shape {}", shape.label())));
     let open = egui::Popup::is_id_open(ui.ctx(), egui::Popup::default_response_id(&resp));
-    let hover = ui.ctx().animate_bool_with_time(resp.id.with("hv"), resp.hovered() || open, 0.12);
+    let (press, c) = widgets::paint_key(ui, &resp, rect, egui::CornerRadius::same(3), open, theme::AMBER);
     let p = ui.painter();
-    p.rect(rect, egui::CornerRadius::same(3), alpha(theme::AMBER, 0.05 + 0.10 * hover), Stroke::new(1.0, alpha(theme::AMBER, 0.25 + 0.35 * hover)), egui::StrokeKind::Inside);
-    let g = egui::Rect::from_center_size(egui::pos2(rect.left() + 12.0, rect.center().y), vec2(16.0, (height - 5.0).max(6.0)));
-    shape_glyph(p, g, shape, theme::lerp(alpha(theme::AMBER, 0.75), theme::AMBER, hover));
-    p.text(egui::pos2(g.right() + 5.0, rect.center().y), egui::Align2::LEFT_CENTER, &label, font, theme::lerp(theme::text_2(), theme::text(), hover));
+    let g = egui::Rect::from_center_size(egui::pos2(rect.left() + 12.0, rect.center().y + press), vec2(16.0, (height - 5.0).max(6.0)));
+    shape_glyph(p, g, shape, theme::AMBER);
+    p.text(egui::pos2(g.right() + 5.0, rect.center().y + press), egui::Align2::LEFT_CENTER, &label, font, c);
     if resp.hovered() {
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
     }
@@ -1646,7 +1615,7 @@ fn memory_pill(ui: &mut Ui, slot: usize, m: Option<&crate::prefs::Memory>, lit: 
         let f = p.layout_no_wrap(mhz, font.clone(), egui::Color32::PLACEHOLDER);
         let room = SLOT_W - 8.0 - num.size().x - 6.0 - f.size().x - 5.0 - 8.0;
         let name = widgets::ellipsize(&p, &m.name, theme::mono_bold(10.0), room);
-        (f, p.layout_no_wrap(name, theme::mono_bold(10.0), egui::Color32::PLACEHOLDER), mode_tally(m.mode))
+        (f, p.layout_no_wrap(name, theme::mono_bold(10.0), egui::Color32::PLACEHOLDER))
     });
     let plus = m.is_none().then(|| p.layout_no_wrap(format!("+ {slot}"), theme::mono(10.0), egui::Color32::PLACEHOLDER));
     let w = plus.as_ref().map_or(SLOT_W, |g| g.size().x + 20.0);
@@ -1654,19 +1623,17 @@ fn memory_pill(ui: &mut Ui, slot: usize, m: Option<&crate::prefs::Memory>, lit: 
     let name = m.map_or_else(|| format!("empty slot {slot}"), |m| m.name.clone());
     resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, lit, &name));
     let hover = ui.ctx().animate_bool_with_time(resp.id.with("hv"), resp.hovered(), 0.12);
-    let t = ui.ctx().animate_bool_with_time(resp.id.with("on"), lit, 0.15);
-    let cr = egui::CornerRadius::same(3);
     let y = rect.center().y;
     match parts {
-        Some((f, n, tally)) => {
-            let bg = theme::lerp(theme::lerp(theme::surface_3(), theme::surface_4(), hover), alpha(theme::AMBER, 0.20), t);
-            p.rect(rect, cr, bg, Stroke::new(1.0, theme::lerp(theme::line(), alpha(theme::AMBER, 0.75), t)), egui::StrokeKind::Inside);
+        Some((f, n)) => {
+            let (press, c) = widgets::paint_key(ui, &resp, rect, egui::CornerRadius::same(3), lit, theme::AMBER);
+            let y = y + press;
             let mut x = rect.left() + 8.0;
             p.galley(egui::pos2(x, y - num.size().y / 2.0), num.clone(), theme::text_3());
             x += num.size().x + 6.0;
-            p.galley(egui::pos2(x, y - f.size().y / 2.0), f.clone(), theme::lerp(theme::text_2(), theme::text(), t.max(hover)));
+            p.galley(egui::pos2(x, y - f.size().y / 2.0), f.clone(), c);
             x += f.size().x + 5.0;
-            p.galley(egui::pos2(x, y - n.size().y / 2.0 + 0.5), n, alpha(tally, 0.9));
+            p.galley(egui::pos2(x, y - n.size().y / 2.0 + 0.5), n, theme::text_2());
         }
         None => {
             let c = if armed { alpha(theme::AMBER, 0.8) } else { theme::lerp(theme::line_2(), theme::text_3(), hover) };

@@ -573,10 +573,10 @@ fn front_end(app: &mut App, ui: &mut Ui) {
     // edges line up whatever the labels.
     let mut keys: Vec<(String, bool, egui::Color32, &str, FrontKey)> = Vec::new();
     if let Some(on) = s.rf_notch {
-        keys.push(("AM/FM NOTCH".into(), on, theme::VIOLET, "The tuner's broadcast-band notch", FrontKey::RfNotch));
+        keys.push(("AM/FM NOTCH".into(), on, theme::AMBER, "The tuner's broadcast-band notch", FrontKey::RfNotch));
     }
     if let Some(on) = s.dab_notch {
-        keys.push(("DAB NOTCH".into(), on, theme::VIOLET, "The tuner's DAB-band notch", FrontKey::DabNotch));
+        keys.push(("DAB NOTCH".into(), on, theme::AMBER, "The tuner's DAB-band notch", FrontKey::DabNotch));
     }
     keys.push((lo, s.lo_offset, theme::CYAN, "Park the tuner off-center so its DC spur stays out of the channel", FrontKey::LoOffset));
     if let Some(on) = s.iq_correction {
@@ -585,7 +585,7 @@ fn front_end(app: &mut App, ui: &mut Ui) {
     if let Some(on) = s.bias_t {
         keys.push(("BIAS-T".into(), on, theme::WARN, "DC on the antenna feed, for an inline preamp; saved per radio", FrontKey::BiasT));
     }
-    keys.push((spur, spur_on || checking, theme::VIOLET, "Find the receiver's own spurs by moving the span an eighth and back, then notch them. Click again to clear.", FrontKey::Spur));
+    keys.push((spur, spur_on || checking, theme::AMBER, "Find the receiver's own spurs by moving the span an eighth and back, then notch them. Click again to clear.", FrontKey::Spur));
     let mut hit = None;
     let col_w = ((ui.available_width() - 6.0) / 2.0).floor();
     for pair in keys.chunks(2) {
@@ -657,7 +657,7 @@ fn processing(app: &mut App, ui: &mut Ui) {
         });
     });
     row(ui, "BLANKER", "Wideband impulse blanker, for ignition and power-line clicks. It also clips the start of strong packet bursts, so leave it off for APRS.", &mut |ui| {
-        if let Some(i) = widgets::segmented(ui, "blanker", &["OFF", "LOW", "MED", "HIGH"], Some(p.blanker.min(3) as usize), theme::VIOLET) {
+        if let Some(i) = widgets::segmented(ui, "blanker", &["OFF", "LOW", "MED", "HIGH"], Some(p.blanker.min(3) as usize), theme::AMBER) {
             post = Some(json!({ "blanker": i }));
         }
     });

@@ -551,18 +551,6 @@ impl Seg {
     }
 }
 
-/// A vertical gradient over `r`, `top` to `bottom`.
-fn vgrad(p: &egui::Painter, r: Rect, top: Color32, bottom: Color32) {
-    let mut m = egui::Mesh::default();
-    m.colored_vertex(r.left_top(), top);
-    m.colored_vertex(r.right_top(), top);
-    m.colored_vertex(r.left_bottom(), bottom);
-    m.colored_vertex(r.right_bottom(), bottom);
-    m.add_triangle(0, 1, 2);
-    m.add_triangle(2, 1, 3);
-    p.add(Shape::mesh(m));
-}
-
 /// The display behind the digits: a bezel cut into the panel, and a panel
 /// of dark glass lit from behind in the receiver's color, brightest at its
 /// middle as a backlight falls off toward the frame.
@@ -593,6 +581,7 @@ pub fn lcd_back(p: &egui::Painter, r: Rect, tint: Color32) {
 /// texture like an LCD's cells, a shadow under the bezel's upper lip, and
 /// the glass's own edge.
 pub fn lcd_glass(p: &egui::Painter, r: Rect) {
+    use crate::theme::vgrad;
     let cp = p.with_clip_rect(r.shrink(1.0));
     // Rows: a faint dark line every third point.
     let mut y = r.top() + 2.0;

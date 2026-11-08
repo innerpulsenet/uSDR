@@ -153,19 +153,11 @@ pub fn menu_chip_lit<R>(ui: &mut Ui, label: &str, labels: &[&str], tally: Color3
         .iter()
         .map(|l| ui.painter().layout_no_wrap(format!("{l} ▾"), theme::mono_bold(10.5), Color32::PLACEHOLDER).size().x)
         .fold(galley.size().x, f32::max);
-    let (rect, resp) = ui.allocate_exact_size(vec2(widest + 14.0, 22.0), Sense::click());
+    let (rect, resp) = ui.allocate_exact_size(vec2(widest + 14.0, KEY_H_SMALL), Sense::click());
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, label));
     let open = egui::Popup::is_id_open(ui.ctx(), egui::Popup::default_response_id(&resp));
-    let t = ui.ctx().animate_bool_with_time(resp.id.with("on"), open || lit, 0.15);
-    let hover = ui.ctx().animate_bool_with_time(resp.id.with("hv"), resp.hovered(), 0.12);
-    let bg = theme::lerp(theme::lerp(theme::surface_3(), theme::surface_4(), hover), alpha(tally, 0.22), t);
-    let stroke = theme::lerp(theme::line(), alpha(tally, 0.75), t);
-    let p = ui.painter();
-    p.rect(rect, CornerRadius::same(3), bg, Stroke::new(1.0, stroke), egui::StrokeKind::Inside);
-    let press = pressed(ui, &resp).max(t);
-    theme::key_face(p, rect, 3, press);
-    let c = theme::lerp(theme::text_2(), theme::text(), t.max(hover));
-    p.galley(rect.center() - galley.size() / 2.0 + vec2(0.0, press), galley, c);
+    let (press, c) = paint_key(ui, &resp, rect, CornerRadius::same(3), open || lit, tally);
+    ui.painter().galley(rect.center() - galley.size() / 2.0 + vec2(0.0, press), galley, c);
     egui::Popup::menu(&resp).show(add).map(|r| r.inner)
 }
 
@@ -176,17 +168,11 @@ pub fn selector<R>(ui: &mut Ui, id: &str, text: &str, color: Color32, width: f32
     let w = if width > 0.0 { width } else { ui.painter().layout_no_wrap(text.to_owned(), font.clone(), Color32::PLACEHOLDER).size().x + 34.0 };
     let (rect, resp) = ui.allocate_exact_size(vec2(w, 24.0), Sense::click());
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, true, text));
-    let hover = ui.ctx().animate_bool_with_time(resp.id.with("hv"), resp.hovered(), 0.12);
+    let (press, _) = paint_key(ui, &resp, rect, CornerRadius::same(theme::RADIUS), false, theme::AMBER);
     let p = ui.painter();
-    p.rect(rect, CornerRadius::same(theme::RADIUS), theme::lerp(theme::surface_3(), theme::surface_4(), hover), Stroke::new(1.0, theme::lerp(theme::line(), theme::line_2(), hover)), egui::StrokeKind::Inside);
-    let press = pressed(ui, &resp);
-    theme::key_face(p, rect, theme::RADIUS, press);
     let shown = ellipsize(p, text, font.clone(), w - 30.0);
     p.text(pos2(rect.left() + 8.0, rect.center().y + press), Align2::LEFT_CENTER, shown, font, color);
     p.text(pos2(rect.right() - 7.0, rect.center().y), Align2::RIGHT_CENTER, "▾", theme::mono(10.0), theme::text_3());
-    if resp.has_focus() {
-        p.rect_stroke(rect.expand(1.5), CornerRadius::same(theme::RADIUS + 1), Stroke::new(1.0, theme::EMBER), egui::StrokeKind::Outside);
-    }
     egui::Popup::menu(&resp).id(egui::Id::new(("selector", id))).width(w.max(160.0)).show(add).map(|r| r.inner)
 }
 
@@ -250,19 +236,40 @@ pub fn numeric(ui: &mut Ui, value: &mut f64, range: std::ops::RangeInclusive<f64
 
 /// An action key at chip height, for the small verbs inside lists.
 pub fn action_small(ui: &mut Ui, label: &str) -> Response {
-    let galley = ui.painter().layout_no_wrap(label.to_string(), theme::sans_semibold(11.0), Color32::PLACEHOLDER);
-    let (rect, resp) = ui.allocate_exact_size(vec2(galley.size().x + 14.0, 22.0), Sense::click());
+    action_sized(ui, label, 14.0, KEY_H_SMALL, 3)
+}
+
+fn action_sized(ui: &mut Ui, label: &str, pad: f32, height: f32, radius: u8) -> Response {
+    let galley = ui.painter().layout_no_wrap(label.to_uppercase(), key_font(), Color32::PLACEHOLDER);
+    let (rect, resp) = ui.allocate_exact_size(vec2(galley.size().x + pad, height), Sense::click());
     let enabled = ui.is_enabled();
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, label));
-    let hover = ui.ctx().animate_bool_with_time(resp.id.with("hv"), resp.hovered(), 0.12);
-    let p = ui.painter();
-    let press = pressed(ui, &resp);
-    let bg = theme::lerp(theme::lerp(theme::surface_3(), theme::surface_4(), hover), theme::surface_4(), press);
-    p.rect(rect, CornerRadius::same(3), bg, Stroke::new(1.0, theme::line_2()), egui::StrokeKind::Inside);
-    theme::key_face(p, rect, 3, press);
-    let c = if enabled { theme::text() } else { theme::text_3() };
-    p.galley(rect.center() - galley.size() / 2.0 + vec2(0.0, press), galley, c);
+    let (press, c) = paint_key(ui, &resp, rect, CornerRadius::same(radius), false, theme::AMBER);
+    ui.painter().galley(rect.center() - galley.size() / 2.0 + vec2(0.0, press), galley, c);
     resp
+}
+
+/// A key's height at chip size, and the one font every key label is set in.
+const KEY_H_SMALL: f32 = 22.0;
+
+pub fn key_font() -> egui::FontId {
+    theme::mono_bold(10.5)
+}
+
+/// Draw `resp`'s key over `rect`: the one body every key has, its hover,
+/// latch and press eased here. Returns how far it is pressed (for its
+/// label's offset) and the color the label takes.
+pub fn paint_key(ui: &Ui, resp: &Response, rect: Rect, radius: CornerRadius, on: bool, lit: Color32) -> (f32, Color32) {
+    let enabled = ui.is_enabled();
+    let k = theme::KeyState {
+        hover: ui.ctx().animate_bool_with_time(resp.id.with("hv"), enabled && resp.hovered(), 0.12),
+        on: ui.ctx().animate_bool_with_time(resp.id.with("on"), on, 0.15),
+        press: if enabled { pressed(ui, resp) } else { 0.0 },
+        color: theme::on_color(lit),
+        focus: resp.has_focus(),
+    };
+    theme::key_body(ui.painter(), rect, radius, k);
+    (k.press.max(k.on * 0.6), theme::key_text(k, enabled))
 }
 
 /// A latching key with a tally light. Returns its response; clicked toggles.
@@ -271,30 +278,18 @@ pub fn key(ui: &mut Ui, label: &str, on: bool, tally: Color32) -> Response {
 }
 
 pub fn key_sized(ui: &mut Ui, label: &str, on: bool, tally: Color32, size: egui::Vec2) -> Response {
-    let galley = ui.painter().layout_no_wrap(label.to_string(), theme::sans_semibold(11.5), Color32::PLACEHOLDER);
-    let w = if size.x > 0.0 { size.x } else { galley.size().x + 30.0 };
+    let galley = ui.painter().layout_no_wrap(label.to_string(), key_font(), Color32::PLACEHOLDER);
+    let w = if size.x > 0.0 { size.x } else { galley.size().x + 18.0 };
     let (rect, resp) = ui.allocate_exact_size(vec2(w, size.y), Sense::click());
     let enabled = ui.is_enabled();
     resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, enabled, on, label));
-    let t = ui.ctx().animate_bool_with_time(resp.id.with("on"), on, 0.18);
-    let hover = ui.ctx().animate_bool_with_time(resp.id.with("hv"), resp.hovered(), 0.12);
-    let bg = theme::lerp(theme::surface_3(), theme::surface_4(), hover.max(t * 0.6));
-    let p = ui.painter();
-    let dim = if ui.is_enabled() { 1.0 } else { 0.4 };
-    let tally = alpha(tally, dim);
-    p.rect(rect, CornerRadius::same(theme::RADIUS), bg, Stroke::new(1.0, theme::lerp(theme::line(), alpha(tally, 0.55), t)), egui::StrokeKind::Inside);
-    let press = pressed(ui, &resp);
-    theme::key_face(p, rect, theme::RADIUS, press);
-    theme::lamp(p, pos2(rect.left() + 11.0, rect.center().y + press), 3.2, tally, t, theme::LampShape::Round);
-    p.galley(pos2(rect.left() + 21.0, rect.center().y - galley.size().y / 2.0 + press), galley, alpha(theme::lerp(theme::text_2(), theme::text(), t.max(hover)), dim));
-    if resp.has_focus() {
-        p.rect_stroke(rect.expand(1.5), CornerRadius::same(theme::RADIUS + 1), Stroke::new(1.0, theme::EMBER), egui::StrokeKind::Outside);
-    }
+    let (press, c) = paint_key(ui, &resp, rect, CornerRadius::same(theme::RADIUS), on, tally);
+    ui.painter().galley(rect.center() - galley.size() / 2.0 + vec2(0.0, press), galley, c);
     resp
 }
 
-/// A compact selector chip: lit with its tally color when on, no LED.
-/// For rows of choices (modes, presets) where a full key is too wide.
+/// A latching key at chip height, for rows of choices (modes, presets)
+/// where a full key is too wide.
 pub fn chip_key(ui: &mut Ui, label: &str, on: bool, tally: Color32) -> Response {
     chip_key_w(ui, label, on, tally, 0.0)
 }
@@ -302,22 +297,13 @@ pub fn chip_key(ui: &mut Ui, label: &str, on: bool, tally: Color32) -> Response 
 /// A chip key `width` wide (0: as wide as its label), for grids of chips
 /// whose edges line up.
 pub fn chip_key_w(ui: &mut Ui, label: &str, on: bool, tally: Color32, width: f32) -> Response {
-    let galley = ui.painter().layout_no_wrap(label.to_string(), theme::mono_bold(10.5), Color32::PLACEHOLDER);
+    let galley = ui.painter().layout_no_wrap(label.to_string(), key_font(), Color32::PLACEHOLDER);
     let w = if width > 0.0 { width } else { galley.size().x + 14.0 };
-    let (rect, resp) = ui.allocate_exact_size(vec2(w, 22.0), Sense::click());
+    let (rect, resp) = ui.allocate_exact_size(vec2(w, KEY_H_SMALL), Sense::click());
     let enabled = ui.is_enabled();
     resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, enabled, on, label));
-    let t = ui.ctx().animate_bool_with_time(resp.id.with("on"), on, 0.15);
-    let hover = ui.ctx().animate_bool_with_time(resp.id.with("hv"), resp.hovered(), 0.12);
-    let bg = theme::lerp(theme::lerp(theme::surface_3(), theme::surface_4(), hover), alpha(tally, 0.22), t);
-    let stroke = theme::lerp(theme::line(), alpha(tally, 0.75), t);
-    let p = ui.painter();
-    p.rect(rect, CornerRadius::same(3), bg, Stroke::new(1.0, stroke), egui::StrokeKind::Inside);
-    // A lit chip is latched down; the pointer presses an unlit one in.
-    let press = pressed(ui, &resp).max(t * 0.6);
-    theme::key_face(p, rect, 3, press);
-    let c = theme::lerp(theme::text_2(), theme::text(), t.max(hover));
-    p.galley(rect.center() - galley.size() / 2.0 + vec2(0.0, press), galley, if enabled { c } else { theme::text_3() });
+    let (press, c) = paint_key(ui, &resp, rect, CornerRadius::same(3), on, tally);
+    ui.painter().galley(rect.center() - galley.size() / 2.0 + vec2(0.0, press), galley, c);
     resp
 }
 
@@ -346,14 +332,11 @@ pub fn lcd_tag(ui: &mut Ui, text: &str, color: Color32, lit: bool) -> Response {
 /// A chip-height step key with a drawn chevron: `wider` points right.
 /// Dimmed and inert when there is no further step.
 pub fn step_chip(ui: &mut Ui, wider: bool, enabled: bool) -> Response {
-    let (rect, resp) = ui.allocate_exact_size(vec2(20.0, 22.0), if enabled { Sense::click() } else { Sense::hover() });
+    let (rect, resp) = ui.allocate_exact_size(vec2(20.0, KEY_H_SMALL), if enabled { Sense::click() } else { Sense::hover() });
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, if wider { "wider" } else { "narrower" }));
-    let hover = ui.ctx().animate_bool_with_time(resp.id.with("hv"), enabled && resp.hovered(), 0.12);
+    let (press, c) = paint_key(ui, &resp, rect, CornerRadius::same(3), false, theme::AMBER);
+    let c = if enabled { c } else { theme::text_3() };
     let p = ui.painter();
-    p.rect(rect, CornerRadius::same(3), theme::lerp(theme::surface_3(), theme::surface_4(), hover), Stroke::new(1.0, theme::line()), egui::StrokeKind::Inside);
-    let press = if enabled { pressed(ui, &resp) } else { 0.0 };
-    theme::key_face(p, rect, 3, press);
-    let c = if enabled { theme::lerp(theme::text_2(), theme::text(), hover) } else { theme::text_3() };
     let (x, y, d) = (rect.center().x, rect.center().y + press, if wider { 1.0 } else { -1.0 });
     p.line_segment([pos2(x - 2.0 * d, y - 4.0), pos2(x + 2.0 * d, y)], Stroke::new(1.5, c));
     p.line_segment([pos2(x + 2.0 * d, y), pos2(x - 2.0 * d, y + 4.0)], Stroke::new(1.5, c));
@@ -362,19 +345,7 @@ pub fn step_chip(ui: &mut Ui, wider: bool, enabled: bool) -> Response {
 
 /// A plain action key.
 pub fn action(ui: &mut Ui, label: &str) -> Response {
-    let galley = ui.painter().layout_no_wrap(label.to_string(), theme::sans_semibold(11.5), Color32::PLACEHOLDER);
-    let (rect, resp) = ui.allocate_exact_size(vec2(galley.size().x + 20.0, 26.0), Sense::click());
-    let enabled = ui.is_enabled();
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, label));
-    let hover = ui.ctx().animate_bool_with_time(resp.id.with("hv"), resp.hovered(), 0.12);
-    let p = ui.painter();
-    let press = pressed(ui, &resp);
-    let bg = theme::lerp(theme::lerp(theme::surface_3(), theme::surface_4(), hover), theme::surface_4(), press);
-    p.rect(rect, CornerRadius::same(theme::RADIUS), bg, Stroke::new(1.0, theme::line_2()), egui::StrokeKind::Inside);
-    theme::key_face(p, rect, theme::RADIUS, press);
-    let c = if ui.is_enabled() { theme::text() } else { theme::text_3() };
-    p.galley(rect.center() - galley.size() / 2.0 + vec2(0.0, press), galley, c);
-    resp
+    action_sized(ui, label, 20.0, 26.0, theme::RADIUS)
 }
 
 /// The one filled call to action in a view.
@@ -382,7 +353,7 @@ pub fn primary(ui: &mut Ui, label: &str) -> Response {
     // Amber, the house accent: crimson stays for recording, live and
     // destructive keys, so a SAVE or Connect never reads as a stop.
     let text = Color32::from_rgb(0x1e, 0x14, 0x06);
-    let galley = ui.painter().layout_no_wrap(label.to_uppercase(), theme::sans_semibold(12.0), text);
+    let galley = ui.painter().layout_no_wrap(label.to_uppercase(), theme::mono_bold(11.5), text);
     let (rect, resp) = ui.allocate_exact_size(vec2(galley.size().x + 32.0, 32.0), Sense::click());
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, label));
     let hover = ui.ctx().animate_bool_with_time(resp.id.with("hv"), resp.hovered(), 0.12);
@@ -391,6 +362,9 @@ pub fn primary(ui: &mut Ui, label: &str) -> Response {
     let press = pressed(ui, &resp);
     theme::key_face(p, rect, theme::RADIUS, press);
     p.galley(rect.center() - galley.size() / 2.0 + vec2(0.0, press), galley, text);
+    if resp.has_focus() {
+        p.rect_stroke(rect.expand(1.5), CornerRadius::same(theme::RADIUS + 1), Stroke::new(1.0, theme::EMBER), egui::StrokeKind::Outside);
+    }
     resp
 }
 
@@ -720,54 +694,59 @@ fn reduced(ui: &Ui) -> bool {
     ui.data(|d| d.get_temp(reduce_motion_id()).unwrap_or(false))
 }
 
-/// One choice of several, in one recessed track: the segments are set into
-/// it and the lit one slides to the choice, so it reads as "pick one" where
-/// a row of separate chips reads as "switch any". Returns the segment
-/// clicked when it is not the one already chosen.
+/// The corners of the `i`th key of `n` joined in a row: only the row's two
+/// ends are rounded, so they read as one block.
+pub fn joined_corners(i: usize, n: usize) -> CornerRadius {
+    let r = 3;
+    CornerRadius { nw: if i == 0 { r } else { 0 }, sw: if i == 0 { r } else { 0 }, ne: if i + 1 == n { r } else { 0 }, se: if i + 1 == n { r } else { 0 } }
+}
+
+/// One choice of several: keys joined in one block, the backlight sliding
+/// to the chosen one. It reads as "pick one" where a row of separate keys
+/// reads as "switch any". Returns the segment clicked when it is not the one
+/// already chosen.
 pub fn segmented(ui: &mut Ui, id: &str, labels: &[&str], current: Option<usize>, tally: Color32) -> Option<usize> {
     let id = ui.make_persistent_id(("segmented", id));
-    let font = theme::mono_bold(10.5);
+    let font = key_font();
     let widths: Vec<f32> = labels.iter().map(|l| ui.painter().layout_no_wrap(l.to_string(), font.clone(), Color32::PLACEHOLDER).size().x + 14.0).collect();
-    let pad = 2.0;
-    let total = widths.iter().sum::<f32>() + 2.0 * pad;
-    let (track, _) = ui.allocate_exact_size(vec2(total, 22.0), Sense::hover());
+    let total = widths.iter().sum::<f32>();
+    let (track, _) = ui.allocate_exact_size(vec2(total, KEY_H_SMALL), Sense::hover());
     let enabled = ui.is_enabled();
     let p = ui.painter().clone();
-    theme::well(&p, track, None);
-    let mut x = track.left() + pad;
+    let color = theme::on_color(tally);
+    let mut x = track.left();
     let cells: Vec<Rect> = widths
         .iter()
         .map(|w| {
-            let r = Rect::from_min_size(pos2(x, track.top() + pad), vec2(*w, track.height() - 2.0 * pad));
+            let r = Rect::from_min_size(pos2(x, track.top()), vec2(*w, track.height()));
             x += w;
             r
         })
         .collect();
-    // The lit segment glides between choices.
-    if let Some(c) = current.and_then(|i| cells.get(i)) {
-        let t = if reduced(ui) { 0.0 } else { 0.14 };
-        let l = ui.ctx().animate_value_with_time(id.with("l"), c.left(), t);
-        let r = ui.ctx().animate_value_with_time(id.with("r"), c.right(), t);
-        let lit = Rect::from_min_max(pos2(l, c.top()), pos2(r, c.bottom()));
-        let a = if enabled { 1.0 } else { 0.45 };
-        p.rect(lit, CornerRadius::same(3), alpha(tally, 0.24 * a), Stroke::new(1.0, alpha(tally, 0.7 * a)), egui::StrokeKind::Inside);
-    }
-    let mut out = None;
+    // The keys first, each up, so the lit one can slide across them.
+    let mut states = Vec::with_capacity(cells.len());
     for (i, (cell, label)) in cells.iter().zip(labels).enumerate() {
         let resp = ui.interact(*cell, id.with(i), if enabled { Sense::click() } else { Sense::hover() });
         let on = current == Some(i);
         resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::RadioButton, enabled, on, *label));
         let hover = ui.ctx().animate_bool_with_time(resp.id.with("hv"), enabled && resp.hovered() && !on, 0.12);
-        if hover > 0.0 {
-            p.rect_filled(*cell, CornerRadius::same(3), alpha(theme::surface_4(), 0.6 * hover));
-        }
-        // A hairline between two unlit neighbors, so the segments read as set
-        // into one track.
-        if i > 0 && !on && current != Some(i - 1) {
-            p.line_segment([pos2(cell.left(), cell.top() + 4.0), pos2(cell.left(), cell.bottom() - 4.0)], Stroke::new(1.0, theme::line()));
-        }
-        let c = if !enabled { theme::text_3() } else if on { theme::text() } else { theme::lerp(theme::text_3(), theme::text_2(), 0.6 + 0.4 * hover) };
-        p.text(cell.center(), Align2::CENTER_CENTER, *label, font.clone(), c);
+        let k = theme::KeyState { hover, on: 0.0, press: if enabled { pressed(ui, &resp) } else { 0.0 }, color, focus: resp.has_focus() };
+        theme::key_body(&p, cell.shrink2(vec2(0.5, 0.0)), joined_corners(i, cells.len()), k);
+        states.push((resp, k));
+    }
+    if let Some(i) = current.filter(|i| *i < cells.len()) {
+        let c = cells[i];
+        let t = if reduced(ui) { 0.0 } else { 0.14 };
+        let l = ui.ctx().animate_value_with_time(id.with("l"), c.left(), t);
+        let r = ui.ctx().animate_value_with_time(id.with("r"), c.right(), t);
+        let lit = Rect::from_min_max(pos2(l, c.top()), pos2(r, c.bottom())).shrink2(vec2(0.5, 0.0));
+        theme::key_body(&p, lit, joined_corners(i, cells.len()), theme::KeyState { hover: 0.0, on: 1.0, press: 0.0, color, focus: false });
+    }
+    let mut out = None;
+    for (i, ((cell, label), (resp, k))) in cells.iter().zip(labels).zip(&states).enumerate() {
+        let on = current == Some(i);
+        let c = theme::key_text(theme::KeyState { on: if on { 1.0 } else { 0.0 }, ..*k }, enabled);
+        p.text(cell.center() + vec2(0.0, if on { 0.6 } else { k.press }), Align2::CENTER_CENTER, *label, font.clone(), c);
         if resp.clicked() && !on {
             out = Some(i);
         }

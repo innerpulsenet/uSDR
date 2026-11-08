@@ -39,13 +39,9 @@ pub fn dock(app: &mut App, ui: &mut Ui) {
             (DockTab::Scan, TAB_LABELS[3], None),
             (DockTab::Map, TAB_LABELS[4], None),
         ];
-        let mut under: Option<egui::Rect> = None;
         for (t, label, count) in tabs {
             let on = app.dock_tab == t;
             let r = tab(ui, label, count, on);
-            if on {
-                under = Some(r.rect);
-            }
             if r.clicked() {
                 app.dock_tab = t;
             }
@@ -63,16 +59,8 @@ pub fn dock(app: &mut App, ui: &mut Ui) {
                 }
             }
         });
-        // The amber underline slides to the tab that was chosen.
-        if let Some(rr) = under {
-            let ctx = ui.ctx().clone();
-            let rm = app.reduce_motion();
-            let ease = |id: &str, v: f32| if rm { v } else { ctx.animate_value_with_time(egui::Id::new(("dock-tab", id)), v, 0.15) };
-            let (l, r) = (ease("l", rr.left() + 4.0), ease("r", rr.right() - 4.0));
-            ui.painter().rect_filled(egui::Rect::from_min_max(egui::pos2(l, rr.bottom() - 1.0), egui::pos2(r, rr.bottom() + 1.0)), egui::CornerRadius::same(1), theme::AMBER);
-        }
     });
-    // A rule the width of the logs under the tabs, the underline riding on it.
+    // A rule the width of the logs under the tabs.
     let y = row.response.rect.bottom();
     let x1 = ui.max_rect().right();
     let p = ui.painter();
@@ -93,34 +81,30 @@ const TAB_LABELS: [&str; 5] = ["Decodes", "Classifier", "Last heard", "Scan", "M
 /// The width the tab row takes, measured the way [`tab`] lays each one out.
 fn tabs_width(ui: &Ui) -> f32 {
     let p = ui.painter();
-    let pill = p.layout_no_wrap("999".into(), theme::mono_bold(10.0), egui::Color32::PLACEHOLDER).size().x + 10.0 + 6.0;
+    let count = p.layout_no_wrap("999".into(), widgets::key_font(), egui::Color32::PLACEHOLDER).size().x + 6.0;
     TAB_LABELS
         .iter()
         .enumerate()
-        .map(|(i, l)| p.layout_no_wrap(l.to_string(), theme::sans_semibold(12.0), egui::Color32::PLACEHOLDER).size().x + 16.0 + if i < 3 { pill } else { 0.0 } + 4.0)
+        .map(|(i, l)| p.layout_no_wrap(l.to_uppercase(), widgets::key_font(), egui::Color32::PLACEHOLDER).size().x + 16.0 + if i < 3 { count } else { 0.0 } + 4.0)
         .sum()
 }
 
-/// A dock tab: its name and, when it keeps a log, a pill with the count.
+/// A dock tab: a key with its name and, when it keeps a log, the count.
 fn tab(ui: &mut Ui, label: &str, count: Option<usize>, on: bool) -> egui::Response {
-    let p = ui.painter().clone();
-    let g = p.layout_no_wrap(label.to_string(), theme::sans_semibold(12.0), egui::Color32::PLACEHOLDER);
-    let badge = count.map(|n| p.layout_no_wrap(n.to_string(), theme::mono_bold(10.0), egui::Color32::PLACEHOLDER));
-    // The pill holds three digits whatever the count, so a log growing past
-    // 9 or 99 does not move the tabs after it.
-    let pill_w = |b: &std::sync::Arc<egui::Galley>| b.size().x.max(p.layout_no_wrap("999".into(), theme::mono_bold(10.0), egui::Color32::PLACEHOLDER).size().x) + 10.0;
-    let bw = badge.as_ref().map_or(0.0, |b| pill_w(b) + 6.0);
-    let (rect, resp) = ui.allocate_exact_size(vec2(g.size().x + bw + 16.0, 26.0), egui::Sense::click());
+    let g = ui.painter().layout_no_wrap(label.to_uppercase(), widgets::key_font(), egui::Color32::PLACEHOLDER);
+    let badge = count.map(|n| ui.painter().layout_no_wrap(n.to_string(), widgets::key_font(), egui::Color32::PLACEHOLDER));
+    // Room for three digits whatever the count, so a log growing past 9 or
+    // 99 does not move the tabs after it.
+    let count_w = if badge.is_some() { ui.painter().layout_no_wrap("999".into(), widgets::key_font(), egui::Color32::PLACEHOLDER).size().x + 6.0 } else { 0.0 };
+    let (rect, resp) = ui.allocate_exact_size(vec2(g.size().x + count_w + 16.0, 26.0), egui::Sense::click());
     resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, on, label));
-    let hover = ui.ctx().animate_bool_with_time(resp.id.with("hv"), resp.hovered(), 0.12);
-    let c = if on { theme::text() } else { theme::lerp(theme::text_2(), theme::text(), hover) };
-    let y = rect.center().y - 1.0;
+    let (press, c) = widgets::paint_key(ui, &resp, rect, egui::CornerRadius::same(theme::RADIUS), on, theme::AMBER);
+    let p = ui.painter();
+    let y = rect.center().y + press;
     p.galley(egui::pos2(rect.left() + 8.0, y - g.size().y / 2.0), g.clone(), c);
     if let (Some(b), Some(n)) = (badge, count) {
-        let pill = egui::Rect::from_min_size(egui::pos2(rect.left() + 8.0 + g.size().x + 6.0, y - 8.0), vec2(pill_w(&b), 16.0));
-        let (fill, text) = if n > 0 && on { (alpha(theme::AMBER, 0.22), theme::AMBER) } else if n > 0 { (theme::surface_3(), theme::text_2()) } else { (theme::surface_2(), theme::text_3()) };
-        p.rect(pill, egui::CornerRadius::same(8), fill, egui::Stroke::new(1.0, if n > 0 && on { alpha(theme::AMBER, 0.5) } else { theme::line() }), egui::StrokeKind::Inside);
-        p.galley(pill.center() - b.size() / 2.0, b, text);
+        let at = egui::pos2(rect.left() + 8.0 + g.size().x + 6.0, y - b.size().y / 2.0);
+        p.galley(at, b, if n > 0 { theme::text() } else { theme::text_3() });
     }
     resp
 }

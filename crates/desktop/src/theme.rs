@@ -41,6 +41,8 @@ struct Palette {
     text: [Color32; 3],
     line: [Color32; 2],
     select: Color32,
+    /// A key's smoked glass: at rest (top, foot), then held down (top, foot).
+    key: [Color32; 4],
 }
 
 const fn rgb(h: u32) -> Color32 {
@@ -58,6 +60,7 @@ const CARBON: Palette = Palette {
     text: [rgb(0xe3e6e9), rgb(0xb9bdc3), rgb(0x8f949b)],
     line: [hairline(227, 230, 233, 0.10), hairline(227, 230, 233, 0.18)],
     select: rgb(0x1a73b8),
+    key: [rgb(0x1b1e23), rgb(0x0e1013), rgb(0x0c0d10), rgb(0x14161a)],
 };
 
 // Ink is visibly warmer than Carbon, not a shade off it: its surfaces step
@@ -69,6 +72,7 @@ const INK_P: Palette = Palette {
     text: [rgb(0xf0eae0), rgb(0xb8ae9f), rgb(0x8f8678)],
     line: [hairline(255, 236, 214, 0.11), hairline(255, 236, 214, 0.20)],
     select: rgb(0x7a521f),
+    key: [rgb(0x221c15), rgb(0x13100b), rgb(0x110d09), rgb(0x1a150f)],
 };
 
 // Night is Carbon's palette, its ground a hair off Carbon's so whatever
@@ -653,6 +657,92 @@ pub fn key_face(painter: &egui::Painter, r: egui::Rect, radius: u8, press: f32) 
     }
 }
 
+/// The color a key is lit in, whatever its caller asked for: amber is "on"
+/// across the app. Violet stays receiver B's, lemon a caution's (DC on the
+/// feed) and ember the live state's, because those say something amber can't.
+pub fn on_color(asked: Color32) -> Color32 {
+    if asked == VIOLET || asked == WARN || asked == EMBER { asked } else { AMBER }
+}
+
+/// A vertical gradient over `r`, `top` to `bottom`.
+pub fn vgrad(painter: &egui::Painter, r: egui::Rect, top: Color32, bottom: Color32) {
+    let mut m = egui::Mesh::default();
+    m.colored_vertex(r.left_top(), top);
+    m.colored_vertex(r.right_top(), top);
+    m.colored_vertex(r.left_bottom(), bottom);
+    m.colored_vertex(r.right_bottom(), bottom);
+    m.add_triangle(0, 1, 2);
+    m.add_triangle(2, 1, 3);
+    painter.add(egui::Shape::mesh(m));
+}
+
+/// How a key stands this frame: each of the three runs 0 to 1.
+#[derive(Clone, Copy)]
+pub struct KeyState {
+    pub hover: f32,
+    pub on: f32,
+    pub press: f32,
+    /// What lights it, as [`on_color`] gives it.
+    pub color: Color32,
+    pub focus: bool,
+}
+
+/// Every key in the app: a cap of smoked glass set in a dark collar, lit
+/// from behind when latched, as a small piece of the LCD. A held key goes
+/// darker and its label sinks; a lit one takes the backlight's color through
+/// the glass, brightest at its middle.
+pub fn key_body(painter: &egui::Painter, r: egui::Rect, radius: egui::CornerRadius, k: KeyState) {
+    let [rest_top, rest_foot, held_top, held_foot] = pal().key;
+    let on = k.on.clamp(0.0, 1.0);
+    let press = k.press.clamp(0.0, 1.0);
+    let lift = 0.06 * k.hover * (1.0 - on.max(press));
+    let top = lerp(lerp(lerp(rest_top, held_top, press), lerp(rest_top, k.color, 0.07), on), Color32::WHITE, lift);
+    let foot = lerp(lerp(lerp(rest_foot, held_foot, press), lerp(held_top, k.color, 0.05), on), Color32::WHITE, lift);
+    let inset = (radius.nw as f32).max(2.0);
+    // The cap and its collar as one shape, the collar's lit lip under it.
+    painter.rect(r, radius, lerp(top, foot, 0.5), Stroke::new(1.0, Color32::from_black_alpha(215)), egui::StrokeKind::Outside);
+    painter.line_segment(
+        [r.left_bottom() + egui::vec2(inset, 1.5), r.right_bottom() + egui::vec2(-inset, 1.5)],
+        Stroke::new(1.0, Color32::from_white_alpha(26)),
+    );
+    // The glass in one mesh: the sheen across its upper half is in the top
+    // band's colors. Every key on the window draws this every frame.
+    let glass = r.shrink(1.0);
+    let mid = glass.center().y;
+    let mut m = egui::Mesh::default();
+    for (y, c) in [(glass.top(), lerp(top, Color32::WHITE, 0.035)), (mid, lerp(top, foot, 0.5)), (glass.bottom(), foot)] {
+        m.colored_vertex(egui::pos2(glass.left(), y), c);
+        m.colored_vertex(egui::pos2(glass.right(), y), c);
+    }
+    for i in [0, 2] {
+        m.add_triangle(i, i + 1, i + 2);
+        m.add_triangle(i + 2, i + 1, i + 3);
+    }
+    painter.add(egui::Shape::mesh(m));
+    if on > 0.0 {
+        let (c, x0, x1, y0, y1) = (glass.center(), glass.left(), glass.right(), glass.top(), glass.bottom());
+        let edge = [egui::pos2(x0, y0), egui::pos2(c.x, y0), egui::pos2(x1, y0), egui::pos2(x1, c.y), egui::pos2(x1, y1), egui::pos2(c.x, y1), egui::pos2(x0, y1), egui::pos2(x0, c.y)];
+        radial_fan(painter, c, &edge, alpha(k.color, 0.34 * on), alpha(k.color, 0.03 * on));
+        painter.rect_stroke(r, radius, Stroke::new(1.0, alpha(k.color, 0.42 * on)), egui::StrokeKind::Inside);
+    }
+    painter.line_segment(
+        [r.left_top() + egui::vec2(inset, 0.5), r.right_top() + egui::vec2(-inset, 0.5)],
+        Stroke::new(1.0, Color32::from_white_alpha(36)),
+    );
+    if k.focus {
+        painter.rect_stroke(r.expand(1.5), egui::CornerRadius::same(RADIUS + 1), Stroke::new(1.0, EMBER), egui::StrokeKind::Outside);
+    }
+}
+
+/// A key's label, in step with its [`KeyState`].
+pub fn key_text(k: KeyState, enabled: bool) -> Color32 {
+    if !enabled {
+        return text_3();
+    }
+    let off = lerp(text_2(), text(), k.hover);
+    lerp(off, lerp(k.color, Color32::WHITE, 0.6), k.on)
+}
+
 /// A light along the top edge of `r` in the driven receiver's color: a
 /// hairline brightest at `travel` (0 the left end, 1 the right) and fading
 /// away from it, with a soft wash falling from it into the panel.
@@ -835,6 +925,16 @@ impl egui::Plugin for NightFilter {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_key_is_lit_amber_unless_its_color_says_more() {
+        for asked in [AMBER, CYAN, OK, ERR, Color32::from_rgb(1, 2, 3)] {
+            assert_eq!(on_color(asked), AMBER);
+        }
+        for kept in [VIOLET, WARN, EMBER] {
+            assert_eq!(on_color(kept), kept);
+        }
+    }
 
     #[test]
     fn night_keeps_brightness_order_and_alpha_in_red() {
