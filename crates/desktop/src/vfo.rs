@@ -40,6 +40,9 @@ pub struct Vfo {
     /// The display's height, the digits centered in what the strip leaves;
     /// 0 for just what they need.
     pub well_h: f32,
+    /// Drawn on an LCD that is already there: no glass of its own, its
+    /// width whatever the zone gives it, lit fully in the receiver's color.
+    pub bare: bool,
 }
 
 /// The LCD's annunciators: which receiver, its mode, width and gain at the
@@ -57,7 +60,7 @@ pub struct Annunciators {
 impl Default for Vfo {
     fn default() -> Self {
         // The 10 kHz digit.
-        Self { selected: 5, entry: None, focus_entry: false, scroll_accum: 0.0, open_entry_request: false, cells: Vec::new(), shown: None, roll: [None; DIGITS], tint: None, annun: Annunciators::default(), well_h: 0.0 }
+        Self { selected: 5, entry: None, focus_entry: false, scroll_accum: 0.0, open_entry_request: false, cells: Vec::new(), shown: None, roll: [None; DIGITS], tint: None, annun: Annunciators::default(), well_h: 0.0, bare: false }
     }
 }
 
@@ -143,18 +146,20 @@ impl Vfo {
         let unit_w = if strip { 0.0 } else { ui.painter().layout_no_wrap("MHz".into(), unit_font.clone(), theme::text_3()).size().x + 10.0 };
         let strip_h = if strip { 17.0 } else { 0.0 };
         // The glass sits in a bezel, the digits inset from its edges.
-        let (pad_x, pad_y) = (14.0, 5.0);
+        let (pad_x, pad_y) = if self.bare { (2.0, 1.0) } else { (14.0, 5.0) };
         let natural_h = height + 2.0 * pad_y + strip_h;
         let outer_h = self.well_h.max(natural_h);
         let total = shown_w + point + unit_w + 2.0 * pad_x;
-        let (outer, resp) = ui.allocate_exact_size(vec2(total, outer_h), Sense::click());
+        let (outer, resp) = ui.allocate_exact_size(vec2(if self.bare { ui.available_width() } else { total }, outer_h), Sense::click());
         // Named for the receiver it reads, its label now being inside it.
         if strip {
             let name = format!("RECEIVER {}", self.annun.rx);
             resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, &name));
         }
         let tint = self.tint.unwrap_or(theme::AMBER);
-        lcd_back(ui.painter(), outer, tint);
+        if !self.bare {
+            lcd_back(ui.painter(), outer, tint);
+        }
         // The digits' own band: under the strip, centered in what is left.
         let spare = outer_h - natural_h;
         let rect = Rect::from_min_size(pos2(outer.left() + pad_x, outer.top() + pad_y + strip_h + spare * 0.55), vec2(total - 2.0 * pad_x, height));
@@ -177,8 +182,8 @@ impl Vfo {
         self.shown = Some(s.clone());
         // The lit segments: the receiver's tint washed toward white, so the
         // figures read first and the color second; the Hz group a step down.
-        let lit = theme::lerp(theme::text(), tint, 0.28);
-        let lit_hz = theme::lerp(theme::text_2(), tint, 0.22);
+        let lit = if self.bare { theme::lcd_lit(tint) } else { theme::lerp(theme::text(), tint, 0.28) };
+        let lit_hz = if self.bare { theme::lerp(lit, Color32::BLACK, 0.16) } else { theme::lerp(theme::text_2(), tint, 0.22) };
         let baseline = rect.bottom() - height * 0.10;
         let mut x = rect.left();
         let mut hovered_digit = None;
@@ -251,7 +256,9 @@ impl Vfo {
         } else {
             painter.text(pos2(x + 10.0, baseline), Align2::LEFT_BOTTOM, "MHz", unit_font, theme::alpha(lit_hz, 0.75));
         }
-        lcd_glass(&painter, outer);
+        if !self.bare {
+            lcd_glass(&painter, outer);
+        }
         if rolling {
             crate::anim::more(ui.ctx());
         }
@@ -289,16 +296,25 @@ impl Vfo {
     /// right the flags and the unit.
     fn paint_strip(&self, p: &egui::Painter, outer: Rect, pad_x: f32, tint: Color32, lit: Color32, lit_hz: Color32) {
         let a = &self.annun;
-        let y = outer.top() + 5.0 + 7.0;
+        let y = outer.top() + if self.bare { 7.0 } else { 12.0 };
         let f = theme::mono_bold(10.0);
         let mut x = outer.left() + pad_x - 2.0;
-        // The receiver: a block of lit segment with the letter cut out.
-        let g = p.layout_no_wrap(format!("RX {}", a.rx), f.clone(), Color32::PLACEHOLDER);
-        let block = Rect::from_min_size(pos2(x, y - 7.0), vec2(g.size().x + 8.0, 14.0));
-        p.rect_filled(block.expand(1.5), CornerRadius::same(3), theme::alpha(tint, 0.12));
-        p.rect_filled(block, CornerRadius::same(2), theme::alpha(tint, 0.85));
-        p.galley(pos2(block.left() + 4.0, y - g.size().y / 2.0), g, theme::lerp(theme::ink(), Color32::BLACK, 0.4));
-        x = block.right() + 8.0;
+        if self.bare {
+            // The band has a zone for the receiver; this one is named.
+            let mut job = egui::text::LayoutJob::default();
+            job.append("FREQUENCY", 0.0, egui::TextFormat { font_id: theme::mono(9.5), color: theme::alpha(lit, 0.66), extra_letter_spacing: 1.0, ..Default::default() });
+            let g = p.layout_job(job);
+            p.galley(pos2(x, y - g.size().y / 2.0), g.clone(), lit);
+            x += g.size().x + 12.0;
+        } else {
+            // The receiver: a block of lit segment with the letter cut out.
+            let g = p.layout_no_wrap(format!("RX {}", a.rx), f.clone(), Color32::PLACEHOLDER);
+            let block = Rect::from_min_size(pos2(x, y - 7.0), vec2(g.size().x + 8.0, 14.0));
+            p.rect_filled(block.expand(1.5), CornerRadius::same(3), theme::alpha(tint, 0.12));
+            p.rect_filled(block, CornerRadius::same(2), theme::alpha(tint, 0.85));
+            p.galley(pos2(block.left() + 4.0, y - g.size().y / 2.0), g, theme::lerp(theme::ink(), Color32::BLACK, 0.4));
+            x = block.right() + 8.0;
+        }
         // The unit's room at the right, which the words never reach into.
         let unit_w = p.layout_no_wrap("MHz".into(), f.clone(), lit_hz).size().x;
         let limit = outer.right() - pad_x + 2.0 - unit_w - 8.0;
@@ -338,7 +354,9 @@ impl Vfo {
         }
         // A hairline under the strip, as the glass's printed rule.
         let rule_y = outer.top() + 5.0 + 17.0 - 1.5;
-        p.line_segment([pos2(outer.left() + pad_x - 2.0, rule_y), pos2(outer.right() - pad_x + 2.0, rule_y)], Stroke::new(1.0, theme::alpha(lit, 0.07)));
+        if !self.bare {
+            p.line_segment([pos2(outer.left() + pad_x - 2.0, rule_y), pos2(outer.right() - pad_x + 2.0, rule_y)], Stroke::new(1.0, theme::alpha(lit, 0.07)));
+        }
     }
 
     pub fn step_selected(&self, dir: f64) -> f64 {

@@ -32,7 +32,7 @@ pub fn side(app: &mut App, ui: &mut Ui) {
         widgets::applet(ui, "gain", "Gain", |_| {}, |ui| gain(app, ui));
         let on = front_end_on(&app.status);
         let head = |ui: &mut Ui| {
-            let (t, c) = if on == 0 { ("ALL OFF".to_string(), theme::text_3()) } else { (format!("{on} ON"), theme::CYAN) };
+            let (t, c) = if on == 0 { ("ALL OFF".to_string(), theme::text_3()) } else { (format!("{on} ON"), theme::AMBER) };
             ui.label(RichText::new(t).font(theme::mono(10.5)).color(c));
         };
         widgets::applet(ui, "frontend", "Front end", head, |ui| front_end(app, ui));
@@ -417,7 +417,7 @@ fn gain(app: &mut App, ui: &mut Ui) {
         app.post("/api/sdr/gain", json!({ "gain_db": v }));
     }
     if s.is_sdrplay() {
-        widgets::glass(ui, egui::Id::new("gain-glass"), theme::CYAN, |ui| gain_staging(ui, &s));
+        widgets::glass(ui, egui::Id::new("gain-glass"), theme::AMBER, |ui| gain_staging(ui, &s));
     }
     if let Some(sp) = s.agc_setpoint_dbfs {
         let mut v = sp;
@@ -490,13 +490,13 @@ fn gain_staging(ui: &mut Ui, s: &usdr_proto::Status) {
     } else {
         "LNA gain reduction, in the steps this band has. Set by RF GAIN: the first 20 dB of reduction comes off the IF, then the LNA takes over."
     };
-    row(ui, "LNA", lna_value, if lna_db.is_some_and(|d| d > 0.0) { theme::CYAN } else { theme::text_2() }, lna_tip, &|p, t| {
+    row(ui, "LNA", lna_value, if lna_db.is_some_and(|d| d > 0.0) { theme::AMBER } else { theme::text_2() }, lna_tip, &|p, t| {
         let Some(&top) = steps.last().filter(|t| **t > 0.0) else { return };
         let x = |db: f64| t.left() + t.width() * (db / top) as f32;
         for w in steps.windows(2) {
             let seg = egui::Rect::from_min_max(egui::pos2(x(w[0]) + 0.5, t.top()), egui::pos2(x(w[1]) - 0.5, t.bottom()));
             let lit = lna_db.is_some_and(|d| d >= w[1] - 0.01);
-            p.rect_filled(seg, egui::CornerRadius::same(1), if lit { alpha(theme::CYAN, 0.85) } else { alpha(theme::CYAN, 0.10) });
+            p.rect_filled(seg, egui::CornerRadius::same(1), if lit { alpha(theme::AMBER, 0.85) } else { alpha(theme::AMBER, 0.10) });
         }
     });
     // The IF stage: reduction lit from the left, the take-over window
@@ -515,7 +515,7 @@ fn gain_staging(ui: &mut Ui, s: &usdr_proto::Status) {
         let x = |db: f64| t.left() + t.width() * ((db - if_min) / (if_max - if_min)).clamp(0.0, 1.0) as f32;
         if s.lna_auto {
             let band = egui::Rect::from_min_max(egui::pos2(x(30.0), t.top() - 1.0), egui::pos2(x(50.0), t.bottom() + 1.0));
-            p.rect_filled(band, egui::CornerRadius::same(1), alpha(theme::CYAN, 0.14));
+            p.rect_filled(band, egui::CornerRadius::same(1), alpha(theme::AMBER, 0.14));
         }
         if let Some(v) = ifgr {
             let c = if pinned { theme::ERR } else { theme::AMBER };
@@ -702,13 +702,14 @@ fn processing(app: &mut App, ui: &mut Ui) {
 
 fn recorder(app: &mut App, ui: &mut Ui) {
     let kinds: Vec<String> = app.mode_caps().map(|c| c.capture.clone()).unwrap_or_else(|| vec!["iq".into(), "voice".into(), "discriminator".into()]);
-    let has = |k: &str| app.modes.is_empty() || kinds.iter().any(|x| x == k);
+    let every_kind = app.modes.is_empty();
+    let has = |k: &str| every_kind || kinds.iter().any(|x| x == k);
     let receiving = app.status.error.is_none() && app.status.rate_hz > 0.0 && !kinds.is_empty();
     // What the ring holds, on its display: filling or not, the channel and
     // its rate, and the last 20 s of level over the floor.
     widgets::glass(ui, egui::Id::new("recorder-glass"), theme::AMBER, |ui| {
         ui.horizontal(|ui| {
-            widgets::lcd_tag(ui, if receiving { "FILLING" } else { "OFF" }, theme::OK, receiving);
+            widgets::lcd_tag(ui, if receiving { "FILLING" } else { "OFF" }, theme::AMBER, receiving);
             let head = if !receiving {
                 format!("{} keeps no buffer", app.status.mode.label())
             } else {
@@ -723,6 +724,7 @@ fn recorder(app: &mut App, ui: &mut Ui) {
     let dir = app.prefs.record_dir();
     let busy = app.recorder_busy.clone();
     ui.horizontal_wrapped(|ui| {
+        crate::bar::rec_key(app, ui);
         for (kind, label, tip) in [("iq", "SAVE I/Q", "CS16LE + JSON sidecar"), ("voice", "SAVE AUDIO", "voice WAV"), ("discriminator", "SAVE DISC", "discriminator WAV")] {
             ui.add_enabled_ui(has(kind) && busy.is_none(), |ui| {
                 if widgets::action(ui, label).on_hover_text(tip).clicked()

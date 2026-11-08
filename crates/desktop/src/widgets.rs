@@ -160,6 +160,17 @@ pub fn menu_chip_lit<R>(ui: &mut Ui, label: &str, labels: &[&str], tally: Color3
     egui::Popup::menu(&resp).show(add).map(|r| r.inner)
 }
 
+/// A key `width` wide that opens a menu and says so with its glyph alone.
+pub fn menu_glyph<R>(ui: &mut Ui, glyph: &str, width: f32, add: impl FnOnce(&mut Ui) -> R) -> Option<R> {
+    let galley = ui.painter().layout_no_wrap(glyph.to_string(), key_font(), Color32::PLACEHOLDER);
+    let (rect, resp) = ui.allocate_exact_size(vec2(width, KEY_H_SMALL), Sense::click());
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, glyph));
+    let open = egui::Popup::is_id_open(ui.ctx(), egui::Popup::default_response_id(&resp));
+    let (press, c) = paint_key(ui, &resp, rect, CornerRadius::same(3), open, theme::AMBER);
+    ui.painter().galley(rect.center() - galley.size() / 2.0 + vec2(0.0, press), galley, c);
+    egui::Popup::menu(&resp).show(add).map(|r| r.inner)
+}
+
 /// A selector: the chosen value in mono with a chevron, opening a menu of
 /// the choices. The house take on a combo box.
 pub fn selector<R>(ui: &mut Ui, id: &str, text: &str, color: Color32, width: f32, add: impl FnOnce(&mut Ui) -> R) -> Option<R> {
@@ -307,11 +318,17 @@ pub fn chip_key(ui: &mut Ui, label: &str, on: bool, tally: Color32) -> Response 
 /// A chip key `width` wide (0: as wide as its label), for grids of chips
 /// whose edges line up.
 pub fn chip_key_w(ui: &mut Ui, label: &str, on: bool, tally: Color32, width: f32) -> Response {
+    chip_key_named(ui, label, label, on, tally, width)
+}
+
+/// A chip key showing `label`, a short form of what it is `name`d for
+/// a screen reader and its tooltip.
+pub fn chip_key_named(ui: &mut Ui, label: &str, name: &str, on: bool, tally: Color32, width: f32) -> Response {
     let galley = ui.painter().layout_no_wrap(label.to_string(), key_font(), Color32::PLACEHOLDER);
     let w = if width > 0.0 { width } else { galley.size().x + 14.0 };
     let (rect, resp) = ui.allocate_exact_size(vec2(w, KEY_H_SMALL), Sense::click());
     let enabled = ui.is_enabled();
-    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, enabled, on, label));
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, enabled, on, name));
     let (press, c) = paint_key(ui, &resp, rect, CornerRadius::same(3), on, tally);
     ui.painter().galley(rect.center() - galley.size() / 2.0 + vec2(0.0, press), galley, c);
     resp
@@ -396,15 +413,20 @@ pub struct Fader<'a, F: Fn(f64) -> String> {
 impl<F: Fn(f64) -> String> Fader<'_, F> {
     /// Returns (changed, released-after-change).
     pub fn show(self, ui: &mut Ui) -> (bool, bool) {
-        self.run(ui, false)
+        self.run(ui, false, false)
     }
 
     /// On one 22 px line: the label, the track, the value.
     pub fn show_compact(self, ui: &mut Ui) -> (bool, bool) {
-        self.run(ui, true)
+        self.run(ui, true, false)
     }
 
-    fn run(self, ui: &mut Ui, compact: bool) -> (bool, bool) {
+    /// The track and its cap alone, its reading shown elsewhere.
+    pub fn show_bare(self, ui: &mut Ui) -> (bool, bool) {
+        self.run(ui, true, true)
+    }
+
+    fn run(self, ui: &mut Ui, compact: bool, bare: bool) -> (bool, bool) {
         let w = ui.available_width();
         let h = if compact { 22.0 } else if self.ticks.is_empty() { 34.0 } else { 46.0 };
         let (rect, resp) = ui.allocate_exact_size(vec2(w, h), Sense::click_and_drag());
@@ -413,7 +435,9 @@ impl<F: Fn(f64) -> String> Fader<'_, F> {
         let p = ui.painter();
         let a = if self.enabled { 1.0 } else { 0.5 };
         let value_text = (self.text)(*self.value);
-        let track = if compact {
+        let track = if bare {
+            Rect::from_min_max(pos2(rect.left() + 6.0, rect.center().y - 3.0), pos2(rect.right() - 6.0, rect.center().y + 3.0))
+        } else if compact {
             let lw = p.layout_no_wrap(self.label.to_string(), theme::mono(10.5), theme::text_3()).size().x;
             // Room for the widest the readout gets over the range, no more,
             // and the value set just after the track's end, so a short

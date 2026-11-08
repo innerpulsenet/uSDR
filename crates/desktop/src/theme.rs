@@ -629,6 +629,11 @@ pub fn on_color(asked: Color32) -> Color32 {
     if asked == VIOLET || asked == WARN || asked == EMBER { asked } else { AMBER }
 }
 
+/// What is lit on the LCD: the receiver's color, a little toward white.
+pub fn lcd_lit(tint: Color32) -> Color32 {
+    lerp(tint, Color32::WHITE, 0.18)
+}
+
 /// A vertical gradient over `r`, `top` to `bottom`.
 pub fn vgrad(painter: &egui::Painter, r: egui::Rect, top: Color32, bottom: Color32) {
     let mut m = egui::Mesh::default();

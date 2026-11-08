@@ -149,7 +149,7 @@ fn signal(app: &mut App, ui: &mut Ui, b_on: bool) {
     let ((s_txt, s_col), _) = meter.readout();
     ui.allocate_ui(vec2(190.0, 26.0), |ui| {
         ui.set_width(190.0);
-        meter.ui_bar(ui, rm, mark);
+        meter.ui_bar(ui, rm, mark, if b_on { theme::VIOLET } else { theme::AMBER });
     });
     let g = ui.painter().layout_no_wrap("S9+60".into(), theme::mono_bold(15.0), s_col);
     let (r, _) = ui.allocate_exact_size(g.size(), Sense::hover());

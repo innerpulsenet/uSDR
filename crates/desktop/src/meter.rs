@@ -121,16 +121,17 @@ impl Meter {
     /// The bargraph across the whole of its bay, in a recessed well: lit
     /// segments green to S9, amber to +40, ember past it; the floor caret,
     /// the peak pip and the scale inside the well under the segments.
-    pub fn ui_bar(&mut self, ui: &mut Ui, reduce_motion: bool, mark: Option<f32>) {
-        self.bar(ui, reduce_motion, mark, true);
+    pub fn ui_bar(&mut self, ui: &mut Ui, reduce_motion: bool, mark: Option<f32>, tint: egui::Color32) {
+        self.bar(ui, reduce_motion, mark, true, tint);
     }
 
     /// The cells and scale alone, for a display that is already glass.
-    pub fn ui_bar_bare(&mut self, ui: &mut Ui, reduce_motion: bool, mark: Option<f32>) {
-        self.bar(ui, reduce_motion, mark, false);
+    pub fn ui_bar_bare(&mut self, ui: &mut Ui, reduce_motion: bool, mark: Option<f32>, tint: egui::Color32) {
+        self.bar(ui, reduce_motion, mark, false, tint);
     }
 
-    fn bar(&mut self, ui: &mut Ui, reduce_motion: bool, mark: Option<f32>, framed: bool) {
+    fn bar(&mut self, ui: &mut Ui, reduce_motion: bool, mark: Option<f32>, framed: bool, tint: egui::Color32) {
+        let lit_c = theme::lcd_lit(tint);
         let now = ui.input(|i| i.time);
         let dt = ui.input(|i| i.stable_dt).clamp(0.001, 0.05);
         let pos = self.tick(now, dt, reduce_motion);
@@ -140,7 +141,7 @@ impl Meter {
         // The same backlit glass as the frequency readout: a bezel, a dark
         // panel lit from behind, and the segments as an LCD's cells.
         if framed {
-            crate::vfo::lcd_back(&p, rect, theme::AMBER);
+            crate::vfo::lcd_back(&p, rect, tint);
         }
         let bar = Rect::from_min_max(pos2(rect.left() + 8.0, rect.top() + 4.0), pos2(rect.right() - 8.0, rect.top() + 13.0));
         let lit_to = bar.left() + bar.width() * pos;
@@ -164,9 +165,9 @@ impl Meter {
             }
             let r = Rect::from_min_max(pos2(x, bar.top()), pos2((x + 2.0).min(bar.right()), bar.bottom()));
             let c = if x < s9_x {
-                theme::OK
+                tint
             } else if x < p40_x {
-                theme::AMBER
+                theme::lerp(tint, egui::Color32::WHITE, 0.45)
             } else {
                 theme::EMBER
             };
@@ -188,7 +189,7 @@ impl Meter {
         }
         if let Some(fl) = self.floor {
             let fx = at(fl);
-            p.line_segment([pos2(fx, bar.top() - 2.0), pos2(fx, bar.bottom() + 2.0)], Stroke::new(1.5, theme::CYAN));
+            p.line_segment([pos2(fx, bar.top() - 2.0), pos2(fx, bar.bottom() + 2.0)], Stroke::new(1.5, theme::alpha(theme::text(), 0.7)));
         }
         if self.peak > pos + 0.008 {
             let px = bar.left() + bar.width() * self.peak;
@@ -212,9 +213,9 @@ impl Meter {
             let tx = at(db);
             // The end labels sit inside the ends; only the inner ones get a tick.
             if db > -108.0 && db < 0.0 {
-                p.line_segment([pos2(tx, bar.bottom() + 1.0), pos2(tx, bar.bottom() + 3.0)], Stroke::new(1.0, theme::text_3()));
+                p.line_segment([pos2(tx, bar.bottom() + 1.0), pos2(tx, bar.bottom() + 3.0)], Stroke::new(1.0, theme::alpha(lit_c, 0.5)));
             }
-            let g = p.layout_no_wrap(label.to_string(), theme::mono(10.0), if hi { theme::alpha(theme::AMBER, 0.8) } else { theme::text_3() });
+            let g = p.layout_no_wrap(label.to_string(), theme::mono(10.0), if hi { lit_c } else { theme::alpha(lit_c, 0.72) });
             let x0 = if db <= -108.0 { tx } else if db >= 0.0 { tx - g.size().x } else { tx - g.size().x / 2.0 };
             if x0 < last_right + 4.0 {
                 continue;

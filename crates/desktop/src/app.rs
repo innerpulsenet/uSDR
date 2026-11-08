@@ -235,7 +235,6 @@ pub struct App {
     /// The window's frame as it was opened.
     pub chrome: crate::chrome::Chrome,
     /// The window is wide enough for the memories to ride on the toolbar.
-    pub memories_on_toolbar: bool,
     /// The window title as last set.
     title: String,
 }
@@ -369,7 +368,6 @@ impl App {
             fullscreen: false,
             shade: None,
             chrome: Default::default(),
-            memories_on_toolbar: false,
             title: String::new(),
         }
     }
@@ -2088,24 +2086,6 @@ impl App {
             .response
             .rect;
         theme::groove_h(ui.painter(), r.left(), r.right(), r.bottom() - 2.0);
-        // The toolbar's own items take about 880 px; the memories about 140
-        // for their label and STORE and a fixed width a slot, so where they
-        // go depends on the window alone, never on how many are stored.
-        // The toolbar runs the width of the display, beside the column.
-        let toolbar_room = ui.available_width() - if self.prefs.show_side { self.prefs.side_width } else { 0.0 };
-        let slots = self.memories().len().max(8);
-        let mem_w = 140.0 + (crate::bar::SLOT_W + 4.0) * slots as f32;
-        self.memories_on_toolbar = toolbar_room >= 880.0 + mem_w;
-        if self.prefs.show_memories && !self.memories_on_toolbar {
-            let r = egui::Panel::top("memories")
-                .exact_size(30.0)
-                .show_separator_line(false)
-                .frame(egui::Frame::new().inner_margin(egui::Margin::symmetric(EDGE, 4)))
-                .show(ui, |ui| crate::bar::memory_row(self, ui))
-                .response
-                .rect;
-            theme::groove_h(ui.painter(), r.left(), r.right(), r.bottom() - 2.0);
-        }
         // The display is the instrument: the column and the dock may not
         // take more than about a third of the width or two fifths of the
         // height left for it, so a small window still has a waterfall.
@@ -2250,11 +2230,10 @@ mod tests {
     }
 
     #[test]
-    fn the_receiver_bar_never_cuts_off_its_signal_bay() {
-        // Between 1500 and 1840 px the one-band fits used to run past the
-        // window, cutting off the CAL key and the SNR and, narrower still,
-        // laying the CAL key over the dBFS reading.
-        for w in [1500.0, 1560.0, 1600.0, 1650.0, 1700.0, 1760.0, 1800.0, 1840.0, 1900.0] {
+    fn the_receiver_bar_never_cuts_off_its_signal_zone() {
+        // CAL is the last thing on the signal zone's top line: it stays
+        // clear of the reading on its left and the audio zone on its right.
+        for w in [1100.0, 1280.0, 1400.0, 1500.0, 1600.0, 1760.0, 1900.0, 2560.0] {
             for with_b in [false, true] {
                 let mut h = harness_sized(w);
                 h.run_steps(2);
@@ -2265,9 +2244,10 @@ mod tests {
                 h.run_steps(4);
                 let cal = h.get_by_label("CAL +1.9k").rect();
                 let signal = h.get_by_label("SIGNAL").rect();
-                assert!(cal.right() <= w - 14.0 + 0.5, "{w} px{}: the CAL key ends at {}", if with_b { " with B" } else { "" }, cal.right());
+                let audio = h.get_by_label("AUDIO A").rect();
+                assert!(cal.right() < audio.left(), "{w} px{}: the CAL key ends at {}, audio starts at {}", if with_b { " with B" } else { "" }, cal.right(), audio.left());
                 // Room between the label and the key for S9+60 and -100.0 dBFS.
-                assert!(cal.left() - signal.right() >= 130.0, "{w} px: the CAL key at {} crowds the reading after {}", cal.left(), signal.right());
+                assert!(cal.left() - signal.right() >= 120.0, "{w} px: the CAL key at {} crowds the reading after {}", cal.left(), signal.right());
             }
         }
     }
@@ -2565,7 +2545,10 @@ mod tests {
     #[test]
     fn recalling_a_memory_tunes_and_switches_mode() {
         let mut h = harness();
-        h.get_by_label("FM BC").click();
+        // The default bank's eighth slot is past the row, in its menu.
+        h.get_by_label("+2").click();
+        h.run_steps(2);
+        h.get_by_label("8  98.1000 MHz  FM BC").click();
         h.run_steps(2);
         let posts = drain(&h);
         assert!(posts.contains(&("/api/sdr/tune".into(), json!({ "freq_hz": 98_100_000.0 }))), "{posts:?}");
@@ -2811,7 +2794,7 @@ mod tests {
         assert_eq!(h.get_by_label("NOAA WX").rect(), before);
         let free = h.get_by_label("empty slot 4").rect();
         let third = h.get_by_label("A long name for a memory").rect();
-        assert!(free.left() > third.right() && (third.width() - crate::bar::SLOT_W).abs() < 0.5);
+        assert!(free.left() > third.right() && third.width() <= crate::bar::SLOT_W + 0.5);
         assert!(h.query_by_label("empty slot 5").is_none());
     }
 
@@ -3005,7 +2988,7 @@ mod tests {
     #[test]
     fn the_modes_own_width_is_a_preset_that_resets() {
         // Sideband's own 2.5k is not among the round presets; it joins them.
-        let mut h = harness_sized(1900.0);
+        let mut h = harness_sized(2560.0);
         filtered(&mut h, Mode::Usb, 2_500.0, (200.0, 4_000.0), (300.0, 2_400.0), true);
         h.get_by_label("2.5k").click();
         h.run_steps(2);
@@ -3035,7 +3018,7 @@ mod tests {
                 }
             })
             .collect();
-        for w in [1400.0, 1600.0, 1760.0, 1900.0] {
+        for w in [1100.0, 1280.0, 1400.0, 1600.0, 1900.0, 2560.0] {
             for (name, mode, lo, hi, b) in [("usb", Mode::Usb, 50.0, 4_000.0, false), ("ft8", Mode::Ft8, 100.0, 3_100.0, false), ("nfm", Mode::Nfm, -6_250.0, 6_250.0, false), ("b", Mode::Usb, 300.0, 2_800.0, true)] {
                 let mut h = harness_wh(w, 400.0);
                 {

@@ -104,12 +104,6 @@ pub fn toolbar(app: &mut App, ui: &mut Ui) {
             });
         }
         // HOLD lives on the waterfall itself, beside the history it holds.
-        // Wide windows carry the memories here rather than on a row of their own.
-        if app.prefs.show_memories && app.memories_on_toolbar {
-            ui.add_space(8.0);
-            divider(ui);
-            crate::bar::memory_chips(app, ui);
-        }
     });
 }
 
