@@ -204,6 +204,22 @@
    "source": "https://sourceforge.net/p/wsjt/wsjtx/ci/master/tree/models/FrequencyList.cpp?format=raw"
   },
   {
+   "band": "60m",
+   "dial_mhz": 5.2872,
+   "sideband": "USB",
+   "region": "ALL",
+   "note": "WSPR 60 m dial",
+   "source": "https://intel.innerpulse.net/doc/hf-digital-modes-in-2026-ft8-s-57-share-the-active-second-tier-and-what-remains"
+  },
+  {
+   "band": "60m",
+   "dial_mhz": 5.3647,
+   "sideband": "USB",
+   "region": "ALL",
+   "note": "WSPR 60 m dial",
+   "source": "https://intel.innerpulse.net/doc/hf-digital-modes-in-2026-ft8-s-57-share-the-active-second-tier-and-what-remains"
+  },
+  {
    "band": "40m",
    "dial_mhz": 7.0386,
    "sideband": "USB",
@@ -970,6 +986,115 @@
   {
    "item": "US NAVTEX stations (Boston NMF, Chesapeake NMN, etc.)",
    "why": "navcen.uscg.gov returned 403. The finding that no Atlantic station uses 4209.5 rests on the Canadian RAMN plus 47 CFR, which describes 4209.5 only as an international NAVTEX-type frequency."
+  }
+ ],
+ "selcal": [
+  {
+   "family": "NAT-A",
+   "name": "New York, Gander, Santa Maria, Shanwick: 43N to 47N",
+   "freqs_khz": [
+    3016.0,
+    5598.0,
+    8906.0,
+    11396.0,
+    13306.0,
+    17946.0,
+    21925.0
+   ],
+   "region": "Atlantic",
+   "source": "https://wiki.radioreference.com/index.php/MWARA"
+  },
+  {
+   "family": "NAT-B",
+   "name": "Gander, Iceland, Shanwick: 47N to 64N",
+   "freqs_khz": [
+    2899.0,
+    5616.0,
+    8864.0,
+    13291.0
+   ],
+   "region": "Atlantic",
+   "source": "https://wiki.radioreference.com/index.php/MWARA"
+  },
+  {
+   "family": "NAT-C",
+   "name": "Gander, Iceland, Shanwick: 47N to 64N",
+   "freqs_khz": [
+    2872.0,
+    5649.0,
+    8879.0,
+    11336.0
+   ],
+   "region": "Atlantic",
+   "source": "https://wiki.radioreference.com/index.php/MWARA"
+  },
+  {
+   "family": "NAT-D",
+   "name": "Bodo, Gander, Iceland, Shanwick, Arctic: north of 62N",
+   "freqs_khz": [
+    2971.0,
+    4675.0,
+    8891.0,
+    13291.0
+   ],
+   "region": "Atlantic",
+   "source": "https://wiki.radioreference.com/index.php/MWARA"
+  },
+  {
+   "family": "NAT-E",
+   "name": "New York, Santa Maria: south of 43N",
+   "freqs_khz": [
+    2962.0,
+    6628.0,
+    8825.0,
+    11309.0,
+    13354.0,
+    17952.0,
+    21964.0
+   ],
+   "region": "Atlantic",
+   "source": "https://wiki.radioreference.com/index.php/MWARA"
+  },
+  {
+   "family": "NAT-F",
+   "name": "Gander, Shanwick",
+   "freqs_khz": [
+    3476.0,
+    6622.0,
+    8831.0,
+    13291.0
+   ],
+   "region": "Atlantic",
+   "source": "https://wiki.radioreference.com/index.php/MWARA"
+  },
+  {
+   "family": "CAR-A",
+   "name": "New York Radio, Caribbean",
+   "freqs_khz": [
+    2887.0,
+    3455.0,
+    5550.0,
+    6577.0,
+    8846.0,
+    11396.0
+   ],
+   "region": "NorthAmerica",
+   "source": "https://wiki.radioreference.com/index.php/MWARA"
+  },
+  {
+   "family": "CAR-B",
+   "name": "New York Radio, Caribbean",
+   "freqs_khz": [
+    5520.0,
+    6586.0,
+    8918.0,
+    11330.0,
+    13297.0,
+    17907.0,
+    21985.0
+   ],
+   "region": "NorthAmerica",
+   "source": "https://wiki.radioreference.com/index.php/MWARA"
   }
  ]
 }

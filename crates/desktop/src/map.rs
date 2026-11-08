@@ -148,7 +148,7 @@ fn gather(app: &App, l: Layers) -> (Vec<Mark>, Vec<(Color32, Vec<(f32, f32)>)>) 
                     marks.push(Mark { lat, lon, kind: Kind::Ship { distress: false }, color: widgets::protocol_color("AIS"), label: name, detail: format!("{} · AIS · {}", local_hms(d.at), d.ev.summary), decode: Some(i), age });
                 }
             }
-            "FT8" | "FT4" | "WSPR" | "JS8" if l.amateur => {
+            "FT8" | "FT4" | "WSPR" | "FST4W" | "JS8" if l.amateur => {
                 let Some(grid) = d.ev.fields.get("grid") else { continue };
                 let Some((lat, lon)) = usdr_proto::station::grid_center(grid) else { continue };
                 let call = d.ev.fields.get("de").or(d.ev.fields.get("call")).or(d.ev.fields.get("from")).cloned().unwrap_or_default();

@@ -40,7 +40,7 @@ impl Family {
             Family::Paging => "POCSAG and FLEX pages appear here. PAGER walks the paging channels around the tuned frequency; FLEX and PACKET decode the tuned channel.",
             Family::Packet => "AX.25 packets (APRS positions and messages among them) and AIS ship reports appear here. PACKET decodes the tuned channel; AIS hears both marine channels anywhere in the span.",
             Family::Broadcast => "A broadcast station's RDS (its name, RadioText, clock) and NOAA SAME alerts appear here. Tune WFM to a station for RDS.",
-            Family::HfData => "HF data appears here: FT8 and FT4 at the end of each slot; RTTY, PSK31, NAVTEX, SITOR and PACTOR text as it is copied; DSC calls, HFDL aircraft messages, STANAG modems, the WWV time code and DRM broadcasts; radiofax pictures in their viewer. Pick a mode under HF; the keys beside its name tune its bands or stations.",
+            Family::HfData => "HF data appears here: FT8 and FT4 at the end of each slot; RTTY, PSK31, NAVTEX, SITOR and PACTOR text as it is copied; DSC calls, HFDL aircraft messages, STANAG modems, SELCAL calls, the WWV time code and DRM broadcasts; radiofax pictures in their viewer. Pick a mode under HF; the keys beside its name tune its bands or stations.",
         }
     }
 
@@ -94,8 +94,14 @@ pub const DECODERS: &[Decoder] = &[
     Decoder { chip: "ALE", family: Family::HfData, matches: &["2G ALE"] },
     Decoder { chip: "CW", family: Family::HfData, matches: &["CW"] },
     Decoder { chip: "JS8", family: Family::HfData, matches: &["JS8"] },
+    Decoder { chip: "FST4W", family: Family::HfData, matches: &["FST4W"] },
     Decoder { chip: "WSPR", family: Family::HfData, matches: &["WSPR"] },
     Decoder { chip: "OLIVIA", family: Family::HfData, matches: &["OLIVIA"] },
+    Decoder { chip: "CONTESTIA", family: Family::HfData, matches: &["CONTESTIA"] },
+    Decoder { chip: "DOMINOEX", family: Family::HfData, matches: &["DOMINOEX"] },
+    Decoder { chip: "THOR", family: Family::HfData, matches: &["THOR"] },
+    Decoder { chip: "MT63", family: Family::HfData, matches: &["MT63"] },
+    Decoder { chip: "SELCAL", family: Family::HfData, matches: &["SELCAL"] },
     Decoder { chip: "MFSK", family: Family::HfData, matches: &["MFSK"] },
     Decoder { chip: "SSTV", family: Family::HfData, matches: &["SSTV"] },
     Decoder { chip: "WWV", family: Family::HfData, matches: &["WWV"] },
@@ -162,6 +168,7 @@ pub const RTTY_DIALS: &[(&str, f64)] = &[
     // Deutscher Wetterdienst's weather broadcasts, 50 baud and 450 Hz.
     ("DWD 10.1", 10_099_300.0),
     ("DWD 7.6", 7_644_500.0),
+    ("DWD 4.6", 4_581_500.0),
 ];
 
 /// The US automatic digital station segments (47 CFR 97.221), where
@@ -207,6 +214,8 @@ mod tests {
             ("PACTOR", Family::HfData),
             ("STANAG 4285", Family::HfData),
             ("2G ALE", Family::HfData),
+            ("SELCAL", Family::HfData),
+            ("CONTESTIA", Family::HfData),
             ("WWV", Family::HfData),
             ("DRM", Family::HfData),
         ] {

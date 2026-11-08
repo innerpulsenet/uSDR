@@ -34,7 +34,7 @@ pub fn dials(mode: Mode) -> Vec<Dial> {
         Mode::Cw => data::CW_DIALS.iter().map(|(b, hz, n)| d(b, *hz, n)).collect(),
         Mode::Olivia => data::OLIVIA_DIALS.iter().map(|(b, hz, n)| d(b, *hz, n)).collect(),
         Mode::Hell => data::HELL_DIALS.iter().map(|(b, hz, n)| d(b, *hz, n)).collect(),
-        Mode::Wspr => data::WSPR_DIALS.iter().map(|(b, hz, n)| d(b, *hz, n)).collect(),
+        Mode::Wspr | Mode::Fst4w => data::WSPR_DIALS.iter().map(|(b, hz, n)| d(b, *hz, n)).collect(),
         Mode::Js8 => data::JS8_DIALS.iter().map(|(b, hz, n)| d(b, *hz, n)).collect(),
         Mode::Sstv => data::SSTV_DIALS.iter().filter(|(_, _, sb)| *sb == "USB").map(|(b, hz, _)| d(b, *hz, "SSTV calling frequency (upper sideband)")).collect(),
         // Midway between the two channels, both in the span.

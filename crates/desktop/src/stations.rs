@@ -16,6 +16,7 @@ pub fn for_mode(mode: Mode) -> Option<&'static Directory> {
         Mode::Dsc => Some(&DSC),
         Mode::Hfdl => Some(&HFDL),
         Mode::Ale => Some(&ALE),
+        Mode::Selcal => Some(&SELCAL),
         Mode::Mfsk => Some(&RADIOGRAM),
         Mode::Wwv => Some(&WWV),
         Mode::Drm => Some(&DRM),
@@ -70,6 +71,14 @@ pub const ALE: Directory = Directory {
     dial_offset_hz: 0.0,
     source: "Amateur ALE channels from hflink.com, checked 2026-11-06. No military or government ALE list could be confirmed from an official source, so none is given; HFGCS's published frequencies are its voice channels.",
     stations: data::ALE,
+};
+
+pub const SELCAL: Directory = Directory {
+    mode: Mode::Selcal,
+    title: "OCEANIC HF VOICE",
+    dial_offset_hz: 0.0,
+    source: "North Atlantic and Caribbean HF families from the RadioReference MWARA page (last edited 2 August 2021; the NAT lists confirmed there November 2020). Community-kept, so assignments may have changed.",
+    stations: data::SELCAL,
 };
 
 pub const RADIOGRAM: Directory = Directory {

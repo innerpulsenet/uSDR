@@ -496,6 +496,10 @@ fn text_of(ev: &scannerd_engine::DecodeEvent) -> Option<TextIn<'_>> {
         "RTTY" => ("RTTY", num("df")?, num("snr"), ev.summary.as_str()),
         "CW" => ("CW", num("df")?, num("snr"), f("text")?.as_str()),
         "OLIVIA" => ("OLIVIA", num("centerHz")?, num("snrDb"), f("text")?.as_str()),
+        "DOMINOEX" => ("DOMINOEX", num("centerHz")?, num("snrDb"), f("text")?.as_str()),
+        "THOR" => ("THOR", num("centerHz")?, num("snrDb"), f("text")?.as_str()),
+        "MT63" => ("MT63", num("centerHz")?, num("snrDb"), f("text")?.as_str()),
+        "CONTESTIA" => ("CONTESTIA", num("centerHz")?, num("snrDb"), f("text")?.as_str()),
         "MFSK" if ev.kind == "text" => {
             let mode = match f("mode")?.as_str() {
                 "MFSK16" => "MFSK16",

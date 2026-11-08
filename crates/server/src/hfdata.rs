@@ -1,5 +1,5 @@
 //! The HF text and picture decoders on receiver A's sideband audio: WEFAX,
-//! RTTY, NAVTEX and PSK31. Each takes the audio before the AGC, as FT8's
+//! RTTY, NAVTEX, PSK31 and the rest. Each takes the audio before the AGC, as FT8's
 //! does, and what it decodes leaves as the same `decode` events every other
 //! decoder sends, so the log, the history and the web page need nothing new.
 //! Radiofax rows are the exception: they go as 0x06 binary frames to the
@@ -15,9 +15,13 @@ use scannerd_engine::cw::{CwDecoder, CwEvent};
 use scannerd_engine::js8::{Js8Decoder, Js8Event, Js8Speed};
 use scannerd_engine::sstv::{SstvDecoder, SstvEvent, SstvMode, SstvState};
 use scannerd_engine::wspr::WsprDecoder;
+use scannerd_engine::fst4w::Fst4wDecoder;
 use scannerd_engine::hell::{HELL_ROWS, HellDecoder, HellEvent};
 use scannerd_engine::mfsk::{MfskConfig, MfskDecoder, MfskEvent};
 use scannerd_engine::olivia::{OliviaDecoder, OliviaEvent};
+use scannerd_engine::ifk::{DominoExDecoder, IfkEvent, ThorDecoder};
+use scannerd_engine::mt63::{Mt63Decoder, Mt63Event};
+use scannerd_engine::selcal::{SelcalDecoder, SelcalEvent};
 use scannerd_engine::hfdl::{HfdlDecoder, HfdlEvent};
 use scannerd_engine::stanag::{StanagDecoder, StanagEvent};
 use scannerd_engine::pactor::{PactorDecoder, PactorEvent, PactorMode};
@@ -106,7 +110,13 @@ enum Kind {
     Stanag(Box<StanagDecoder>),
     Cw(Box<CwDecoder>),
     Wspr(Box<WsprDecoder>),
+    Fst4w(Box<Fst4wDecoder>),
     Olivia(Box<OliviaDecoder>),
+    Contestia(Box<OliviaDecoder>),
+    Selcal(Box<SelcalDecoder>),
+    Dominoex(Box<DominoExDecoder>),
+    Thor(Box<ThorDecoder>),
+    Mt63(Box<Mt63Decoder>),
     Mfsk(Box<MfskDecoder>),
     /// Feld Hell, and how many columns have gone out.
     Hell { dec: Box<HellDecoder>, sent: u32 },
@@ -163,6 +173,9 @@ hf_event_impl!(CwEvent);
 hf_event_impl!(Js8Event);
 hf_event_impl!(SstvEvent);
 hf_event_impl!(OliviaEvent);
+hf_event_impl!(SelcalEvent);
+hf_event_impl!(IfkEvent);
+hf_event_impl!(Mt63Event);
 hf_event_impl!(MfskEvent);
 
 /// The wall clock, ms since the Unix epoch: the slot decoders cut by it.
@@ -277,6 +290,17 @@ impl HfEvent for DscEvent {
     }
 }
 
+fn ifk_reading(s: scannerd_engine::ifk::IfkStatus) -> DigitalReading {
+    DigitalReading {
+        locked: s.locked,
+        center_hz: Some(s.center_hz.round()),
+        snr_db: s.snr_db.map(f32::round),
+        variant: s.locked.then_some(s.variant),
+        facts: vec![Fact::new("characters", s.chars.to_string())],
+        ..Default::default()
+    }
+}
+
 fn hf_event(protocol: &str, e: &impl HfEvent) -> DecodeEvent {
     DecodeEvent { protocol: protocol.into(), kind: e.kind().into(), summary: e.summary(), valid: e.valid(), fields: e.fields().into_iter().map(|(k, v)| (k.to_string(), v)).collect() }
 }
@@ -332,7 +356,13 @@ impl HfDecoder {
             SdrMode::Stanag | SdrMode::Ale => Kind::Stanag(Box::new(StanagDecoder::new(fs))),
             SdrMode::Cw => Kind::Cw(Box::new(CwDecoder::new(fs))),
             SdrMode::Wspr => Kind::Wspr(Box::new(WsprDecoder::new(fs))),
+            SdrMode::Fst4w => Kind::Fst4w(Box::new(Fst4wDecoder::new(fs))),
             SdrMode::Olivia => Kind::Olivia(Box::new(OliviaDecoder::new_auto(fs, 1_500.0))),
+            SdrMode::Contestia => Kind::Contestia(Box::new(OliviaDecoder::new_contestia_auto(fs, 1_500.0))),
+            SdrMode::Dominoex => Kind::Dominoex(Box::new(DominoExDecoder::new_auto(fs, 1_500.0))),
+            SdrMode::Thor => Kind::Thor(Box::new(ThorDecoder::new_auto(fs, 1_500.0))),
+            SdrMode::Mt63 => Kind::Mt63(Box::new(Mt63Decoder::new_auto(fs, 1_500.0))),
+            SdrMode::Selcal => Kind::Selcal(Box::new(SelcalDecoder::new(fs))),
             SdrMode::Mfsk => Kind::Mfsk(Box::new(MfskDecoder::new(fs, MfskConfig::default()))),
             SdrMode::Hell => Kind::Hell { dec: Box::new(HellDecoder::new(fs)), sent: 0 },
             SdrMode::Js8 => Kind::Js8(Box::new(Js8Decoder::new(fs, &Js8Speed::ALL))),
@@ -376,7 +406,7 @@ impl HfDecoder {
                 **d = PskDecoder::new(fs as f32, c.psk_baud);
             }
             Kind::Sitor(d) => d.set_mode(sitor_mode(c)),
-            Kind::Navtex(_) | Kind::Dsc(_) | Kind::Pactor(_) | Kind::Wwv(_) | Kind::Hfdl(_) | Kind::Stanag(_) | Kind::Cw(_) | Kind::Js8(_) | Kind::Sstv { .. } | Kind::Wspr(_) | Kind::Olivia(_) | Kind::Mfsk(_) | Kind::Hell { .. } => {}
+            Kind::Navtex(_) | Kind::Dsc(_) | Kind::Pactor(_) | Kind::Wwv(_) | Kind::Hfdl(_) | Kind::Stanag(_) | Kind::Cw(_) | Kind::Js8(_) | Kind::Sstv { .. } | Kind::Wspr(_) | Kind::Fst4w(_) | Kind::Olivia(_) | Kind::Contestia(_) | Kind::Selcal(_) | Kind::Dominoex(_) | Kind::Thor(_) | Kind::Mt63(_) | Kind::Mfsk(_) | Kind::Hell { .. } => {}
             Kind::Drm { service, audio, .. } => {
                 if *service != c.drm_service {
                     *service = c.drm_service;
@@ -650,6 +680,31 @@ impl HfDecoder {
                     send(hf_event("CW", &e));
                 }
             }
+            Kind::Fst4w(d) => {
+                let t0 = wall_ms().saturating_sub((audio.len() as f64 / self.fs as f64 * 1e3) as u64);
+                d.push(audio, t0);
+                for (slot_ms, decodes) in d.take() {
+                    let secs = slot_ms / 1000;
+                    for w in decodes {
+                        let mut f = BTreeMap::new();
+                        f.insert("tag".to_string(), w.tag.to_string());
+                        f.insert("snr".to_string(), format!("{:.0}", w.snr_db));
+                        f.insert("dt".to_string(), format!("{:.1}", w.dt_s));
+                        f.insert("df".to_string(), format!("{:.0}", w.freq_hz));
+                        f.insert("drift".to_string(), format!("{:.1}", w.drift_hz_per_min));
+                        f.insert("call".to_string(), w.call.clone());
+                        if let Some(g) = &w.grid {
+                            f.insert("grid".to_string(), g.clone());
+                        }
+                        if let Some(p) = w.power_dbm {
+                            f.insert("dbm".to_string(), p.to_string());
+                        }
+                        f.insert("slot".to_string(), format!("{:02}{:02}{:02}", (secs / 3600) % 24, (secs / 60) % 60, secs % 60));
+                        f.insert("slotMs".to_string(), slot_ms.to_string());
+                        send(DecodeEvent { protocol: "FST4W".into(), kind: w.kind.to_string(), summary: w.text.clone(), valid: true, fields: f });
+                    }
+                }
+            }
             Kind::Wspr(d) => {
                 // Stamped with its first sample: the block just ended.
                 let t0 = wall_ms().saturating_sub((audio.len() as f64 / self.fs as f64 * 1e3) as u64);
@@ -677,6 +732,36 @@ impl HfDecoder {
                 d.push(audio);
                 for e in d.take() {
                     send(hf_event("OLIVIA", &e));
+                }
+            }
+            Kind::Contestia(d) => {
+                d.push(audio);
+                for e in d.take() {
+                    send(hf_event("CONTESTIA", &e));
+                }
+            }
+            Kind::Dominoex(d) => {
+                d.push(audio);
+                for e in d.take() {
+                    send(hf_event("DOMINOEX", &e));
+                }
+            }
+            Kind::Thor(d) => {
+                d.push(audio);
+                for e in d.take() {
+                    send(hf_event("THOR", &e));
+                }
+            }
+            Kind::Mt63(d) => {
+                d.push(audio);
+                for e in d.take() {
+                    send(hf_event("MT63", &e));
+                }
+            }
+            Kind::Selcal(d) => {
+                d.push(audio);
+                for e in d.take() {
+                    send(hf_event("SELCAL", &e));
                 }
             }
             Kind::Mfsk(d) => {
@@ -990,7 +1075,28 @@ impl HfDecoder {
                 });
                 DigitalReading { locked: s.locked, center_hz: s.center_hz.map(f32::round), snr_db: s.snr_db.map(f32::round), variant, channels, ..Default::default() }
             }
-            Kind::Olivia(d) => {
+            Kind::Dominoex(d) => ifk_reading(d.status()),
+            Kind::Thor(d) => ifk_reading(d.status()),
+            Kind::Mt63(d) => {
+                let s = d.status();
+                DigitalReading {
+                    locked: s.locked,
+                    center_hz: Some(s.center_hz.round()),
+                    snr_db: s.snr_db.map(f32::round),
+                    variant: s.locked.then_some(s.mode),
+                    facts: vec![Fact::new("characters", s.chars.to_string())],
+                    ..Default::default()
+                }
+            }
+            Kind::Selcal(d) => {
+                let s = d.status();
+                let mut facts = vec![Fact::new("calls", s.calls.to_string())];
+                if let Some(code) = s.last_code {
+                    facts.push(Fact::new("last code", code));
+                }
+                DigitalReading { locked: s.locked, snr_db: s.snr_db.map(f32::round), variant: s.pair, facts, ..Default::default() }
+            }
+            Kind::Olivia(d) | Kind::Contestia(d) => {
                 let s = d.status();
                 DigitalReading {
                     locked: s.locked,
@@ -1025,6 +1131,18 @@ impl HfDecoder {
             Kind::Hell { dec, .. } => {
                 let s = dec.status();
                 DigitalReading { locked: s.locked, center_hz: s.center_hz.map(f32::round), snr_db: s.snr_db.map(f32::round), ..Default::default() }
+            }
+            Kind::Fst4w(d) => {
+                let s = d.status();
+                let mut facts = Vec::new();
+                if let Some(t) = s.slot_secs {
+                    facts.push(Fact::new("120 s slot", format!("{t:.0} s in")));
+                }
+                if let Some(n) = s.last_count {
+                    facts.push(Fact::new("last slot", format!("{n} decoded")));
+                }
+                let variant = if s.decoding { Some("decoding".to_string()) } else if s.collecting { Some("collecting".to_string()) } else { None };
+                DigitalReading { locked: s.collecting || s.decoding, variant, facts, ..Default::default() }
             }
             Kind::Wspr(d) => {
                 let s = d.status();

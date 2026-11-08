@@ -654,10 +654,22 @@ pub fn protocol_color(p: &str) -> Color32 {
         rgb(0xfcd34d)
     } else if u.contains("OLIVIA") {
         rgb(0x86efac)
+    } else if u.contains("DOMINOEX") {
+        rgb(0xfca5a5)
+    } else if u.contains("THOR") {
+        rgb(0xc4b5fd)
+    } else if u.contains("MT63") {
+        rgb(0x7dd3fc)
+    } else if u.contains("CONTESTIA") {
+        rgb(0xbef264)
+    } else if u.contains("SELCAL") {
+        rgb(0xfdba74)
     } else if u.contains("MFSK") {
         rgb(0x67e8f9)
     } else if u.contains("HELL") {
         rgb(0xd6d3d1)
+    } else if u.contains("FST4W") {
+        rgb(0xf9a8d4)
     } else if u.contains("WSPR") {
         rgb(0xfb7185)
     } else if u.contains("JS8") {

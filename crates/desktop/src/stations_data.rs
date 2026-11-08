@@ -151,11 +151,24 @@ pub const ALE: &[Station] = &[
     Station { call: "HFL", name: "HFLINK amateur ALE: voice calling", region: Region::Worldwide, freqs_khz: &[1996.0, 3996.0, 5357.0, 5371.5, 7296.0, 10131.0, 14346.0, 18117.5, 21432.5, 24932.0, 28312.5, 50162.5], note: "USB dial, as hflink.com lists the channels", schedule: &[], windows: &[] },
 ];
 
+pub const SELCAL: &[Station] = &[
+    Station { call: "NAT-A", name: "New York, Gander, Santa Maria, Shanwick: 43N to 47N", region: Region::Atlantic, freqs_khz: &[3016.0, 5598.0, 8906.0, 11396.0, 13306.0, 17946.0, 21925.0], note: "USB dial", schedule: &[], windows: &[] },
+    Station { call: "NAT-B", name: "Gander, Iceland, Shanwick: 47N to 64N", region: Region::Atlantic, freqs_khz: &[2899.0, 5616.0, 8864.0, 13291.0], note: "USB dial", schedule: &[], windows: &[] },
+    Station { call: "NAT-C", name: "Gander, Iceland, Shanwick: 47N to 64N", region: Region::Atlantic, freqs_khz: &[2872.0, 5649.0, 8879.0, 11336.0], note: "USB dial", schedule: &[], windows: &[] },
+    Station { call: "NAT-D", name: "Bodo, Gander, Iceland, Shanwick, Arctic: north of 62N", region: Region::Atlantic, freqs_khz: &[2971.0, 4675.0, 8891.0, 13291.0], note: "USB dial", schedule: &[], windows: &[] },
+    Station { call: "NAT-E", name: "New York, Santa Maria: south of 43N", region: Region::Atlantic, freqs_khz: &[2962.0, 6628.0, 8825.0, 11309.0, 13354.0, 17952.0, 21964.0], note: "USB dial", schedule: &[], windows: &[] },
+    Station { call: "NAT-F", name: "Gander, Shanwick", region: Region::Atlantic, freqs_khz: &[3476.0, 6622.0, 8831.0, 13291.0], note: "USB dial", schedule: &[], windows: &[] },
+    Station { call: "CAR-A", name: "New York Radio, Caribbean", region: Region::NorthAmerica, freqs_khz: &[2887.0, 3455.0, 5550.0, 6577.0, 8846.0, 11396.0], note: "USB dial", schedule: &[], windows: &[] },
+    Station { call: "CAR-B", name: "New York Radio, Caribbean", region: Region::NorthAmerica, freqs_khz: &[5520.0, 6586.0, 8918.0, 11330.0, 13297.0, 17907.0, 21985.0], note: "USB dial", schedule: &[], windows: &[] },
+];
+
 pub const WSPR_DIALS: &[(&str, f64, &str)] = &[
     ("2200 m", 136000.0, ""),
     ("630 m", 474200.0, ""),
     ("160 m", 1836600.0, ""),
     ("80 m", 3568600.0, ""),
+    ("60 m", 5287200.0, ""),
+    ("60 m", 5364700.0, ""),
     ("40 m", 7038600.0, ""),
     ("30 m", 10138700.0, ""),
     ("20 m", 14095600.0, ""),

@@ -384,9 +384,9 @@ fn is_data(m: Mode) -> bool {
 const DATA_DOMAINS: &[(&str, &[Mode])] = &[
     ("VHF · UHF DIGITAL VOICE", &[Mode::P25, Mode::Dmr, Mode::Nxdn]),
     ("PAGING & PACKET", &[Mode::Packet, Mode::Pager, Mode::Flex]),
-    ("AMATEUR · WEAK SIGNAL & KEYBOARD", &[Mode::Ft8, Mode::Ft4, Mode::Wspr, Mode::Js8, Mode::Psk31, Mode::Rtty, Mode::Cw, Mode::Olivia, Mode::Mfsk, Mode::Hell, Mode::Sstv]),
+    ("AMATEUR · WEAK SIGNAL & KEYBOARD", &[Mode::Ft8, Mode::Ft4, Mode::Wspr, Mode::Fst4w, Mode::Js8, Mode::Psk31, Mode::Rtty, Mode::Cw, Mode::Olivia, Mode::Contestia, Mode::Thor, Mode::Dominoex, Mode::Mt63, Mode::Mfsk, Mode::Hell, Mode::Sstv]),
     ("MARITIME & WEATHER", &[Mode::Ais, Mode::Dsc, Mode::Navtex, Mode::Sitor, Mode::Wefax]),
-    ("AVIATION, MILITARY & DATA LINKS", &[Mode::Hfdl, Mode::Ale, Mode::Stanag, Mode::Pactor]),
+    ("AVIATION, MILITARY & DATA LINKS", &[Mode::Hfdl, Mode::Selcal, Mode::Ale, Mode::Stanag, Mode::Pactor]),
     ("TIME & BROADCAST", &[Mode::Wwv, Mode::Drm]),
     ("SEARCH", &[Mode::Auto, Mode::Scan]),
 ];
@@ -409,7 +409,13 @@ fn hf_spec(m: Mode) -> &'static str {
         Mode::Cw => "Morse · skimmer",
         Mode::Js8 => "FT8-style chat",
         Mode::Wspr => "2 min · beacons",
+        Mode::Fst4w => "2–30 min · beacons",
         Mode::Olivia => "MFSK · deep fades",
+        Mode::Contestia => "MFSK · faster",
+        Mode::Dominoex => "IFK · Micro–22",
+        Mode::Thor => "IFK+FEC · Micro–22",
+        Mode::Mt63 => "64 tones · nets",
+        Mode::Selcal => "tone pairs · voice",
         Mode::Mfsk => "text · pictures",
         Mode::Hell => "on-off · by eye",
         Mode::Sstv => "color pictures",
@@ -1399,7 +1405,7 @@ fn hf_decoder_line(app: &App) -> (bool, String) {
     let slot_s = match mode {
         Mode::Ft8 => Some(15.0),
         Mode::Ft4 => Some(7.5),
-        Mode::Wspr => Some(120.0),
+        Mode::Wspr | Mode::Fst4w => Some(120.0),
         _ => None,
     };
     if let Some(slot) = slot_s {

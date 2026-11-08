@@ -43,8 +43,12 @@
 //! -12 dB, 16/500 and 32/1000 -13 dB, 8/250 -15 dB; 8/500 in flat Rayleigh
 //! fading (1 Hz) -4 dB. Half an hour of noise prints nothing.
 //!
-//! Not decoded: Contestia (the same scheme with six-bit characters), and
-//! signals sent with the tones reversed (lower sideband).
+//! Contestia is the same waveform and the same receiver with a shorter
+//! code: blocks of 32 symbols, six-bit characters (upper case, figures and
+//! a little punctuation, from a table of its own), and its own scrambling
+//! sequence started 5 places further on for each character.
+//!
+//! Not decoded: signals sent with the tones reversed (lower sideband).
 
 use crate::mfsk::resample::Resampler;
 use crate::rtty::Lines;
@@ -54,23 +58,92 @@ use std::sync::Arc;
 
 /// The rate Olivia is defined at.
 const RATE: f32 = 8000.0;
-/// Symbols in a block, and the length of the Walsh-Hadamard code.
-const BLOCK: usize = 64;
-/// The scrambling sequence, from Jalocha's encoder.
-const SCRAMBLE: u64 = 0xE257_E6D0_2915_74EC;
-/// Each character's scrambling starts this many places after the last's.
-const SCRAMBLE_SHIFT: usize = 13;
+
+/// Which of the two codes on the Olivia waveform.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum Family {
+    #[default]
+    Olivia,
+    Contestia,
+}
+
+impl Family {
+    /// Symbols in a block, and the length of the Walsh-Hadamard code.
+    fn block(self) -> usize {
+        match self {
+            Family::Olivia => 64,
+            Family::Contestia => 32,
+        }
+    }
+
+    /// The scrambling sequence, from Jalocha's encoder.
+    fn scramble(self) -> u64 {
+        match self {
+            Family::Olivia => 0xE257_E6D0_2915_74EC,
+            Family::Contestia => 0xEDB8_8320,
+        }
+    }
+
+    /// Each character's scrambling starts this many places after the last's.
+    fn scramble_shift(self) -> usize {
+        match self {
+            Family::Olivia => 13,
+            Family::Contestia => 5,
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Family::Olivia => "Olivia",
+            Family::Contestia => "Contestia",
+        }
+    }
+
+    /// A decoded code word as text; `None` for what prints nothing.
+    fn to_char(self, v: u8) -> Option<char> {
+        match self {
+            Family::Olivia => match v {
+                b'\r' | b'\n' => Some('\n'),
+                0x20..=0x7e => Some(v as char),
+                _ => None,
+            },
+            // The transmitter's table read backward. 0 is both line feed and
+            // the idle filler, and carriage return already ends the line; 61
+            // is backspace, which a log has no use for; 62 and 63 are never
+            // sent.
+            Family::Contestia => match v {
+                1..=58 => Some((v + 32) as char),
+                59 => Some(' '),
+                60 => Some('\n'),
+                _ => None,
+            },
+        }
+    }
+
+    /// How sure a block must be, against [`SCORE_MIN`]'s scale. Contestia's
+    /// blocks have half the symbols, so they gather half the evidence.
+    fn score_scale(self) -> f32 {
+        match self {
+            Family::Olivia => 1.0,
+            Family::Contestia => CONTESTIA_SCORE_SCALE,
+        }
+    }
+
+    /// The least share of the evidence a reading must fit. Half the symbols
+    /// spread the best of the 64 correlations further in noise.
+    fn agreement_min(self) -> f32 {
+        match self {
+            Family::Olivia => AGREEMENT_MIN,
+            Family::Contestia => CONTESTIA_AGREEMENT_MIN,
+        }
+    }
+}
 /// The search reaches this far either side of the configured center. A
 /// station further off than this is off by more than operators leave one;
 /// the cost of the search grows with it.
 const SEARCH_HZ: f32 = 100.0;
 /// Spectra per symbol: timing is tried at a quarter symbol.
 const PHASES: usize = 4;
-/// Spectra a block spans.
-const BLOCK_HOPS: usize = BLOCK * PHASES;
-/// Spectra kept: a block, plus the half block a reading waits before it is
-/// judged, with room to spare.
-const RING_HOPS: usize = 2 * BLOCK_HOPS;
 /// Zero padding of the FFT: bins a quarter of the tone spacing apart.
 const PAD: usize = 2;
 
@@ -87,6 +160,16 @@ const SCORE_MEMORY: f32 = 0.5;
 /// 8/500, 10.0 for 16/500, 9.5 for 16/1000 and 8.3 for 32/1000, against
 /// 18.4, 15, 15, 13, 13 and 11.6 here.
 const SCORE_MIN: f32 = 15.0;
+/// Contestia's score threshold against Olivia's. In ten minutes of noise
+/// the best of every alignment and offset reached 9.6 for 4/250, 8.1 for
+/// 8/250 and 6.8 for 32/1000, against 18.4, 15 and 11.6 with this. Noise
+/// alone would allow less; on the air, 14.071 MHz with FT8 in the passband
+/// printed fragments until it was this high and the agreement 0.75.
+const CONTESTIA_SCORE_SCALE: f32 = 1.0;
+/// ...and its agreement threshold, set on the air likewise.
+const CONTESTIA_AGREEMENT_MIN: f32 = 0.75;
+/// A second good block must fall this close to a block's frequency.
+const CORROBORATE_HZ: f32 = 6.0;
 /// ...and the reading's characters agree with this share of the evidence
 /// at least: the best correlation against the most any character could
 /// have, every bit agreeing. A signal of another setting (an 8/500 read
@@ -127,6 +210,8 @@ pub struct OliviaConfig {
     pub bandwidth_hz: f32,
     /// The middle of the band in the audio.
     pub center_hz: f32,
+    /// Olivia or Contestia.
+    pub family: Family,
 }
 
 impl Default for OliviaConfig {
@@ -135,6 +220,7 @@ impl Default for OliviaConfig {
             tones: 8,
             bandwidth_hz: 500.0,
             center_hz: 1500.0,
+            family: Family::Olivia,
         }
     }
 }
@@ -145,7 +231,33 @@ impl OliviaConfig {
             tones,
             bandwidth_hz,
             center_hz,
+            family: Family::Olivia,
         }
+    }
+
+    /// One Contestia setting.
+    pub fn contestia(tones: u32, bandwidth_hz: f32, center_hz: f32) -> Self {
+        Self {
+            family: Family::Contestia,
+            ..Self::new(tones, bandwidth_hz, center_hz)
+        }
+    }
+
+    /// Contestia's settings as they are heard, all at one center.
+    pub fn common_contestia(center_hz: f32) -> Vec<OliviaConfig> {
+        [
+            (4, 250.0),
+            (8, 250.0),
+            (4, 500.0),
+            (8, 500.0),
+            (16, 500.0),
+            (8, 1000.0),
+            (16, 1000.0),
+            (32, 1000.0),
+        ]
+        .into_iter()
+        .map(|(t, b)| Self::contestia(t, b, center_hz))
+        .collect()
     }
 
     /// The settings heard most on the air, all at one center: what the
@@ -175,6 +287,7 @@ impl OliviaConfig {
             tones,
             bandwidth_hz,
             center_hz: self.center_hz,
+            family: self.family,
         }
     }
 
@@ -306,8 +419,8 @@ fn ifht(d: &mut [f32]) {
 }
 
 /// Is bit t of character c's row inverted by the scrambler?
-fn scrambled(c: usize, t: usize) -> bool {
-    (SCRAMBLE >> ((c * SCRAMBLE_SHIFT + t) & (BLOCK - 1))) & 1 == 1
+fn scrambled(f: Family, c: usize, t: usize) -> bool {
+    (f.scramble() >> ((c * f.scramble_shift() + t) & (f.block() - 1))) & 1 == 1
 }
 
 fn gray(x: usize) -> usize {
@@ -324,22 +437,23 @@ fn ungray(mut g: usize) -> usize {
 }
 
 /// A block of characters as the symbols (before Gray coding) that carry it.
-fn encode_block(chars: &[u8], bits: usize) -> [usize; BLOCK] {
-    let mut out = [0usize; BLOCK];
-    let mut row = [0f32; BLOCK];
+fn encode_block(f: Family, chars: &[u8], bits: usize) -> Vec<usize> {
+    let block = f.block();
+    let mut out = vec![0usize; block];
+    let mut row = vec![0f32; block];
     for (c, &ch) in chars.iter().enumerate().take(bits) {
-        let ch = (ch & 0x7f) as usize;
+        let ch = ch as usize & (2 * block - 1);
         // The row a character picks: the inverse transform of a unit vector
         // at its low six bits, negated by its seventh.
         row.fill(0.0);
-        if ch < BLOCK {
+        if ch < block {
             row[ch] = 1.0;
         } else {
-            row[ch - BLOCK] = -1.0;
+            row[ch - block] = -1.0;
         }
         ifht(&mut row);
         for (t, v) in row.iter().enumerate() {
-            let neg = (*v < 0.0) != scrambled(c, t);
+            let neg = (*v < 0.0) != scrambled(f, c, t);
             if neg {
                 out[t] |= 1 << ((c + t) % bits);
             }
@@ -364,6 +478,13 @@ struct Reading {
 
 struct Chain {
     cfg: OliviaConfig,
+    family: Family,
+    /// Symbols in a block, and the spectra a block spans.
+    block: usize,
+    block_hops: usize,
+    /// Spectra kept: a block, plus the half block a reading waits before it
+    /// is judged, with room to spare.
+    ring_hops: usize,
     tones: usize,
     bits: usize,
     n: usize,
@@ -384,7 +505,7 @@ struct Chain {
     /// highest offset.
     width: usize,
     bin_hz: f32,
-    /// Tone powers, `width` per spectrum, `RING_HOPS` spectra.
+    /// Tone powers, `width` per spectrum, `ring_hops` spectra.
     power: Vec<f32>,
     /// Bit log-likelihood ratios, `offsets * bits` per spectrum.
     llr: Vec<f32>,
@@ -404,8 +525,8 @@ struct Chain {
     samples: u64,
     /// Blocks judged good, waiting to be printed.
     blocks: Vec<Block>,
-    /// When recent good blocks were judged, and how well they fit.
-    fits: Vec<(u64, f32)>,
+    /// When recent good blocks were judged, how well they fit, and where.
+    fits: Vec<(u64, f32, f32)>,
     lines: Lines,
     last_char: u64,
     last_print: Option<u64>,
@@ -421,6 +542,10 @@ struct Chain {
 impl Chain {
     fn new(cfg: OliviaConfig) -> Self {
         let cfg = cfg.normalized();
+        let family = cfg.family;
+        let block = family.block();
+        let block_hops = block * PHASES;
+        let ring_hops = 2 * block_hops;
         let tones = cfg.tones as usize;
         let bits = cfg.bits();
         let n = cfg.symbol_len();
@@ -469,6 +594,10 @@ impl Chain {
 
         Self {
             cfg,
+            family,
+            block,
+            block_hops,
+            ring_hops,
             tones,
             bits,
             n,
@@ -484,13 +613,13 @@ impl Chain {
             offsets,
             width,
             bin_hz,
-            power: vec![0.0; RING_HOPS * width],
-            llr: vec![0.0; RING_HOPS * offsets * bits],
+            power: vec![0.0; ring_hops * width],
+            llr: vec![0.0; ring_hops * offsets * bits],
             hops: 0,
             noise: 0.0,
             noise_bias,
-            score: vec![0.0; BLOCK_HOPS * offsets],
-            reading: vec![Reading::default(); BLOCK_HOPS * offsets],
+            score: vec![0.0; block_hops * offsets],
+            reading: vec![Reading::default(); block_hops * offsets],
             zero_tones,
             one_tones,
             samples: 0,
@@ -503,14 +632,14 @@ impl Chain {
             found_center: None,
             snr_db: None,
             quality: 0.0,
-            score_min: SCORE_MIN * (3.0 / bits as f32).sqrt(),
-            tmp: vec![0.0; BLOCK],
+            score_min: SCORE_MIN * (3.0 / bits as f32).sqrt() * family.score_scale(),
+            tmp: vec![0.0; block],
             sorted: Vec::with_capacity(width),
         }
     }
 
     fn locked(&self) -> bool {
-        let block = (BLOCK_HOPS * self.hop) as u64;
+        let block = (self.block_hops * self.hop) as u64;
         self.last_print
             .is_some_and(|t| self.samples.saturating_sub(t) <= LOCK_HOLD_BLOCKS * block + block / 2)
     }
@@ -544,7 +673,7 @@ impl Chain {
         }
         self.fft
             .process_with_scratch(&mut self.buf, &mut self.scratch);
-        let row = (self.hops as usize % RING_HOPS) * self.width;
+        let row = (self.hops as usize % self.ring_hops) * self.width;
         for j in 0..self.width {
             self.power[row + j] = self.buf[self.lo_bin + j].norm_sqr();
         }
@@ -566,7 +695,7 @@ impl Chain {
         }
         let inv = 1.0 / self.noise.max(1e-20);
 
-        let lrow = (self.hops as usize % RING_HOPS) * self.offsets * self.bits;
+        let lrow = (self.hops as usize % self.ring_hops) * self.offsets * self.bits;
         let step = 2 * PAD;
         let mut e = [0f32; 64];
         for o in 0..self.offsets {
@@ -581,14 +710,14 @@ impl Chain {
         }
     }
 
-    /// Read the 64 symbols ending at this spectrum as a block, at every
+    /// Read the block of symbols ending at this spectrum as a block, at every
     /// offset, and fold each reading into the smoothed scores.
     fn read_blocks(&mut self) {
         let h = self.hops - 1;
-        if h + 1 < BLOCK_HOPS as u64 {
+        if h + 1 < self.block_hops as u64 {
             return;
         }
-        let slot = h as usize % BLOCK_HOPS;
+        let slot = h as usize % self.block_hops;
         for o in 0..self.offsets {
             let r = self.read(h, o, false);
             let i = slot * self.offsets + o;
@@ -612,12 +741,12 @@ impl Chain {
         let stride = self.offsets * self.bits;
         for c in 0..self.bits {
             let mut mag = 0.0;
-            for t in 0..BLOCK {
-                let hop = h - ((BLOCK - 1 - t) * PHASES) as u64;
+            for t in 0..self.block {
+                let hop = h - ((self.block - 1 - t) * PHASES) as u64;
                 let v = self.llr
-                    [(hop as usize % RING_HOPS) * stride + o * self.bits + (c + t) % self.bits];
+                    [(hop as usize % self.ring_hops) * stride + o * self.bits + (c + t) % self.bits];
                 mag += v.abs();
-                self.tmp[t] = if scrambled(c, t) { -v } else { v };
+                self.tmp[t] = if scrambled(self.family, c, t) { -v } else { v };
             }
             fht(&mut self.tmp);
             let (mut best, mut second, mut at) = (0.0f32, 0.0f32, 0usize);
@@ -650,7 +779,7 @@ impl Chain {
             r.chars[c] = if self.tmp[at] >= 0.0 {
                 at as u8
             } else {
-                at as u8 + BLOCK as u8
+                (at + self.block) as u8
             };
             r.log_odds[c] = lo;
             total += lo.max(-2.0);
@@ -665,11 +794,11 @@ impl Chain {
     /// of all alignments and offsets.
     fn judge(&mut self) {
         let h = self.hops - 1;
-        if h + 1 < (BLOCK_HOPS + BLOCK_HOPS / 2) as u64 {
+        if h + 1 < (self.block_hops + self.block_hops / 2) as u64 {
             return;
         }
-        let end = h - (BLOCK_HOPS / 2) as u64;
-        let slot = end as usize % BLOCK_HOPS;
+        let end = h - (self.block_hops / 2) as u64;
+        let slot = end as usize % self.block_hops;
         let (mut best, mut at) = (f32::NEG_INFINITY, 0);
         for (i, s) in self.score.iter().enumerate() {
             if *s > best {
@@ -681,11 +810,11 @@ impl Chain {
             return;
         }
         let o = at % self.offsets;
-        if self.reading[at].agreement < AGREEMENT_MIN {
+        if self.reading[at].agreement < self.family.agreement_min() {
             return;
         }
         let r = self.read(end, o, true);
-        let syms = encode_block(&r.chars[..self.bits], self.bits);
+        let syms = encode_block(self.family, &r.chars[..self.bits], self.bits);
         let p = |o: usize| self.sent_power(end, o, &syms);
         let mid = p(o);
         // The center between bins, from the power of the sent tones one bin
@@ -706,13 +835,9 @@ impl Chain {
         let snr = self.snr_from(mid);
         let chars = (0..self.bits)
             .filter(|&c| r.log_odds[c] >= CHAR_LOG_ODDS_MIN)
-            .filter_map(|c| match r.chars[c] {
-                b'\r' | b'\n' => Some('\n'),
-                ch @ 0x20..=0x7e => Some(ch as char),
-                _ => None,
-            })
+            .filter_map(|c| self.family.to_char(r.chars[c]))
             .collect();
-        self.fits.push((self.samples, r.agreement));
+        self.fits.push((self.samples, r.agreement, center));
         let keep = self.samples.saturating_sub((2.0 * HOLD_S * RATE) as u64);
         self.fits.retain(|f| f.0 >= keep);
         self.blocks.push(Block {
@@ -727,14 +852,14 @@ impl Chain {
 
     /// Mean power on the tones a block's characters say were sent, at one
     /// offset.
-    fn sent_power(&self, end: u64, o: usize, syms: &[usize; BLOCK]) -> f32 {
+    fn sent_power(&self, end: u64, o: usize, syms: &[usize]) -> f32 {
         let mut s = 0.0;
         for (t, sym) in syms.iter().enumerate() {
-            let hop = end - ((BLOCK - 1 - t) * PHASES) as u64;
-            let row = (hop as usize % RING_HOPS) * self.width;
+            let hop = end - ((self.block - 1 - t) * PHASES) as u64;
+            let row = (hop as usize % self.ring_hops) * self.width;
             s += self.power[row + o + 2 * PAD * gray(*sym)];
         }
-        s / BLOCK as f32
+        s / self.block as f32
     }
 
     /// Signal to noise in 2500 Hz from the mean power on the sent tones.
@@ -829,6 +954,11 @@ impl OliviaDecoder {
         Self::with_configs(fs, &OliviaConfig::common(center_hz))
     }
 
+    /// Contestia's common settings, side by side.
+    pub fn new_contestia_auto(fs: f32, center_hz: f32) -> Self {
+        Self::with_configs(fs, &OliviaConfig::common_contestia(center_hz))
+    }
+
     /// Several settings side by side. A strong signal of one setting can
     /// look like text to the receiver of another (an 8/250 to a 4/250, whose
     /// tones and bits are a subset of it), so what a receiver reads waits
@@ -897,9 +1027,16 @@ impl OliviaDecoder {
                     j != i
                         && d.fits
                             .iter()
-                            .any(|&(t, a)| t.abs_diff(b.t) <= hold && a > b.agreement + BETTER_FIT)
+                            .any(|&(t, a, _)| t.abs_diff(b.t) <= hold && a > b.agreement + BETTER_FIT)
                 });
-                if !beaten {
+                // Interference (FT8 in the passband, say) makes an isolated
+                // confident block now and then; a transmission makes a run
+                // of them on one frequency.
+                let c = &self.chains[i];
+                let span = 3 * (c.block_hops * c.hop) as u64;
+                let alone = hold > 0
+                    && !c.fits.iter().any(|&(t, _, f)| t != b.t && t.abs_diff(b.t) <= span && (f - b.center).abs() <= CORROBORATE_HZ);
+                if !beaten && !alone {
                     self.chains[i].print(b, &mut self.events);
                 }
             }
@@ -945,6 +1082,21 @@ mod tests {
     use super::*;
     use crate::rtty::testsig::{Rng, add_noise, chunks, levenshtein, rayleigh};
 
+    const BLOCK: usize = 64;
+
+    /// Text as Contestia's transmitter codes it (fldigi's table).
+    fn contestia_code(b: u8) -> u8 {
+        let b = b.to_ascii_uppercase();
+        match b {
+            b' ' => 59,
+            b'\r' => 60,
+            b'\n' | 0 => 0,
+            33..=90 => b - 32,
+            8 => 61,
+            _ => b'?' - 32,
+        }
+    }
+
     /// An Olivia transmitter as Jalocha's modulator builds it: raised-cosine
     /// symbols two symbol periods long, overlapping by half, each with a
     /// random quarter-cycle phase step. `ppm` stretches its clock. Mean
@@ -960,13 +1112,16 @@ mod tests {
     ) -> Vec<f32> {
         let cfg = cfg.normalized();
         let bits = cfg.bits();
-        let mut bytes: Vec<u8> = text.bytes().collect();
+        let mut bytes: Vec<u8> = match cfg.family {
+            Family::Olivia => text.bytes().collect(),
+            Family::Contestia => text.bytes().map(contestia_code).collect(),
+        };
         while !bytes.len().is_multiple_of(bits) {
             bytes.push(0);
         }
         let mut syms = Vec::new();
         for blk in bytes.chunks(bits) {
-            syms.extend(encode_block(blk, bits).iter().map(|s| gray(*s)));
+            syms.extend(encode_block(cfg.family, blk, bits).iter().map(|s| gray(*s)));
         }
         let scale = 1.0 + ppm * 1e-6;
         let len_s = cfg.symbol_len() as f64 / RATE as f64 * scale;
@@ -1028,12 +1183,12 @@ mod tests {
     #[test]
     fn hadamard_round_trip() {
         for ch in 0..128u8 {
-            let syms = encode_block(&[ch, 0, 0], 3);
+            let syms = encode_block(Family::Olivia, &[ch, 0, 0], 3);
             let mut v = [0f32; BLOCK];
             for (t, s) in syms.iter().enumerate() {
                 let bit = (s >> (t % 3)) & 1;
                 let l = if bit == 0 { 1.0 } else { -1.0 };
-                v[t] = if scrambled(0, t) { -l } else { l };
+                v[t] = if scrambled(Family::Olivia, 0, t) { -l } else { l };
             }
             fht(&mut v);
             let (at, best) = v
@@ -1316,5 +1471,99 @@ mod tests {
         let ev = dec.take();
         assert!(ev.is_empty(), "{ev:?}");
         assert!(!dec.status().locked);
+    }
+
+    #[test]
+    fn contestia_hadamard_round_trip() {
+        let f = Family::Contestia;
+        for ch in 0..64u8 {
+            let syms = encode_block(f, &[ch, 0, 0], 3);
+            assert_eq!(syms.len(), 32);
+            let mut v = [0f32; 32];
+            for (t, s) in syms.iter().enumerate() {
+                let bit = (s >> (t % 3)) & 1;
+                let l = if bit == 0 { 1.0 } else { -1.0 };
+                v[t] = if scrambled(f, 0, t) { -l } else { l };
+            }
+            fht(&mut v);
+            let (at, best) = v.iter().enumerate().max_by(|a, b| a.1.abs().total_cmp(&b.1.abs())).unwrap();
+            assert_eq!(if *best >= 0.0 { at as u8 } else { at as u8 + 32 }, ch);
+        }
+    }
+
+    #[test]
+    fn contestia_alphabet_reads_back() {
+        for b in b"CQ DE W1AW 0123456789 ./?".iter().copied() {
+            assert_eq!(Family::Contestia.to_char(contestia_code(b)), Some(b as char));
+        }
+        assert_eq!(Family::Contestia.to_char(contestia_code(b'q')), Some('Q'));
+        assert_eq!(Family::Contestia.to_char(0), None);
+        assert_eq!(Family::Contestia.to_char(61), None);
+    }
+
+    #[test]
+    fn contestia_clean_copy_every_common_setting() {
+        let fs = 47_904.0;
+        for cfg in OliviaConfig::common_contestia(1500.0) {
+            let mut rng = Rng::new(7);
+            let x = olivia_tx(TEXT, cfg, fs, 0.0, 0.0, 0.3, &mut rng);
+            let mut dec = OliviaDecoder::new(fs, cfg);
+            let got = run(&mut dec, &x);
+            assert!(cer(TEXT, &got) < 0.02, "{}: {got:?}", cfg.label());
+        }
+    }
+
+    #[test]
+    fn contestia_copies_off_frequency_in_noise() {
+        let fs = 47_904.0;
+        let cfg = OliviaConfig::contestia(8, 500.0, 1500.0);
+        let mut rng = Rng::new(11);
+        let mut x = olivia_tx(TEXT, cfg, fs, 50.0, 40.0, 0.3, &mut rng);
+        add_noise(&mut x, 0.3, -6.0, fs, &mut rng);
+        let mut dec = OliviaDecoder::new(fs, cfg);
+        let got = run(&mut dec, &x);
+        assert!(cer(TEXT, &got) < 0.05, "{got:?}");
+    }
+
+    #[test]
+    fn contestia_auto_finds_the_setting() {
+        let fs = 47_904.0;
+        let cfg = OliviaConfig::contestia(16, 500.0, 1500.0);
+        let mut rng = Rng::new(3);
+        let mut x = olivia_tx(TEXT, cfg, fs, 30.0, 20.0, 0.3, &mut rng);
+        add_noise(&mut x, 0.3, 0.0, fs, &mut rng);
+        let mut dec = OliviaDecoder::new_contestia_auto(fs, 1500.0);
+        chunks(&x, |c| dec.push(c));
+        dec.flush();
+        let mut got = String::new();
+        for e in dec.take() {
+            let OliviaEvent::Text { text, tones, bandwidth_hz, .. } = e;
+            assert_eq!((tones, bandwidth_hz), (16, 500), "{text}");
+            got.push_str(&text);
+        }
+        assert!(cer(TEXT, &got) < 0.05, "{got:?}");
+    }
+
+    /// The false-print floor, printed for setting the thresholds:
+    /// `cargo test -p scannerd-engine --release contestia_noise_floor -- --ignored --nocapture`
+    #[test]
+    #[ignore = "ten minutes of noise per setting"]
+    fn contestia_noise_floor() {
+        let fs = 8_000.0;
+        for cfg in OliviaConfig::common_contestia(1500.0) {
+            let mut rng = Rng::new(21);
+            let mut x = vec![0f32; (600.0 * fs) as usize];
+            add_noise(&mut x, 0.3, 0.0, fs, &mut rng);
+            let mut c = Chain::new(cfg);
+            let (mut best, mut printed) = (f32::NEG_INFINITY, 0usize);
+            for s in x.chunks(512) {
+                c.push(s);
+                let m = c.score.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+                best = best.max(m);
+                printed += c.blocks.len();
+                c.blocks.clear();
+            }
+            println!("{}: best score {best:.1} against {:.1}, {printed} blocks printed", cfg.label(), c.score_min);
+        }
     }
 }

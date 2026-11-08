@@ -487,6 +487,37 @@ pub fn olivia(app: &mut App, ui: &mut Ui) {
     teleprinter(app, ui, "OLIVIA", None, "Olivia text appears here as it is copied: the decoder tries the common settings at once around 1500 Hz and keeps the one that decodes. The band keys above tune the Olivia club's calling frequencies.");
 }
 
+pub fn contestia(app: &mut App, ui: &mut Ui) {
+    ui.horizontal_wrapped(|ui| reading_strip(app, ui, Mode::Contestia, "TRYING 4/250 · 8/250 · 4/500 · 8/500 · 16/500 · 8/1000 · 16/1000 · 32/1000"));
+    ui.add_space(4.0);
+    teleprinter(app, ui, "CONTESTIA", None, "Contestia text appears here as it is copied, in capitals, which is all the mode sends: the decoder tries the common settings at once around 1500 Hz and keeps the one that decodes.");
+}
+
+/// FST4W: a row for each beacon, tagged with its period.
+pub fn fst4w(app: &mut App, ui: &mut Ui) {
+    let cols: &[(&str, &str, f32)] = &[("tag", "PERIOD", 56.0), ("snr", "dB", 34.0), ("df", "Hz", 44.0), ("call", "CALL", 90.0), ("grid", "GRID", 56.0), ("dbm", "dBm", 40.0)];
+    ui.horizontal_wrapped(|ui| reading_strip(app, ui, Mode::Fst4w, "WAITING FOR THE SLOT"));
+    ui.add_space(4.0);
+    list_head(ui, cols);
+    message_list(app, ui, "FST4W", cols, "FST4W beacons appear here at the end of their slots: 120, 300, 900 and 1800 seconds, all decoded at once within 110 Hz of 1500 Hz. The band keys use the WSPR dials; the mode has no published dial list of its own.");
+}
+
+/// A keyboard mode: its lock reading and the text as it arrives.
+pub fn text_mode(app: &mut App, ui: &mut Ui, mode: Mode, protocol: &str, idle: &str, empty: &str) {
+    ui.horizontal_wrapped(|ui| reading_strip(app, ui, mode, idle));
+    ui.add_space(4.0);
+    teleprinter(app, ui, protocol, None, empty);
+}
+
+/// SELCAL: a row for each call, while the channel plays.
+pub fn selcal(app: &mut App, ui: &mut Ui) {
+    let cols: &[(&str, &str, f32)] = &[("code", "CODE", 70.0), ("offsetHz", "Hz", 40.0), ("snrDb", "dB", 40.0), ("repeat", "REPEAT", 56.0)];
+    ui.horizontal_wrapped(|ui| reading_strip(app, ui, Mode::Selcal, "LISTENING FOR TONE PAIRS"));
+    ui.add_space(4.0);
+    list_head(ui, cols);
+    message_list(app, ui, "SELCAL", cols, "SELCAL calls appear here with their four-letter code while the voice channel plays. A controller calls a flight before speaking to it.");
+}
+
 /// MFSK: the text as it arrives and, beside it, the newest picture a
 /// Shortwave Radiogram show sent.
 pub fn mfsk(app: &mut App, ui: &mut Ui) {

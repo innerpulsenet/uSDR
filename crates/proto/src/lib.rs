@@ -883,11 +883,23 @@ pub enum Mode {
     /// television, Olivia, MFSK and Feld Hell.
     Cw,
     Wspr,
+    /// WSPR's sibling: 120 to 1800 second beacons.
+    Fst4w,
     Js8,
     Sstv,
     Olivia,
+    /// Olivia's six-bit relative, on the same waveform.
+    Contestia,
+    /// Incremental frequency keying and its forward-corrected cousin.
+    Dominoex,
+    Thor,
+    /// 64 differential BPSK carriers with Walsh-coded characters.
+    Mt63,
     Mfsk,
     Hell,
+    /// Aviation selective calling: two pairs of tones on an HF voice channel,
+    /// read while the channel plays.
+    Selcal,
     /// The NIST time stations' 100 Hz time code, on AM.
     Wwv,
     /// Digital Radio Mondiale: an OFDM broadcast decoded to its service
@@ -898,7 +910,7 @@ pub enum Mode {
 }
 
 impl Mode {
-    pub const ALL: [Mode; 35] = [
+    pub const ALL: [Mode; 41] = [
         Mode::Nfm,
         Mode::Am,
         Mode::Usb,
@@ -925,11 +937,17 @@ impl Mode {
         Mode::Ale,
         Mode::Cw,
         Mode::Wspr,
+        Mode::Fst4w,
         Mode::Js8,
         Mode::Sstv,
         Mode::Olivia,
+        Mode::Contestia,
+        Mode::Dominoex,
+        Mode::Thor,
+        Mode::Mt63,
         Mode::Mfsk,
         Mode::Hell,
+        Mode::Selcal,
         Mode::Wwv,
         Mode::Drm,
         Mode::Auto,
@@ -963,9 +981,15 @@ impl Mode {
             Mode::Ale => "ALE",
             Mode::Cw => "CW",
             Mode::Wspr => "WSPR",
+            Mode::Fst4w => "FST4W",
             Mode::Js8 => "JS8",
             Mode::Sstv => "SSTV",
             Mode::Olivia => "OLIVIA",
+            Mode::Contestia => "CONTESTIA",
+            Mode::Dominoex => "DOMINOEX",
+            Mode::Thor => "THOR",
+            Mode::Mt63 => "MT63",
+            Mode::Selcal => "SELCAL",
             Mode::Mfsk => "MFSK",
             Mode::Hell => "HELL",
             Mode::Wwv => "WWV",
@@ -984,7 +1008,7 @@ impl Mode {
     /// dial (the suppressed carrier) and the decoder finds its signal in
     /// the audio above it.
     pub fn is_sideband_data(self) -> bool {
-        matches!(self, Mode::Ft8 | Mode::Ft4 | Mode::Wefax | Mode::Rtty | Mode::Navtex | Mode::Psk31 | Mode::Sitor | Mode::Dsc | Mode::Hfdl | Mode::Pactor | Mode::Stanag | Mode::Ale | Mode::Cw | Mode::Wspr | Mode::Js8 | Mode::Sstv | Mode::Olivia | Mode::Mfsk | Mode::Hell)
+        matches!(self, Mode::Ft8 | Mode::Ft4 | Mode::Wefax | Mode::Rtty | Mode::Navtex | Mode::Psk31 | Mode::Sitor | Mode::Dsc | Mode::Hfdl | Mode::Pactor | Mode::Stanag | Mode::Ale | Mode::Cw | Mode::Wspr | Mode::Js8 | Mode::Sstv | Mode::Olivia | Mode::Mfsk | Mode::Hell | Mode::Contestia | Mode::Selcal | Mode::Dominoex | Mode::Thor | Mode::Mt63 | Mode::Fst4w)
     }
 
     /// Demodulated as single sideband: voice, and the sideband data modes.
@@ -1019,9 +1043,15 @@ impl Mode {
             Mode::Ale => "ale",
             Mode::Cw => "cw",
             Mode::Wspr => "wspr",
+            Mode::Fst4w => "fst4w",
             Mode::Js8 => "js8",
             Mode::Sstv => "sstv",
             Mode::Olivia => "olivia",
+            Mode::Contestia => "contestia",
+            Mode::Dominoex => "dominoex",
+            Mode::Thor => "thor",
+            Mode::Mt63 => "mt63",
+            Mode::Selcal => "selcal",
             Mode::Mfsk => "mfsk",
             Mode::Hell => "hell",
             Mode::Wwv => "wwv",

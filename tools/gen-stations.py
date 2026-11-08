@@ -213,6 +213,13 @@ for net, (call, name) in nets.items():
 w("];")
 w("")
 
+# SELCAL: the oceanic HF voice families, which carry it.
+w("pub const SELCAL: &[Station] = &[")
+for e in d2["selcal"]:
+    w(station(e["family"], e["name"], e["region"], e["freqs_khz"], "USB dial"))
+w("];")
+w("")
+
 def dials(name, rows):
     w(f"pub const {name}: &[(&str, f64, &str)] = &[")
     for band, hz, note in rows:
