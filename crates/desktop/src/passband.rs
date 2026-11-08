@@ -4,7 +4,8 @@
 //! Drag an edge to move it, drag the band to slide it, wheel to widen or
 //! narrow it; a symmetric filter's edges move together.
 
-use crate::theme::{self, alpha};
+use crate::lcd::Look;
+use crate::theme::alpha;
 use egui::{Align2, Color32, Rect, Sense, Shape, Stroke, Ui, pos2, vec2};
 use usdr_proto::{FilterRange, FilterShape};
 
@@ -32,8 +33,9 @@ fn skirt_hz(shape: Option<FilterShape>, width: f32) -> f32 {
 /// `(edges, width)` are read at the glass's right end; `around(width)`
 /// gives the edges a width keeps (the wheel's).
 #[allow(clippy::too_many_arguments)]
-pub fn show(ui: &mut Ui, height: f32, lo: f32, hi: f32, range: &FilterRange, shape: Option<FilterShape>, tint: Color32, (edges, width): (&str, &str), around: &dyn Fn(f32) -> (f32, f32)) -> Option<(f32, f32)> {
-    let (edge_font, width_font) = (theme::mono(9.0), theme::mono_bold(11.0));
+pub fn show(ui: &mut Ui, height: f32, lo: f32, hi: f32, range: &FilterRange, shape: Option<FilterShape>, look: &Look, (edges, width): (&str, &str), around: &dyn Fn(f32) -> (f32, f32)) -> Option<(f32, f32)> {
+    let tint = look.accent;
+    let (edge_font, width_font) = (crate::theme::mono(9.0), crate::theme::mono_bold(11.0));
     let tw = |t: &str, f: &egui::FontId| ui.painter().layout_no_wrap(t.into(), f.clone(), Color32::PLACEHOLDER).size().x;
     let rw = tw(edges, &edge_font).max(tw(width, &width_font)).max(30.0);
     let w = ui.available_width();
@@ -58,7 +60,7 @@ pub fn show(ui: &mut Ui, height: f32, lo: f32, hi: f32, range: &FilterRange, sha
     let mut t = (a0 / step).ceil() * step;
     while t <= a1 {
         let x = x_of(t);
-        cp.line_segment([pos2(x, plot.bottom() - 3.0), pos2(x, plot.bottom())], Stroke::new(1.0, alpha(theme::text_3(), 0.5)));
+        cp.line_segment([pos2(x, plot.bottom() - 3.0), pos2(x, plot.bottom())], Stroke::new(1.0, alpha(look.caption, 0.5)));
         t += step;
     }
 
@@ -195,14 +197,14 @@ pub fn show(ui: &mut Ui, height: f32, lo: f32, hi: f32, range: &FilterRange, sha
     cp.add(Shape::line(outline.clone(), Stroke::new(1.25, alpha(tint, 0.95))));
     // The carrier.
     if a0 <= 0.0 && a1 >= 0.0 {
-        crate::spectrum::dashed_v(&cp, x_of(0.0), plot.top(), plot.bottom(), alpha(theme::text(), 0.45));
+        crate::spectrum::dashed_v(&cp, x_of(0.0), plot.top(), plot.bottom(), alpha(look.value, 0.45));
     }
     // The edges, lit when they are the ones under the pointer or in hand.
     for (x, g) in [(xl, Grip::Low), (xh, Grip::High)] {
         let on = held == Some(g) || hover == Some(g);
-        cp.line_segment([pos2(x, top - 1.0), pos2(x, foot)], Stroke::new(if on { 2.0 } else { 1.25 }, if on { theme::text() } else { alpha(tint, 0.95) }));
+        cp.line_segment([pos2(x, top - 1.0), pos2(x, foot)], Stroke::new(if on { 2.0 } else { 1.25 }, if on { look.value } else { alpha(tint, 0.95) }));
     }
-    let lit = theme::lcd_lit(tint);
+    let lit = look.value;
     p.line_segment([pos2(read.left(), glass.top() + 4.0), pos2(read.left(), glass.bottom() - 4.0)], Stroke::new(1.0, alpha(lit, 0.12)));
     p.text(pos2(read.right() - 6.0, glass.top() + 2.0), Align2::RIGHT_TOP, edges, edge_font, alpha(lit, 0.66));
     p.text(pos2(read.right() - 6.0, glass.bottom() - 1.0), Align2::RIGHT_BOTTOM, width, width_font, lit);

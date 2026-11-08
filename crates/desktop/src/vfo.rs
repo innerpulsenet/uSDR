@@ -43,6 +43,8 @@ pub struct Vfo {
     /// Drawn on an LCD that is already there: no glass of its own, its
     /// width whatever the zone gives it, lit fully in the receiver's color.
     pub bare: bool,
+    /// The face the digits are lit for, on that LCD.
+    pub look: Option<crate::lcd::Look>,
 }
 
 /// The LCD's annunciators: which receiver, its mode, width and gain at the
@@ -60,7 +62,7 @@ pub struct Annunciators {
 impl Default for Vfo {
     fn default() -> Self {
         // The 10 kHz digit.
-        Self { selected: 5, entry: None, focus_entry: false, scroll_accum: 0.0, open_entry_request: false, cells: Vec::new(), shown: None, roll: [None; DIGITS], tint: None, annun: Annunciators::default(), well_h: 0.0, bare: false }
+        Self { selected: 5, entry: None, focus_entry: false, scroll_accum: 0.0, open_entry_request: false, cells: Vec::new(), shown: None, roll: [None; DIGITS], tint: None, annun: Annunciators::default(), well_h: 0.0, bare: false, look: None }
     }
 }
 
@@ -182,8 +184,10 @@ impl Vfo {
         self.shown = Some(s.clone());
         // The lit segments: the receiver's tint washed toward white, so the
         // figures read first and the color second; the Hz group a step down.
-        let lit = if self.bare { theme::lcd_lit(tint) } else { theme::lerp(theme::text(), tint, 0.28) };
-        let lit_hz = if self.bare { theme::lerp(lit, Color32::BLACK, 0.16) } else { theme::lerp(theme::text_2(), tint, 0.22) };
+        let (lit, lit_hz) = match self.look {
+            Some(l) => (l.digits, l.hz),
+            None => (theme::lerp(theme::text(), tint, 0.28), theme::lerp(theme::text_2(), tint, 0.22)),
+        };
         let baseline = rect.bottom() - height * 0.10;
         let mut x = rect.left();
         let mut hovered_digit = None;
@@ -252,7 +256,8 @@ impl Vfo {
             x += w;
         }
         if strip {
-            self.paint_strip(&painter, outer, pad_x, tint, lit, lit_hz);
+            let (words, words_hz) = self.look.map_or((lit, lit_hz), |l| (l.value, l.value));
+            self.paint_strip(&painter, outer, pad_x, tint, words, words_hz);
         } else {
             painter.text(pos2(x + 10.0, baseline), Align2::LEFT_BOTTOM, "MHz", unit_font, theme::alpha(lit_hz, 0.75));
         }
@@ -302,7 +307,7 @@ impl Vfo {
         if self.bare {
             // The band has a zone for the receiver; this one is named.
             let mut job = egui::text::LayoutJob::default();
-            job.append("FREQUENCY", 0.0, egui::TextFormat { font_id: theme::mono(9.5), color: theme::alpha(lit, 0.66), extra_letter_spacing: 1.0, ..Default::default() });
+            job.append("FREQUENCY", 0.0, egui::TextFormat { font_id: theme::mono(9.5), color: self.look.map_or(lit, |l| l.caption), extra_letter_spacing: 1.0, ..Default::default() });
             let g = p.layout_job(job);
             p.galley(pos2(x, y - g.size().y / 2.0), g.clone(), lit);
             x += g.size().x + 12.0;
@@ -584,6 +589,27 @@ pub fn lcd_back(p: &egui::Painter, r: Rect, tint: Color32) {
     let mut m = egui::Mesh::default();
     let c = r.center();
     m.colored_vertex(c, theme::alpha(tint, 0.11));
+    let n = 40;
+    for k in 0..=n {
+        let a = k as f32 / n as f32 * std::f32::consts::TAU;
+        m.colored_vertex(pos2(c.x + a.cos() * r.width() * 0.56, c.y + a.sin() * r.height() * 0.95), Color32::TRANSPARENT);
+    }
+    for k in 1..=n as u32 {
+        m.add_triangle(0, k, k + 1);
+    }
+    p.with_clip_rect(r.shrink(1.0)).add(Shape::mesh(m));
+}
+
+/// The display behind a look's readings: the same bezel as [`lcd_back`], its
+/// panel in the look's own colors.
+pub fn lcd_back_look(p: &egui::Painter, r: Rect, look: &crate::lcd::Look) {
+    let bezel = r.expand(2.0);
+    p.rect_filled(bezel, CornerRadius::same(7), Color32::from_black_alpha(150));
+    p.line_segment([bezel.left_bottom() + vec2(6.0, 0.5), bezel.right_bottom() + vec2(-6.0, 0.5)], Stroke::new(1.0, Color32::from_white_alpha(16)));
+    p.rect_filled(r, CornerRadius::same(5), look.panel);
+    let mut m = egui::Mesh::default();
+    let c = r.center();
+    m.colored_vertex(c, look.wash);
     let n = 40;
     for k in 0..=n {
         let a = k as f32 / n as f32 * std::f32::consts::TAU;

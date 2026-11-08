@@ -511,6 +511,15 @@ fn interface_page(app: &mut App, ui: &mut Ui, ctx: &egui::Context) {
         }
     });
     ui.add_space(4.0);
+    row(ui, "LCD", |ui| {
+        use crate::lcd::LcdStyle;
+        let labels: Vec<&str> = LcdStyle::ALL.iter().map(|s| s.label()).collect();
+        let cur = LcdStyle::ALL.iter().position(|s| *s == app.prefs.lcd);
+        if let Some(i) = widgets::segmented(ui, "lcd", &labels, cur, theme::AMBER) {
+            app.prefs.lcd = LcdStyle::ALL[i];
+        }
+    });
+    ui.add_space(4.0);
     row(ui, "Motion", |ui| {
         use crate::prefs::Motion;
         let all = [Motion::System, Motion::Full, Motion::Reduced];

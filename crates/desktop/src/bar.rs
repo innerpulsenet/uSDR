@@ -60,8 +60,8 @@ fn zones(w: f32, digits: f32) -> Zones {
 }
 
 /// A caption printed on the LCD.
-fn caption(t: impl Into<String>, lit: egui::Color32) -> RichText {
-    RichText::new(t).font(theme::mono(9.5)).color(alpha(lit, 0.66)).extra_letter_spacing(1.0)
+fn caption(t: impl Into<String>, look: &crate::lcd::Look) -> RichText {
+    RichText::new(t).font(theme::mono(9.5)).color(look.caption).extra_letter_spacing(1.0)
 }
 
 pub fn receiver_bar(app: &mut App, ui: &mut Ui) {
@@ -72,15 +72,15 @@ pub fn receiver_bar(app: &mut App, ui: &mut Ui) {
     let (area, _) = ui.allocate_exact_size(vec2(w, band_h + KEYS_GAP + KEYS_H), Sense::hover());
     let band = Rect::from_min_size(area.min, vec2(w, band_h));
     let keys_top = band.bottom() + KEYS_GAP;
-    let tint = if app.active_b && app.status.rx2.is_some() { theme::VIOLET } else { theme::AMBER };
-    crate::vfo::lcd_back(ui.painter(), band, tint);
+    let look = app.lcd_look(app.active_b && app.status.rx2.is_some());
+    crate::vfo::lcd_back_look(ui.painter(), band, &look);
     // The zones' edges, the first the LCD's own.
     let mut edges = [band.left(); 8];
     for (i, width) in [z.rx, z.freq, z.signal, z.audio, z.mode, z.filter, z.step].into_iter().enumerate() {
         edges[i + 1] = edges[i] + width;
     }
     for x in &edges[1..7] {
-        ui.painter().line_segment([egui::pos2(*x, band.top() + 8.0), egui::pos2(*x, band.bottom() - 8.0)], Stroke::new(1.0, alpha(tint, 0.14)));
+        ui.painter().line_segment([egui::pos2(*x, band.top() + 8.0), egui::pos2(*x, band.bottom() - 8.0)], Stroke::new(1.0, look.rule));
     }
     let lcd_rect = |i: usize| Rect::from_min_max(egui::pos2(edges[i] + if i == 0 { 10.0 } else { 9.0 }, band.top() + 6.0), egui::pos2(edges[i + 1] - 8.0, band.bottom() - 5.0));
     let keys_rect = |i: usize, j: usize| Rect::from_min_max(egui::pos2(edges[i] + if i == 0 { 10.0 } else { 9.0 }, keys_top), egui::pos2(edges[j + 1] - 8.0, keys_top + KEYS_H));
@@ -89,11 +89,11 @@ pub fn receiver_bar(app: &mut App, ui: &mut Ui) {
     let keys_ui = |ui: &mut Ui, name: &str, i: usize, j: usize| ui.new_child(egui::UiBuilder::new().id_salt(("band-keys", name)).max_rect(keys_rect(i, j)).layout(row));
 
     let (mut lcd, mut keys) = (lcd_ui(ui, "rx", 0), keys_ui(ui, "rx", 0, 0));
-    rx(app, &mut lcd, &mut keys, tint, band_h);
+    rx(app, &mut lcd, &mut keys, look, band_h);
     let mut lcd = lcd_ui(ui, "freq", 1);
-    frequency(app, &mut lcd, digits, tint);
+    frequency(app, &mut lcd, digits, look);
     let mut lcd = lcd_ui(ui, "signal", 2);
-    signal(app, &mut lcd, tint);
+    signal(app, &mut lcd, look);
     // The memories are frequencies: their keys sit under the frequency and
     // the signal, with B's own keys ahead of them while B runs.
     let mut keys = keys_ui(ui, "memories", 1, 2);
@@ -104,23 +104,23 @@ pub fn receiver_bar(app: &mut App, ui: &mut Ui) {
         memory_chips(app, &mut keys, room);
     }
     let (mut lcd, mut keys) = (lcd_ui(ui, "audio", 3), keys_ui(ui, "audio", 3, 3));
-    audio(app, &mut lcd, &mut keys, tint);
+    audio(app, &mut lcd, &mut keys, look);
     let (mut lcd, mut keys) = (lcd_ui(ui, "mode", 4), keys_ui(ui, "mode", 4, 4));
-    modes(app, &mut lcd, &mut keys, tint, band_h);
+    modes(app, &mut lcd, &mut keys, look, band_h);
     let (mut lcd, mut keys) = (lcd_ui(ui, "filter", 5), keys_ui(ui, "filter", 5, 5));
-    filter(app, &mut lcd, &mut keys, tint);
+    filter(app, &mut lcd, &mut keys, look);
     let (mut lcd, mut keys) = (lcd_ui(ui, "step", 6), keys_ui(ui, "step", 6, 6));
-    tuning(app, &mut lcd, &mut keys, tint, band_h);
+    tuning(app, &mut lcd, &mut keys, look, band_h);
     crate::vfo::lcd_glass(ui.painter(), band);
 }
 
 /// Which receiver the bar is driving, large, and the keys that choose it.
-fn rx(app: &mut App, lcd: &mut Ui, keys: &mut Ui, tint: egui::Color32, band_h: f32) {
+fn rx(app: &mut App, lcd: &mut Ui, keys: &mut Ui, look: crate::lcd::Look, band_h: f32) {
     let has_b = app.status.rx2.is_some();
     let is_b = app.active_b && has_b;
-    let lit = theme::lcd_lit(tint);
+    let lit = look.digits;
     lcd.spacing_mut().item_spacing.y = 2.0;
-    lcd.label(caption("RX", lit));
+    lcd.label(caption("RX", &look));
     lcd.label(RichText::new(if is_b { "B" } else { "A" }).font(theme::mono_bold(if band_h > 100.0 { 42.0 } else { 34.0 })).color(lit));
     let other = match (has_b, is_b) {
         (false, _) => "B OFF",
@@ -189,7 +189,7 @@ fn start_b(app: &mut App) {
 }
 
 /// The frequency zone: the annunciators and the digits.
-fn frequency(app: &mut App, ui: &mut Ui, digits_px: f32, tint: egui::Color32) {
+fn frequency(app: &mut App, ui: &mut Ui, digits_px: f32, look: crate::lcd::Look) {
     let b = app.status.rx2.clone().filter(|_| app.active_b);
     let hz = app.active_hz();
     let mut acts = Vec::new();
@@ -205,7 +205,8 @@ fn frequency(app: &mut App, ui: &mut Ui, digits_px: f32, tint: egui::Color32) {
     };
     let is_b = b.is_some();
     let rec = if is_b { app.player_b.reading().recording.is_some() } else { app.player.reading().recording.is_some() };
-    app.vfo.tint = Some(tint);
+    app.vfo.tint = Some(look.accent);
+    app.vfo.look = Some(look);
     app.vfo.bare = true;
     app.vfo.annun = crate::vfo::Annunciators {
         rx: if is_b { "B" } else { "A" },
@@ -214,7 +215,7 @@ fn frequency(app: &mut App, ui: &mut Ui, digits_px: f32, tint: egui::Color32) {
         gain,
         // Only what is worth seeing beside the frequency: a recording, and
         // that the next memory key stores.
-        flags: if app.memory_armed { vec![("PICK A SLOT", true, tint), ("● REC", rec, theme::EMBER)] } else { vec![("● REC", rec, theme::EMBER)] },
+        flags: if app.memory_armed { vec![("PICK A SLOT", true, look.accent), ("● REC", rec, theme::EMBER)] } else { vec![("● REC", rec, theme::EMBER)] },
     };
     app.vfo.well_h = ui.available_height();
     app.vfo.ui(ui, hz, digits_px, rm, &mut acts);
@@ -231,9 +232,9 @@ fn frequency(app: &mut App, ui: &mut Ui, digits_px: f32, tint: egui::Color32) {
 
 /// The step: what the digits and the wheel move by, read on the LCD, chosen
 /// by a touch on it, and the jog keys under it.
-fn tuning(app: &mut App, lcd: &mut Ui, keys: &mut Ui, tint: egui::Color32, band_h: f32) {
+fn tuning(app: &mut App, lcd: &mut Ui, keys: &mut Ui, look: crate::lcd::Look, band_h: f32) {
     let hz = app.active_hz();
-    let lit = theme::lcd_lit(tint);
+    let lit = look.value;
     let auto = crate::tuning::mode_raster_hz(app.status.mode, hz);
     let (word, value) = match app.prefs.step_hz {
         None => ("AUTO", crate::tuning::fmt_short_hz(auto)),
@@ -242,7 +243,7 @@ fn tuning(app: &mut App, lcd: &mut Ui, keys: &mut Ui, tint: egui::Color32, band_
     let width = lcd.available_width();
     lcd.spacing_mut().item_spacing.y = 2.0;
     lcd.horizontal(|ui| {
-        ui.label(caption("STEP", lit));
+        ui.label(caption("STEP", &look));
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.label(RichText::new(word).font(theme::mono(10.0)).color(lit));
         });
@@ -271,7 +272,7 @@ fn tuning(app: &mut App, lcd: &mut Ui, keys: &mut Ui, tint: egui::Color32, band_
     });
     let lock = app.prefs.span_lock;
     // A touch on the tag sets it too, for a window too narrow for its key.
-    let tag = widgets::lcd_tag(lcd, "SPAN LOCK", tint, lock).on_hover_text("Keep the span where it is: tuning moves only the receiver (L)");
+    let tag = widgets::lcd_tag_in(lcd, "SPAN LOCK", &look, lock).on_hover_text("Keep the span where it is: tuning moves only the receiver (L)");
     if tag.hovered() {
         lcd.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
     }
@@ -440,14 +441,14 @@ fn mode_size(room: f32, label: &str, most: f32) -> f32 {
     (room / (label.chars().count() as f32 * 0.6)).min(most)
 }
 
-fn modes(app: &mut App, lcd: &mut Ui, keys: &mut Ui, tint: egui::Color32, band_h: f32) {
+fn modes(app: &mut App, lcd: &mut Ui, keys: &mut Ui, look: crate::lcd::Look, band_h: f32) {
     let b = app.status.rx2.clone().filter(|_| app.active_b);
-    let lit = theme::lcd_lit(tint);
+    let lit = look.value;
     let cur = b.as_ref().map_or(app.status.mode, |b| b.mode);
     let data = is_data(cur);
     let width = lcd.available_width();
     lcd.spacing_mut().item_spacing.y = 1.0;
-    lcd.label(caption("MODE", lit));
+    lcd.label(caption("MODE", &look));
     let tag_w = if data { 44.0 } else { 0.0 };
     let label = cur.label();
     let size = mode_size(width - tag_w - 2.0, label, if band_h > 100.0 { 34.0 } else { 26.0 });
@@ -456,7 +457,7 @@ fn modes(app: &mut App, lcd: &mut Ui, keys: &mut Ui, tint: egui::Color32, band_h
         ui.label(RichText::new(label).font(theme::mono_bold(size)).color(lit));
         if data {
             ui.add_space(4.0);
-            widgets::lcd_tag(ui, "DATA", tint, true);
+            widgets::lcd_tag_in(ui, "DATA", &look, true);
         }
     });
     if b.is_some() {
@@ -831,9 +832,9 @@ fn preset_label(w: f32) -> String {
     format!("{}k", format!("{:.1}", w / 1000.0).trim_end_matches(".0"))
 }
 
-fn filter(app: &mut App, lcd: &mut Ui, keys: &mut Ui, tint: egui::Color32) {
+fn filter(app: &mut App, lcd: &mut Ui, keys: &mut Ui, look: crate::lcd::Look) {
     let width_px = keys.available_width();
-    let lit = theme::lcd_lit(tint);
+    let lit = look.value;
     // Receiver B's filter is its mode's, set the same way with its mode named.
     let b = app.status.rx2.clone().filter(|_| app.active_b);
     let (mode, lo, hi) = match &b {
@@ -866,7 +867,7 @@ fn filter(app: &mut App, lcd: &mut Ui, keys: &mut Ui, tint: egui::Color32) {
     let named = !shaped || lcd.available_width() >= 130.0;
     lcd.horizontal(|ui| {
         if named {
-            ui.label(caption("FILTER", lit));
+            ui.label(caption("FILTER", &look));
         }
         if shaped {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -1010,7 +1011,7 @@ fn filter(app: &mut App, lcd: &mut Ui, keys: &mut Ui, tint: egui::Color32) {
             format!("{}–{}", k(l).trim_end_matches('k'), k(h))
         };
         let plot_h = lcd.available_height();
-        if let Some(edges) = crate::passband::show(lcd, plot_h, lo, hi, &range, shaped.then_some(shape), tint, (&edges, &k(width)), &around) {
+        if let Some(edges) = crate::passband::show(lcd, plot_h, lo, hi, &range, shaped.then_some(shape), &look, (&edges, &k(width)), &around) {
             set = Some(edges);
         }
         if let Some((l, h)) = set {
@@ -1044,24 +1045,24 @@ pub fn rec_key(app: &mut App, ui: &mut Ui) {
 
 /// The audio zone: muted or the gain, and the level; the mute key, the gain
 /// fader and the rest of it under them.
-fn audio(app: &mut App, lcd: &mut Ui, keys: &mut Ui, tint: egui::Color32) {
+fn audio(app: &mut App, lcd: &mut Ui, keys: &mut Ui, look: crate::lcd::Look) {
     let is_b = app.active_b && app.status.rx2.is_some();
-    let lit = theme::lcd_lit(tint);
+    let lit = look.value;
     let (vol, muted) = if is_b { (app.prefs.volume_b, app.prefs.muted_b) } else { (app.prefs.volume, app.prefs.muted) };
     let player = if is_b { app.player_b.clone() } else { app.player.clone() };
     lcd.spacing_mut().item_spacing.y = 4.0;
-    lcd.label(caption(if is_b { "AUDIO B" } else { "AUDIO A" }, lit));
+    lcd.label(caption(if is_b { "AUDIO B" } else { "AUDIO A" }, &look));
     lcd.allocate_ui_with_layout(vec2(lcd.available_width(), 22.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
         if muted {
-            widgets::lcd_tag(ui, "MUTED", tint, true);
+            widgets::lcd_tag_in(ui, "MUTED", &look, true);
         } else {
             ui.label(RichText::new(format!("{:.0}", vol * 100.0)).font(theme::mono_bold(20.0)).color(lit));
-            ui.label(caption("AF", lit));
+            ui.label(caption("AF", &look));
         }
     });
     let r = player.reading();
     let lw = lcd.available_width();
-    level_meter(lcd, lw, r.rms, r.peak, tint);
+    level_meter(lcd, lw, r.rms, r.peak, look);
     keys.spacing_mut().item_spacing.x = 5.0;
     // A narrow zone keeps the fader long: the LCD says it is muted.
     let word = if muted { "MUTED" } else { "MUTE" };
@@ -1090,7 +1091,7 @@ fn audio(app: &mut App, lcd: &mut Ui, keys: &mut Ui, tint: egui::Color32) {
                 fine: 1.0,
                 label: "AF GAIN",
                 text: |v| format!("{v:.0}"),
-                color: tint,
+                color: if is_b { theme::VIOLET } else { theme::AMBER },
                 enabled: !muted,
                 ticks: vec![],
             }
@@ -1152,7 +1153,7 @@ fn audio(app: &mut App, lcd: &mut Ui, keys: &mut Ui, tint: egui::Color32) {
 /// What the receiver is playing, −60 to 0 dBFS, on the LCD: RMS as lit
 /// segments (red from −3), the peak as a pip, ticks at −40, −20 and −6, and
 /// a clip lamp that holds a second.
-fn level_meter(ui: &mut Ui, w: f32, rms: f32, peak: f32, tint: egui::Color32) {
+fn level_meter(ui: &mut Ui, w: f32, rms: f32, peak: f32, look: crate::lcd::Look) {
     let (rect, resp) = ui.allocate_exact_size(vec2(w, 22.0), Sense::hover());
     let p = ui.painter_at(rect.expand(3.0));
     let db = |v: f32| 20.0 * v.max(1e-6).log10();
@@ -1163,7 +1164,7 @@ fn level_meter(ui: &mut Ui, w: f32, rms: f32, peak: f32, tint: egui::Color32) {
     let mut x = bar.left();
     while x < bar.right() - 0.5 {
         let d = (x - bar.left()) / bar.width() * 60.0 - 60.0;
-        let c = if d >= -3.0 { theme::ERR } else { theme::lcd_lit(tint) };
+        let c = if d >= -3.0 { theme::ERR } else { look.meter[0] };
         let seg = egui::Rect::from_min_max(egui::pos2(x, bar.top()), egui::pos2((x + 2.0).min(bar.right()), bar.bottom()));
         if x < lit_to {
             p.rect_filled(seg.expand2(vec2(1.0, 2.0)), egui::CornerRadius::same(1), alpha(c, 0.18));
@@ -1176,11 +1177,11 @@ fn level_meter(ui: &mut Ui, w: f32, rms: f32, peak: f32, tint: egui::Color32) {
     }
     if peak > 1e-4 {
         let px = x_of(db(peak));
-        p.line_segment([egui::pos2(px, bar.top() - 1.0), egui::pos2(px, bar.bottom() + 1.0)], Stroke::new(1.5, theme::text()));
+        p.line_segment([egui::pos2(px, bar.top() - 1.0), egui::pos2(px, bar.bottom() + 1.0)], Stroke::new(1.5, look.value));
     }
     for d in [-40.0, -20.0, -6.0] {
         let tx = x_of(d);
-        p.line_segment([egui::pos2(tx, bar.bottom() + 2.0), egui::pos2(tx, bar.bottom() + 5.0)], Stroke::new(1.0, theme::text_3()));
+        p.line_segment([egui::pos2(tx, bar.bottom() + 2.0), egui::pos2(tx, bar.bottom() + 5.0)], Stroke::new(1.0, look.caption));
     }
     let id = resp.id.with("clip");
     let now = ui.input(|i| i.time);
@@ -1202,7 +1203,7 @@ fn level_meter(ui: &mut Ui, w: f32, rms: f32, peak: f32, tint: egui::Color32) {
 }
 
 /// The signal zone: the reading, the meter, what is heard and the SNR.
-fn signal(app: &mut App, ui: &mut Ui, tint: egui::Color32) {
+fn signal(app: &mut App, ui: &mut Ui, look: crate::lcd::Look) {
     let is_b = app.active_b && app.status.rx2.is_some();
     let rm = app.reduce_motion();
     let mark = app.prefs.view.sql_mark;
@@ -1216,19 +1217,19 @@ fn signal(app: &mut App, ui: &mut Ui, tint: egui::Color32) {
     let err_warn = now < app.err_warn_until;
     let ((s_txt, _), (db_txt, db_col)) = if is_b { app.meter_b.readout() } else { app.meter.readout() };
     let mut calibrate = false;
-    let lit = theme::lcd_lit(tint);
-    let dim = alpha(lit, 0.66);
+    let lit = look.value;
+    let dim = look.caption;
     let reading = theme::mono_bold(if ui.available_width() >= 320.0 { 22.0 } else { 16.0 });
     ui.spacing_mut().item_spacing.y = 3.0;
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 8.0;
-        ui.label(caption(label, lit));
+        ui.label(caption(label, &look));
         fixed(ui, &s_txt, reading.clone(), lit, "S9+60");
         fixed(ui, &db_txt, theme::mono(11.0), if db_col == theme::ERR { theme::ERR } else { lit }, "-100.0 dBFS");
         if let Some(e) = err {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let t = if e.abs() >= 1_000.0 { format!("CAL {:+.1}k", e / 1000.0) } else { format!("CAL {e:+.0}") };
-                let r = widgets::lcd_tag(ui, &t, tint, err_warn)
+                let r = widgets::lcd_tag_in(ui, &t, &look, err_warn)
                     .on_hover_text("The carrier is this far from where the receiver put it: click to calibrate the ppm from it");
                 if r.hovered() {
                     ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
@@ -1238,12 +1239,12 @@ fn signal(app: &mut App, ui: &mut Ui, tint: egui::Color32) {
         }
     });
     if is_b {
-        app.meter_b.ui_bar_bare(ui, rm, mark, tint);
+        app.meter_b.ui_bar_bare(ui, rm, mark, &look);
         let snr = app.meter_b.snr.map_or(format!("{:>4} dB", "—"), |s| format!("{s:>4.1} dB"));
         ui.add(egui::Label::new(RichText::new(format!("SNR {snr} · measured from the spectrum")).font(theme::mono(10.5)).color(dim)).truncate());
     } else {
-        app.meter.ui_bar_bare(ui, rm, mark, tint);
-        status_row(app, ui, rm, lit, dim, tint);
+        app.meter.ui_bar_bare(ui, rm, mark, &look);
+        status_row(app, ui, rm, lit, dim, look);
     }
     if calibrate && let Some(l) = &app.link {
         l.post_get("/api/sdr/calibrate", json!({}), Get::Calibrate);
@@ -1253,7 +1254,7 @@ fn signal(app: &mut App, ui: &mut Ui, tint: egui::Color32) {
 /// The display's last line: what is heard (the decoder's copy, the
 /// classifier's call, a station's RDS), the stereo pilot, the notches in,
 /// and the SNR, as annunciators and lit text.
-fn status_row(app: &App, ui: &mut Ui, rm: bool, lit: egui::Color32, dim: egui::Color32, tint: egui::Color32) {
+fn status_row(app: &App, ui: &mut Ui, rm: bool, lit: egui::Color32, dim: egui::Color32, look: crate::lcd::Look) {
     let s = &app.status;
     let snr = app.meter.snr.map_or(format!("{:>4} dB", "—"), |d| format!("{d:>4.1} dB"));
     let small_lit = |t: String| RichText::new(t).font(theme::mono(10.5)).color(lit);
@@ -1272,7 +1273,7 @@ fn status_row(app: &App, ui: &mut Ui, rm: bool, lit: egui::Color32, dim: egui::C
         // A decoder owns the channel: the bay reports its copy.
         let (word, on, color, txt, tip, col) = if s.mode.is_hf_data() || s.mode == Mode::Ais {
             let (busy, line) = hf_decoder_line(app);
-            (if busy { "DECODING" } else { "LISTENING" }, busy, tint, line.clone(), Some(line), if busy { lit } else { dim })
+            (if busy { "DECODING" } else { "LISTENING" }, busy, look.tag, line.clone(), Some(line), if busy { lit } else { dim })
         } else {
             let (c, word) = app.shown_class();
             let short = |p: &str| p.split(" (").next().unwrap_or(p).to_string();
@@ -1282,10 +1283,14 @@ fn status_row(app: &App, ui: &mut Ui, rm: bool, lit: egui::Color32, dim: egui::C
                 (Some(c), None) if word != "IDLE" => (short(&c.protocol), Some(format!("{} · {}", c.protocol, c.modulation)), lit),
                 _ => (crate::app::mode_idle_text(s.mode).to_string(), None, dim),
             };
-            let color = if word == "HELD" { theme::WARN } else { tint };
+            let color = if word == "HELD" { theme::WARN } else { look.tag };
             (word, word != "IDLE", color, txt, tip, col)
         };
-        widgets::lcd_tag(ui, word, color, on);
+        if color == look.tag {
+            widgets::lcd_tag_in(ui, word, &look, on);
+        } else {
+            widgets::lcd_tag(ui, word, color, on);
+        }
         if s.mode == Mode::Wfm
             && let Some(st) = app.player.reading().stereo
         {
@@ -1295,7 +1300,7 @@ fn status_row(app: &App, ui: &mut Ui, rm: bool, lit: egui::Color32, dim: egui::C
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.label(small_lit(format!("SNR {snr}")));
             if !notches.is_empty() {
-                widgets::lcd_tag(ui, &format!("NOTCH {}", notches.join(" ")), tint, true);
+                widgets::lcd_tag_in(ui, &format!("NOTCH {}", notches.join(" ")), &look, true);
             }
             ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
                 let r = ui.add(egui::Label::new(RichText::new(txt).font(theme::sans(12.0)).color(col)).truncate());

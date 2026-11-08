@@ -28,6 +28,7 @@ mod dock;
 mod lookups;
 mod lookups_data;
 mod map;
+mod lcd;
 mod meter;
 mod net;
 mod panels;

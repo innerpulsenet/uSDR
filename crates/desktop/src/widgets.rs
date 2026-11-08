@@ -341,6 +341,15 @@ pub fn chip_key_named(ui: &mut Ui, label: &str, name: &str, on: bool, tally: Col
 /// with the word cut out of it; unlit, the word faintly there, as an
 /// unpowered segment is. Clickable where the display takes a touch.
 pub fn lcd_tag(ui: &mut Ui, text: &str, color: Color32, lit: bool) -> Response {
+    lcd_tag_colored(ui, text, color, theme::lerp(theme::ink(), Color32::BLACK, 0.4), lit)
+}
+
+/// An annunciator in a look's own colors.
+pub fn lcd_tag_in(ui: &mut Ui, text: &str, look: &crate::lcd::Look, lit: bool) -> Response {
+    lcd_tag_colored(ui, text, look.tag, look.tag_text, lit)
+}
+
+fn lcd_tag_colored(ui: &mut Ui, text: &str, color: Color32, word: Color32, lit: bool) -> Response {
     let font = theme::mono_bold(10.0);
     let g = ui.painter().layout_no_wrap(text.to_string(), font, Color32::PLACEHOLDER);
     let (r, resp) = ui.allocate_exact_size(vec2(g.size().x + 10.0, 16.0), Sense::click());
@@ -349,7 +358,7 @@ pub fn lcd_tag(ui: &mut Ui, text: &str, color: Color32, lit: bool) -> Response {
     if lit {
         p.rect_filled(r.expand(1.5), CornerRadius::same(3), alpha(color, 0.14));
         p.rect_filled(r, CornerRadius::same(2), alpha(color, 0.88));
-        p.galley(r.center() - g.size() / 2.0, g, theme::lerp(theme::ink(), Color32::BLACK, 0.4));
+        p.galley(r.center() - g.size() / 2.0, g, word);
     } else {
         p.rect_stroke(r, CornerRadius::same(2), Stroke::new(1.0, alpha(color, 0.18)), egui::StrokeKind::Inside);
         p.galley(r.center() - g.size() / 2.0, g, alpha(color, 0.38));
@@ -596,13 +605,13 @@ pub fn lamp_label(ui: &mut Ui, tone: Tone, text: &str) -> Response {
 }
 
 /// A word on a small LCD let into the plate, at least `min_w` wide.
-pub fn lcd_text(ui: &mut Ui, text: &str, color: Color32, min_w: f32) -> Response {
+pub fn lcd_text(ui: &mut Ui, text: &str, color: Color32, look: &crate::lcd::Look, min_w: f32) -> Response {
     let font = theme::mono_bold(11.0);
     let g = ui.painter().layout_no_wrap(text.to_owned(), font, color);
     let (rect, resp) = ui.allocate_exact_size(vec2((g.size().x + 16.0).max(min_w), 24.0), Sense::click());
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, text));
     let p = ui.painter_at(rect.expand(3.0));
-    crate::vfo::lcd_back(&p, rect, theme::AMBER);
+    crate::vfo::lcd_back_look(&p, rect, look);
     p.galley(rect.center() - g.size() / 2.0, g, color);
     crate::vfo::lcd_glass(&p, rect);
     resp

@@ -60,6 +60,8 @@ pub struct Prefs {
     pub span_lock: bool,
     pub motion: Motion,
     pub ground: crate::theme::Ground,
+    /// What the receiver's LCD looks like.
+    pub lcd: crate::lcd::LcdStyle,
     pub record_dir: Option<PathBuf>,
     pub side_width: f32,
     pub dock_height: f32,
@@ -108,6 +110,7 @@ impl Default for Prefs {
             span_lock: false,
             motion: Motion::System,
             ground: crate::theme::Ground::Carbon,
+            lcd: crate::lcd::LcdStyle::default(),
             record_dir: None,
             side_width: 318.0,
             dock_height: 230.0,

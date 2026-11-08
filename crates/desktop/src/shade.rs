@@ -115,8 +115,9 @@ fn frequency(app: &mut App, ui: &mut Ui, tint: egui::Color32, b_on: bool) {
     let font = theme::mono_bold(22.0);
     let size = ui.painter().layout_no_wrap(text.clone(), font.clone(), theme::text()).size();
     let (rect, resp) = ui.allocate_exact_size(vec2(size.x + 46.0, 32.0), Sense::hover());
-    crate::vfo::lcd_back(ui.painter(), rect, tint);
-    let lit = theme::lcd_lit(tint);
+    let look = app.lcd_look(b_on);
+    crate::vfo::lcd_back_look(ui.painter(), rect, &look);
+    let lit = look.digits;
     let tab = Rect::from_center_size(pos2(rect.left() + 13.0, rect.center().y), vec2(14.0, 14.0));
     ui.painter().rect_filled(tab, CornerRadius::same(3), alpha(tint, 0.9));
     ui.painter().text(tab.center(), Align2::CENTER_CENTER, if b_on { "B" } else { "A" }, theme::mono_bold(10.0), theme::ink());
@@ -147,11 +148,12 @@ fn frequency(app: &mut App, ui: &mut Ui, tint: egui::Color32, b_on: bool) {
 fn signal(app: &mut App, ui: &mut Ui, b_on: bool) {
     let rm = app.reduce_motion();
     let mark = app.prefs.view.sql_mark;
+    let look = app.lcd_look(b_on);
     let meter = if b_on { &mut app.meter_b } else { &mut app.meter };
     let ((s_txt, s_col), _) = meter.readout();
     ui.allocate_ui(vec2(190.0, 26.0), |ui| {
         ui.set_width(190.0);
-        meter.ui_bar(ui, rm, mark, if b_on { theme::VIOLET } else { theme::AMBER });
+        meter.ui_bar(ui, rm, mark, &look);
     });
     let g = ui.painter().layout_no_wrap("S9+60".into(), theme::mono_bold(15.0), s_col);
     let (r, _) = ui.allocate_exact_size(g.size(), Sense::hover());

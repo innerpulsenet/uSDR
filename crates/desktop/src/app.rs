@@ -1258,6 +1258,11 @@ impl App {
 
     // ---------- layout ----------
 
+    /// The receiver LCD's colors now, for A or B.
+    pub fn lcd_look(&self, is_b: bool) -> crate::lcd::Look {
+        crate::lcd::look(self.prefs.lcd, self.prefs.view.palette, is_b)
+    }
+
     fn masthead(&mut self, ui: &mut Ui) {
         let now = ui.input(|i| i.time);
         ui.horizontal_centered(|ui| {
@@ -1327,7 +1332,8 @@ impl App {
                 self.view_menu(ui);
                 let utc = utc_hms();
                 let wide = ui.painter().layout_no_wrap("00:00:00 UTC".into(), theme::mono_bold(11.0), egui::Color32::PLACEHOLDER).size().x + 16.0;
-                widgets::lcd_text(ui, &format!("{utc} UTC"), theme::lcd_lit(theme::AMBER), wide);
+                let look = self.lcd_look(false);
+                widgets::lcd_text(ui, &format!("{utc} UTC"), look.value, &look, wide);
                 self.connection_chip(ui);
                 self.presence_badge(ui);
                 // The dial scale takes the middle the two ends leave.
@@ -1343,7 +1349,8 @@ impl App {
     }
 
     fn connection_chip(&mut self, ui: &mut Ui) {
-        let lit = theme::lcd_lit(theme::AMBER);
+        let look = self.lcd_look(false);
+        let lit = look.value;
         let (color, text) = match &self.conn {
             Conn::Live => (lit, self.link.as_ref().map(|l| l.base.trim_start_matches("http://").to_string()).unwrap_or_default()),
             Conn::Connecting { attempt, reason } => (
@@ -1357,7 +1364,7 @@ impl App {
             Conn::Idle => (alpha(lit, 0.5), "not connected".into()),
         };
         let text: String = text.chars().take(48).collect();
-        let resp = widgets::lcd_text(ui, &text, color, 0.0);
+        let resp = widgets::lcd_text(ui, &text, color, &look, 0.0);
         // Signal bars: frame rate against the 25 fps the server sends.
         if let Conn::Live = self.conn {
             let (r, _) = ui.allocate_exact_size(vec2(18.0, 14.0), Sense::hover());
@@ -2341,6 +2348,14 @@ mod tests {
                 on_mode(&mut h, mode, b, hz);
                 h.render().expect("render").save(dir.join(format!("size-{name}-{w}.png"))).expect("save");
             }
+        }
+        // Every LCD face, the meter lit, for side by side.
+        for style in crate::lcd::LcdStyle::ALL {
+            let mut h = harness_with(Prefs { auto_connect: false, lcd: style, ..Default::default() }, 1600.0, 300.0);
+            on_mode(&mut h, Mode::Ft8, false, 14.074e6);
+            h.state_mut().app.meter.feed(-52.0, -110.0, 0.1);
+            h.run_steps(30);
+            h.render().expect("render").save(dir.join(format!("look-{style:?}.png"))).expect("save");
         }
         for g in [crate::theme::Ground::Ink, crate::theme::Ground::Night] {
             let mut h = harness_with(Prefs { auto_connect: false, ground: g, ..Default::default() }, 1600.0, 980.0);
