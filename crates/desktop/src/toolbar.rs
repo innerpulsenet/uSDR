@@ -14,8 +14,8 @@ fn small(t: impl Into<String>) -> RichText {
 }
 
 fn divider(ui: &mut Ui) {
-    let (r, _) = ui.allocate_exact_size(vec2(1.0, 18.0), egui::Sense::hover());
-    ui.painter().rect_filled(r, egui::CornerRadius::ZERO, theme::line_2());
+    let (r, _) = ui.allocate_exact_size(vec2(2.0, 18.0), egui::Sense::hover());
+    theme::groove_v(ui.painter(), r.left(), r.top(), r.bottom());
 }
 
 pub fn toolbar(app: &mut App, ui: &mut Ui) {

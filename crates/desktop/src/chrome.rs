@@ -17,12 +17,6 @@ pub struct Chrome {
 }
 
 impl Chrome {
-    /// The fill for the chrome's panels (masthead, receiver bar, column,
-    /// dock, status bar): solid, or with Mica, translucent over it.
-    pub fn panel_fill(&self) -> egui::Color32 {
-        if self.mica { alpha(theme::surface_1(), 0.62) } else { theme::surface_1() }
-    }
-
     /// The window's plate: solid, or with Mica, translucent over it.
     pub fn plate_fill(&self) -> egui::Color32 {
         if self.mica { alpha(theme::plate(), 0.62) } else { theme::plate() }

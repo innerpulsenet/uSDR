@@ -1278,27 +1278,27 @@ impl App {
                 // the protocol heard all show in the receiver bar and toolbar.
                 annunciator(ui, "RATE", &crate::tuning::fmt_short_hz(s.rate_hz), theme::text());
                 if s.lo_offset {
-                    annunciator(ui, "LO", &format!("{:+}", crate::tuning::fmt_short_hz(s.lo_offset_hz)), theme::CYAN);
+                    annunciator(ui, "LO", &format!("{:+}", crate::tuning::fmt_short_hz(s.lo_offset_hz)), theme::text());
                 }
                 sep(ui);
                 let streaming = self.pan.last_frame.is_some_and(|t| t.elapsed() < Duration::from_secs(2));
                 if !streaming {
-                    widgets::chip(ui, Tone::Idle, "ADC —");
+                    widgets::lamp_label(ui, Tone::Idle, "ADC —");
                 } else if now < self.clip_until {
-                    widgets::chip(ui, Tone::Err, "ADC CLIP");
+                    widgets::lamp_label(ui, Tone::Err, "ADC CLIP");
                 } else {
-                    widgets::chip(ui, Tone::Ok, "ADC OK");
+                    widgets::lamp_label(ui, Tone::Ok, "ADC OK");
                 }
                 let drops = s.dropped_blocks + s.lagged_blocks;
                 if let Some(e) = &s.error {
-                    widgets::chip(ui, Tone::Err, "NO RADIO").on_hover_text(e.clone());
+                    widgets::lamp_label(ui, Tone::Err, "NO RADIO").on_hover_text(e.clone());
                 } else if !streaming {
-                    widgets::chip(ui, Tone::Idle, "STREAM —");
+                    widgets::lamp_label(ui, Tone::Idle, "STREAM —");
                 } else if drops > 0 || s.lost_samples > 0 {
-                    widgets::chip(ui, Tone::Warn, &format!("STREAM {drops} drop · {} gap", s.gap_events))
+                    widgets::lamp_label(ui, Tone::Warn, &format!("STREAM {drops} drop · {} gap", s.gap_events))
                         .on_hover_text(format!("{} lost samples since start", s.lost_samples));
                 } else {
-                    widgets::chip(ui, Tone::Ok, "STREAM OK");
+                    widgets::lamp_label(ui, Tone::Ok, "STREAM OK");
                 }
                 let rec = match (self.player.reading().recording.is_some(), self.player_b.reading().recording.is_some()) {
                     (true, true) => Some("REC A B"),
@@ -1307,7 +1307,7 @@ impl App {
                     _ => None,
                 };
                 if let Some(t) = rec {
-                    widgets::chip(ui, Tone::Live, t);
+                    widgets::lamp_label(ui, Tone::Live, t);
                 }
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -1326,7 +1326,8 @@ impl App {
                 }
                 self.view_menu(ui);
                 let utc = utc_hms();
-                ui.label(egui::RichText::new(format!("{utc} UTC")).font(theme::mono(12.0)).color(theme::text_2()));
+                let wide = ui.painter().layout_no_wrap("00:00:00 UTC".into(), theme::mono_bold(11.0), egui::Color32::PLACEHOLDER).size().x + 16.0;
+                widgets::lcd_text(ui, &format!("{utc} UTC"), theme::lcd_lit(theme::AMBER), wide);
                 self.connection_chip(ui);
                 self.presence_badge(ui);
                 // The dial scale takes the middle the two ends leave.
@@ -1342,20 +1343,21 @@ impl App {
     }
 
     fn connection_chip(&mut self, ui: &mut Ui) {
-        let (tone, text) = match &self.conn {
-            Conn::Live => (Tone::Ok, self.link.as_ref().map(|l| l.base.trim_start_matches("http://").to_string()).unwrap_or_default()),
+        let lit = theme::lcd_lit(theme::AMBER);
+        let (color, text) = match &self.conn {
+            Conn::Live => (lit, self.link.as_ref().map(|l| l.base.trim_start_matches("http://").to_string()).unwrap_or_default()),
             Conn::Connecting { attempt, reason } => (
-                Tone::Warn,
+                theme::WARN,
                 match reason {
                     Some(r) if *attempt > 0 => format!("reconnecting · {r}"),
                     Some(r) => r.clone(),
                     None => "connecting".into(),
                 },
             ),
-            Conn::Idle => (Tone::Idle, "not connected".into()),
+            Conn::Idle => (alpha(lit, 0.5), "not connected".into()),
         };
         let text: String = text.chars().take(48).collect();
-        let resp = widgets::chip(ui, tone, &text);
+        let resp = widgets::lcd_text(ui, &text, color, 0.0);
         // Signal bars: frame rate against the 25 fps the server sends.
         if let Conn::Live = self.conn {
             let (r, _) = ui.allocate_exact_size(vec2(18.0, 14.0), Sense::hover());
@@ -1625,7 +1627,7 @@ impl App {
                 .interactable(false)
                 .show(ctx, |ui| {
                     egui::Frame::new()
-                        .fill(alpha(theme::surface_3(), 0.97 * fade))
+                        .fill(alpha(theme::plate(), 0.97 * fade))
                         .stroke(Stroke::new(1.0, alpha(theme::line_2(), fade)))
                         .corner_radius(CornerRadius::same(5))
                         .inner_margin(egui::Margin::symmetric(12, 8))
@@ -1808,8 +1810,8 @@ const BEZEL: f32 = 6.0;
 const EDGE: i8 = 12;
 
 fn sep(ui: &mut Ui) {
-    let (r, _) = ui.allocate_exact_size(vec2(1.0, 18.0), Sense::hover());
-    ui.painter().rect_filled(r, CornerRadius::ZERO, theme::line_2());
+    let (r, _) = ui.allocate_exact_size(vec2(2.0, 18.0), Sense::hover());
+    theme::groove_v(ui.painter(), r.left(), r.top(), r.bottom());
 }
 
 fn annunciator(ui: &mut Ui, label: &str, value: &str, color: egui::Color32) {
@@ -2016,14 +2018,19 @@ impl App {
             crate::shade::strip(self, ui);
             return;
         }
+        // The whole window is one plate: the panels below are clear over it,
+        // grooves between them where the plate is cut, the displays windows
+        // let into it.
+        theme::paint_plate(ui.painter(), ctx.viewport_rect(), self.chrome.plate_fill());
         if !live && self.chrome.own_titlebar {
             // No masthead before a connection: a bare title bar, so the
             // window can still be moved and closed.
             egui::Panel::top("titlebar")
                 .exact_size(36.0)
-                .frame(egui::Frame::new().fill(self.chrome.panel_fill()).inner_margin(egui::Margin::symmetric(14, 0)))
+                .show_separator_line(false)
+                .frame(egui::Frame::new().inner_margin(egui::Margin::symmetric(EDGE, 0)))
                 .show(ui, |ui| {
-                    crate::chrome::title_drag(ui, ui.max_rect().expand2(vec2(14.0, 0.0)));
+                    crate::chrome::title_drag(ui, ui.max_rect().expand2(vec2(EDGE as f32, 0.0)));
                     ui.horizontal_centered(|ui| {
                         let (r, _) = ui.allocate_exact_size(vec2(18.0, 18.0), Sense::hover());
                         brand::mark_static(ui.painter(), r);
@@ -2038,10 +2045,6 @@ impl App {
             return;
         }
 
-        // The whole window is one plate: the panels below are clear over it,
-        // grooves between them where the plate is cut, the displays windows
-        // let into it.
-        theme::paint_plate(ui.painter(), ctx.viewport_rect(), self.chrome.plate_fill());
         let r = egui::Panel::top("masthead")
             .exact_size(44.0)
             .show_separator_line(false)
@@ -3082,10 +3085,10 @@ mod tests {
         h.state_mut().app.status.mode = Mode::Ft8;
         h.state_mut().app.status.inspect_hz = 14_074_000.0;
         h.run_steps(3);
-        h.get_by_label("DATA").click();
+        h.get_by_role_and_label(egui::accesskit::Role::RadioButton, "DATA").click();
         h.run_steps(4);
         h.render().expect("render").save(dir.join("hf-menu.png")).expect("save");
-        h.get_by_label("DATA").click();
+        h.get_by_role_and_label(egui::accesskit::Role::RadioButton, "DATA").click();
         h.run_steps(2);
         {
             let app = &mut h.state_mut().app;
@@ -3387,7 +3390,7 @@ mod tests {
         }
         h.run_steps(4);
         h.render().expect("render").save(dir.join("ais.png")).expect("save");
-        h.get_by_label("DATA").click();
+        h.get_by_role_and_label(egui::accesskit::Role::RadioButton, "DATA").click();
         h.run_steps(4);
         h.render().expect("render").save(dir.join("data-menu.png")).expect("save");
     }

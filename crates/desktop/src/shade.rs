@@ -115,11 +115,13 @@ fn frequency(app: &mut App, ui: &mut Ui, tint: egui::Color32, b_on: bool) {
     let font = theme::mono_bold(22.0);
     let size = ui.painter().layout_no_wrap(text.clone(), font.clone(), theme::text()).size();
     let (rect, resp) = ui.allocate_exact_size(vec2(size.x + 46.0, 32.0), Sense::hover());
-    theme::well(ui.painter(), rect, Some(tint));
+    crate::vfo::lcd_back(ui.painter(), rect, tint);
+    let lit = theme::lcd_lit(tint);
     let tab = Rect::from_center_size(pos2(rect.left() + 13.0, rect.center().y), vec2(14.0, 14.0));
     ui.painter().rect_filled(tab, CornerRadius::same(3), alpha(tint, 0.9));
     ui.painter().text(tab.center(), Align2::CENTER_CENTER, if b_on { "B" } else { "A" }, theme::mono_bold(10.0), theme::ink());
-    widgets::rolling_text(ui.painter(), egui::Id::new("shade-freq"), pos2(rect.left() + 26.0, rect.center().y), Align2::LEFT_CENTER, &text, font, theme::text());
+    widgets::rolling_text(ui.painter(), egui::Id::new("shade-freq"), pos2(rect.left() + 26.0, rect.center().y), Align2::LEFT_CENTER, &text, font, lit);
+    crate::vfo::lcd_glass(ui.painter(), rect);
     if resp.hovered() {
         let notches = widgets::wheel(ui);
         if notches != 0.0 {

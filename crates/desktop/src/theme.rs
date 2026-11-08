@@ -1,8 +1,9 @@
 //! The innerpulse grounds, the ember signal and uSDR's own accent.
 //!
 //! Two grounds, from the brand's KDE themes. **Carbon** (the default) is the
-//! brand's brushed steel over cool carbon blacks: steel text, blued-steel
-//! selection, glass panels lit from above. **Ink** is the warm product ground.
+//! brand's brushed steel over cool carbon blacks: steel text, one brushed
+//! plate with glass let into it, lit from above. **Ink** is the warm product
+//! ground.
 //! uSDR belongs to the firmware & RF family, whose accent on either is amber:
 //! the VFO, the passband, the trace. Ember stays reserved for the mark,
 //! focus, the one filled action and the *live* state (recording) — never a
@@ -40,7 +41,6 @@ struct Palette {
     s: [Color32; 4],
     text: [Color32; 3],
     line: [Color32; 2],
-    select: Color32,
     /// The window's one plate.
     plate: Color32,
     /// A key's smoked glass: at rest (top, foot), then held down (top, foot).
@@ -61,7 +61,6 @@ const CARBON: Palette = Palette {
     s: [rgb(0x111317), rgb(0x171a1f), rgb(0x1f2329), rgb(0x2b3037)],
     text: [rgb(0xe3e6e9), rgb(0xb9bdc3), rgb(0x8f949b)],
     line: [hairline(227, 230, 233, 0.10), hairline(227, 230, 233, 0.18)],
-    select: rgb(0x1a73b8),
     plate: rgb(0x262a30),
     key: [rgb(0x1b1e23), rgb(0x0e1013), rgb(0x0c0d10), rgb(0x14161a)],
 };
@@ -74,7 +73,6 @@ const INK_P: Palette = Palette {
     s: [rgb(0x15110c), rgb(0x1d1812), rgb(0x282119), rgb(0x362d23)],
     text: [rgb(0xf0eae0), rgb(0xb8ae9f), rgb(0x8f8678)],
     line: [hairline(255, 236, 214, 0.11), hairline(255, 236, 214, 0.20)],
-    select: rgb(0x7a521f),
     plate: rgb(0x211b14),
     key: [rgb(0x221c15), rgb(0x13100b), rgb(0x110d09), rgb(0x1a150f)],
 };
@@ -256,7 +254,7 @@ pub fn set_ground(ctx: &egui::Context, g: Ground) {
         style.text_styles = [
             (TextStyle::Small, sans(11.0)),
             (TextStyle::Body, sans(13.0)),
-            (TextStyle::Button, sans_semibold(12.5)),
+            (TextStyle::Button, mono(11.5)),
             (TextStyle::Heading, headline(17.0)),
             (TextStyle::Monospace, mono(12.0)),
         ]
@@ -271,7 +269,7 @@ pub fn set_ground(ctx: &egui::Context, g: Ground) {
         *v = egui::Visuals::dark();
         v.override_text_color = None;
         v.panel_fill = plate();
-        v.window_fill = surface_2();
+        v.window_fill = plate();
         v.extreme_bg_color = ink();
         v.faint_bg_color = surface_2();
         v.code_bg_color = surface_3();
@@ -280,8 +278,9 @@ pub fn set_ground(ctx: &egui::Context, g: Ground) {
         v.menu_corner_radius = egui::CornerRadius::same(RADIUS);
         v.window_shadow = shadow(Depth::Floating);
         v.popup_shadow = egui::Shadow { blur: 18, offset: [0, 6], ..shadow(Depth::Floating) };
-        v.selection.bg_fill = if g != Ground::Ink { alpha(pal().select, 0.85) } else { alpha(AMBER, 0.28) };
-        v.selection.stroke = Stroke::new(1.0, if g != Ground::Ink { Color32::WHITE } else { AMBER });
+        // What is chosen is amber, in a menu as on a key.
+        v.selection.bg_fill = alpha(AMBER, 0.28);
+        v.selection.stroke = Stroke::new(1.0, AMBER);
         v.hyperlink_color = AMBER;
         v.warn_fg_color = WARN;
         v.error_fg_color = ERR;
@@ -292,6 +291,12 @@ pub fn set_ground(ctx: &egui::Context, g: Ground) {
         v.handle_shape = egui::style::HandleShape::Rect { aspect_ratio: 0.55 };
         v.text_cursor.stroke = Stroke::new(1.5, EMBER);
 
+        // The stock controls wear the keys' glass, flat: a stock button is
+        // rare enough not to be worth a mesh, and sits among the real keys.
+        let [rest_top, rest_foot, held_top, held_foot] = pal().key;
+        let face = lerp(rest_top, rest_foot, 0.5);
+        let held = lerp(held_top, held_foot, 0.5);
+        let collar = Stroke::new(1.0, Color32::from_black_alpha(190));
         let r = egui::CornerRadius::same(RADIUS);
         let w = &mut v.widgets;
         w.noninteractive.bg_fill = surface_2();
@@ -299,19 +304,19 @@ pub fn set_ground(ctx: &egui::Context, g: Ground) {
         w.noninteractive.bg_stroke = Stroke::new(1.0, line());
         w.noninteractive.fg_stroke = Stroke::new(1.0, text_2());
         w.noninteractive.corner_radius = r;
-        w.inactive.bg_fill = surface_3();
-        w.inactive.weak_bg_fill = surface_3();
-        w.inactive.bg_stroke = Stroke::new(1.0, line());
+        w.inactive.bg_fill = face;
+        w.inactive.weak_bg_fill = face;
+        w.inactive.bg_stroke = collar;
         w.inactive.fg_stroke = Stroke::new(1.0, text());
         w.inactive.corner_radius = r;
-        w.hovered.bg_fill = surface_4();
-        w.hovered.weak_bg_fill = surface_4();
+        w.hovered.bg_fill = lerp(face, Color32::WHITE, 0.06);
+        w.hovered.weak_bg_fill = lerp(face, Color32::WHITE, 0.06);
         w.hovered.bg_stroke = Stroke::new(1.0, line_2());
         w.hovered.fg_stroke = Stroke::new(1.0, text());
         w.hovered.corner_radius = r;
         w.hovered.expansion = 0.0;
-        w.active.bg_fill = surface_4();
-        w.active.weak_bg_fill = surface_4();
+        w.active.bg_fill = held;
+        w.active.weak_bg_fill = held;
         w.active.bg_stroke = Stroke::new(1.0, AMBER);
         w.active.fg_stroke = Stroke::new(1.0, text());
         w.active.corner_radius = r;

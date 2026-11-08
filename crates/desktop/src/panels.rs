@@ -430,7 +430,7 @@ fn gain(app: &mut App, ui: &mut Ui) {
             fine: 1.0,
             label: "IF AGC TARGET",
             text: |v| format!("{v:.0} dBFS"),
-            color: theme::CYAN,
+            color: theme::text_2(),
             enabled: active,
             ticks: vec![],
         }

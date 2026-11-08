@@ -173,7 +173,7 @@ fn rail(app: &mut App, ui: &mut Ui) {
             p.rect_filled(r, CornerRadius::same(4), alpha(theme::surface_4(), 0.5));
         }
         let c = if on { theme::text() } else if resp.hovered() { theme::text_2() } else { theme::text_3() };
-        p.text(pos2(r.left() + 14.0, r.center().y), Align2::LEFT_CENTER, page.label(), theme::sans(13.0), c);
+        p.text(pos2(r.left() + 14.0, r.center().y), Align2::LEFT_CENTER, page.label(), theme::mono(11.5), c);
         // A lamp on the Station page says how reporting is doing.
         if page == Page::Station
             && let Some((_, rep)) = &app.station

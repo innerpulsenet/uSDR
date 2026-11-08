@@ -9,17 +9,17 @@ use egui::{Align2, RichText, Ui, pos2, vec2};
 pub fn connect_screen(app: &mut App, ui: &mut Ui) {
     let ctx = ui.ctx().clone();
     let full = ui.max_rect();
-    ui.painter().rect_filled(full, egui::CornerRadius::ZERO, theme::ink());
     let rm = app.reduce_motion();
-    // The receive splash across the lower part of the window.
-    let splash = egui::Rect::from_min_max(pos2(full.left(), full.top() + full.height() * 0.42), full.max);
+    // The receive splash in a window across the lower part of the plate.
+    let splash = egui::Rect::from_min_max(pos2(full.left() + 12.0, full.top() + full.height() * 0.42), pos2(full.right() - 12.0, full.bottom() - 34.0));
+    theme::well(ui.painter(), splash, None);
     app.splash.paint(ui, splash, rm);
 
     let card_w = 440.0;
     let card = egui::Rect::from_center_size(pos2(full.center().x, full.top() + full.height() * 0.30), vec2(card_w, 330.0));
     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(card));
     egui::Frame::new()
-        .fill(alpha(theme::surface_2(), 0.96))
+        .fill(alpha(theme::plate(), 0.98))
         .stroke(egui::Stroke::new(1.0, theme::line_2()))
         .corner_radius(egui::CornerRadius::same(6))
         .inner_margin(egui::Margin::same(24))
@@ -106,7 +106,7 @@ pub fn reconnect_veil(app: &mut App, ctx: &egui::Context) {
         .order(egui::Order::Foreground)
         .show(ctx, |ui| {
             egui::Frame::new()
-                .fill(alpha(theme::surface_3(), 0.97))
+                .fill(alpha(theme::plate(), 0.97))
                 .stroke(egui::Stroke::new(1.0, alpha(theme::WARN, 0.5)))
                 .corner_radius(egui::CornerRadius::same(6))
                 .inner_margin(egui::Margin::symmetric(16, 10))

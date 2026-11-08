@@ -543,13 +543,7 @@ pub enum Tone {
 /// chip (recording) breathes: its lamp swells and dims over two seconds,
 /// so a recording in progress is seen to be in progress.
 pub fn chip(ui: &mut Ui, tone: Tone, text: &str) -> Response {
-    let (c, shape, lit) = match tone {
-        Tone::Ok => (theme::OK, theme::LampShape::Round, 1.0),
-        Tone::Warn => (theme::WARN, theme::LampShape::Triangle, 1.0),
-        Tone::Err => (theme::ERR, theme::LampShape::Square, 1.0),
-        Tone::Idle => (theme::text_3(), theme::LampShape::Round, 0.0),
-        Tone::Live => (theme::EMBER, theme::LampShape::Round, 1.0),
-    };
+    let (c, _, _) = tone_look(tone);
     let g = ui.painter().layout_no_wrap(text.to_owned(), theme::mono(10.5), c);
     let lamp_w = 13.0;
     let (rect, resp) = ui.allocate_exact_size(g.size() + vec2(12.0 + lamp_w, 6.0), Sense::hover());
@@ -557,6 +551,25 @@ pub fn chip(ui: &mut Ui, tone: Tone, text: &str) -> Response {
     let p = ui.painter();
     p.rect(rect, CornerRadius::same(3), alpha(c, 0.08), Stroke::new(1.0, alpha(c, 0.5)), egui::StrokeKind::Inside);
     let at = pos2(rect.left() + 6.0 + 4.0, rect.center().y);
+    tone_lamp(ui, at, tone);
+    p.galley(pos2(rect.left() + 6.0 + lamp_w, rect.top() + 3.0), g, c);
+    resp
+}
+
+/// A tone's color, its lamp's outline and how brightly it is lit.
+fn tone_look(tone: Tone) -> (Color32, theme::LampShape, f32) {
+    match tone {
+        Tone::Ok => (theme::OK, theme::LampShape::Round, 1.0),
+        Tone::Warn => (theme::WARN, theme::LampShape::Triangle, 1.0),
+        Tone::Err => (theme::ERR, theme::LampShape::Square, 1.0),
+        Tone::Idle => (theme::text_3(), theme::LampShape::Round, 0.0),
+        Tone::Live => (theme::EMBER, theme::LampShape::Round, 1.0),
+    }
+}
+
+/// A tone's lamp at `at`. The live one breathes, over two seconds.
+fn tone_lamp(ui: &Ui, at: egui::Pos2, tone: Tone) {
+    let (c, shape, lit) = tone_look(tone);
     let mut glow = lit;
     if tone == Tone::Live && !reduced(ui) {
         let t = ui.input(|i| i.time);
@@ -565,8 +578,32 @@ pub fn chip(ui: &mut Ui, tone: Tone, text: &str) -> Response {
         crate::anim::more(ui.ctx());
     }
     // Idle reads as a dark lamp in the text's gray, not as a lit one.
-    theme::lamp(p, at, 3.6, if tone == Tone::Idle { theme::text_2() } else { c }, glow, shape);
-    p.galley(pos2(rect.left() + 6.0 + lamp_w, rect.top() + 3.0), g, c);
+    theme::lamp(ui.painter(), at, 3.6, if tone == Tone::Idle { theme::text_2() } else { c }, glow, shape);
+}
+
+/// A lamp on the plate and its word engraved beside it, for a state read
+/// at a glance. A tone other than good colors the word too.
+pub fn lamp_label(ui: &mut Ui, tone: Tone, text: &str) -> Response {
+    let (c, _, _) = tone_look(tone);
+    let color = if matches!(tone, Tone::Ok | Tone::Idle) { theme::text_2() } else { c };
+    let g = ui.painter().layout_no_wrap(text.to_owned(), theme::mono(10.5), Color32::PLACEHOLDER);
+    let (rect, resp) = ui.allocate_exact_size(g.size() + vec2(13.0, 4.0), Sense::hover());
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, text));
+    tone_lamp(ui, pos2(rect.left() + 4.0, rect.center().y), tone);
+    theme::paint_engraved(ui.painter(), pos2(rect.left() + 13.0, rect.top() + 2.0), g, color);
+    resp
+}
+
+/// A word on a small LCD let into the plate, at least `min_w` wide.
+pub fn lcd_text(ui: &mut Ui, text: &str, color: Color32, min_w: f32) -> Response {
+    let font = theme::mono_bold(11.0);
+    let g = ui.painter().layout_no_wrap(text.to_owned(), font, color);
+    let (rect, resp) = ui.allocate_exact_size(vec2((g.size().x + 16.0).max(min_w), 24.0), Sense::click());
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, text));
+    let p = ui.painter_at(rect.expand(3.0));
+    crate::vfo::lcd_back(&p, rect, theme::AMBER);
+    p.galley(rect.center() - g.size() / 2.0, g, color);
+    crate::vfo::lcd_glass(&p, rect);
     resp
 }
 
