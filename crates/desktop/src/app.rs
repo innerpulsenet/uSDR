@@ -2255,6 +2255,100 @@ mod tests {
         }
     }
 
+    /// Every mode's capabilities as a server reports them, for a bar drawn
+    /// as it is on the air.
+    fn all_modes() -> Vec<proto::ModeCaps> {
+        Mode::ALL
+            .iter()
+            .map(|&mode| {
+                let sideband = matches!(mode, Mode::Usb | Mode::Lsb | Mode::Ft8 | Mode::Ft4);
+                proto::ModeCaps {
+                    mode,
+                    bandwidth_hz: if sideband { 3_000.0 } else { 12_500.0 },
+                    filter: matches!(mode, Mode::Usb | Mode::Lsb | Mode::Ft8 | Mode::Ft4 | Mode::Nfm | Mode::Am).then(|| proto::FilterRange { min_width_hz: 500.0, max_width_hz: 16_000.0, max_edge_hz: 8_000.0, symmetric: !sideband, shaped: sideband }),
+                    description: String::new(),
+                    ..Default::default()
+                }
+            })
+            .collect()
+    }
+
+    /// Put the window on `mode`, with receiver B driven if asked, and let it
+    /// settle.
+    fn on_mode(h: &mut Harness<'static, T>, mode: Mode, with_b: bool, hz: f64) {
+        {
+            let app = &mut h.state_mut().app;
+            app.server = Some(proto::ServerInfo { name: "usdr".into(), version: "test".into(), api: 2, features: vec!["filter".into(), "filter-shape".into(), "rx2".into()] });
+            app.modes = all_modes();
+            app.status.mode = mode;
+            app.status.freq_hz = hz;
+            app.status.inspect_hz = hz;
+            app.status.freq_error_hz = Some(1_900.0);
+            (app.status.tune_min_hz, app.status.tune_max_hz) = (1e3, 2e9);
+            app.status.rds = (mode == Mode::Wfm).then(|| proto::Rds { pi: "1234".into(), ps: Some("WIYY".into()), ps_steady: true, locked: true, rt: Some("98 Rock · Now playing a very long title on the station that rocks all day".into()), ..Default::default() });
+            app.status.filter_shape = proto::FilterShape::Sharp;
+            if with_b {
+                app.status.rx2 = Some(proto::SubRx { freq_hz: 14.2e6, mode: Mode::Usb, bandwidth_hz: 2_500.0, ..Default::default() });
+                app.active_b = true;
+            }
+        }
+        h.run_steps(6);
+    }
+
+    #[test]
+    fn no_two_controls_overlap_at_any_size() {
+        use egui::accesskit::Role;
+        let sizes = [(1100.0, 700.0), (1280.0, 800.0), (1400.0, 900.0), (1600.0, 980.0), (1900.0, 1080.0), (2560.0, 1440.0)];
+        let modes = [(Mode::Ft8, 14.074e6), (Mode::Usb, 14.2e6), (Mode::Am, 10e6), (Mode::Wfm, 100.5e6), (Mode::Nfm, 1_296.2e6), (Mode::P25, 851.0e6), (Mode::Ais, 162e6), (Mode::Contestia, 14.07e6), (Mode::Wefax, 8.68e6)];
+        for (w, ht) in sizes {
+            for (mode, hz) in modes {
+                for with_b in [false, true] {
+                    let mut h = harness_wh(w, ht);
+                    on_mode(&mut h, mode, with_b, hz);
+                    let keys: Vec<(String, egui::Rect)> = h
+                        .query_all(egui_kittest::kittest::By::new().predicate(|n| matches!(n.role(), Role::Button | Role::CheckBox | Role::RadioButton | Role::ComboBox | Role::Slider)))
+                        .map(|n| (egui_kittest::kittest::NodeT::accesskit_node(&n).label().unwrap_or_default().to_string(), n.rect()))
+                        // Scrolled or folded past what is shown.
+                        .filter(|(_, r)| r.bottom() <= ht - 26.0 && r.width() > 0.0)
+                        .collect();
+                    // The masthead and the receiver bar.
+                    let band_foot = 200.0;
+                    for (name, r) in &keys {
+                        if r.top() < band_foot {
+                            assert!(r.left() >= 0.0 && r.right() <= w, "{w}x{ht} {mode:?} b={with_b}: {name} runs off the window: {r:?}");
+                        }
+                    }
+                    for (i, (a, ra)) in keys.iter().enumerate() {
+                        for (b, rb) in &keys[i + 1..] {
+                            let o = ra.intersect(*rb);
+                            assert!(!(o.width() > 1.0 && o.height() > 1.0), "{w}x{ht} {mode:?} b={with_b}: {a} {ra:?} overlaps {b} {rb:?}");
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// The whole window at each size and ground, for a look by eye:
+    /// `USDR_QA_DIR=<dir> cargo test -p usdr-desktop qa_renders_every_size -- --ignored`.
+    #[test]
+    #[ignore]
+    fn qa_renders_every_size() {
+        let Some(dir) = std::env::var_os("USDR_QA_DIR").map(std::path::PathBuf::from) else { return };
+        for (w, ht) in [(1100.0, 700.0), (1280.0, 800.0), (1600.0, 980.0), (1900.0, 1080.0), (2560.0, 1440.0)] {
+            for (name, mode, hz, b) in [("ft8", Mode::Ft8, 14.074e6, false), ("wfm-b", Mode::Wfm, 100.5e6, true)] {
+                let mut h = harness_wh(w, ht);
+                on_mode(&mut h, mode, b, hz);
+                h.render().expect("render").save(dir.join(format!("size-{name}-{w}.png"))).expect("save");
+            }
+        }
+        for g in [crate::theme::Ground::Ink, crate::theme::Ground::Night] {
+            let mut h = harness_with(Prefs { auto_connect: false, ground: g, ..Default::default() }, 1600.0, 980.0);
+            on_mode(&mut h, Mode::Ft8, false, 14.074e6);
+            h.render().expect("render").save(dir.join(format!("ground-{g:?}.png"))).expect("save");
+        }
+    }
+
     #[test]
     fn a_view_that_hides_every_frame_says_so_and_shows_them_back() {
         let mut h = harness();

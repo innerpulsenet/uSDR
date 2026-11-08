@@ -118,6 +118,8 @@ fn decodes(app: &mut App, ui: &mut Ui) {
     // The families, each with what it holds, then the chosen family's own
     // decoders: one row, never wrapped, scrolled sideways where the dock is
     // too narrow for it, so the log below keeps the height it was given.
+    // The row's view, for the keys that fold into a menu when it runs out.
+    let view_w = ui.available_width();
     let row = egui::ScrollArea::horizontal().id_salt("families").scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden).auto_shrink([false, true]).show(ui, |ui| {
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 3.0;
@@ -201,7 +203,8 @@ fn decodes(app: &mut App, ui: &mut Ui) {
                         }
                     }
                     // Where to tune for the receiver's mode.
-                    crate::tunestrip::strip(app, ui);
+                    let room = view_w - (ui.cursor().left() - ui.max_rect().left());
+                    crate::tunestrip::strip(app, ui, room);
                 } else if list.len() > 1 {
                     if widgets::chip_key(ui, "ANY", app.decode_chip.is_none(), family_color(f)).clicked() {
                         app.decode_chip = None;
@@ -552,9 +555,24 @@ fn scope(app: &mut App, ui: &mut Ui) {
         }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             let rates = [5.0f32, 10.0, 25.0];
+            let labels = ["5 Hz", "10 Hz", "25 Hz"];
             let cur = rates.iter().position(|hz| (app.prefs.scope_rate_hz - hz).abs() < 0.1);
-            if let Some(i) = widgets::segmented(ui, "scope-rate", &["5 Hz", "10 Hz", "25 Hz"], cur, theme::OK) {
-                app.prefs.scope_rate_hz = rates[i];
+            let need: f32 = labels.iter().map(|l| ui.painter().layout_no_wrap(l.to_string(), widgets::key_font(), egui::Color32::PLACEHOLDER).size().x + 14.0).sum();
+            if ui.available_width() >= need + 6.0 {
+                if let Some(i) = widgets::segmented(ui, "scope-rate", &labels, cur, theme::OK) {
+                    app.prefs.scope_rate_hz = rates[i];
+                }
+            } else {
+                // A narrow scope keeps the rate as one menu, clear of the views.
+                let shown = cur.map_or("RATE", |i| labels[i]);
+                widgets::menu_chip(ui, shown, theme::AMBER, |ui| {
+                    for (hz, l) in rates.iter().zip(labels) {
+                        if ui.selectable_label((app.prefs.scope_rate_hz - hz).abs() < 0.1, l).clicked() {
+                            app.prefs.scope_rate_hz = *hz;
+                            ui.close();
+                        }
+                    }
+                });
             }
         });
     });

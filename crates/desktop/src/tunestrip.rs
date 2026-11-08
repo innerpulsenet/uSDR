@@ -67,8 +67,14 @@ fn mhz(hz: f64) -> String {
     crate::tuning::fmt_mhz(hz, 4)
 }
 
-/// The strip for the receiver's mode, on the dock's key row.
-pub fn strip(app: &mut App, ui: &mut Ui) {
+/// A band key's width, for a label of `text_w` points.
+fn band_key_w(label: &str, text_w: f32) -> f32 {
+    if label.len() <= 3 { 30.0 } else { text_w + 14.0 }
+}
+
+/// The strip for the receiver's mode, on the dock's key row, `room` left
+/// for it there: the bands are a key each while they fit, else one menu.
+pub fn strip(app: &mut App, ui: &mut Ui, room: f32) {
     let mode = app.status.mode;
     if !mode.is_hf_data() {
         return;
@@ -78,20 +84,47 @@ pub fn strip(app: &mut App, ui: &mut Ui) {
     let list = dials(mode);
     if !list.is_empty() {
         rule(ui);
-        ui.label(RichText::new("BAND").font(theme::mono(9.5)).color(theme::text_3()));
-        let mut pick = None;
-        for dial in &list {
-            let on = (rx - dial.hz).abs() < 50.0;
-            let label = if dial.band.starts_with("DWD") { dial.band.clone() } else { short(&dial.band) };
-            let mut tip = format!("{} {} · dial {} MHz", mode.label(), dial.band, mhz(dial.hz));
-            if !dial.note.is_empty() {
-                tip += &format!("\n{}", dial.note);
+        let label_of = |dial: &Dial| if dial.band.starts_with("DWD") { dial.band.clone() } else { short(&dial.band) };
+        let keys = |app_rx: f64, ui: &mut Ui, list: &[Dial]| {
+            let mut pick = None;
+            for dial in list {
+                let on = (app_rx - dial.hz).abs() < 50.0;
+                let label = label_of(dial);
+                let mut tip = format!("{} {} · dial {} MHz", mode.label(), dial.band, mhz(dial.hz));
+                if !dial.note.is_empty() {
+                    tip += &format!("\n{}", dial.note);
+                }
+                let w = if label.len() <= 3 { 30.0 } else { 0.0 };
+                if widgets::chip_key_w(ui, &label, on, tally, w).on_hover_text(tip).clicked() {
+                    pick = Some(dial.clone());
+                }
             }
-            let w = if label.len() <= 3 { 30.0 } else { 0.0 };
-            if widgets::chip_key_w(ui, &label, on, tally, w).on_hover_text(tip).clicked() {
-                pick = Some(dial.clone());
-            }
-        }
+            pick
+        };
+        // The word, the keys and what comes after them, a station menu.
+        let gap = ui.spacing().item_spacing.x;
+        let need = 44.0 + if crate::stations::for_mode(mode).is_some() { 110.0 } else { 0.0 }
+            + list.iter().map(|d| { let l = label_of(d); band_key_w(&l, ui.painter().layout_no_wrap(l.clone(), widgets::key_font(), egui::Color32::PLACEHOLDER).size().x) + gap }).sum::<f32>();
+        let pick = if need <= room {
+            ui.label(RichText::new("BAND").font(theme::mono(9.5)).color(theme::text_3()));
+            keys(rx, ui, &list)
+        } else {
+            let here = list.iter().find(|d| (rx - d.hz).abs() < 50.0);
+            let name = here.map_or("BAND".to_string(), |d| format!("BAND {}", label_of(d)));
+            widgets::menu_chip_lit(ui, &name, &[], tally, here.is_some(), |ui| {
+                ui.set_max_width(240.0);
+                ui.horizontal_wrapped(|ui| {
+                    ui.spacing_mut().item_spacing.x = 3.0;
+                    let p = keys(rx, ui, &list);
+                    if p.is_some() {
+                        ui.close();
+                    }
+                    p
+                })
+                .inner
+            })
+            .flatten()
+        };
         if let Some(d) = pick {
             tune_dial(app, mode, &d);
         }

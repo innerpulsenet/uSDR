@@ -41,8 +41,9 @@ pub fn applet_folded<R>(ui: &mut Ui, id: &str, title: &str, extra: impl FnOnce(&
 fn applet_opened<R>(ui: &mut Ui, id: &str, title: &str, first_open: bool, extra: impl FnOnce(&mut Ui), add: impl FnOnce(&mut Ui) -> R) -> Option<R> {
     let open_id = ui.make_persistent_id(("applet", id));
     let mut open = ui.data_mut(|d| *d.get_persisted_mut_or_insert_with(open_id, || first_open));
-    // A section engraved on the plate, a groove cut under it.
-    let frame = egui::Frame::new().inner_margin(egui::Margin::symmetric(0, 4));
+    // A section engraved on the plate, a groove cut under it, its right edge
+    // clear of the column's scroll bar.
+    let frame = egui::Frame::new().inner_margin(egui::Margin { left: 0, right: 10, top: 4, bottom: 4 });
     let shown = frame
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
