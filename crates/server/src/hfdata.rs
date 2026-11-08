@@ -773,7 +773,12 @@ impl HfDecoder {
                         "PSK31",
                         "text",
                         t.text,
-                        fields([("channel", t.channel.to_string()), ("df", format!("{:.0}", t.audio_hz)), ("snr", format!("{:.0}", t.snr_db))]),
+                        fields([
+                            ("channel", t.channel.to_string()),
+                            ("df", format!("{:.0}", t.audio_hz)),
+                            ("snr", format!("{:.0}", t.snr_db)),
+                            ("mode", if config().psk_baud == 62.5 { "PSK63" } else { "PSK31" }.into()),
+                        ]),
                     ));
                 }
             }

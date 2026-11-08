@@ -1,4 +1,7 @@
-//! FT8 and FT4 spots sent to PSKReporter, as the operator's station.
+//! Spots sent to PSKReporter, as the operator's station: FT8, FT4, WSPR
+//! and JS8 decodes name their sender; the keyboard modes (PSK31/63, RTTY,
+//! CW, Olivia, MFSK) give a station only when it signs (see
+//! [`signed_calls`]). WSPR decodes go to WSPRnet as well (`wsprnet.rs`).
 //!
 //! The reporter takes the decodes the receiver already broadcasts, keeps
 //! one spot per station, band and mode, and sends them every five minutes
@@ -56,8 +59,15 @@ pub struct Spot {
 
 type Key = (String, u32, &'static str);
 
+/// A keyboard-mode text stream: the mode, the decoder's channel and the
+/// dial it was heard on.
+type StreamKey = (&'static str, u32, u64);
+
 struct Inner {
     station: Station,
+    /// What each keyboard-mode stream has printed lately, upper case, and
+    /// when it last printed.
+    streams: HashMap<StreamKey, (String, Instant)>,
     queue: HashMap<Key, Spot>,
     /// When each station was last reported, and whether its locator was.
     reported: HashMap<Key, (Instant, bool)>,
@@ -111,6 +121,12 @@ fn band_of(hz: u32) -> u32 {
         (144_000, 148_000),
     ];
     let khz = hz / 1000;
+    if (135..138).contains(&khz) {
+        return 135;
+    }
+    if (472..480).contains(&khz) {
+        return 472;
+    }
     BANDS.iter().find(|(lo, hi)| (*lo..*hi).contains(&khz)).map_or(khz / 1000 * 1000, |b| b.0)
 }
 
@@ -118,6 +134,7 @@ impl Reporter {
     pub fn new(station: Station) -> Self {
         let mut inner = Inner {
             station,
+            streams: HashMap::new(),
             queue: HashMap::new(),
             reported: HashMap::new(),
             status: ReporterStatus::default(),
@@ -167,12 +184,43 @@ impl Reporter {
         g.dirty = true;
     }
 
-    /// Take a decode the receiver broadcast; FT8 and FT4 decodes that name
-    /// their sender become spots, everything else is ignored.
-    pub fn offer(&self, inspect_hz: f64, ev: &scannerd_engine::DecodeEvent) {
-        let Some(spot) = spot_of(inspect_hz, ev) else { return };
+    /// Whether a WSPR decode from this sender should go to WSPRnet.
+    pub fn reports(&self, call: &str) -> bool {
+        let g = self.inner.lock().expect("reporter");
+        g.station.report_spots && g.station.complete() && call != g.station.callsign
+    }
+
+    pub fn wsprnet_result(&self, sent: u64, err: Option<String>) {
         let mut g = self.inner.lock().expect("reporter");
-        if !(g.station.report_spots && g.station.complete()) || spot.call == g.station.callsign {
+        g.status.wsprnet_sent += sent;
+        if err.is_some() || sent > 0 {
+            g.status.wsprnet_error = err;
+        }
+        g.dirty = true;
+    }
+
+    /// Take a decode the receiver broadcast; those that name their sender,
+    /// or keyboard text in which a station signs, become spots, and
+    /// everything else is ignored.
+    pub fn offer(&self, inspect_hz: f64, ev: &scannerd_engine::DecodeEvent) {
+        let mut g = self.inner.lock().expect("reporter");
+        if !(g.station.report_spots && g.station.complete()) {
+            return;
+        }
+        let spots = match text_of(ev) {
+            Some(t) => g.heard_text(inspect_hz, t),
+            None => spot_of(inspect_hz, ev).into_iter().collect(),
+        };
+        for spot in spots {
+            g.queue_spot(spot);
+        }
+    }
+}
+
+impl Inner {
+    fn queue_spot(&mut self, spot: Spot) {
+        let g = self;
+        if spot.call == g.station.callsign {
             return;
         }
         let key: Key = (spot.call.clone(), band_of(spot.freq_hz), spot.mode);
@@ -202,6 +250,39 @@ impl Reporter {
         g.dirty = true;
     }
 
+    /// Add keyboard text to its stream and return the stations that
+    /// signed in it since last time.
+    fn heard_text(&mut self, dial_hz: f64, t: TextIn) -> Vec<Spot> {
+        let now = Instant::now();
+        self.streams.retain(|_, (_, at)| now.duration_since(*at) < STREAM_IDLE);
+        if !(100_000.0..4.0e9).contains(&dial_hz) || !(0.0..5_000.0).contains(&t.df) {
+            return Vec::new();
+        }
+        let key: StreamKey = (t.mode, t.stream, dial_hz.round() as u64);
+        let (buf, at) = self.streams.entry(key).or_insert_with(|| (String::new(), now));
+        *at = now;
+        buf.extend(t.text.chars().map(|c| if c.is_ascii() { c.to_ascii_uppercase() } else { ' ' }));
+        if buf.len() > STREAM_KEEP {
+            let cut = buf.len() - STREAM_KEEP;
+            buf.drain(..cut);
+        }
+        let (calls, used) = signed_calls(buf);
+        buf.drain(..used);
+        let at = unix_now() as u32;
+        calls
+            .into_iter()
+            .filter_map(|c| normalize_callsign(&c).ok())
+            .map(|call| Spot { call, grid: None, freq_hz: (dial_hz + t.df).round() as u32, snr_db: t.snr.round().clamp(-128.0, 127.0) as i8, mode: t.mode, at })
+            .collect()
+    }
+}
+
+/// How much of a keyboard stream is kept to find a call in, and how long
+/// a quiet stream is remembered.
+const STREAM_KEEP: usize = 240;
+const STREAM_IDLE: Duration = Duration::from_secs(600);
+
+impl Reporter {
     /// The datagrams due now, if any, with the bookkeeping for having sent
     /// them done; `None` when it is not time or there is nothing to send.
     fn due_datagrams(&self, now: Instant) -> Option<Vec<Vec<u8>>> {
@@ -273,10 +354,21 @@ impl Reporter {
         let mut tick = tokio::time::interval(Duration::from_secs(1));
         tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         let mut socket: Option<tokio::net::UdpSocket> = None;
+        let (wspr_tx, wspr_rx) = tokio::sync::mpsc::channel(512);
+        tokio::spawn(crate::wsprnet::run(std::sync::Arc::clone(&self), wspr_rx));
         loop {
             tokio::select! {
                 ev = events.recv() => match ev {
-                    Ok(SdrEvent::Decode { inspect_hz, event }) => self.offer(inspect_hz, &event),
+                    Ok(SdrEvent::Decode { inspect_hz, event }) => {
+                        self.offer(inspect_hz, &event);
+                        if let Some(w) = crate::wsprnet::spot_of(inspect_hz, &event)
+                            && self.reports(&w.call)
+                        {
+                            // A full queue means WSPRnet has been away for
+                            // hours; the newest spots are the ones dropped.
+                            let _ = wspr_tx.try_send(w);
+                        }
+                    }
                     Ok(_) => {}
                     Err(RecvError::Lagged(_)) => {}
                     Err(RecvError::Closed) => return,
@@ -330,22 +422,42 @@ async fn send_all(socket: &mut Option<tokio::net::UdpSocket>, datagrams: &[Vec<u
     Ok(())
 }
 
-/// The spot an FT8/FT4 decode makes, when it names a sender that is a
-/// real callsign (not a hash the decoder could not resolve).
+/// A WSPR type 3 sender is its call in angle brackets once the hash has
+/// been heard in full; "<...>" until then, which names no one.
+pub fn unbracket(call: &str) -> Option<&str> {
+    match call.strip_prefix('<').and_then(|c| c.strip_suffix('>')) {
+        Some(c) if c.contains('.') => None,
+        Some(c) => Some(c),
+        None if call.contains('<') || call.contains('>') => None,
+        None => Some(call),
+    }
+}
+
+/// The spot a decode makes when it names its sender as a real callsign
+/// (not a hash the decoder could not resolve): FT8, FT4, WSPR and JS8.
 fn spot_of(inspect_hz: f64, ev: &scannerd_engine::DecodeEvent) -> Option<Spot> {
-    let mode = match ev.protocol.as_str() {
-        "FT8" => "FT8",
-        "FT4" => "FT4",
-        _ => return None,
-    };
     if !ev.valid {
         return None;
     }
-    let de = ev.fields.get("de")?;
-    if de.contains('<') {
+    let (mode, sender) = match ev.protocol.as_str() {
+        "FT8" => ("FT8", ev.fields.get("de")?.as_str()),
+        "FT4" => ("FT4", ev.fields.get("de")?.as_str()),
+        "WSPR" => ("WSPR", unbracket(ev.fields.get("call")?)?),
+        "JS8" => {
+            // A heartbeat, a directed frame or a message gives "from"; a
+            // compound frame gives the sender's full call as "call".
+            let from = ev.fields.get("from").or_else(|| ev.fields.get("call"))?;
+            if ev.fields.get("implausibleCall").is_some_and(|bad| bad.split(' ').any(|b| b == from)) {
+                return None;
+            }
+            ("JS8", from.as_str())
+        }
+        _ => return None,
+    };
+    if sender.contains('<') || sender.starts_with('@') {
         return None;
     }
-    let call = normalize_callsign(de).ok()?;
+    let call = normalize_callsign(sender).ok()?;
     let df: f64 = ev.fields.get("df")?.parse().ok()?;
     if !(0.0..5_000.0).contains(&df) || !(100_000.0..4.0e9).contains(&inspect_hz) {
         return None;
@@ -353,7 +465,8 @@ fn spot_of(inspect_hz: f64, ev: &scannerd_engine::DecodeEvent) -> Option<Spot> {
     let snr: f32 = ev.fields.get("snr").and_then(|s| s.parse().ok()).unwrap_or(0.0);
     // RR73 is spelled like a square in the Arctic, and is the sign-off.
     let grid = ev.fields.get("grid").filter(|g| !g.eq_ignore_ascii_case("RR73")).and_then(|g| normalize_grid(g).ok());
-    let at = ev.fields.get("slotMs").and_then(|s| s.parse::<u64>().ok()).map_or_else(unix_now, |ms| ms / 1000);
+    let slot_ms = ev.fields.get("slotMs").or_else(|| if mode == "JS8" { ev.fields.get("slot") } else { None });
+    let at = slot_ms.and_then(|s| s.parse::<u64>().ok()).map_or_else(unix_now, |ms| ms / 1000);
     Some(Spot {
         call,
         grid,
@@ -362,6 +475,104 @@ fn spot_of(inspect_hz: f64, ev: &scannerd_engine::DecodeEvent) -> Option<Spot> {
         mode,
         at: at as u32,
     })
+}
+
+/// A piece of keyboard text from one decoder channel.
+struct TextIn<'a> {
+    mode: &'static str,
+    stream: u32,
+    df: f64,
+    snr: f32,
+    text: &'a str,
+}
+
+/// The keyboard modes PSKReporter takes, as their decoders print them.
+fn text_of(ev: &scannerd_engine::DecodeEvent) -> Option<TextIn<'_>> {
+    let f = |k: &str| ev.fields.get(k);
+    let num = |k: &str| f(k).and_then(|v| v.parse::<f64>().ok());
+    let channel = f("channel").and_then(|c| c.parse().ok()).unwrap_or(0);
+    let (mode, df, snr, text) = match ev.protocol.as_str() {
+        "PSK31" => (if f("mode").is_some_and(|m| m == "PSK63") { "PSK63" } else { "PSK31" }, num("df")?, num("snr"), ev.summary.as_str()),
+        "RTTY" => ("RTTY", num("df")?, num("snr"), ev.summary.as_str()),
+        "CW" => ("CW", num("df")?, num("snr"), f("text")?.as_str()),
+        "OLIVIA" => ("OLIVIA", num("centerHz")?, num("snrDb"), f("text")?.as_str()),
+        "MFSK" if ev.kind == "text" => {
+            let mode = match f("mode")?.as_str() {
+                "MFSK16" => "MFSK16",
+                "MFSK32" => "MFSK32",
+                "MFSK64" => "MFSK64",
+                _ => return None,
+            };
+            (mode, num("centerHz")?, num("snrDb"), f("text")?.as_str())
+        }
+        _ => return None,
+    };
+    Some(TextIn { mode, stream: channel, df, snr: snr.unwrap_or(0.0) as f32, text })
+}
+
+/// A callsign as it is written on the air, strictly: a prefix of one to
+/// three letters and digits with a letter in it, a digit, and one to four
+/// letters, with at most one portable part on either side of a slash.
+/// Strict on purpose: keyboard text is full of 5NN, TU73 and decoding
+/// noise, and a station that did not transmit must never be spotted.
+fn on_air_call(t: &str) -> bool {
+    let base = |b: &str| {
+        let b = b.as_bytes();
+        let letters = b.iter().rev().take_while(|c| c.is_ascii_uppercase()).count();
+        if !(1..=4).contains(&letters) || b.len() < letters + 2 {
+            return false;
+        }
+        let rest = &b[..b.len() - letters];
+        let (prefix, digit) = (&rest[..rest.len() - 1], rest[rest.len() - 1]);
+        digit.is_ascii_digit() && (1..=3).contains(&prefix.len()) && prefix.iter().all(u8::is_ascii_alphanumeric) && prefix.iter().any(u8::is_ascii_uppercase)
+    };
+    let parts: Vec<&str> = t.split('/').collect();
+    let small = |p: &str| (1..=4).contains(&p.len()) && p.bytes().all(|c| c.is_ascii_alphanumeric());
+    match parts.as_slice() {
+        [b] => base(b),
+        [a, b] => (base(a) && small(b)) || (small(a) && base(b)),
+        [a, b, c] => small(a) && base(b) && small(c),
+        _ => false,
+    }
+}
+
+/// The calls a station signed with in keyboard text, and how far into the
+/// text they were found (the caller drops that much). A station signs as
+/// "DE K1ABC K1ABC", "CQ K1ABC K1ABC" or "CQ TEST K1ABC K1ABC": the call
+/// after DE, CQ or TEST and the same call again within three words. The
+/// call a station is calling ("W2XYZ W2XYZ DE K1ABC") is not taken, nor a
+/// call sent once, which a decoding error could have made.
+fn signed_calls(text: &str) -> (Vec<String>, usize) {
+    let mut words: Vec<(usize, usize)> = Vec::new();
+    let mut start = None;
+    for (i, c) in text.char_indices() {
+        let word = c.is_ascii_alphanumeric() || c == '/';
+        match (word, start) {
+            (true, None) => start = Some(i),
+            (false, Some(s)) => {
+                words.push((s, i));
+                start = None;
+            }
+            _ => {}
+        }
+    }
+    // A word still being printed is not complete yet.
+    let complete = words.len();
+    let w = |i: usize| &text[words[i].0..words[i].1];
+    let (mut calls, mut used) = (Vec::new(), 0);
+    let mut i = 0;
+    while i + 2 < complete {
+        if matches!(w(i), "DE" | "CQ" | "TEST") && on_air_call(w(i + 1))
+            && let Some(j) = (i + 2..complete.min(i + 5)).find(|&j| w(j) == w(i + 1))
+        {
+            calls.push(w(i + 1).to_string());
+            used = words[j].1;
+            i = j + 1;
+            continue;
+        }
+        i += 1;
+    }
+    (calls, used)
 }
 
 fn put_str(b: &mut Vec<u8>, s: &str) {
@@ -693,11 +904,67 @@ mod tests {
         }
     }
 
+    fn ev(protocol: &str, kind: &str, kv: &[(&str, &str)]) -> scannerd_engine::DecodeEvent {
+        let fields = kv.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
+        scannerd_engine::DecodeEvent { protocol: protocol.into(), kind: kind.into(), summary: String::new(), valid: true, fields }
+    }
+
+    #[test]
+    fn wspr_and_js8_name_their_sender() {
+        let w = ev("WSPR", "type1", &[("call", "K1ABC"), ("grid", "FN42"), ("df", "1496"), ("snr", "-21"), ("slotMs", "1700000040000")]);
+        let s = spot_of(14_095_600.0, &w).unwrap();
+        assert_eq!((s.call.as_str(), s.mode, s.freq_hz, s.snr_db, s.grid.as_deref(), s.at), ("K1ABC", "WSPR", 14_097_096, -21, Some("FN42"), 1_700_000_040));
+        assert!(spot_of(14_095_600.0, &ev("WSPR", "type3", &[("call", "<...>"), ("df", "1496")])).is_none());
+        assert_eq!(spot_of(14_095_600.0, &ev("WSPR", "type3", &[("call", "<K1ABC>"), ("df", "1496")])).unwrap().call, "K1ABC");
+        let j = ev("JS8", "frame", &[("from", "K1ABC"), ("grid", "FN31"), ("df", "1200.0"), ("snr", "-5"), ("slot", "1700000015000")]);
+        let s = spot_of(7_078_000.0, &j).unwrap();
+        assert_eq!((s.call.as_str(), s.mode, s.freq_hz, s.at), ("K1ABC", "JS8", 7_079_200, 1_700_000_015));
+        assert!(spot_of(7_078_000.0, &ev("JS8", "frame", &[("from", "Q0QQ"), ("implausibleCall", "Q0QQ"), ("df", "1200")])).is_none());
+        assert!(spot_of(7_078_000.0, &ev("JS8", "frame", &[("to", "@ALLCALL"), ("df", "1200")])).is_none(), "no sender");
+    }
+
+    #[test]
+    fn keyboard_text_gives_only_stations_that_sign() {
+        let (c, _) = signed_calls("CQ CQ CQ DE K1ABC K1ABC K1ABC PSE K ");
+        assert_eq!(c, vec!["K1ABC"]);
+        let (c, _) = signed_calls("CQ TEST VE3/W1AW VE3/W1AW ");
+        assert_eq!(c, vec!["VE3/W1AW"]);
+        assert!(signed_calls("W2XYZ W2XYZ DE K1ABC KN ").0.is_empty(), "the called station did not transmit, and K1ABC was sent once");
+        assert!(signed_calls("DE K1ABC K1AB").0.is_empty(), "the repeat is still being printed");
+        assert!(signed_calls("UR RST 5NN 5NN TU 73 73 DE 5NN 5NN ").0.is_empty());
+        for bad in ["5NN", "TU73", "73", "CQ", "K1", "K1ABCDE", "1ABC", "K/1AB/C/D"] {
+            assert!(!on_air_call(bad), "{bad}");
+        }
+        for good in ["K1ABC", "9A1AA", "2E0ABC", "3DA0XX", "W1AW/P", "VE3/W1AW", "DL/K1ABC/P", "HB9X"] {
+            assert!(on_air_call(good), "{good}");
+        }
+    }
+
+    #[test]
+    fn keyboard_spots_build_up_across_decodes() {
+        let r = Reporter::new(station());
+        let mut psk = ev("PSK31", "text", &[("channel", "3"), ("df", "1500"), ("snr", "12"), ("mode", "PSK31")]);
+        for piece in ["CQ CQ de K1", "ABC K1ABC", " pse k\n"] {
+            psk.summary = piece.into();
+            r.offer(14_070_000.0, &psk);
+        }
+        let mut cw = ev("CW", "text", &[("channel", "1"), ("df", "700"), ("snr", "20"), ("text", "CQ DE W2XYZ W2XYZ K ")]);
+        r.offer(7_030_000.0, &cw);
+        cw.fields.insert("text".into(), "CQ DE W2XYZ W2XYZ K ".into());
+        r.offer(7_030_000.0, &cw);
+        let g = r.inner.lock().unwrap();
+        let mut q: Vec<(&str, u32, &str)> = g.queue.values().map(|s| (s.call.as_str(), s.freq_hz, s.mode)).collect();
+        q.sort();
+        assert_eq!(q, vec![("K1ABC", 14_071_500, "PSK31"), ("W2XYZ", 7_030_700, "CW")]);
+    }
+
     #[test]
     fn bands() {
         assert_eq!(band_of(14_075_000), 14_000);
         assert_eq!(band_of(7_074_500), 7_000);
         assert_eq!(band_of(50_313_900), 50_000);
         assert_eq!(band_of(4_625_000), 4_000);
+        assert_eq!(band_of(475_700), 472);
+        assert_eq!(band_of(137_500), 135);
     }
 }

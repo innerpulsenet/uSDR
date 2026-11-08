@@ -13,6 +13,7 @@ mod hfdata;
 mod keys;
 mod p25_keys;
 mod pskreporter;
+mod wsprnet;
 mod scan;
 mod sdr;
 mod sub_rx;

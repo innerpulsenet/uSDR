@@ -1579,13 +1579,15 @@ impl App {
         let last = rep.last_sent.map_or("none yet".into(), utc);
         let err = rep.last_error.clone().map(|e| format!("\n{e}")).unwrap_or_default();
         let tip = format!(
-            "FT8 and FT4 spots reported to PSKReporter as {} in {}.\n{} spots in {} uploads since the server started · {} stations this hour · {} waiting · last upload {last}{err}\nClick for the station settings.",
+            "Spots reported to PSKReporter as {} in {}.\n{} spots in {} uploads since the server started · {} stations this hour · {} waiting · last upload {last}{err}\n{} WSPR spots to WSPRnet{}\nClick for the station settings.",
             if st.callsign.is_empty() { "—" } else { &st.callsign },
             if st.grid.is_empty() { "—" } else { &st.grid },
             rep.spots_sent,
             rep.datagrams,
             rep.heard_hour,
-            rep.queued
+            rep.queued,
+            rep.wsprnet_sent,
+            rep.wsprnet_error.as_ref().map(|e| format!(" · {e}")).unwrap_or_default()
         );
         let resp = resp.on_hover_text(tip);
         if resp.clicked() {
@@ -3399,7 +3401,7 @@ mod tests {
         };
         let st = proto::Station { callsign: "N0CALL".into(), grid: "FM19la".into(), antenna: "40 m end-fed wire".into(), report_spots: true };
         let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
-        let rep = proto::ReporterStatus { state: proto::ReporterState::Waiting, spots_sent: 214, datagrams: 9, queued: 17, heard_hour: 48, last_sent: Some(now - 140), next_send: Some(now + 162), last_error: None };
+        let rep = proto::ReporterStatus { state: proto::ReporterState::Waiting, spots_sent: 214, datagrams: 9, queued: 17, heard_hour: 48, last_sent: Some(now - 140), next_send: Some(now + 162), last_error: None, ..Default::default() };
         h.state().wire.events.send(NetEvent::Station(st, rep)).unwrap();
         h.state_mut().app.settings_open = true;
         save(&mut h, "settings-station.png");

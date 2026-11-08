@@ -15,7 +15,9 @@ pub struct Station {
     pub grid: String,
     /// The receiving antenna, free text, shown on the reporter's map.
     pub antenna: String,
-    /// FT8 and FT4 decodes go to PSKReporter.
+    /// Decodes that name their sender go to PSKReporter (FT8, FT4, WSPR,
+    /// JS8, and the text modes when a station signs), and WSPR decodes to
+    /// WSPRnet as well.
     pub report_spots: bool,
 }
 
@@ -56,6 +58,10 @@ pub struct ReporterStatus {
     pub last_sent: Option<u64>,
     pub next_send: Option<u64>,
     pub last_error: Option<String>,
+    /// WSPR spots accepted by WSPRnet since the server started, and why
+    /// the last upload there failed, if it did.
+    pub wsprnet_sent: u64,
+    pub wsprnet_error: Option<String>,
 }
 
 /// A callsign as reports carry it: 3 to 12 characters of letters, digits

@@ -39,7 +39,7 @@ impl Page {
 
     fn blurb(self) -> &'static str {
         match self {
-            Page::Station => "Your callsign and locator, kept on the server, and the FT8 and FT4 spots it reports under them.",
+            Page::Station => "Your callsign and locator, kept on the server, and the spots it reports under them.",
             Page::Connection => "The server this app drives, and what its web page may do meanwhile.",
             Page::Audio => "Where this app plays the receivers.",
             Page::Recordings => "Where recordings and saved pictures go on this computer.",
@@ -325,7 +325,7 @@ fn station_page(app: &mut App, ui: &mut Ui) {
     let mut on = st.report_spots;
     let complete = parsed.as_ref().is_ok_and(|s| s.complete());
     if ui
-        .checkbox(&mut on, RichText::new("Report FT8 and FT4 decodes to PSKReporter").font(theme::sans(12.5)))
+        .checkbox(&mut on, RichText::new("Report spots to PSKReporter, and WSPR to WSPRnet").font(theme::sans(12.5)))
         .on_hover_text("Each station heard goes on the map at pskreporter.info, with its signal report, under your callsign.")
         .changed()
     {
@@ -339,7 +339,7 @@ fn station_page(app: &mut App, ui: &mut Ui) {
     ui.add(
         egui::Label::new(
             RichText::new(
-                "The server keeps one spot per station, band and mode and uploads every five minutes; a station is reported again within the hour only when its locator becomes known. Decodes the receiver hears while this app is closed are reported too.",
+                "FT8, FT4, WSPR and JS8 decodes name their sender. In PSK31/63, RTTY, CW, Olivia and MFSK a station is reported only when it signs, as \"DE K1ABC K1ABC\" or \"CQ K1ABC K1ABC\". The server keeps one spot per station, band and mode and uploads every five minutes; a station is reported again within the hour only when its locator becomes known. WSPR decodes also go to WSPRnet as they are heard. Decodes the receiver hears while this app is closed are reported too.",
             )
             .font(theme::sans(11.5))
             .color(theme::text_3()),
@@ -390,12 +390,16 @@ fn reporter_card(app: &App, ui: &mut Ui, st: &Station, rep: &ReporterStatus, com
                     _ => "—".into(),
                 };
                 stat(ui, "NEXT UPLOAD", next);
+                stat(ui, "WSPRNET", rep.wsprnet_sent.to_string());
             });
             if let Some(t) = rep.last_sent {
                 ui.label(RichText::new(format!("last upload {}", utc(t))).font(theme::mono(10.5)).color(theme::text_3()));
             }
             if let Some(e) = &rep.last_error {
                 ui.add(egui::Label::new(RichText::new(e).font(theme::mono(10.5)).color(theme::ERR)).wrap());
+            }
+            if let Some(e) = &rep.wsprnet_error {
+                ui.add(egui::Label::new(RichText::new(format!("WSPRnet: {e}")).font(theme::mono(10.5)).color(theme::ERR)).wrap());
             }
             if rep.state != ReporterState::Off {
                 // The card counts down while it is open.
