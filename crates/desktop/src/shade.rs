@@ -55,10 +55,10 @@ impl App {
 pub fn strip(app: &mut App, ui: &mut Ui) {
     let ctx = ui.ctx().clone();
     egui::CentralPanel::default()
-        .frame(egui::Frame::new().fill(theme::surface_1()).inner_margin(egui::Margin::symmetric(12, 6)))
+        .frame(egui::Frame::new().inner_margin(egui::Margin::symmetric(12, 6)))
         .show(ui, |ui| {
             let full = ui.max_rect().expand2(vec2(12.0, 6.0));
-            theme::paint_brushed(ui.painter(), full);
+            theme::paint_plate(ui.painter(), full, theme::plate());
             // The strip is the window's handle: drag it to move the window,
             // double-click it to roll back down. Anything on it takes its
             // own clicks first.

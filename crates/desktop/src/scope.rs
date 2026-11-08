@@ -443,7 +443,7 @@ impl Scope {
         let rect = ui.available_rect_before_wrap();
         let hover = ui.allocate_rect(rect, Sense::hover()).hover_pos();
         let painter = ui.painter_at(rect);
-        painter.rect_filled(rect, CornerRadius::same(4), theme::ink());
+        theme::well(ui.painter(), rect, None);
         let Some(live) = f else {
             painter.text(rect.center(), Align2::CENTER_CENTER, "no signal yet", theme::sans(12.0), theme::text_3());
             return;
@@ -513,7 +513,7 @@ impl Scope {
         let spec_bottom = if with_mini { left.top() + left.height() * 0.62 - axis_h } else { left.bottom() - axis_h };
         let spec = Rect::from_min_max(pos2(ruler.left(), ruler.bottom() + 2.0), pos2(left.right(), spec_bottom));
         let mini = Rect::from_min_max(pos2(spec.left(), spec.bottom() + axis_h), left.max);
-        painter.rect(spec, CornerRadius::same(3), theme::ink(), Stroke::new(1.0, theme::line()), egui::StrokeKind::Inside);
+        theme::well(&painter, spec, None);
         let x_of = |hz: f32| spec.left() + (hz - span.lo) / (span.hi - span.lo) * spec.width();
         let (bands, marks) = annotations(status, sub, from_pass);
         // Bands shaded faintly in the plot and named on the ruler; marks
@@ -1017,7 +1017,7 @@ impl Scope {
 }
 
 fn grid(painter: &egui::Painter, r: Rect, cols: usize, rows: usize) {
-    painter.rect(r, CornerRadius::same(3), theme::ink(), Stroke::new(1.0, theme::line()), egui::StrokeKind::Inside);
+    theme::well(painter, r, None);
     for i in 1..cols {
         let x = r.left() + r.width() * i as f32 / cols as f32;
         painter.line_segment([pos2(x, r.top()), pos2(x, r.bottom())], Stroke::new(1.0, theme::line()));

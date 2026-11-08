@@ -41,6 +41,8 @@ struct Palette {
     text: [Color32; 3],
     line: [Color32; 2],
     select: Color32,
+    /// The window's one plate.
+    plate: Color32,
     /// A key's smoked glass: at rest (top, foot), then held down (top, foot).
     key: [Color32; 4],
 }
@@ -60,18 +62,20 @@ const CARBON: Palette = Palette {
     text: [rgb(0xe3e6e9), rgb(0xb9bdc3), rgb(0x8f949b)],
     line: [hairline(227, 230, 233, 0.10), hairline(227, 230, 233, 0.18)],
     select: rgb(0x1a73b8),
+    plate: rgb(0x262a30),
     key: [rgb(0x1b1e23), rgb(0x0e1013), rgb(0x0c0d10), rgb(0x14161a)],
 };
 
 // Ink is visibly warmer than Carbon, not a shade off it: its surfaces step
 // up through umber rather than slate, and its hairlines are warm and a
-// touch stronger, since it has no weave to give the panels a grain.
+// touch stronger, since it has no brushing to give the plate a grain.
 const INK_P: Palette = Palette {
     ground: rgb(0x0a0908),
     s: [rgb(0x15110c), rgb(0x1d1812), rgb(0x282119), rgb(0x362d23)],
     text: [rgb(0xf0eae0), rgb(0xb8ae9f), rgb(0x8f8678)],
     line: [hairline(255, 236, 214, 0.11), hairline(255, 236, 214, 0.20)],
     select: rgb(0x7a521f),
+    plate: rgb(0x211b14),
     key: [rgb(0x221c15), rgb(0x13100b), rgb(0x110d09), rgb(0x1a150f)],
 };
 
@@ -90,7 +94,7 @@ fn pal() -> &'static Palette {
 }
 
 /// The ground's materials: Night is built on Carbon and reports it, so it
-/// keeps the weave, the brushed plate and the steel.
+/// keeps the brushed plate and the steel.
 pub fn ground() -> Ground {
     if GROUND.load(Ordering::Relaxed) == 1 { Ground::Ink } else { Ground::Carbon }
 }
@@ -102,6 +106,10 @@ pub fn night() -> bool {
 
 pub fn ink() -> Color32 {
     pal().ground
+}
+/// The plate the whole window is cut from.
+pub fn plate() -> Color32 {
+    pal().plate
 }
 pub fn surface_1() -> Color32 {
     pal().s[0]
@@ -262,7 +270,7 @@ pub fn set_ground(ctx: &egui::Context, g: Ground) {
         let v = &mut style.visuals;
         *v = egui::Visuals::dark();
         v.override_text_color = None;
-        v.panel_fill = surface_1();
+        v.panel_fill = plate();
         v.window_fill = surface_2();
         v.extreme_bg_color = ink();
         v.faint_bg_color = surface_2();
@@ -347,6 +355,7 @@ pub fn glass_top(painter: &egui::Painter, r: egui::Rect) {
 /// takes the tint of what the well belongs to (amber for A, violet for B).
 pub fn well(painter: &egui::Painter, r: egui::Rect, tint: Option<Color32>) {
     let cr = egui::CornerRadius::same(RADIUS);
+    painter.rect_stroke(r, cr, Stroke::new(1.0, Color32::from_black_alpha(190)), egui::StrokeKind::Outside);
     painter.rect_filled(r, cr, ink());
     let shade = egui::Rect::from_min_size(r.min, egui::vec2(r.width(), (r.height() * 0.4).min(7.0)));
     let mut mesh = egui::Mesh::default();
@@ -358,8 +367,8 @@ pub fn well(painter: &egui::Painter, r: egui::Rect, tint: Option<Color32>) {
     mesh.add_triangle(2, 1, 3);
     painter.add(egui::Shape::mesh(mesh));
     painter.line_segment(
-        [r.left_bottom() + egui::vec2(RADIUS as f32, 0.5), r.right_bottom() + egui::vec2(-(RADIUS as f32), 0.5)],
-        Stroke::new(1.0, Color32::from_white_alpha(14)),
+        [r.left_bottom() + egui::vec2(RADIUS as f32, 1.5), r.right_bottom() + egui::vec2(-(RADIUS as f32), 1.5)],
+        Stroke::new(1.0, Color32::from_white_alpha(28)),
     );
     let edge = tint.map_or(line(), |t| alpha(t, 0.30));
     painter.rect_stroke(r, cr, Stroke::new(1.0, edge), egui::StrokeKind::Inside);
@@ -400,46 +409,6 @@ pub fn steel_label(ui: &mut egui::Ui, s: &str, font: FontId) -> egui::Response {
     let (r, resp) = ui.allocate_exact_size(size, egui::Sense::hover());
     steel_text(ui.painter(), r.min, egui::Align2::LEFT_TOP, s, font);
     resp
-}
-
-/// The carbon-fiber weave: a 16 px twill tile, a whisper above the ground,
-/// for the masthead and the applet column. Ink has no weave.
-pub fn weave(ctx: &egui::Context) -> Option<egui::TextureHandle> {
-    if ground() != Ground::Carbon {
-        return None;
-    }
-    let id = egui::Id::new("carbon-weave");
-    if let Some(t) = ctx.data(|d| d.get_temp::<egui::TextureHandle>(id)) {
-        return Some(t);
-    }
-    let n = 16;
-    let mut px = Vec::with_capacity(n * n);
-    for y in 0..n {
-        for x in 0..n {
-            // Two 8 px tows crossing: the band a pixel sits on, and how far
-            // across the tow, give a soft rounded highlight.
-            let warp = ((x / 4 + y / 4) % 2) == 0;
-            let u = if warp { (x % 4) as f32 } else { (y % 4) as f32 };
-            let lift = (1.0 - ((u - 1.5) / 2.0).powi(2)).max(0.0);
-            let a = if warp { 5.0 + 6.0 * lift } else { 2.0 + 4.0 * lift };
-            px.push(Color32::from_white_alpha(a as u8));
-        }
-    }
-    let tex = ctx.load_texture(
-        "carbon-weave",
-        egui::ColorImage::new([n, n], px),
-        egui::TextureOptions { wrap_mode: egui::TextureWrapMode::Repeat, ..egui::TextureOptions::NEAREST },
-    );
-    ctx.data_mut(|d| d.insert_temp(id, tex.clone()));
-    Some(tex)
-}
-
-/// Tile the weave over `r`.
-pub fn paint_weave(painter: &egui::Painter, r: egui::Rect) {
-    if let Some(t) = weave(painter.ctx()) {
-        let uv = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(r.width() / 16.0, r.height() / 16.0));
-        painter.image(t.id(), r, uv, Color32::WHITE);
-    }
 }
 
 /// A lamp's outline: what shape it lights in, so a state reads by shape as
@@ -532,8 +501,8 @@ pub fn engraved(ui: &mut egui::Ui, text: &str, font: FontId, color: Color32, spa
 
 /// Brushed metal: fine horizontal grain, each line its own shade and
 /// drifting slowly along its length, as a brushed plate catches the light.
-/// A 512 x 64 tile, repeated. Carbon's faceplate only.
-pub fn brushed(ctx: &egui::Context) -> Option<egui::TextureHandle> {
+/// A 512 x 64 tile, repeated. Carbon's plate only.
+fn brushed(ctx: &egui::Context) -> Option<egui::TextureHandle> {
     if ground() != Ground::Carbon {
         return None;
     }
@@ -563,7 +532,7 @@ pub fn brushed(ctx: &egui::Context) -> Option<egui::TextureHandle> {
             let drift = knots[k] + (knots[(k + 1) % 16] - knots[k]) * t;
             let grain = rnd();
             let v = 0.45 * line + 0.35 * drift + 0.20 * grain;
-            px[y * w + x] = Color32::from_white_alpha((v * 13.0) as u8);
+            px[y * w + x] = Color32::from_white_alpha((v * 30.0) as u8);
         }
     }
     let tex = ctx.load_texture(
@@ -575,60 +544,56 @@ pub fn brushed(ctx: &egui::Context) -> Option<egui::TextureHandle> {
     Some(tex)
 }
 
-/// Brush `r` like a faceplate: the grain, and a broad soft sheen across
-/// it where the light from above falls.
-pub fn paint_brushed(painter: &egui::Painter, r: egui::Rect) {
+/// The window's one plate: `fill`, the grain tied to the screen so no panel
+/// edge shows a seam, light falling from the top and gone by the foot.
+pub fn paint_plate(painter: &egui::Painter, r: egui::Rect, fill: Color32) {
+    painter.rect_filled(r, egui::CornerRadius::ZERO, fill);
     if let Some(t) = brushed(painter.ctx()) {
-        let uv = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(r.width() / 512.0, r.height() / 64.0));
+        let uv = egui::Rect::from_min_max(egui::pos2(r.left() / 512.0, r.top() / 64.0), egui::pos2(r.right() / 512.0, r.bottom() / 64.0));
         painter.image(t.id(), r, uv, Color32::WHITE);
-        let mut mesh = egui::Mesh::default();
-        let top = Color32::from_white_alpha(9);
-        mesh.colored_vertex(r.left_top(), top);
-        mesh.colored_vertex(r.right_top(), top);
-        mesh.colored_vertex(r.left_bottom(), Color32::TRANSPARENT);
-        mesh.colored_vertex(r.right_bottom(), Color32::TRANSPARENT);
-        mesh.add_triangle(0, 1, 2);
-        mesh.add_triangle(2, 1, 3);
-        painter.add(egui::Shape::mesh(mesh));
     }
+    let top = egui::Rect::from_min_max(r.min, egui::pos2(r.right(), r.top() + r.height() * 0.22));
+    vgrad(painter, top, Color32::from_white_alpha(13), Color32::TRANSPARENT);
+    let foot = egui::Rect::from_min_max(egui::pos2(r.left(), r.bottom() - r.height() * 0.28), r.max);
+    vgrad(painter, foot, Color32::TRANSPARENT, Color32::from_black_alpha(56));
 }
 
-/// A raised, machined plate for a section of controls, as one shape to set
-/// behind what was laid out on it: brushed steel a shade lighter than the
-/// panel (on Carbon; a flat lighter face elsewhere), a sheen along its top,
-/// a chamfer lit above and shadowed below, and a soft drop shadow under it.
-pub fn plate_shape(ctx: &egui::Context, r: egui::Rect) -> egui::Shape {
-    let cr = egui::CornerRadius::same(6);
-    let mut v = Vec::new();
-    // The shadow it casts on the panel.
-    v.push(egui::Shape::rect_filled(r.translate(egui::vec2(0.0, 2.0)).expand(1.0), egui::CornerRadius::same(7), Color32::from_black_alpha(70)));
-    v.push(egui::Shape::rect_filled(r, cr, lerp(surface_2(), surface_3(), 0.55)));
-    if let Some(t) = brushed(ctx) {
-        let uv = egui::Rect::from_min_max(egui::pos2(0.13, 0.0), egui::pos2(0.13 + r.width() / 512.0, r.height() / 64.0));
-        let mut m = egui::Mesh::with_texture(t.id());
-        m.add_rect_with_uv(r.shrink(1.0), uv, Color32::from_white_alpha(150));
-        v.push(egui::Shape::mesh(m));
-    }
-    // Light falling across the top third.
-    let sheen = egui::Rect::from_min_size(r.min, egui::vec2(r.width(), r.height() * 0.4));
+/// A groove cut across the plate at `y`: a dark line and the lit lip under it.
+pub fn groove_h(painter: &egui::Painter, x0: f32, x1: f32, y: f32) {
+    let y = y.round();
+    painter.line_segment([egui::pos2(x0, y + 0.5), egui::pos2(x1, y + 0.5)], Stroke::new(1.0, Color32::from_black_alpha(158)));
+    painter.line_segment([egui::pos2(x0, y + 1.5), egui::pos2(x1, y + 1.5)], Stroke::new(1.0, Color32::from_white_alpha(23)));
+}
+
+/// A groove cut down the plate at `x`.
+pub fn groove_v(painter: &egui::Painter, x: f32, y0: f32, y1: f32) {
+    let x = x.round();
+    painter.line_segment([egui::pos2(x + 0.5, y0), egui::pos2(x + 0.5, y1)], Stroke::new(1.0, Color32::from_black_alpha(158)));
+    painter.line_segment([egui::pos2(x + 1.5, y0), egui::pos2(x + 1.5, y1)], Stroke::new(1.0, Color32::from_white_alpha(23)));
+}
+
+/// A fader's machined cap, its center line cut across the grip.
+pub fn fader_cap(painter: &egui::Painter, r: egui::Rect, hover: f32) {
+    let stops = [(0.0, rgb(0x8d939b)), (0.45, rgb(0xe7eaee)), (0.47, rgb(0x4b5057)), (0.55, rgb(0xc4c8ce)), (1.0, rgb(0x777c84))];
+    painter.rect_stroke(r, egui::CornerRadius::same(2), Stroke::new(1.0, Color32::BLACK), egui::StrokeKind::Outside);
     let mut m = egui::Mesh::default();
-    m.colored_vertex(sheen.left_top(), Color32::from_white_alpha(14));
-    m.colored_vertex(sheen.right_top(), Color32::from_white_alpha(14));
-    m.colored_vertex(sheen.left_bottom(), Color32::TRANSPARENT);
-    m.colored_vertex(sheen.right_bottom(), Color32::TRANSPARENT);
-    m.add_triangle(0, 1, 2);
-    m.add_triangle(2, 1, 3);
-    v.push(egui::Shape::mesh(m));
-    // The chamfer: lit along the top edge, shadowed along the foot.
-    v.push(egui::Shape::line_segment([r.left_top() + egui::vec2(6.0, 0.5), r.right_top() + egui::vec2(-6.0, 0.5)], Stroke::new(1.0, Color32::from_white_alpha(34))));
-    v.push(egui::Shape::line_segment([r.left_bottom() + egui::vec2(6.0, -0.5), r.right_bottom() + egui::vec2(-6.0, -0.5)], Stroke::new(1.0, Color32::from_black_alpha(150))));
-    v.push(egui::Shape::rect_stroke(r, cr, Stroke::new(1.0, Color32::from_black_alpha(110)), egui::StrokeKind::Outside));
-    egui::Shape::Vec(v)
+    for (i, (f, c)) in stops.iter().enumerate() {
+        let x = r.left() + r.width() * f;
+        let c = lerp(*c, Color32::WHITE, 0.12 * hover);
+        m.colored_vertex(egui::pos2(x, r.top()), c);
+        m.colored_vertex(egui::pos2(x, r.bottom()), c);
+        if i > 0 {
+            let k = 2 * i as u32;
+            m.add_triangle(k - 2, k - 1, k);
+            m.add_triangle(k - 1, k + 1, k);
+        }
+    }
+    painter.add(egui::Shape::mesh(m));
 }
 
-/// A key's relief over its face, `press` 0 up to 1 down. Up, it stands
-/// proud of the panel: a lit top edge and a dark foot under it. Down, it
-/// sits in the panel: shade falls into it from the top edge and the foot
+/// The filled key's relief over its face, `press` 0 up to 1 down. Up, it
+/// stands proud of the plate: a lit top edge and a dark foot under it. Down,
+/// it sits in the plate: shade falls into it from the top edge and the foot
 /// is gone.
 pub fn key_face(painter: &egui::Painter, r: egui::Rect, radius: u8, press: f32) {
     let up = 1.0 - press.clamp(0.0, 1.0);

@@ -55,7 +55,7 @@ pub fn side(app: &mut App, ui: &mut Ui) {
     let fade = |top: bool| {
         let h = 32.0;
         let edge = if top { egui::Rect::from_min_size(shown.min, vec2(shown.width(), h)) } else { egui::Rect::from_min_max(egui::pos2(shown.left(), shown.bottom() - h), shown.max) };
-        let (clear, solid) = (alpha(theme::surface_1(), 0.0), theme::surface_1());
+        let (clear, solid) = (alpha(theme::plate(), 0.0), theme::plate());
         let (a, b) = if top { (solid, clear) } else { (clear, solid) };
         let mut mesh = egui::Mesh::default();
         mesh.colored_vertex(edge.left_top(), a);

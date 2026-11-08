@@ -363,21 +363,29 @@ fn clock(app: &App, ui: &mut Ui, rows: &[Row], filter: &mut Filter, has_call: bo
     ui.horizontal(|ui| {
         ui.label(mono(format!("{} · {:02}:{:02}:{:04.1}", app.status.mode.label(), (secs / 3600) % 24, (secs / 60) % 60, start.rem_euclid(60.0)), theme::text_2()));
         ui.label(mono(if even { "1ST" } else { "2ND" }, theme::text_3())).on_hover_text("Stations take turns: one sends in the first slot of each pair, the other answers in the second");
-        let w = (ui.available_width() * 0.32).clamp(80.0, 320.0);
+        // What the newest slot held: stations, and the farthest one, when
+        // the line has room for it beside the keys at its end.
+        let width_of = |ui: &Ui, t: &str| ui.painter().layout_no_wrap(t.to_string(), theme::mono(11.0), egui::Color32::PLACEHOLDER).size().x;
+        let gap = ui.spacing().item_spacing.x;
+        let keys = width_of(ui, "CQ") + 14.0 + if has_call { width_of(ui, "TO YOU") + 14.0 + gap } else { 0.0 };
+        let room = ui.available_width() - width_of(ui, "decode in 15.0 s") - keys - 4.0 * gap;
+        let heard = rows.first().map(|first| {
+            let slot_rows: Vec<&Row> = rows.iter().take_while(|r| r.slot_ms == first.slot_ms).collect();
+            let far = slot_rows.iter().filter_map(|r| r.path.map(|p| p.0)).fold(None, |a: Option<f64>, k| Some(a.map_or(k, |a| a.max(k))));
+            let short = format!("{} heard", slot_rows.len());
+            match far.map(|k| format!("{short} · farthest {} km", km(k))) {
+                Some(long) if room - width_of(ui, &long) >= 40.0 => long,
+                _ => short,
+            }
+        });
+        let w = (room - heard.as_ref().map_or(0.0, |t| width_of(ui, t))).clamp(40.0, (ui.available_width() * 0.32).clamp(80.0, 320.0));
         let (r, _) = ui.allocate_exact_size(vec2(w, 6.0), egui::Sense::hover());
         let p = ui.painter();
         p.rect_filled(r, egui::CornerRadius::same(3), theme::ink());
         let done = egui::Rect::from_min_size(r.min, vec2(r.width() * (into / slot) as f32, r.height()));
         p.rect_filled(done, egui::CornerRadius::same(3), alpha(tally, 0.8));
         ui.label(mono(format!("decode in {:.1} s", slot - into), theme::text_3()));
-        // What the newest slot held: stations, and the farthest one.
-        if let Some(newest) = rows.first().map(|r| r.slot_ms) {
-            let slot_rows: Vec<&Row> = rows.iter().take_while(|r| r.slot_ms == newest).collect();
-            let far = slot_rows.iter().filter_map(|r| r.path.map(|p| p.0)).fold(None, |a: Option<f64>, k| Some(a.map_or(k, |a| a.max(k))));
-            let text = match far {
-                Some(k) => format!("{} heard · farthest {} km", slot_rows.len(), km(k)),
-                None => format!("{} heard", slot_rows.len()),
-            };
+        if let Some(text) = heard {
             ui.label(mono(text, theme::text_2())).on_hover_text("In the newest slot");
         }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {

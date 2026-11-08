@@ -22,6 +22,11 @@ impl Chrome {
     pub fn panel_fill(&self) -> egui::Color32 {
         if self.mica { alpha(theme::surface_1(), 0.62) } else { theme::surface_1() }
     }
+
+    /// The window's plate: solid, or with Mica, translucent over it.
+    pub fn plate_fill(&self) -> egui::Color32 {
+        if self.mica { alpha(theme::plate(), 0.62) } else { theme::plate() }
+    }
 }
 
 /// Put Mica behind the window, where Windows 11 has it. Returns whether
@@ -85,11 +90,13 @@ enum Glyph {
 fn window_key(ui: &mut Ui, glyph: Glyph, tip: &str, danger: bool) -> egui::Response {
     let (r, resp) = ui.allocate_exact_size(vec2(30.0, 26.0), Sense::click());
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, tip));
-    let h = ui.ctx().animate_bool_with_time(resp.id.with("hv"), resp.hovered(), 0.12);
+    let (_, label) = crate::widgets::paint_key(ui, &resp, r, CornerRadius::same(theme::RADIUS), false, theme::AMBER);
+    let h = ui.ctx().animate_bool_with_time(resp.id.with("danger"), danger && resp.hovered(), 0.12);
     let p = ui.painter();
-    let plate = if danger { alpha(theme::ACTION, 0.9 * h) } else { alpha(theme::surface_4(), h) };
-    p.rect_filled(r, CornerRadius::same(theme::RADIUS), plate);
-    let c = if danger { theme::lerp(theme::text_2(), egui::Color32::WHITE, h) } else { theme::lerp(theme::text_2(), theme::text(), h) };
+    if h > 0.0 {
+        p.rect_filled(r, CornerRadius::same(theme::RADIUS), alpha(theme::ACTION, 0.9 * h));
+    }
+    let c = theme::lerp(label, egui::Color32::WHITE, h);
     let s = Stroke::new(1.2, c);
     let m = r.center();
     let d = 4.5;

@@ -26,11 +26,12 @@ pub fn dock(app: &mut App, ui: &mut Ui) {
             .resizable(true)
             .default_size(app.prefs.scope_width.min(scope_max))
             .size_range(240.0..=scope_max)
-            .frame(egui::Frame::new().inner_margin(egui::Margin { left: 10, right: 0, top: 0, bottom: 0 }))
+            .show_separator_line(false)
+            .frame(egui::Frame::new().inner_margin(egui::Margin { left: 12, right: 0, top: 0, bottom: 0 }))
             .show(ui, |ui| scope(app, ui));
         app.prefs.scope_width = resp.response.rect.width();
     }
-    let row = ui.horizontal(|ui| {
+    ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 4.0;
         let tabs = [
             (DockTab::Decodes, TAB_LABELS[0], Some(app.decodes.len())),
@@ -60,18 +61,13 @@ pub fn dock(app: &mut App, ui: &mut Ui) {
             }
         });
     });
-    // A rule the width of the logs under the tabs.
-    let y = row.response.rect.bottom();
-    let x1 = ui.max_rect().right();
-    let p = ui.painter();
-    p.line_segment([egui::pos2(row.response.rect.left(), y), egui::pos2(x1, y)], egui::Stroke::new(1.0, theme::line()));
     ui.add_space(6.0);
     match app.dock_tab {
         DockTab::Decodes => decodes(app, ui),
-        DockTab::Classifier => classifier(app, ui),
-        DockTab::Calls => calls(app, ui),
-        DockTab::Scan => scan(app, ui),
-        DockTab::Map => crate::map::show(app, ui),
+        DockTab::Classifier => widgets::window(ui, |ui| classifier(app, ui)),
+        DockTab::Calls => widgets::window(ui, |ui| calls(app, ui)),
+        DockTab::Scan => widgets::window(ui, |ui| scan(app, ui)),
+        DockTab::Map => widgets::window(ui, |ui| crate::map::show(app, ui)),
     }
 }
 
@@ -224,7 +220,7 @@ fn decodes(app: &mut App, ui: &mut Ui) {
     if whole - row.state.offset.x > shown.width() + 1.0 {
         let edge = egui::Rect::from_min_max(egui::pos2(shown.right() - 28.0, shown.top()), shown.max);
         let mut mesh = egui::Mesh::default();
-        let (clear, solid) = (alpha(theme::surface_1(), 0.0), theme::surface_1());
+        let (clear, solid) = (alpha(theme::plate(), 0.0), theme::plate());
         mesh.colored_vertex(edge.left_top(), clear);
         mesh.colored_vertex(edge.right_top(), solid);
         mesh.colored_vertex(edge.right_bottom(), solid);
@@ -233,7 +229,12 @@ fn decodes(app: &mut App, ui: &mut Ui) {
         mesh.add_triangle(0, 2, 3);
         ui.painter().add(egui::Shape::mesh(mesh));
     }
-    ui.add_space(2.0);
+    ui.add_space(4.0);
+    widgets::window(ui, |ui| decode_log(app, ui));
+}
+
+/// The log itself, or the receiver's mode's workspace, in its window.
+fn decode_log(app: &mut App, ui: &mut Ui) {
     let filter = app.decode_filter.to_lowercase();
     let chip = app.decode_chip.and_then(|c| crate::decoders::DECODERS.iter().find(|d| d.chip == c));
     let family = app.decode_family;

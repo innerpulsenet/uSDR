@@ -41,10 +41,8 @@ pub fn applet_folded<R>(ui: &mut Ui, id: &str, title: &str, extra: impl FnOnce(&
 fn applet_opened<R>(ui: &mut Ui, id: &str, title: &str, first_open: bool, extra: impl FnOnce(&mut Ui), add: impl FnOnce(&mut Ui) -> R) -> Option<R> {
     let open_id = ui.make_persistent_id(("applet", id));
     let mut open = ui.data_mut(|d| *d.get_persisted_mut_or_insert_with(open_id, || first_open));
-    // A raised plate, as the bar's sections are: set behind the card once
-    // its height is known.
-    let slot = ui.painter().add(egui::Shape::Noop);
-    let frame = egui::Frame::new().inner_margin(egui::Margin::symmetric(10, 8));
+    // A section engraved on the plate, a groove cut under it.
+    let frame = egui::Frame::new().inner_margin(egui::Margin::symmetric(0, 4));
     let shown = frame
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
@@ -90,7 +88,8 @@ fn applet_opened<R>(ui: &mut Ui, id: &str, title: &str, first_open: bool, extra:
             }
             Some(r)
         });
-    ui.painter().set(slot, theme::plate_shape(ui.ctx(), shown.response.rect));
+    let r = shown.response.rect;
+    theme::groove_h(ui.painter(), r.left(), r.right(), r.bottom() + 2.0);
     let out = shown.inner;
     ui.data_mut(|d| d.insert_persisted(open_id, open));
     out
@@ -194,6 +193,17 @@ pub fn glass<R>(ui: &mut Ui, id: egui::Id, tint: Color32, add: impl FnOnce(&mut 
     }
     crate::vfo::lcd_glass(ui.painter(), rect);
     r
+}
+
+/// A window let into the plate over the room left in `ui`, `add` laid out
+/// in it.
+pub fn window<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
+    let r = ui.available_rect_before_wrap();
+    theme::well(ui.painter(), r, None);
+    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(r.shrink2(vec2(8.0, 6.0))).layout(egui::Layout::top_down(egui::Align::Min)));
+    let out = add(&mut child);
+    ui.advance_cursor_after_rect(r);
+    out
 }
 
 /// A selector as a small LCD window: `caption` printed faint, `value` lit,
@@ -419,8 +429,8 @@ impl<F: Fn(f64) -> String> Fader<'_, F> {
             p.text(rect.right_top(), Align2::RIGHT_TOP, &value_text, theme::mono_bold(11.5), alpha(self.color, a.max(0.7)));
             Rect::from_min_max(pos2(rect.left() + 4.0, rect.top() + 18.0), pos2(rect.right() - 4.0, rect.top() + 24.0))
         };
-        p.rect_filled(track, CornerRadius::same(2), theme::ink());
-        p.rect_stroke(track, CornerRadius::same(2), Stroke::new(1.0, theme::line()), egui::StrokeKind::Outside);
+        p.rect(track, CornerRadius::same(2), theme::ink(), Stroke::new(1.0, Color32::from_black_alpha(200)), egui::StrokeKind::Outside);
+        p.line_segment([pos2(track.left() + 2.0, track.bottom() + 1.5), pos2(track.right() - 2.0, track.bottom() + 1.5)], Stroke::new(1.0, Color32::from_white_alpha(26)));
         let span = (self.max - self.min).max(1e-9);
         let t = ((*self.value - self.min) / span).clamp(0.0, 1.0) as f32;
         let fill = Rect::from_min_max(track.min, pos2(track.left() + track.width() * t, track.bottom()));
@@ -434,9 +444,7 @@ impl<F: Fn(f64) -> String> Fader<'_, F> {
         mesh.add_triangle(2, 1, 3);
         p.add(egui::Shape::mesh(mesh));
         let hover = ui.ctx().animate_bool_with_time(resp.id.with("hv"), resp.hovered() || resp.dragged(), 0.12);
-        let thumb = Rect::from_center_size(pos2(fill.right(), track.center().y), vec2(8.0, 16.0 + 2.0 * hover));
-        p.rect(thumb, CornerRadius::same(2), theme::lerp(theme::text_2(), theme::text(), hover), Stroke::new(1.0, theme::ink()), egui::StrokeKind::Inside);
-        p.line_segment([pos2(thumb.center().x, thumb.top() + 4.0), pos2(thumb.center().x, thumb.bottom() - 4.0)], Stroke::new(1.0, alpha(theme::ink(), 0.7)));
+        theme::fader_cap(p, Rect::from_center_size(pos2(fill.right(), track.center().y), vec2(10.0, 16.0)), hover);
         for (f, label) in &self.ticks {
             let x = track.left() + track.width() * f;
             p.line_segment([pos2(x, track.bottom() + 2.0), pos2(x, track.bottom() + 5.0)], Stroke::new(1.0, theme::text_3()));

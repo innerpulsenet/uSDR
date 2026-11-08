@@ -23,20 +23,14 @@ fn bay<R>(ui: &mut Ui, label: &str, add: impl FnOnce(&mut Ui) -> R) -> R {
     bay_with(ui, |ui| theme::engraved(ui, label, theme::mono(10.5), theme::text_3(), 1.0, egui::Sense::hover()), add)
 }
 
-/// A bay whose top line is more than its label: a section of controls,
-/// on its own raised plate the height of the bar's displays.
+/// A bay whose top line is more than its label: a section of controls on
+/// the plate.
 fn bay_with<R, H>(ui: &mut Ui, head: impl FnOnce(&mut Ui) -> H, add: impl FnOnce(&mut Ui) -> R) -> R {
-    // The plate goes behind what is laid out on it, so its place is kept
-    // and it is drawn once the bay's width is known.
-    let slot = ui.painter().add(egui::Shape::Noop);
     let resp = ui.vertical(|ui| {
         ui.spacing_mut().item_spacing.y = 4.0;
         head(ui);
         add(ui)
     });
-    let c = resp.response.rect;
-    let plate = egui::Rect::from_min_max(egui::pos2(c.left() - 7.0, c.top() - 1.0), egui::pos2(c.right() + 7.0, c.top() - 1.0 + READOUT_H));
-    ui.painter().set(slot, theme::plate_shape(ui.ctx(), plate));
     ui.add_space(12.0);
     resp.inner
 }

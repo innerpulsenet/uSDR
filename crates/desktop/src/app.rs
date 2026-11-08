@@ -1806,6 +1806,8 @@ impl App {
 
 /// The faceplate's margin around the display, points.
 const BEZEL: f32 = 6.0;
+/// Every row's distance from the window's edge, so their ends line up.
+const EDGE: i8 = 12;
 
 fn sep(ui: &mut Ui) {
     let (r, _) = ui.allocate_exact_size(vec2(1.0, 18.0), Sense::hover());
@@ -1822,9 +1824,8 @@ fn annunciator(ui: &mut Ui, label: &str, value: &str, color: egui::Color32) {
 
 pub fn icon_button(ui: &mut Ui, glyph: &str, tip: &str) -> egui::Response {
     let (r, resp) = ui.allocate_exact_size(vec2(26.0, 24.0), Sense::click());
-    let h = ui.ctx().animate_bool_with_time(resp.id, resp.hovered(), 0.12);
-    ui.painter().rect_filled(r, CornerRadius::same(4), alpha(theme::surface_4(), h));
-    ui.painter().text(r.center(), Align2::CENTER_CENTER, glyph, theme::sans(14.0), theme::lerp(theme::text_2(), theme::text(), h));
+    let (press, c) = widgets::paint_key(ui, &resp, r, CornerRadius::same(4), false, theme::AMBER);
+    ui.painter().text(r.center() + vec2(0.0, press), Align2::CENTER_CENTER, glyph, theme::sans(14.0), c);
     resp.on_hover_text(tip)
 }
 
@@ -2039,30 +2040,41 @@ impl App {
             return;
         }
 
-        egui::Panel::top("masthead")
+        // The whole window is one plate: the panels below are clear over it,
+        // grooves between them where the plate is cut, the displays windows
+        // let into it.
+        theme::paint_plate(ui.painter(), ctx.viewport_rect(), self.chrome.plate_fill());
+        let r = egui::Panel::top("masthead")
             .exact_size(44.0)
-            .frame(egui::Frame::new().fill(self.chrome.panel_fill()).inner_margin(egui::Margin::symmetric(14, 0)).stroke(Stroke::new(1.0, theme::line())))
+            .show_separator_line(false)
+            .frame(egui::Frame::new().inner_margin(egui::Margin::symmetric(EDGE, 0)))
             .show(ui, |ui| {
-                theme::paint_weave(ui.painter(), ui.max_rect().expand2(vec2(14.0, 0.0)));
                 if self.chrome.own_titlebar {
-                    crate::chrome::title_drag(ui, ui.max_rect().expand2(vec2(14.0, 0.0)));
+                    crate::chrome::title_drag(ui, ui.max_rect().expand2(vec2(EDGE as f32, 0.0)));
                 }
                 self.masthead(ui)
-            });
-        egui::Panel::bottom("statusbar")
+            })
+            .response
+            .rect;
+        theme::groove_h(ui.painter(), r.left(), r.right(), r.bottom() - 2.0);
+        let r = egui::Panel::bottom("statusbar")
             .exact_size(26.0)
-            .frame(egui::Frame::new().fill(self.chrome.panel_fill()).inner_margin(egui::Margin::symmetric(14, 0)).stroke(Stroke::new(1.0, theme::line())))
-            .show(ui, |ui| self.status_bar(ui));
+            .show_separator_line(false)
+            .frame(egui::Frame::new().inner_margin(egui::Margin::symmetric(EDGE, 0)))
+            .show(ui, |ui| self.status_bar(ui))
+            .response
+            .rect;
+        theme::groove_h(ui.painter(), r.left(), r.right(), r.top());
         // The receiver bar: the receiver being driven, across the window.
-        egui::Panel::top("receiver")
-            .frame(egui::Frame::new().fill(self.chrome.panel_fill()).inner_margin(egui::Margin::symmetric(14, 8)).stroke(Stroke::new(1.0, theme::line())))
+        let r = egui::Panel::top("receiver")
+            .show_separator_line(false)
+            .frame(egui::Frame::new().inner_margin(egui::Margin::symmetric(EDGE, 8)))
             .show(ui, |ui| {
-                theme::paint_brushed(ui.painter(), ui.max_rect().expand2(vec2(14.0, 8.0)));
                 ui.set_width(ui.available_width());
                 crate::bar::receiver_bar(self, ui);
                 // The index tick: the bar belongs to the active receiver; it
                 // takes B's violet as the wash does.
-                let r = ui.max_rect().expand2(vec2(14.0, 8.0));
+                let r = ui.max_rect().expand2(vec2(EDGE as f32, 8.0));
                 let on_b = self.active_b && self.status.rx2.is_some();
                 let b = ui.ctx().animate_bool_with_time(egui::Id::new("rx-b-wash"), on_b, 0.2);
                 ui.painter().rect_filled(Rect::from_min_size(r.left_top(), vec2(16.0, 2.0)), CornerRadius::ZERO, theme::lerp(theme::EMBER, theme::VIOLET, b));
@@ -2072,7 +2084,10 @@ impl App {
                 let sweep = if rm { if on_b { 1.0 } else { 0.0 } } else { ui.ctx().animate_bool_with_time(egui::Id::new("rx-edge-sweep"), on_b, 0.45) };
                 let travel = (sweep * std::f32::consts::PI).sin() * 0.6;
                 theme::edge_light(ui.painter(), r.shrink2(vec2(0.0, 0.0)), theme::lerp(theme::AMBER, theme::VIOLET, b), travel);
-            });
+            })
+            .response
+            .rect;
+        theme::groove_h(ui.painter(), r.left(), r.right(), r.bottom() - 2.0);
         // The toolbar's own items take about 880 px; the memories about 140
         // for their label and STORE and a fixed width a slot, so where they
         // go depends on the window alone, never on how many are stored.
@@ -2082,10 +2097,14 @@ impl App {
         let mem_w = 140.0 + (crate::bar::SLOT_W + 4.0) * slots as f32;
         self.memories_on_toolbar = toolbar_room >= 880.0 + mem_w;
         if self.prefs.show_memories && !self.memories_on_toolbar {
-            egui::Panel::top("memories")
+            let r = egui::Panel::top("memories")
                 .exact_size(30.0)
-                .frame(egui::Frame::new().fill(self.chrome.panel_fill()).inner_margin(egui::Margin::symmetric(14, 4)).stroke(Stroke::new(1.0, theme::line())))
-                .show(ui, |ui| crate::bar::memory_row(self, ui));
+                .show_separator_line(false)
+                .frame(egui::Frame::new().inner_margin(egui::Margin::symmetric(EDGE, 4)))
+                .show(ui, |ui| crate::bar::memory_row(self, ui))
+                .response
+                .rect;
+            theme::groove_h(ui.painter(), r.left(), r.right(), r.bottom() - 2.0);
         }
         // The display is the instrument: the column and the dock may not
         // take more than about a third of the width or two fifths of the
@@ -2097,39 +2116,37 @@ impl App {
                 .resizable(true)
                 .default_size(self.prefs.side_width.min(side_max))
                 .size_range(260.0..=side_max)
-                .frame(egui::Frame::new().fill(self.chrome.panel_fill()).inner_margin(egui::Margin::same(10)))
-                .show(ui, |ui| {
-                    theme::paint_weave(ui.painter(), ui.max_rect().expand(10.0));
-                    crate::panels::side(self, ui);
-                });
-            self.prefs.side_width = resp.response.rect.width();
+                .show_separator_line(false)
+                .frame(egui::Frame::new().inner_margin(egui::Margin::symmetric(EDGE, 8)))
+                .show(ui, |ui| crate::panels::side(self, ui));
+            let r = resp.response.rect;
+            theme::groove_v(ui.painter(), r.left(), r.top() + 6.0, r.bottom() - 6.0);
+            self.prefs.side_width = r.width();
         }
         if self.prefs.show_dock {
             let resp = egui::Panel::bottom("dock")
                 .resizable(true)
                 .default_size(self.prefs.dock_height.min(dock_max))
                 .size_range(120.0..=dock_max)
-                .frame(egui::Frame::new().fill(self.chrome.panel_fill()).inner_margin(egui::Margin::symmetric(10, 8)).stroke(Stroke::new(1.0, theme::line())))
+                .show_separator_line(false)
+                .frame(egui::Frame::new().inner_margin(egui::Margin::symmetric(EDGE, 8)))
                 .show(ui, |ui| crate::dock::dock(self, ui));
             self.prefs.dock_height = resp.response.rect.height();
         }
-        let chrome_fill = self.chrome.panel_fill();
         egui::CentralPanel::default()
-            .frame(egui::Frame::new().fill(if self.chrome.mica { egui::Color32::TRANSPARENT } else { theme::ink() }).inner_margin(egui::Margin::same(0)))
+            .frame(egui::Frame::new().inner_margin(egui::Margin::same(0)))
             .show(ui, |ui| {
                 egui::Frame::new()
-                    .fill(chrome_fill)
-                    .inner_margin(egui::Margin::symmetric(10, 2))
+                    .inner_margin(egui::Margin::symmetric(EDGE, 2))
                     .show(ui, |ui| {
                         ui.set_width(ui.available_width());
                         ui.set_height(28.0);
                         crate::toolbar::toolbar(self, ui);
                     });
-                // The display set into the faceplate behind a bezel.
+                // The display let into the plate behind a bezel, its edges
+                // on the same line as the keys above and the windows below.
                 let plate = ui.available_rect_before_wrap();
-                ui.painter().rect_filled(plate, CornerRadius::ZERO, chrome_fill);
-                theme::paint_weave(ui.painter(), plate);
-                let screen = plate.shrink(BEZEL);
+                let screen = plate.shrink2(vec2(EDGE as f32, BEZEL));
                 let mut child = ui.new_child(egui::UiBuilder::new().max_rect(screen));
                 self.panafall(&mut child);
                 theme::bezel(ui.painter(), screen, BEZEL);
