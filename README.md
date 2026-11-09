@@ -433,7 +433,10 @@ ssh root@172.16.0.216 systemctl status sdrplay soapyremote-server
 which keeps what SDRplay's API reports through its events (the IF AGC's gain
 reduction, and power overload) and answers `readSetting` for `live_ifgr`,
 `live_lna_gr`, `overload` and `overload_count`. The daemon reads them where
-they exist and does without them where they do not. Applied 2026-11-03; the
+they exist and does without them where they do not. It also runs the IF AGC in
+the API's 50 Hz mode: the mode the stock driver picks, with attack and decay
+left at zero, has no damping, and after one large step it swung the IF by 20 dB
+or more until the stream was reopened. Applied 2026-11-03; the
 sources and the library from before it are in
 `/root/src/SoapySDRPlay3/usdr-backup/`. To apply it to a fresh tree:
 
@@ -484,7 +487,9 @@ handed to the RSP's own IF loop, which holds the ADC at its -30 dBFS setpoint.
 That loop moves only the IF stage, so the LNA follows it: once a second, an
 IF gain reduction of 50 dB or more (or an overload report) takes the LNA
 deeper by as much as the IF is over 40 dB, in one step, and an IF under
-30 dB for three seconds gives back a state. The IF settles near 40 dB, the
+30 dB for three seconds gives back a state. The 19 dB LNA steps wait for two
+seconds of that reading unless the radio reports overload, because the AGC
+reads high for a moment after any big tune. The IF settles near 40 dB, the
 same take-over level manual and clip-guarded gain use. Without this, a strong
 local station drove the IF to the end of its range with the LNA wide open,
 and the overdriven front end painted that station across the band; see

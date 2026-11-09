@@ -1,9 +1,9 @@
-# SoapySDRPlay3: pass on the live gain and overload state SDRplay's API reports
-# through its events (see "The RSP's IF AGC and the LNA" in README.md).
+# SoapySDRPlay3: pass on the live gain and overload state SDRplay's API reports,
+# through its events, and run the damped 50 Hz IF AGC (see "The RSP's IF AGC and the LNA" in README.md).
 # Apply in the SoapySDRPlay3 source tree with `patch -p1 < this-file`.
 
---- a/SoapySDRPlay.hpp	2026-11-03 11:51:40.672800078 -0500
-+++ b/SoapySDRPlay.hpp	2026-11-03 11:51:52.701242605 -0500
+--- a/SoapySDRPlay.hpp
++++ b/SoapySDRPlay.hpp
 @@ -320,6 +320,16 @@
      int fs_changed;
      // event callback reporting device is unavailable
@@ -21,8 +21,8 @@
      const int updateTimeout = 500;   // 500ms timeout for updates
  
  public:
---- a/Streaming.cpp	2026-11-03 11:51:40.767801403 -0500
-+++ b/Streaming.cpp	2026-11-03 11:51:52.701441441 -0500
+--- a/Streaming.cpp
++++ b/Streaming.cpp
 @@ -160,6 +160,12 @@
  {
      if (eventId == sdrplay_api_GainChange)
@@ -51,9 +51,22 @@
              sdrplay_api_Update(device.dev, device.tuner, sdrplay_api_Update_Ctrl_OverloadMsgAck, sdrplay_api_Update_Ext1_None);
              // OVERLOAD CORRECTED
          }
---- a/Settings.cpp	2026-11-03 11:51:40.867802797 -0500
-+++ b/Settings.cpp	2026-11-03 11:51:52.701722662 -0500
-@@ -1827,6 +1827,27 @@
+--- a/Settings.cpp
++++ b/Settings.cpp
+@@ -516,7 +516,11 @@
+ {
+     std::lock_guard <std::mutex> lock(_general_state_mutex);
+ 
+-    sdrplay_api_AgcControlT agc_control = automatic ? sdrplay_api_AGC_CTRL_EN : sdrplay_api_AGC_DISABLE;
++    // uSDR: the API's 50 Hz loop. AGC_CTRL_EN with its attack and decay left
++    // at their default of zero does not damp: one large step (a band change, a
++    // 19 dB LNA step) sets it swinging the IF by 20 dB or more, and it keeps
++    // going until the stream is reopened.
++    sdrplay_api_AgcControlT agc_control = automatic ? sdrplay_api_AGC_50HZ : sdrplay_api_AGC_DISABLE;
+     if (chParams->ctrlParams.agc.enable != agc_control)
+     {
+         chParams->ctrlParams.agc.enable = agc_control;
+@@ -1827,6 +1831,27 @@
  
  std::string SoapySDRPlay::readSetting(const std::string &key) const
  {

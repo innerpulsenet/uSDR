@@ -25,8 +25,9 @@ use crate::fanout::{Fanout, IqBlock};
 use anyhow::{Context, Result};
 use num_complex::Complex32;
 use soapysdr::Direction::Rx;
-use std::sync::Arc;
-use std::sync::mpsc::{Receiver, Sender, SyncSender, channel, sync_channel};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, SyncSender, TrySendError, channel, sync_channel};
+use std::sync::{Arc, Mutex};
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum GainControl {
@@ -950,6 +951,211 @@ fn corrected(desired: f64, ppm: f64) -> f64 {
     desired / (1.0 + ppm * 1e-6)
 }
 
+/// Past this, a retune is reported in the log: normally 15-30 ms, and a
+/// stream that is not being drained loses samples in 65 ms at 8 MS/s.
+const SLOW_TUNE: std::time::Duration = std::time::Duration::from_millis(150);
+
+/// How many deliveries the control side may fall behind by before the reader
+/// stops telling it about them: five seconds' worth.
+const REPORT_DEPTH: usize = 256;
+
+/// What the reader tells the control side about each pass over the stream.
+enum ReadReport {
+    /// A delivery, with what the gain loops and the health readout need of it.
+    Block { samples: usize, peak: f32, clipped: u64, unheard: bool, lagged: u32 },
+    /// Samples were lost before they reached the reader.
+    Overflow,
+    Failed(soapysdr::Error),
+}
+
+/// Where each delivery falls on the acquisition timeline, and whether it goes
+/// out at all.
+///
+/// A block is held back while the tuner moves, and so is the one in hand when
+/// the hold lifts, which began while the oscillator was still on its way. Held
+/// blocks still count as samples, so a tune that was refused, with no new run
+/// to explain the hole, shows up downstream as the gap it is.
+#[derive(Default)]
+struct Timeline {
+    sample_pos: u64,
+    epoch: u64,
+    was_held: bool,
+}
+
+impl Timeline {
+    /// `(first_sample, epoch)` for a block of `n` samples, or `None` to let
+    /// it go.
+    fn next(&mut self, n: usize, held: bool, epoch: u64) -> Option<(u64, u64)> {
+        if epoch != self.epoch {
+            self.epoch = epoch;
+            self.sample_pos = 0;
+        }
+        let deliver = !held && !self.was_held;
+        self.was_held = held;
+        let first = self.sample_pos;
+        self.sample_pos += n as u64;
+        deliver.then_some((first, epoch))
+    }
+}
+
+/// What the reader and the control side share.
+#[derive(Default)]
+struct ReaderShared {
+    /// The stream and its delivery size; empty across a rate change.
+    stream: Mutex<Option<(soapysdr::RxStream<Complex32>, usize)>>,
+    /// Keeps the reader off `stream`, so the control side gets the lock.
+    yielded: AtomicBool,
+    /// Bumped on every new run of samples: an accepted tune or rate change,
+    /// or an overflow.
+    epoch: AtomicU64,
+    /// Set across a write that moves the tuner.
+    held: AtomicBool,
+    stop: AtomicBool,
+}
+
+/// The thread that drains the stream and hands the samples out.
+///
+/// It does nothing else, because everything else can take a long time. A
+/// write to an SDRplay waits for the API to confirm it, normally 15-30 ms but
+/// measured at 500 ms on a receiver whose LNA was hunting under the IF AGC.
+/// The driver's ring is 65 ms deep at 8 MS/s, so one thread doing both lost
+/// samples at every retune, and at each of the two re-asserts after it: three
+/// half-second holes in the waterfall and the audio. Here a write only holds
+/// up the control side.
+struct SampleReader {
+    shared: Arc<ReaderShared>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl SampleReader {
+    fn start(
+        stream: soapysdr::RxStream<Complex32>,
+        block_len: usize,
+        fanout: Fanout,
+        reports: SyncSender<ReadReport>,
+    ) -> Result<Self> {
+        let shared = Arc::new(ReaderShared::default());
+        *shared.stream.lock().expect("stream") = Some((stream, block_len));
+        let inner = shared.clone();
+        let thread = std::thread::Builder::new()
+            .name("sdr-reader".into())
+            .spawn(move || read_samples(&inner, &fanout, &reports))
+            .context("starting the sample reader")?;
+        Ok(Self { shared, thread: Some(thread) })
+    }
+
+    /// Stop delivering: the tuner is about to move.
+    fn hold(&self) {
+        self.shared.held.store(true, Ordering::Release);
+    }
+
+    /// Deliver again.
+    fn release(&self) {
+        self.shared.held.store(false, Ordering::Release);
+    }
+
+    /// What follows is a different run of samples.
+    fn new_run(&self) {
+        self.shared.epoch.fetch_add(1, Ordering::AcqRel);
+    }
+
+    /// Take the stream away from the reader and close it.
+    fn close(&self) {
+        self.shared.yielded.store(true, Ordering::Release);
+        if let Some((mut stream, _)) = self.shared.stream.lock().expect("stream").take() {
+            let _ = stream.deactivate(None);
+        }
+    }
+
+    /// Give the reader a new, active stream.
+    fn open(&self, stream: soapysdr::RxStream<Complex32>, block_len: usize) {
+        *self.shared.stream.lock().expect("stream") = Some((stream, block_len));
+        self.shared.yielded.store(false, Ordering::Release);
+    }
+}
+
+impl Drop for SampleReader {
+    fn drop(&mut self) {
+        self.shared.stop.store(true, Ordering::Release);
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+        self.close();
+    }
+}
+
+fn read_samples(shared: &ReaderShared, fanout: &Fanout, reports: &SyncSender<ReadReport>) {
+    let mut buf = vec![Complex32::new(0.0, 0.0); MAX_BLOCK];
+    let mut timeline = Timeline::default();
+    // The control side may be half a second into a driver call; a report it
+    // has no room for is a statistic lost, not a sample.
+    let report = |r: ReadReport| match reports.try_send(r) {
+        Ok(()) | Err(TrySendError::Full(_)) | Err(TrySendError::Disconnected(_)) => {}
+    };
+    while !shared.stop.load(Ordering::Acquire) {
+        if shared.yielded.load(Ordering::Acquire) {
+            std::thread::sleep(std::time::Duration::from_millis(1));
+            continue;
+        }
+        // Gather one delivery's worth (see BLOCK_SECONDS). An error part-way
+        // still delivers what arrived before it, then is dealt with below.
+        let mut n = 0usize;
+        let mut read_err = None;
+        {
+            let mut slot = shared.stream.lock().expect("stream");
+            let Some((stream, block_len)) = slot.as_mut() else {
+                drop(slot);
+                std::thread::sleep(std::time::Duration::from_millis(1));
+                continue;
+            };
+            let block_len = *block_len;
+            while n < block_len {
+                match stream.read(&mut [&mut buf[n..block_len]], 1_000_000) {
+                    Ok(0) => break,
+                    Ok(got) => n += got,
+                    Err(e) => {
+                        read_err = Some(e);
+                        break;
+                    }
+                }
+            }
+        }
+        if n > 0 {
+            let (peak, clipped) = peak_and_clips(&buf[..n]);
+            // In this order: a hold seen lifted has its new run in `epoch`.
+            let held = shared.held.load(Ordering::Acquire);
+            let epoch = shared.epoch.load(Ordering::Acquire);
+            let (mut unheard, mut lagged) = (false, 0);
+            if let Some((first_sample, epoch)) = timeline.next(n, held, epoch) {
+                let block = IqBlock { samples: Arc::from(&buf[..n]), first_sample, epoch };
+                if fanout.subscriber_count() == 0 {
+                    unheard = true;
+                } else {
+                    lagged = fanout.broadcast(block);
+                }
+            }
+            report(ReadReport::Block { samples: n, peak, clipped, unheard, lagged });
+        }
+        match read_err {
+            None if n == 0 => std::thread::sleep(std::time::Duration::from_millis(1)),
+            None => {}
+            // Samples were lost before they reached this thread — the
+            // driver's ring, or remotely the server's — and the device is
+            // fine, so this is not a strike toward reopening it. A new epoch
+            // makes every consumer restart framing rather than splice across
+            // the hole, and it goes on the stream health readout.
+            Some(e) if e.code == soapysdr::ErrorCode::Overflow => {
+                shared.epoch.fetch_add(1, Ordering::AcqRel);
+                report(ReadReport::Overflow);
+            }
+            Some(e) => {
+                report(ReadReport::Failed(e));
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn run(
     dev: soapysdr::Device,
@@ -964,9 +1170,10 @@ fn run(
     log_tx: SyncSender<String>,
     event_tx: SyncSender<Event>,
 ) -> Result<()> {
-    let (mut stream, mut block_len) = rx_stream(&dev, &caps.driver, rate, remote, Some(&log_tx))?;
+    let (mut stream, block_len) = rx_stream(&dev, &caps.driver, rate, remote, Some(&log_tx))?;
     stream.activate(None)?;
-    let mut buf = vec![Complex32::new(0.0, 0.0); MAX_BLOCK];
+    let (reports_tx, reports) = sync_channel::<ReadReport>(REPORT_DEPTH);
+    let reader = SampleReader::start(stream, block_len, fanout, reports_tx)?;
     let mut dropped: u64 = 0;
     let mut lagged: u64 = 0;
     let mut clipped: u64 = 0;
@@ -974,12 +1181,6 @@ fn run(
     // Samples since the LNA's take-over last looked.
     let mut quarter: u64 = 0;
     let mut peak: f64 = 0.0;
-    // Acquisition timeline: `sample_pos` is where the next read lands on the
-    // device's sample grid; `epoch` bumps on every ACCEPTED tune/rate change
-    // (and starts a new run when the thread opens the stream). Consumers use
-    // the pair to detect lost deliveries and stale queued blocks exactly.
-    let mut sample_pos: u64 = 0;
-    let mut epoch: u64 = 0;
     // `agc_enabled` is the auto-gain loop. Its guard climbs to the hardware
     // maximum; the operator's optional clip guard (Cmd::ClipGuard) sits
     // under a hand-set gain and never exceeds it. Exactly one of the two,
@@ -1011,10 +1212,7 @@ fn run(
         let mut last_tune = None;
         loop {
             let changed = match cmd_rx.try_recv() {
-                Ok(Cmd::Quit) => {
-                    let _ = stream.deactivate(None);
-                    return Ok(());
-                }
+                Ok(Cmd::Quit) => return Ok(()),
                 // Several hops can queue while a previous set_frequency is
                 // still blocking on a sick R820T. Apply only the latest.
                 Ok(Cmd::Tune(f)) => {
@@ -1165,6 +1363,7 @@ fn run(
                 }
                 Ok(Cmd::Ppm(ppm)) => {
                     tune.ppm = ppm;
+                    reader.hold();
                     let ok = set_frequency_retrying(&dev, corrected(tune.desired, tune.ppm));
                     if !ok {
                         let _ = log_tx.try_send(
@@ -1174,17 +1373,16 @@ fn run(
                         // An accepted correction moves the LO: what follows is
                         // a different sample run even though the dial did not
                         // move. Stale queued blocks must not frame with it.
-                        epoch += 1;
-                        sample_pos = 0;
+                        reader.new_run();
                         if sdrplay {
                             reassert = Some((std::time::Instant::now() + SDRPLAY_REASSERT[0], 0));
                         }
                     }
+                    reader.release();
                     ok
                 }
                 Ok(Cmd::Rate(r)) => {
-                    let _ = stream.deactivate(None);
-                    drop(stream);
+                    reader.close();
                     std::thread::sleep(std::time::Duration::from_millis(25));
                     let ok = dev.set_sample_rate(Rx, 0, r);
                     if let Err(ref e) = ok {
@@ -1193,8 +1391,7 @@ fn run(
                         rate = dev.sample_rate(Rx, 0).unwrap_or(r);
                         // New rate = new sample grid: the old positions mean
                         // nothing against it, so this starts a new epoch.
-                        epoch += 1;
-                        sample_pos = 0;
+                        reader.new_run();
                         let _ = log_tx.try_send(format!("sample rate {rate:.0} S/s"));
                         std::thread::sleep(std::time::Duration::from_millis(15));
                         // A hand-picked filter survives a span change only
@@ -1209,15 +1406,13 @@ fn run(
                         }
                     }
                     std::thread::sleep(std::time::Duration::from_millis(20));
-                    (stream, block_len) = rx_stream(&dev, &caps.driver, rate, remote, Some(&log_tx))?;
+                    let (mut stream, block_len) = rx_stream(&dev, &caps.driver, rate, remote, Some(&log_tx))?;
                     stream.activate(None)?;
+                    reader.open(stream, block_len);
                     ok.is_ok()
                 }
                 Err(std::sync::mpsc::TryRecvError::Empty) => break,
-                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                    let _ = stream.deactivate(None);
-                    return Ok(());
-                }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => return Ok(()),
             };
             if changed {
                 publish_state(&dev, &caps, tune, agc_enabled, agc_enabled && tuner_agc && clip_guard.is_none(), &event_tx);
@@ -1231,13 +1426,17 @@ fn run(
                 // a few milliseconds and usually lands, which is the
                 // difference between a click that tunes and a click that is
                 // silently dropped.
+                let started = std::time::Instant::now();
+                reader.hold();
                 // An LNA state the new band does not have makes SDRplay's
                 // API refuse the whole tune (state 8 is legal at 100 MHz, not
                 // at 7 MHz), so it comes down to the band's deepest first.
                 if sdrplay {
                     fit_lna_to_band(&dev, &caps, f, &log_tx);
                 }
+                let write = std::time::Instant::now();
                 let mut ok = set_frequency_retrying(&dev, corrected(f, tune.ppm));
+                let wrote = write.elapsed();
                 if !ok && sdrplay {
                     // A model or band this crate has no state count for:
                     // state 0 exists everywhere. The band change below then
@@ -1253,10 +1452,6 @@ fn run(
                     let before = tune.desired;
                     // Only now is this where the radio is.
                     tune.desired = f;
-                    // Accepted tune: samples before and after belong to
-                    // different RF windows — a new epoch, position restarts.
-                    epoch += 1;
-                    sample_pos = 0;
                     if sdrplay {
                         reassert = Some((std::time::Instant::now() + SDRPLAY_REASSERT[0], 0));
                     }
@@ -1295,6 +1490,10 @@ fn run(
                         }
                     }
                     publish_state(&dev, &caps, tune, agc_enabled, agc_enabled && tuner_agc && clip_guard.is_none(), &event_tx);
+                    // Accepted tune: samples before and after belong to
+                    // different RF windows, so a new epoch. After the state
+                    // above, so the new run is framed at the new frequency.
+                    reader.new_run();
                 } else {
                     // The driver may have stored the refused frequency all
                     // the same, and its readback is what the display labels
@@ -1310,6 +1509,15 @@ fn run(
                     if tune_fails >= 3 {
                         anyhow::bail!("tuner wedged after {tune_fails} failed tune attempts");
                     }
+                }
+                reader.release();
+                if started.elapsed() > SLOW_TUNE {
+                    let _ = log_tx.try_send(format!(
+                        "tune to {:.4} MHz held the tuner {:.0} ms ({:.0} ms of it the frequency write)",
+                        f / 1e6,
+                        started.elapsed().as_secs_f64() * 1e3,
+                        wrote.as_secs_f64() * 1e3
+                    ));
                 }
             }
         }
@@ -1332,145 +1540,115 @@ fn run(
                 .map(|gap| (std::time::Instant::now() + *gap, stage + 1));
         }
 
-        // Gather one delivery's worth (see BLOCK_SECONDS). An error part-way
-        // still delivers what arrived before it, then is dealt with below.
-        let mut n = 0usize;
-        let mut read_err = None;
-        while n < block_len {
-            match stream.read(&mut [&mut buf[n..block_len]], 1_000_000) {
-                Ok(0) => break,
-                Ok(got) => n += got,
-                Err(e) => {
-                    read_err = Some(e);
-                    break;
-                }
-            }
-        }
-        if n > 0 {
-            usb_fails = 0;
-            let (block_peak, block_clipped) = peak_and_clips(&buf[..n]);
-            clipped += block_clipped;
-            peak = peak.max(f64::from(block_peak));
-            counted += n as u64;
-
-            let block = IqBlock {
-                samples: Arc::from(&buf[..n]),
-                first_sample: sample_pos,
-                epoch,
-            };
-            sample_pos += n as u64;
-
-            if fanout.subscriber_count() == 0 {
+        // What the reader did since the last look; the commands above wait
+        // at most this long.
+        let report = match reports.recv_timeout(std::time::Duration::from_millis(25)) {
+            Ok(report) => report,
+            Err(RecvTimeoutError::Timeout) => continue,
+            Err(RecvTimeoutError::Disconnected) => anyhow::bail!("the sample reader stopped"),
+        };
+        match report {
+            ReadReport::Overflow => {
                 dropped += 1;
-            } else {
-                lagged += u64::from(fanout.broadcast(block));
-            }
-
-            // The LNA's take-over, four times a second: from a cold start
-            // with the LNA wide open the IF is pinned at once, and there is
-            // nothing to wait for.
-            quarter += n as u64;
-            if sdrplay && quarter >= (rate / 4.0) as u64 {
-                quarter = 0;
-                let if_agc = agc_enabled && tuner_agc && clip_guard.is_none();
-                let live = sdrplay_live(&dev);
-                let rfgr = dev.gain_element(Rx, 0, "RFGR").ok();
-                // The LNA follows the IF AGC, so the front end is not
-                // left at full gain while the IF runs out of range.
-                if if_agc
-                    && let (Some(sg), Some(ifgr), Some(state)) = (sdrplay_gain(&caps, tune.desired), live.ifgr, rfgr)
-                    && !sg.lna_gr.is_empty()
-                {
-                    let top = sg.lna_gr.len().min(sdrplay_lna_states(&caps, tune.desired).unwrap_or(sg.lna_gr.len())) - 1;
-                    if let Some(next) = lna_takeover.on_tick(sg.lna_gr, ifgr, live.overload == Some(true), state.round().max(0.0) as usize, top)
-                        && crate::driver_log::checked(|| dev.set_gain_element(Rx, 0, "RFGR", next as f64).is_ok())
-                    {
-                        let _ = log_tx.try_send(format!(
-                            "LNA state {next} ({:.0} dB reduction): the IF AGC was at {ifgr:.0} dB{}",
-                            sg.lna_gr[next],
-                            if live.overload == Some(true) { ", overloaded" } else { "" }
-                        ));
-                    }
-                } else {
-                    lna_takeover = LnaTakeover::default();
-                }
-            }
-
-            if counted >= rate as u64 {
-                let clipped_fraction = clipped as f64 / counted.max(1) as f64;
-                if let Some(ref mut cg) = clip_guard
-                    && let Some(new_g) = cg.on_stats(clipped_fraction, peak)
-                {
-                    // Same retried write as a hand-set gain: on this
-                    // tuner the first attempt routinely stalls and the
-                    // second lands. A single attempt here, logged as a
-                    // failure, tripped the server's fault counter and
-                    // reopened the device every sixteen seconds.
-                    if set_gain_checked(&dev, &caps, tune.desired, new_g) {
-                        gain_target = Some(new_g);
-                        let _ = log_tx.try_send(format!(
-                            "gain {new_g:.1} dB (clip {clipped_fraction:.4} peak {peak:.2})"
-                        ));
-                        publish_state(&dev, &caps, tune, agc_enabled, false, &event_tx);
-                    } else {
-                        // Only after every retry: counted by the server
-                        // as a control fault, two of which in a window
-                        // reopen the device — what clears a stalled bus.
-                        let _ = log_tx.try_send(format!(
-                            "gain {new_g:.1} dB failed: tuner did not take the write"
-                        ));
-                        cg.current = cg.current.min(new_g);
-                    }
-                }
-                if sdrplay {
-                    let if_agc = agc_enabled && tuner_agc && clip_guard.is_none();
-                    let live = sdrplay_live(&dev);
-                    let rfgr = dev.gain_element(Rx, 0, "RFGR").ok();
-                    let ifgr = if if_agc { live.ifgr } else { dev.gain_element(Rx, 0, "IFGR").ok() };
-                    let readout = GainReadout {
-                        overall: sdrplay_overall(&caps, tune.desired, rfgr, ifgr),
-                        rfgr,
-                        ifgr,
-                        overload: live.overload,
-                        overload_count: live.overload_count,
-                    };
-                    if readout != last_readout {
-                        let _ = event_tx.try_send(Event::Gain(readout.clone()));
-                        last_readout = readout;
-                    }
-                }
-                peak = 0.0;
-                let _ = event_tx.try_send(Event::StreamStats {
-                    dropped_blocks: dropped,
-                    lagged_deliveries: lagged,
-                    clipped_fraction,
-                });
-                clipped = 0;
-                counted = 0;
-            }
-        }
-        match read_err {
-            None => {}
-            // Samples were lost before they reached this thread — the
-            // driver's ring, or remotely the server's — and the device is
-            // fine, so this is not a strike toward reopening it. A new epoch
-            // makes every consumer restart framing rather than splice across
-            // the hole, and counting it as dropped puts it on the stream
-            // health readout.
-            Some(e) if e.code == soapysdr::ErrorCode::Overflow => {
-                dropped += 1;
-                epoch += 1;
-                sample_pos = 0;
                 let _ = log_tx.try_send("stream overflow: samples lost before delivery".into());
             }
-            Some(e) => {
+            ReadReport::Failed(e) => {
                 usb_fails += 1;
                 let _ = log_tx.try_send(format!("read error ({usb_fails}/3): {e}"));
                 if usb_fails >= 3 {
-                    let _ = stream.deactivate(None);
                     anyhow::bail!("dongle not responding after {usb_fails} read errors: {e}");
                 }
-                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            ReadReport::Block { samples: n, peak: block_peak, clipped: block_clipped, unheard, lagged: late } => {
+                usb_fails = 0;
+                clipped += block_clipped;
+                peak = peak.max(f64::from(block_peak));
+                counted += n as u64;
+                dropped += u64::from(unheard);
+                lagged += u64::from(late);
+
+                // The LNA's take-over, four times a second: from a cold start
+                // with the LNA wide open the IF is pinned at once, and there is
+                // nothing to wait for.
+                quarter += n as u64;
+                if sdrplay && quarter >= (rate / 4.0) as u64 {
+                    quarter = 0;
+                    let if_agc = agc_enabled && tuner_agc && clip_guard.is_none();
+                    let live = sdrplay_live(&dev);
+                    let rfgr = dev.gain_element(Rx, 0, "RFGR").ok();
+                    // The LNA follows the IF AGC, so the front end is not
+                    // left at full gain while the IF runs out of range.
+                    if if_agc
+                        && let (Some(sg), Some(ifgr), Some(state)) = (sdrplay_gain(&caps, tune.desired), live.ifgr, rfgr)
+                        && !sg.lna_gr.is_empty()
+                    {
+                        let top = sg.lna_gr.len().min(sdrplay_lna_states(&caps, tune.desired).unwrap_or(sg.lna_gr.len())) - 1;
+                        if let Some(next) = lna_takeover.on_tick(sg.lna_gr, ifgr, live.overload == Some(true), state.round().max(0.0) as usize, top)
+                            && crate::driver_log::checked(|| dev.set_gain_element(Rx, 0, "RFGR", next as f64).is_ok())
+                        {
+                            let _ = log_tx.try_send(format!(
+                                "LNA state {next} ({:.0} dB reduction): the IF AGC was at {ifgr:.0} dB{}",
+                                sg.lna_gr[next],
+                                if live.overload == Some(true) { ", overloaded" } else { "" }
+                            ));
+                        }
+                    } else {
+                        lna_takeover = LnaTakeover::default();
+                    }
+                }
+
+                if counted >= rate as u64 {
+                    let clipped_fraction = clipped as f64 / counted.max(1) as f64;
+                    if let Some(ref mut cg) = clip_guard
+                        && let Some(new_g) = cg.on_stats(clipped_fraction, peak)
+                    {
+                        // Same retried write as a hand-set gain: on this
+                        // tuner the first attempt routinely stalls and the
+                        // second lands. A single attempt here, logged as a
+                        // failure, tripped the server's fault counter and
+                        // reopened the device every sixteen seconds.
+                        if set_gain_checked(&dev, &caps, tune.desired, new_g) {
+                            gain_target = Some(new_g);
+                            let _ = log_tx.try_send(format!(
+                                "gain {new_g:.1} dB (clip {clipped_fraction:.4} peak {peak:.2})"
+                            ));
+                            publish_state(&dev, &caps, tune, agc_enabled, false, &event_tx);
+                        } else {
+                            // Only after every retry: counted by the server
+                            // as a control fault, two of which in a window
+                            // reopen the device — what clears a stalled bus.
+                            let _ = log_tx.try_send(format!(
+                                "gain {new_g:.1} dB failed: tuner did not take the write"
+                            ));
+                            cg.current = cg.current.min(new_g);
+                        }
+                    }
+                    if sdrplay {
+                        let if_agc = agc_enabled && tuner_agc && clip_guard.is_none();
+                        let live = sdrplay_live(&dev);
+                        let rfgr = dev.gain_element(Rx, 0, "RFGR").ok();
+                        let ifgr = if if_agc { live.ifgr } else { dev.gain_element(Rx, 0, "IFGR").ok() };
+                        let readout = GainReadout {
+                            overall: sdrplay_overall(&caps, tune.desired, rfgr, ifgr),
+                            rfgr,
+                            ifgr,
+                            overload: live.overload,
+                            overload_count: live.overload_count,
+                        };
+                        if readout != last_readout {
+                            let _ = event_tx.try_send(Event::Gain(readout.clone()));
+                            last_readout = readout;
+                        }
+                    }
+                    peak = 0.0;
+                    let _ = event_tx.try_send(Event::StreamStats {
+                        dropped_blocks: dropped,
+                        lagged_deliveries: lagged,
+                        clipped_fraction,
+                    });
+                    clipped = 0;
+                    counted = 0;
+                }
             }
         }
     }
@@ -1697,8 +1875,23 @@ const LNA_DOWN_IFGR: f64 = SDRPLAY_IF_TAKEOVER_DB - 10.0;
 /// LNA gives gain back (three seconds): slow, so a fade does not walk the
 /// front end back into overload.
 const LNA_DOWN_HOLD: u32 = 12;
-/// Ticks of rest after a step, for the IF AGC to settle on it.
+/// Ticks of rest after the LNA takes gain, for the IF AGC to settle on it.
 const LNA_REST: u32 = 2;
+/// Ticks of rest after the LNA gives gain back: two seconds, and not to be cut
+/// short. The IF AGC reads high for a second or more after a step up in gain,
+/// 53-59 dB where it settles at about 39. Taken at face value that sent the
+/// LNA straight back, and at the 19 dB step from state 8 to state 7 on the
+/// broadcast FM band the receiver swung between the two every few seconds.
+const LNA_SETTLE: u32 = 8;
+/// A single LNA step of this much or more, the 19 dB ones in the RSP1A's
+/// tables, is not taken on one reading.
+const LNA_DEEP_STEP_DB: f64 = 15.0;
+/// Ticks the IF must stay over [`LNA_UP_IFGR`] before such a step (two
+/// seconds), unless the API reports overload. For a moment after a big tune
+/// or an LNA step the IF AGC reads 59 dB whatever the signal is. Believed, that
+/// took the broadcast FM band from state 7 (IF at 39 dB) to state 8, which
+/// leaves the IF on its 20 dB floor and the AGC with nowhere to go.
+const LNA_DEEP_HOLD: u32 = 8;
 
 /// The LNA under the RSP's IF AGC. The AGC moves only the IF stage, so on
 /// a band with a strong local station it ran out of reduction (59 dB) with
@@ -1711,6 +1904,7 @@ const LNA_REST: u32 = 2;
 #[derive(Clone, Copy, Debug, Default)]
 struct LnaTakeover {
     cold: u32,
+    hot: u32,
     rest: u32,
 }
 
@@ -1729,15 +1923,27 @@ impl LnaTakeover {
             // The AGC gives back in IF what the LNA takes, so this lands
             // the IF near the take-over level in one step.
             let want = (ifgr - SDRPLAY_IF_TAKEOVER_DB).max(1.0);
-            let next = (state + 1..=top).find(|&s| lna_gr[s] - lna_gr[state] >= want).unwrap_or(top);
+            let mut next = (state + 1..=top).find(|&s| lna_gr[s] - lna_gr[state] >= want).unwrap_or(top);
+            if !overload && let Some(short) = (state..next).find(|&s| lna_gr[s + 1] - lna_gr[s] >= LNA_DEEP_STEP_DB) {
+                if short > state {
+                    next = short;
+                } else {
+                    self.hot += 1;
+                    if self.hot < LNA_DEEP_HOLD {
+                        return None;
+                    }
+                }
+            }
+            self.hot = 0;
             self.rest = LNA_REST;
             return Some(next);
         }
+        self.hot = 0;
         if ifgr <= LNA_DOWN_IFGR && state > 0 {
             self.cold += 1;
             if self.cold >= LNA_DOWN_HOLD {
                 self.cold = 0;
-                self.rest = LNA_REST;
+                self.rest = LNA_SETTLE;
                 return Some(state - 1);
             }
             return None;
@@ -2046,6 +2252,41 @@ fn set_bandwidth(
     let actual = dev.bandwidth(Rx, 0).unwrap_or(want);
     let _ = log_tx.try_send(format!("analog bandwidth {actual:.0} Hz"));
     Ok(())
+}
+
+#[cfg(test)]
+mod reader_tests {
+    use super::Timeline;
+
+    #[test]
+    fn samples_are_counted_on_one_run() {
+        let mut t = Timeline::default();
+        assert_eq!(t.next(100, false, 0), Some((0, 0)));
+        assert_eq!(t.next(100, false, 0), Some((100, 0)));
+    }
+
+    #[test]
+    fn nothing_goes_out_while_the_tuner_moves_nor_the_block_it_ends_inside() {
+        let mut t = Timeline::default();
+        assert_eq!(t.next(100, false, 0), Some((0, 0)));
+        assert_eq!(t.next(100, true, 0), None);
+        assert_eq!(t.next(100, true, 0), None);
+        // The hold lifted during this block: its start may be mid-move.
+        assert_eq!(t.next(100, false, 1), None);
+        // The run after a tune starts at the first block after the hold.
+        assert_eq!(t.next(100, false, 1), Some((100, 1)));
+        assert_eq!(t.next(100, false, 1), Some((200, 1)));
+    }
+
+    #[test]
+    fn a_refused_tune_leaves_the_hole_visible() {
+        let mut t = Timeline::default();
+        assert_eq!(t.next(100, false, 0), Some((0, 0)));
+        assert_eq!(t.next(100, true, 0), None);
+        assert_eq!(t.next(100, false, 0), None);
+        // The same run with its position moved on: downstream sees the gap.
+        assert_eq!(t.next(100, false, 0), Some((300, 0)));
+    }
 }
 
 #[cfg(test)]
@@ -2392,11 +2633,53 @@ mod tests {
             assert_eq!(t.on_tick(gr, 25.0, false, 3, top), None);
         }
         // Never past the deepest state, never under the shallowest.
+        // Gain given back: the AGC's overshoot is not a reason to take it
+        // again, and once settled the step holds.
+        let mut t = LnaTakeover::default();
+        for _ in 0..LNA_DOWN_HOLD - 1 {
+            assert_eq!(t.on_tick(gr, 22.0, false, 8, top), None);
+        }
+        assert_eq!(t.on_tick(gr, 22.0, false, 8, top), Some(7));
+        for _ in 0..LNA_SETTLE {
+            assert_eq!(t.on_tick(gr, 59.0, false, 7, top), None);
+        }
+        assert_eq!(t.on_tick(gr, 39.0, false, 7, top), None);
+
         let mut t = LnaTakeover::default();
         assert_eq!(t.on_tick(gr, 59.0, true, top, top), None);
         for _ in 0..2 * LNA_DOWN_HOLD {
             assert_eq!(t.on_tick(gr, 20.0, false, 0, top), None);
         }
+    }
+
+    #[test]
+    fn the_lna_wants_a_steady_reading_before_a_19_db_step() {
+        let gr = rsp1a_lna_gr_db(100e6);
+        let top = gr.len() - 1;
+        let mut t = LnaTakeover::default();
+        // However pinned the IF reads, a walk stops short of the big step.
+        assert_eq!(t.on_tick(gr, 59.0, false, 4, top), Some(7));
+        for _ in 0..LNA_REST {
+            assert_eq!(t.on_tick(gr, 59.0, false, 7, top), None);
+        }
+        // The stale reading after the step does not take it...
+        for _ in 0..LNA_DEEP_HOLD - 1 {
+            assert_eq!(t.on_tick(gr, 59.0, false, 7, top), None);
+        }
+        // ...and one reading back in the window starts the count over.
+        assert_eq!(t.on_tick(gr, 39.0, false, 7, top), None);
+        for _ in 0..LNA_DEEP_HOLD - 1 {
+            assert_eq!(t.on_tick(gr, 55.0, false, 7, top), None);
+        }
+        // A signal that really is that strong gets there.
+        assert_eq!(t.on_tick(gr, 55.0, false, 7, top), Some(8));
+        // An overload report does not wait.
+        let mut t = LnaTakeover::default();
+        assert_eq!(t.on_tick(gr, 45.0, true, 7, top), Some(8));
+        // Below 60 MHz the step sits mid-table: the walk stops at state 3.
+        let hf = rsp1a_lna_gr_db(7e6);
+        let mut t = LnaTakeover::default();
+        assert_eq!(t.on_tick(hf, 59.0, false, 0, hf.len() - 1), Some(3));
     }
 
     #[test]
