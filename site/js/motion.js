@@ -1,5 +1,7 @@
 // How pages arrive. Everything here is decoration over content that is already
 // complete: asked for less motion, or with this file absent, the page simply is.
+import { wireReadout } from "./figures.js";
+
 export const calm = matchMedia("(prefers-reduced-motion: reduce)").matches;
 
 const EASE = (t) => 1 - (1 - t) ** 4;
@@ -43,9 +45,10 @@ async function dialSvg() {
 // Dress a freshly drawn page. `entering` is false for a quiet refresh in place.
 export function dress(root, entering) {
   root.querySelectorAll(".cells24").forEach((row) => [...row.children].forEach((c, h) => c.style.setProperty("--h", h)));
-  root.querySelectorAll(".bars .bar").forEach((b, i) => b.style.setProperty("--i", i));
   root.querySelectorAll(".rose path").forEach((p, i) => p.style.setProperty("--i", i));
   root.querySelectorAll(".ip-atmos-dial").forEach(async (d) => { d.innerHTML = await dialSvg(); });
+  root.querySelectorAll(".heat-read").forEach((line) => wireReadout(line.previousElementSibling, line, line.textContent));
+  rail(root);
   if (!entering) {
     root.classList.remove("enter");
     return;
@@ -58,6 +61,46 @@ export function dress(root, entering) {
   if (revealer) {
     root.querySelectorAll("section").forEach((s) => { s.classList.add("rv"); revealer.observe(s); });
   }
+}
+
+// Long pages get a strip of their sections that stays under the masthead and
+// marks the one being read. The page's address is its route, so these scroll
+// rather than link.
+let railWatch = null;
+function rail(root) {
+  railWatch?.disconnect();
+  railWatch = null;
+  const heads = [...root.querySelectorAll("section > h2[id][data-rail]")];
+  const head = root.querySelector(":scope > header");
+  if (heads.length < 3 || !head) return;
+  const nav = document.createElement("nav");
+  nav.className = "rail";
+  nav.setAttribute("aria-label", "On this page");
+  nav.innerHTML = `<span class="lbl">On this page</span>${heads.map((h) => `<button type="button" data-to="${h.id}">${h.dataset.rail}</button>`).join("")}`;
+  head.after(nav);
+  nav.addEventListener("click", (ev) => {
+    const to = ev.target.closest("button")?.dataset.to;
+    if (!to) return;
+    const section = document.getElementById(to).closest("section");
+    section.classList.add("in");
+    section.scrollIntoView({ block: "start", behavior: calm ? "auto" : "smooth" });
+  });
+  if (!("IntersectionObserver" in window)) return;
+  const buttons = Object.fromEntries([...nav.querySelectorAll("button")].map((b) => [b.dataset.to, b]));
+  const seen = new Set();
+  railWatch = new IntersectionObserver((entries) => {
+    for (const e of entries) {
+      const id = e.target.querySelector("h2").id;
+      if (e.isIntersecting) seen.add(id);
+      else seen.delete(id);
+    }
+    const current = heads.find((h) => seen.has(h.id));
+    for (const [id, b] of Object.entries(buttons)) {
+      if (id === current?.id) b.setAttribute("aria-current", "true");
+      else b.removeAttribute("aria-current");
+    }
+  }, { rootMargin: "-18% 0px -55% 0px" });
+  heads.forEach((h) => railWatch.observe(h.closest("section")));
 }
 
 // The ember tick under the current section, sliding between them.

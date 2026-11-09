@@ -52,6 +52,9 @@
     <a class="ip-chrome" href="#/now" aria-label="HF Log, home" style="--ip-chrome-mask: url(/brand/hf-log-wordmark-mask.svg)">
       <span class="ip-chrome-mark" aria-hidden="true">
         <svg viewBox="-110 -110 220 220">
+          <!-- The six bars, unchanged, on a boom: the mark as a beam antenna seen from above, the
+               aerial every DX station points down the band. -->
+          <path class="boom" pathLength="1" d="M-98 0H98"/><path class="boom-run" pathLength="1" d="M-98 0H98"/>
           <rect x="-103" y="-23" width="22" height="46" rx="4" style="--i:0"/><rect x="-66.2" y="-87.74" width="22" height="175.48" rx="4" style="--i:1"/>
           <rect x="-29.4" y="-67.21" width="22" height="134.41" rx="4" style="--i:2"/><rect x="7.4" y="-53" width="22" height="106" rx="4" style="--i:3"/>
           <rect x="44.2" y="-93.16" width="22" height="186.33" rx="4" style="--i:4"/><rect x="81" y="-23" width="22" height="46" rx="4" style="--i:5"/>
@@ -71,6 +74,8 @@
       <a href="#/log" data-view="log">Log</a>
       <a href="#/station" data-view="station">Station</a>
     </nav>
+    <form class="mast-find" id="find" role="search"><svg aria-hidden="true"><use href="brand/sprite.svg#ip-i-search"/></svg><input type="search" aria-label="Look up a callsign, flight, MMSI or grid square" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="Look up a call"><kbd aria-hidden="true">/</kbd></form>
+    <p class="utc" title="Every time on this site is UTC"><b id="utc"></b> UTC</p>
     <p class="fresh" id="fresh" aria-live="polite"></p>
   </div>
 </header>

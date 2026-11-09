@@ -2,6 +2,7 @@ import { bandGroup, BAND_GROUPS, bearing, gridCenter, SPOT_SIZES, mountMap, STEP
 import { mountGlobe } from "./globe.js";
 import { atmosphere, calm, dress, moveTick } from "./motion.js";
 import { ago, esc, fmtClock, fmtTime, hours, khz, num } from "./util.js";
+import { callLink, dialFigure, modeBoard, modeChip, modeColor, MODE_SLOT, rowsTable, wireReadout } from "./figures.js";
 
 const view = document.getElementById("view");
 const STALE_S = 20 * 60;
@@ -28,29 +29,15 @@ function emptyLog() {
   return `<p class="empty">The log is empty. Nothing has arrived from the receiver yet, so there is nothing to show.</p>`;
 }
 
-// Only these modes are in the lookup files: the ones with a station to name.
-const LOOKUP_MODES = new Set(["FT8", "FT4", "WSPR", "JS8", "HFDL", "DSC"]);
-
-function callLink(mode, ident) {
-  const clean = (ident || "").replace(/^\.+/, "");
-  return LOOKUP_MODES.has(mode) && /[A-Z0-9]/.test(clean) ? `<a href="#/who?c=${encodeURIComponent(clean)}">${esc(clean)}</a>` : esc(ident || "");
-}
-
-function rowsTable(rows) {
-  return `<div class="scroll"><table><thead><tr><th>Time</th><th>Mode</th><th>kHz</th><th>Who</th><th class="hide-s">Where</th><th class="hide-s">SNR</th></tr></thead><tbody>
-    ${rows.map((r) => `<tr><td>${fmtTime(r.t)}</td><td>${esc(r.m)}</td><td>${khz(r.f)}</td><td class="id">${callLink(r.m, r.i)}</td><td class="hide-s">${esc(r.g || (r.la !== undefined ? `${r.la}, ${r.lo}` : ""))}</td><td class="hide-s">${r.s == null ? "" : `${Math.round(r.s)} dB`}</td></tr>`).join("")}
-  </tbody></table></div>`;
-}
-
 async function showNow() {
-  const [s, m] = await Promise.all([load("status.json"), load("map-24h.json")]);
+  const [s, m, health] = await Promise.all([load("status.json"), load("map-24h.json"), load("health.json").catch(() => null)]);
   land ||= await load("land-110m.json");
   shownBuilt = s.generated_utc;
   const total = s.by_mode.reduce((a, m) => a + m.n, 0);
   const flights = s.by_mode.find((m) => m.mode === "HFDL");
   const amateurs = s.by_mode.filter((m) => ["FT8", "FT4", "WSPR", "JS8"].includes(m.mode)).reduce((a, m) => a + m.idents, 0);
-  const max = Math.max(1, ...s.by_mode.map((m) => m.n / Math.max(m.monitored_s / 3600, 0.1)));
   const lastLine = s.last ? `Last on ${esc(s.last.mode)} at ${khz(s.last.dial_hz)} kHz, ${ago(s.last.end_utc)}.` : "It has not reported a stretch of listening yet.";
+  const dial = dialFigure(health, s.last);
   view.innerHTML = `
     <header class="hero ip-atmos">
       <div class="ip-atmos-bg" aria-hidden="true"><i class="ip-fog f1"></i><i class="ip-fog f2"></i><i class="ip-fog f3"></i></div>
@@ -59,6 +46,7 @@ async function showNow() {
         <h1>One receiver, listening below 30 MHz.</h1>
         <p class="lede">It moves between amateur digital modes, aircraft datalink, ship calls and weather charts on its own schedule. ${lastLine}</p>
         <div id="nowline"></div>
+        <p class="hero-links"><a class="go" href="#/map">Open the map</a><a class="go" href="#/log">Read the log</a></p>
       </div>
       ${m.spots.length ? `<figure class="hero-globe">
         <div class="globe-wrap"><div class="ip-atmos-dial" aria-hidden="true"></div>
@@ -71,19 +59,23 @@ async function showNow() {
       <div><dt>Spent listening</dt><dd>${hours(s.monitored_s)}</dd></div>
       <div><dt>Amateur stations</dt><dd>${num(amateurs)}</dd></div>
       <div><dt>Aircraft on HFDL</dt><dd>${flights ? num(flights.idents) : "0"}</dd></div>
+      <div><dt>Grid squares</dt><dd>${num(m.squares.length)}</dd></div>
     </dl>
     ${s.unhealthy_s || s.lost_decodes ? `<p class="ip-notice ip-notice-warn" role="status"><svg class="ip-i sm" aria-hidden="true"><use href="brand/sprite.svg#ip-s-warn"/></svg><span>${s.unhealthy_s ? `${hours(s.unhealthy_s)} of listening failed its radio check and is left out of the figures. ` : ""}${s.lost_decodes ? `${num(s.lost_decodes)} decodes were lost to a full queue.` : ""}</span></p>` : ""}
-    <section aria-labelledby="yield"><h2 id="yield">Decodes per hour on air</h2>
-      <p class="note">Divided by the time actually spent on each mode.</p>
-      ${s.by_mode.length ? `<div class="bars">${s.by_mode.map((m) => {
-        const rate = m.n / Math.max(m.monitored_s / 3600, 0.1);
-        return `<div class="bar"><span>${esc(m.mode)}</span><i style="--w:${(rate / max * 100).toFixed(1)}%"></i><em>${num(Math.round(rate))}/h · ${hours(m.monitored_s)} on air</em></div>`;
-      }).join("")}</div>` : emptyLog()}
-    </section>
-    <section aria-labelledby="latest"><h2 id="latest">Latest</h2>
-      ${s.latest.length ? rowsTable(s.latest) : emptyLog()}
-    </section>`;
+    ${dial ? `<section aria-labelledby="hdial" class="dial-sec"><h2 id="hdial">Across the dial</h2>
+      <p class="note">Every frequency it sat on in the last 24 hours, placed where it falls between 0 and 30 MHz. A stem's height is what was decoded there, on a log scale; the shaded strips are the amateur bands.</p>
+      ${dial}
+    </section>` : ""}
+    <div class="now-cols">
+      <section aria-labelledby="yield"><h2 id="yield">Decodes per hour on air</h2>
+        ${s.by_mode.length ? modeBoard(s.by_mode) : emptyLog()}
+      </section>
+      <section aria-labelledby="latest"><h2 id="latest">Latest</h2>
+        ${s.latest.length ? `${rowsTable(s.latest.slice(0, 14), { compact: true })}<p class="more"><a class="go" href="#/log">The latest 500 entries</a></p>` : emptyLog()}
+      </section>
+    </div>`;
   drawNowLine();
+  wireReadout(view.querySelector(".dial"), view.querySelector("#dial-read"), "Point at a stem for a reading.");
   const canvas = view.querySelector("#globe");
   if (canvas) unmount = mountGlobe(canvas, m, land);
 }
@@ -176,16 +168,16 @@ function heatTable(rows, unit) {
   for (const r of rows) for (const [n, s] of r.cells) if (s >= 60) max = Math.max(max, n / (s / 3600));
   const cell = ([n, s], label, h) => {
     const at = `${label}, ${String(h).padStart(2, "0")}Z`;
-    if (!s) return `<i class="out" title="${esc(at)}: not monitored"></i>`;
+    if (!s) return `<i class="out" data-tip="${esc(at)}: not monitored"></i>`;
     const rate = n / (s / 3600);
-    if (!n) return `<i class="q" title="${esc(at)}: monitored ${hours(s)}, nothing heard"></i>`;
+    if (!n) return `<i class="q" data-tip="${esc(at)}: monitored ${hours(s)}, nothing heard"></i>`;
     const step = Math.min(STEPS.length - 1, Math.floor((Math.log(rate + 1) / Math.log(max + 1)) * STEPS.length));
-    return `<i style="background:${STEPS[step]}" title="${esc(at)}: ${num(Math.round(rate))} ${unit} per hour, ${hours(s)} monitored"></i>`;
+    return `<i style="background:${STEPS[step]}" data-tip="${esc(at)}: ${num(Math.round(rate))} ${unit} per hour, ${hours(s)} monitored"></i>`;
   };
   return `<div class="scroll"><div class="heat">
     ${rows.map((r) => `<div class="rowlabel">${esc(r.label)}</div><div class="cells24">${r.cells.map((c, h) => cell(c, r.label, h)).join("")}</div>`).join("")}
     <div class="hours">${Array.from({ length: 24 }, (_, h) => `<span>${h % 3 === 0 ? String(h).padStart(2, "0") : ""}</span>`).join("")}</div>
-  </div></div>`;
+  </div></div><p class="fig-read heat-read" aria-live="off">Point at a cell for a reading. Hours are UTC.</p>`;
 }
 
 // Which way the stations were, per band group, in 15-degree wedges. The radius is the
@@ -233,18 +225,18 @@ async function showActivity() {
     <p class="lede">The log so far covers ${days}, grouped by UTC hour over up to ${a.days} days. Every cell is divided by the time the receiver actually spent there.</p>
     </header>
     ${spectrumSection(spectrum)}
-    <section aria-labelledby="h1"><h2 id="h1">Amateur decodes by band and hour</h2>${a.bands.length ? heatTable(a.bands, "decodes") + key : emptyLog()}</section>
-    <section aria-labelledby="h2"><h2 id="h2">All modes by hour</h2>${a.modes.length ? heatTable(a.modes, "decodes") + key : emptyLog()}</section>
-    <section aria-labelledby="hrose"><h2 id="hrose">Which way it hears</h2><p class="note">Stations with a locator over the last 7 days, by compass bearing from the station.</p>${antennaSection(week)}</section>
+    <section aria-labelledby="h1"><h2 id="h1" data-rail="Bands">Amateur decodes by band and hour</h2>${a.bands.length ? heatTable(a.bands, "decodes") + key : emptyLog()}</section>
+    <section aria-labelledby="h2"><h2 id="h2" data-rail="Modes">All modes by hour</h2>${a.modes.length ? heatTable(a.modes, "decodes") + key : emptyLog()}</section>
+    <section aria-labelledby="hrose"><h2 id="hrose" data-rail="Bearings">Which way it hears</h2><p class="note">Stations with a locator over the last 7 days, by compass bearing from the station.</p>${antennaSection(week)}</section>
     <div class="twocol">
-      <section aria-labelledby="h3"><h2 id="h3">Farthest squares</h2><p class="note">Measured between grid-square centers.</p>
+      <section aria-labelledby="h3"><h2 id="h3" data-rail="Farthest">Farthest squares</h2><p class="note">Measured between grid-square centers.</p>
         ${a.farthest.length ? `<div class="scroll"><table><thead><tr><th>km</th><th>Square</th><th>Who</th><th class="hide-s">Band</th><th>Heard</th></tr></thead><tbody>${a.farthest.map((f) => `<tr><td>${num(f.km)}</td><td>${esc(f.grid)}</td><td class="id">${callLink(f.mode, f.ident)}</td><td class="hide-s">${esc(f.band)}</td><td>${fmtTime(f.t)}</td></tr>`).join("")}</tbody></table></div>` : `<p class="empty">Distances need the station's grid square, which has not arrived yet.</p>`}
       </section>
-      <section aria-labelledby="h4"><h2 id="h4">New squares today</h2>
+      <section aria-labelledby="h4"><h2 id="h4" data-rail="New squares">New squares today</h2>
         ${historyDays < 7 ? `<p class="empty">With ${days} of history almost every square is new, so this list waits for a week of data.</p>` : a.new_squares.length ? `<div class="scroll"><table><thead><tr><th>Square</th><th>First heard</th></tr></thead><tbody>${a.new_squares.map((n) => `<tr><td class="id">${esc(n.grid)}</td><td>${fmtTime(n.t)}</td></tr>`).join("")}</tbody></table></div>` : `<p class="empty">No new squares in the last 24 hours.</p>`}
       </section>
     </div>
-    <section aria-labelledby="h5"><h2 id="h5">SELCAL calls</h2><p class="note">A SELCAL call is a two-pair code sent to wake one aircraft's radio. It carries no position.</p>
+    <section aria-labelledby="h5"><h2 id="h5" data-rail="SELCAL">SELCAL calls</h2><p class="note">A SELCAL call is a two-pair code sent to wake one aircraft's radio. It carries no position.</p>
       ${a.selcal.length ? `<div class="scroll"><table><thead><tr><th>Time</th><th>Code</th><th>kHz</th></tr></thead><tbody>${a.selcal.map((c) => `<tr><td>${fmtTime(c.t)}</td><td class="id">${esc(c.code)}</td><td>${khz(c.dial_hz)}</td></tr>`).join("")}</tbody></table></div>` : `<p class="empty">No SELCAL calls logged.</p>`}
     </section>`;
   wireSpectrum(spectrum);
@@ -262,7 +254,7 @@ function spectrumSection(s) {
   const late = s.earliest_minute > s.first_minute + 5;
   const modes = [...new Set(s.marks.map((m) => m[2]))].sort();
   return `<section aria-labelledby="hspec" class="spec-sec">
-    <h2 id="hspec">What the radio saw, last 24 hours</h2>
+    <h2 id="hspec" data-rail="Spectrum">What the radio saw, last 24 hours</h2>
     <p class="note">Each column is one minute, from 2 MHz at the bottom to 30 MHz at the top. Brightness is how far a signal rose above the noise around it, not an average, so quiet spectrum stays dark. Colored marks are what was decoded there.${late ? ` The record began at ${utcClock(s.earliest_minute)} UTC.` : ""}</p>
     <div class="spec-chart">
       <div class="spec-y" aria-hidden="true">${SPECTRUM_BANDS.map(([lo, , name]) => `<span style="top:${yOf(lo).toFixed(2)}%">${name}</span>`).join("")}</div>
@@ -449,7 +441,9 @@ function minuteCounts(rows) {
 async function showLog() {
   const { rows, generated_utc: built } = await load("log.json");
   shownBuilt = built;
-  const modes = [...new Set(rows.map((r) => r.m))].sort();
+  const counts = {};
+  for (const r of rows) counts[r.m] = (counts[r.m] || 0) + 1;
+  const modes = Object.keys(counts).sort((a, b) => counts[b] - counts[a]);
   view.innerHTML = `
     <header class="page-head ip-atmos">${atmosphere(minuteCounts(rows))}
     <p class="eyebrow">Log</p>
@@ -457,21 +451,25 @@ async function showLog() {
     <p class="lede">${rows.length ? `These reach back to ${fmtTime(rows[rows.length - 1].t)}. Look up a station to search everything the log has kept.` : "Nothing has arrived from the receiver yet."}</p>
     ${lookupForm("")}
     </header>
-    <div class="tools" style="margin-top:22px">
-      <div class="chips"><label class="lbl" for="logmode">Mode</label><select id="logmode"><option value="">All</option>${modes.map((m) => `<option>${esc(m)}</option>`).join("")}</select></div>
-      <div class="chips"><label class="lbl" for="logq">Filter</label><input id="logq" type="search" placeholder="Within these rows"></div>
+    <div class="tools log-tools">
+      <div class="chips" id="logmodes" role="group" aria-label="Mode"><span class="lbl">Mode</span><button type="button" data-m="" aria-pressed="true">All <small>${num(rows.length)}</small></button>${modes.map((m) => `<button type="button" data-m="${esc(m)}" aria-pressed="false"><i style="background:${modeColor(m)}"></i>${esc(m)} <small>${num(counts[m])}</small></button>`).join("")}</div>
+      <div class="chips"><label class="lbl" for="logq">Filter</label><input id="logq" type="search" placeholder="Call or square, within these rows"></div>
       <p class="note" id="logn" aria-live="polite"></p>
     </div>
     <div id="logrows"></div>`;
+  let mode = "";
   const draw = () => {
-    const m = view.querySelector("#logmode").value;
     const q = view.querySelector("#logq").value.trim().toUpperCase();
-    const shown = rows.filter((r) => (!m || r.m === m) && (!q || `${r.i || ""} ${r.g || ""}`.toUpperCase().includes(q)));
-    view.querySelector("#logn").textContent = `${num(shown.length)} of ${num(rows.length)}`;
-    view.querySelector("#logrows").innerHTML = shown.length ? rowsTable(shown.slice(0, 500)) : rows.length ? `<p class="empty">No entries match.</p>` : emptyLog();
+    const shown = rows.filter((r) => (!mode || r.m === mode) && (!q || `${r.i || ""} ${r.g || ""}`.toUpperCase().includes(q)));
+    view.querySelector("#logn").textContent = shown.length === rows.length ? "" : `${num(shown.length)} of ${num(rows.length)} shown`;
+    view.querySelector("#logrows").innerHTML = shown.length ? rowsTable(shown.slice(0, 500), { sticky: true }) : rows.length ? `<p class="empty">No entries match.</p>` : emptyLog();
   };
   wireLookup();
-  view.querySelector("#logmode").addEventListener("change", draw);
+  view.querySelectorAll("#logmodes button").forEach((b) => b.addEventListener("click", () => {
+    mode = b.dataset.m;
+    view.querySelectorAll("#logmodes button").forEach((o) => o.setAttribute("aria-pressed", String(o === b)));
+    draw();
+  }));
   view.querySelector("#logq").addEventListener("input", draw);
   draw();
 }
@@ -513,7 +511,7 @@ function stationPage(id, rows) {
       <div><dt>Best report</dt><dd>${bests.length ? `${Math.max(...bests)} dB` : "None"}</dd></div>
     </dl>
     <div class="scroll"><table><thead><tr><th>Mode</th><th>Band</th><th>Decodes</th><th>Best</th><th>First heard</th><th>Last heard</th><th>Square</th></tr></thead><tbody>
-    ${latest.map((r) => `<tr><td>${esc(r[0])}</td><td>${esc(r[1])}</td><td>${num(r[4])}</td><td>${r[5] === null ? "" : `${r[5]} dB`}</td><td>${fmtTime(r[2])}</td><td>${fmtTime(r[3])}</td><td class="id">${r[6] ? `<a href="#/map?w=7d&s=${esc(r[6])}">${esc(r[6])}</a>` : ""}</td></tr>`).join("")}
+    ${latest.map((r) => `<tr><td>${modeChip(r[0])}</td><td>${esc(r[1])}</td><td>${num(r[4])}</td><td>${r[5] === null ? "" : `${r[5]} dB`}</td><td>${fmtTime(r[2])}</td><td>${fmtTime(r[3])}</td><td class="id">${r[6] ? `<a href="#/map?w=7d&s=${esc(r[6])}">${esc(r[6])}</a>` : ""}</td></tr>`).join("")}
     </tbody></table></div>
     ${squares.length ? `<p class="note" style="margin-top:12px">The square is the one most recently reported on that band and mode. The map link shows the last 7 days.</p>` : ""}`;
 }
@@ -596,10 +594,6 @@ function chainSvg(alongside, tall) {
   </svg>`;
 }
 
-// A fixed color per mode, in the brand's categorical order. FT4 and SSTV fold into gray.
-const MODE_SLOT = { FT8: 1, HFDL: 2, DSC: 3, WSPR: 4, SELCAL: 5, JS8: 6, WEFAX: 7 };
-const modeColor = (m) => (MODE_SLOT[m] ? `var(--innerpulse-chart-${MODE_SLOT[m]})` : "var(--innerpulse-chart-other)");
-
 function timelineHtml(h) {
   const span = h.generated_utc - h.since;
   const pos = (t) => Math.max(0, Math.min(100, ((t - h.since) / span) * 100));
@@ -610,7 +604,7 @@ function timelineHtml(h) {
   const bar = ([a, b, mode, dial, healthy, decodes], extra) => {
     const left = pos(a);
     const note = healthy === 0 ? "failed its radio check" : decodes ? `${num(decodes)} decodes` : "nothing decoded";
-    return `<i class="${extra}" style="left:${left.toFixed(2)}%;width:${Math.max(0.1, pos(b) - left).toFixed(2)}%;--c:${modeColor(mode)}" title="${esc(mode)} ${khz(dial)} kHz, ${clock(a)} to ${clock(b)}, ${note}"></i>`;
+    return `<i class="${extra}" style="left:${left.toFixed(2)}%;width:${Math.max(0.1, pos(b) - left).toFixed(2)}%;--c:${modeColor(mode)}" data-tip="${esc(mode)} ${khz(dial)} kHz · ${clock(a)} to ${clock(b)} · ${note}"></i>`;
   };
   const modes = [...new Set(h.timeline.map((r) => r[2]))].sort((x, y) => (MODE_SLOT[x] || 9) - (MODE_SLOT[y] || 9));
   return `<div class="key-row">${modes.map((m) => `<span><i style="background:${modeColor(m)}"></i>${esc(m)}</span>`).join("")}<span><i class="k-fail"></i>Failed check</span><span><i class="k-out"></i>Not monitored</span></div>
@@ -619,7 +613,7 @@ function timelineHtml(h) {
       <div class="tl-label">Heard</div><div class="tl-track thin">${main.map((r) => bar(r, r[5] ? "heard" : "quiet")).join("")}</div>
       <div class="tl-label">Alongside</div><div class="tl-track thin">${wide.map((r) => bar(r, "")).join("")}</div>
       <div></div><div class="tl-ticks">${hoursBack.join("")}</div>
-    </div>`;
+    </div><p class="fig-read heat-read" aria-live="off">Point at a stretch for a reading.</p>`;
 }
 
 const hexRgb = (h) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16));
@@ -640,10 +634,10 @@ function noiseHtml(bands) {
   return `<div class="scroll"><div class="heat">
     ${ham.map((b) => `<div class="rowlabel">${esc(b.label)}</div><div class="cells24">${b.cells.map((c, h) => {
       const at = `${b.label}, ${String(h).padStart(2, "0")}Z`;
-      return c ? `<i style="background:${rampColor(high === low ? 0 : (c[0] - low) / (high - low))}" title="${esc(at)}: ${c[0]} dBFS on average, peak ${c[1]} of full scale, ${hours(c[2])} measured"></i>` : `<i class="out" title="${esc(at)}: not monitored"></i>`;
+      return c ? `<i style="background:${rampColor(high === low ? 0 : (c[0] - low) / (high - low))}" data-tip="${esc(at)}: ${c[0]} dBFS on average, peak ${c[1]} of full scale, ${hours(c[2])} measured"></i>` : `<i class="out" data-tip="${esc(at)}: not monitored"></i>`;
     }).join("")}</div>`).join("")}
     <div class="hours">${Array.from({ length: 24 }, (_, h) => `<span>${h % 3 === 0 ? String(h).padStart(2, "0") : ""}</span>`).join("")}</div>
-  </div></div>
+  </div></div><p class="fig-read heat-read" aria-live="off">Point at a cell for a reading. Hours are UTC.</p>
   <div class="ramp-key"><span>Lower, ${low} dBFS</span><i style="background:linear-gradient(90deg,${STEPS.join(",")})"></i><span>Higher, ${high} dBFS</span><span class="ramp-note">${clipped ? `${num(clipped)} band-hours reached full scale` : "No band-hour reached full scale"}</span></div>`;
 }
 
@@ -667,7 +661,7 @@ const TRAFFIC_VIEWS = {
 };
 
 function trafficMap(w) {
-  return `<section class="traffic-map" aria-labelledby="hmap"><h2 id="hmap">Aircraft and ships on the map</h2>
+  return `<section class="traffic-map" aria-labelledby="hmap"><h2 id="hmap" data-rail="Map">Aircraft and ships on the map</h2>
     <p class="note">Point anywhere along a track for that flight's details. Click to keep it selected.</p>
     <div class="tools" style="margin-top:12px">
       <div class="chips"><span class="lbl">Window</span><button type="button" data-w="24h" aria-pressed="${w === "24h"}">24 hours</button><button type="button" data-w="7d" aria-pressed="${w === "7d"}">7 days</button></div>
@@ -717,12 +711,12 @@ async function showTraffic(params) {
     <p class="lede">Aircraft heard on HFDL in the last 24 hours and DSC ship calls in the last 30 days. Airlines and flag states come from published designator tables, and are blank where a code doesn't match one.</p>
     </header>
     ${trafficMap(w)}
-    <section aria-labelledby="hair"><h2 id="hair">Aircraft</h2>
+    <section aria-labelledby="hair"><h2 id="hair" data-rail="Aircraft">Aircraft</h2>
       ${t.flights.length ? `<div class="scroll"><table><thead><tr><th>Flight</th><th>Operator</th><th class="hide-s">Registration</th><th class="hide-s">Ground station</th><th>Messages</th><th class="hide-s">Last position</th><th>Last heard</th></tr></thead><tbody>
       ${t.flights.map((f) => `<tr><td class="id">${callLink("HFDL", f.i)}</td><td>${esc(aircraftAirline(f.i, names.airlines))}</td><td class="hide-s">${esc(f.reg || "")}</td><td class="hide-s">${esc(gsName[f.gs] || "")}</td><td>${num(f.n)}</td><td class="hide-s">${f.la === undefined ? "" : tracked.has(f.i) ? `<button type="button" class="show-flight" data-flight="${esc(f.i)}" title="Show this flight on the map">${f.la}, ${f.lo}</button>` : `${f.la}, ${f.lo}`}</td><td>${fmtTime(f.t)}</td></tr>`).join("")}
       </tbody></table></div>` : emptyLog()}
     </section>
-    <section aria-labelledby="hship"><h2 id="hship">Ship and coast station calls</h2>
+    <section aria-labelledby="hship"><h2 id="hship" data-rail="Ships">Ship and coast station calls</h2>
       ${t.ships.length ? `<div class="scroll"><table><thead><tr><th>Time</th><th>MMSI</th><th>Flag</th><th>From</th><th>Call</th><th class="hide-s">kHz</th><th class="hide-s">Position</th></tr></thead><tbody>
       ${t.ships.map((s) => `<tr><td>${fmtTime(s.t)}</td><td class="id">${callLink("DSC", s.i)}</td><td>${esc(shipFlag(s, names.flags))}</td><td>${esc(s.from || "")}</td><td>${esc([s.cat, s.what].filter(Boolean).join(", "))}</td><td class="hide-s">${khz(s.f)}</td><td class="hide-s">${s.la == null ? "" : `${s.la.toFixed(2)}, ${s.lo.toFixed(2)}`}</td></tr>`).join("")}
       </tbody></table></div>` : emptyLog()}
@@ -793,13 +787,13 @@ async function showStation() {
       </div>
     </div>
     <section aria-labelledby="husdr" class="usdr-sec">
-      <h2 id="husdr">Driven by uSDR</h2>
+      <h2 id="husdr" data-rail="uSDR">Driven by uSDR</h2>
       <p class="lede">Everything here is received and decoded by <a href="https://www.innerpulse.net/portfolio/#p-usdr">uSDR</a>, a software-defined radio suite from innerpulse. A daemon sits beside the receiver and does the listening, decoding and logging on its own, and the desktop app connects to it for looking and tuning by hand.</p>
       <div class="shots">
         ${USDR_SHOTS.map((s, i) => `<figure><a href="shots/${s.file}" data-shot="${i}"><img loading="lazy" src="shots/${s.file}" width="2000" height="1210" alt="${esc(s.alt)}"></a><figcaption>${esc(s.caption)}</figcaption></figure>`).join("")}
       </div>
     </section>
-    ${health ? `<section aria-labelledby="hhealth"><h2 id="hhealth">Station health and activity</h2>
+    ${health ? `<section aria-labelledby="hhealth"><h2 id="hhealth" data-rail="Health">Station health and activity</h2>
       <div class="health-grid">
         <div class="health-main">
           <div class="card"><h3>Sessions, last 24 hours, UTC</h3>${health.timeline.length ? timelineHtml(health) : emptyLog()}</div>
@@ -824,7 +818,7 @@ async function showStation() {
       </div>
     </section>` : ""}
     <section aria-labelledby="hnotes" class="notes-sec">
-      <h2 id="hnotes">Reading the log</h2>
+      <h2 id="hnotes" data-rail="Notes">Reading the log</h2>
       <div class="notes">
         <article><h3>What it listens to</h3><p>Amateur digital modes (FT8 and WSPR), HFDL aircraft datalink, DSC ship calls, SELCAL, radiofax weather charts and SSTV, all below 30 MHz.</p></article>
         <article><h3>How reception is checked</h3><p>Once an hour the receiver checks itself against a time-signal station. A stretch that failed the check or overloaded the receiver is left out of the figures.</p></article>
@@ -914,11 +908,43 @@ bar.querySelector("nav").addEventListener("click", () => {
   menu.setAttribute("aria-expanded", "false");
 });
 
+// Every time on the site is UTC, so the masthead keeps the clock.
+const utc = document.getElementById("utc");
+if (utc) {
+  const tick = () => { if (!document.hidden) utc.textContent = fmtClock(Date.now() / 1000).slice(0, 5); };
+  tick();
+  setInterval(tick, 5000);
+}
+
+// The lookup box in the masthead; "/" reaches it from anywhere.
+const find = document.getElementById("find");
+if (find) {
+  const box = find.querySelector("input");
+  find.addEventListener("submit", (ev) => {
+    ev.preventDefault();
+    const q = box.value.trim().toUpperCase();
+    if (!q) return;
+    box.value = "";
+    box.blur();
+    location.hash = `#/who?c=${encodeURIComponent(q)}`;
+  });
+  addEventListener("keydown", (ev) => {
+    if (ev.key !== "/" || ev.ctrlKey || ev.metaKey || ev.altKey || /^(INPUT|TEXTAREA|SELECT)$/.test(ev.target.tagName)) return;
+    if (!find.offsetParent) return;
+    ev.preventDefault();
+    box.focus();
+  });
+}
+
 let lastRoute = "";
 function hashChanged() {
   const { name, params } = route();
   const key = `${name}|${name === "map" ? params.w || "24h" : name === "who" ? params.c || "" : name === "traffic" ? params.w || "24h" : ""}`;
-  if (key !== lastRoute) { lastRoute = key; render(); }
+  if (key === lastRoute) return;
+  // A new page starts at its top; the first one keeps wherever the browser restored.
+  if (lastRoute) scrollTo(0, 0);
+  lastRoute = key;
+  render();
 }
 addEventListener("hashchange", hashChanged);
 hashChanged();

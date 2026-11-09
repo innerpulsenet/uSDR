@@ -14,6 +14,7 @@
   --readout-h: 279px; /* five rows and all ten HF bands */
   --ip-atmos-accent: rgba(255, 179, 71, .07);
   --totals-h: 371px;  /* six rows, ten bands and the note */
+  --mast-h: 63px;     /* the masthead and its hairline, for what sticks under it */
 }
 
 * { box-sizing: border-box; }
@@ -40,7 +41,9 @@ h1 { font: 700 clamp(30px, 4vw, 52px)/1.05 var(--innerpulse-headline); letter-sp
 h2 { font: 700 clamp(19px, 2vw, 24px)/1.2 var(--innerpulse-headline); letter-spacing: -.03em; }
 .lede { color: var(--innerpulse-text-2); max-width: 62ch; margin-top: 12px; font-size: var(--innerpulse-text-lg); line-height: 1.5; }
 .note { color: var(--innerpulse-text-3); font-size: 13px; max-width: 74ch; }
-section { margin-top: clamp(32px, 4.5vw, 60px); }
+/* Sections open with a hairline and a short tick, so a long page reads as parts. */
+section { position: relative; margin-top: clamp(28px, 4vw, 52px); padding-top: clamp(18px, 2.2vw, 28px); border-top: 1px solid var(--innerpulse-line); scroll-margin-top: calc(var(--mast-h) + 58px); }
+section::before { content: ""; position: absolute; left: 0; top: -1px; width: 28px; height: 2px; background: var(--innerpulse-text-2); }
 section > h2 + .note { margin-top: 5px; }
 .empty { border: 1px solid var(--innerpulse-line); border-radius: calc(var(--radius) * 2); color: var(--innerpulse-text-2); padding: 28px 22px; margin-top: 14px; max-width: 74ch; font-size: 14px; }
 .num { font-variant-numeric: tabular-nums; }
@@ -48,12 +51,6 @@ section > h2 + .note { margin-top: 5px; }
 .ip-readout { margin-top: 28px; }
 .ip-notice { margin-top: 12px; max-width: 74ch; }
 
-.bars { margin-top: 14px; display: grid; gap: 7px; }
-.bar { display: grid; grid-template-columns: 74px minmax(0, 1fr) 190px; gap: 12px; align-items: center; font-size: 13px; }
-.bar > span { font-family: var(--innerpulse-mono); color: var(--innerpulse-text-2); }
-.bar i { display: block; height: 10px; background: var(--innerpulse-surface-3); position: relative; border-radius: 1px; }
-.bar i::after { content: ""; position: absolute; inset: 0 auto 0 0; width: var(--w); background: var(--series); border-radius: 1px; }
-.bar em { font: 400 12px var(--innerpulse-mono); color: var(--innerpulse-text-2); text-align: right; font-variant-numeric: tabular-nums; }
 
 .scroll { overflow-x: auto; margin-top: 12px; }
 table { border-collapse: collapse; width: 100%; font: 400 13px/1.35 var(--innerpulse-mono); font-variant-numeric: tabular-nums; }
@@ -90,7 +87,7 @@ input[type="search"], select { font: 400 13px var(--innerpulse-sans); background
 #view.enter .ip-atmos > :nth-child(5) { animation-delay: 190ms; }
 .rv { opacity: 0; transform: translateY(16px); transition: opacity .8s var(--innerpulse-ease), transform .8s var(--innerpulse-ease); }
 .rv.in { opacity: 1; transform: none; }
-.rv.in .bar i::after { animation: grow 1s var(--innerpulse-ease) both; animation-delay: calc(var(--i, 0) * 50ms); transform-origin: left; }
+.rv.in .track i { animation: grow 1s var(--innerpulse-ease) both; animation-delay: calc(var(--i, 0) * 50ms); transform-origin: left; }
 .rv.in .cells24 i { animation: cell .5s var(--innerpulse-ease) both; animation-delay: calc(var(--h, 0) * 22ms); }
 .rv.in .rose path { animation: wedge .8s var(--innerpulse-ease) both; animation-delay: calc(var(--i, 0) * 18ms); }
 
@@ -377,8 +374,136 @@ dl { margin: 0; }
 .ip-credit { display: inline-flex; align-items: center; gap: 6px; font: 400 12px var(--innerpulse-mono); color: var(--innerpulse-text-3); text-decoration: none; }
 .ip-credit:hover { color: var(--innerpulse-text); }
 
+
+/* The mark: the six bars as the kit draws them, mounted on a boom in the site's RF amber, so
+   the pulse reads as a beam antenna seen from above. The boom runs out first and the elements
+   rise from it; a glint travels down it while the page works. */
+:root .ip-chrome .ip-chrome-mark path.boom,
+:root .ip-chrome .ip-chrome-mark path.boom-run { fill: none; stroke: var(--innerpulse-amber); stroke-width: 10; stroke-linecap: round; transform: none; animation: none; }
+:root .ip-chrome .ip-chrome-mark path.boom { stroke-dasharray: 1 1.2; animation: boom-in .7s var(--innerpulse-ease) both; }
+:root .ip-chrome .ip-chrome-mark path.boom-run { stroke: #fff1d6; stroke-dasharray: .14 2; stroke-dashoffset: .2; opacity: 0; }
+:root.ip-busy .ip-chrome .ip-chrome-mark path.boom-run { opacity: 1; animation: boom-run 1.2s linear infinite; }
+@keyframes boom-in { from { stroke-dashoffset: 1.05; } to { stroke-dashoffset: 0; } }
+@keyframes boom-run { from { stroke-dashoffset: .2; } to { stroke-dashoffset: -1.05; } }
+/* The kit keys each bar's motion to its place among its siblings; the boom comes first here. */
+.ip-chrome-mark rect:nth-of-type(1), .ip-chrome-mark rect:nth-of-type(6) { --ip-from: 1; --ip-to: 2.333; }
+.ip-chrome-mark rect:nth-of-type(2) { --ip-from: .156; --ip-to: 1.208; }
+.ip-chrome-mark rect:nth-of-type(3) { --ip-from: .213; --ip-to: 1.285; }
+.ip-chrome-mark rect:nth-of-type(4) { --ip-from: .286; --ip-to: 1.381; }
+.ip-chrome-mark rect:nth-of-type(5) { --ip-from: .146; --ip-to: 1.195; }
+.ip-chrome-mark { width: 32px; height: 32px; }
+
+/* Masthead tools: the lookup box and the clock. */
+.utc { margin-left: 20px; font: 400 12px/1 var(--innerpulse-mono); color: var(--innerpulse-text-3); white-space: nowrap; }
+.utc b { font-weight: 500; color: var(--innerpulse-text); font-variant-numeric: tabular-nums; }
+.mast-find { position: relative; display: flex; align-items: center; margin-left: 22px; }
+.mast-find svg { position: absolute; left: 9px; width: 14px; height: 14px; color: var(--innerpulse-text-3); pointer-events: none; }
+.mast-find input { width: 164px; padding-left: 30px; padding-right: 28px; font: 400 12.5px var(--innerpulse-mono); transition: width var(--innerpulse-dur-2) var(--innerpulse-ease), border-color var(--innerpulse-dur-1); }
+.mast-find input:focus { width: 220px; outline: none; border-color: var(--innerpulse-pulse); }
+.mast-find input::-webkit-search-cancel-button { display: none; }
+.mast-find kbd { position: absolute; right: 8px; padding: 2px 5px; font: 500 10.5px/1 var(--innerpulse-mono); color: var(--innerpulse-text-3); border: 1px solid var(--innerpulse-line-2); border-radius: 3px; pointer-events: none; }
+.mast-find input:focus + kbd, .mast-find input:not(:placeholder-shown) + kbd { display: none; }
+
+/* The strip of a long page's sections, under the masthead. */
+.rail { position: sticky; top: var(--mast-h); z-index: 20; display: flex; align-items: center; gap: 2px; padding: 8px 0; background: var(--innerpulse-ground); border-bottom: 1px solid var(--innerpulse-line); overflow-x: auto; scrollbar-width: none; }
+.rail::-webkit-scrollbar { display: none; }
+.rail .lbl { margin-right: 12px; font: 500 var(--innerpulse-text-xs)/1.2 var(--innerpulse-mono); letter-spacing: .12em; text-transform: uppercase; color: var(--innerpulse-text-3); white-space: nowrap; }
+.rail button { flex: none; border: 0; min-height: 30px; padding: 0 10px; color: var(--innerpulse-text-3); white-space: nowrap; transition: color var(--innerpulse-dur-1), background var(--innerpulse-dur-1); }
+.rail button:hover { color: var(--innerpulse-text); }
+.rail button[aria-current] { color: var(--innerpulse-text); background: var(--innerpulse-surface-3); }
+.rail + section { margin-top: clamp(18px, 2.4vw, 30px); border-top: 0; }
+.rail + section::before { display: none; }
+
+/* Links that lead on. */
+.go { display: inline-flex; align-items: baseline; gap: 7px; padding-bottom: 2px; font: 500 13.5px/1.3 var(--innerpulse-sans); color: var(--innerpulse-text); text-decoration: none; border-bottom: 1px solid var(--innerpulse-line-2); transition: border-color var(--innerpulse-dur-1); }
+.go::after { content: "\2192"; transition: transform var(--innerpulse-dur-2) var(--innerpulse-ease); }
+.go:hover { border-color: var(--innerpulse-pulse); }
+.go:hover::after { transform: translateX(4px); }
+.hero-links { display: flex; flex-wrap: wrap; gap: 10px 26px; margin-top: 22px; }
+.more { margin-top: 16px; }
+
+/* A mode wears its chart color everywhere it is named. */
+.mode { display: inline-flex; align-items: center; gap: 7px; color: var(--innerpulse-text); }
+.mode::before { content: ""; flex: none; width: 7px; height: 7px; border-radius: 2px; background: var(--c); }
+
+/* Log rows: one group per minute, with the report as a short meter. */
+.rows .t.same { color: rgba(143, 148, 155, .3); }
+.rows tr.first:not(:first-child) td { border-top: 1px solid var(--innerpulse-line-2); }
+.rows .f small { margin-left: 9px; font-size: 11px; color: var(--innerpulse-text-3); }
+.snr { display: inline-flex; align-items: center; gap: 9px; }
+.snr i { position: relative; display: block; width: 44px; height: 4px; overflow: hidden; background: var(--innerpulse-surface-3); border-radius: 2px; }
+.snr i::after { content: ""; position: absolute; inset: 0 auto 0 0; width: var(--w); background: var(--innerpulse-text-2); border-radius: 2px; }
+.snr b { min-width: 6ch; font-weight: 400; text-align: right; }
+@media (min-width: 761px) {
+  .scroll.stick { overflow: visible; }
+  .stick th { position: sticky; top: var(--mast-h); z-index: 2; background: var(--innerpulse-ground); }
+}
+.log-tools { margin-top: 22px; }
+#logmodes button i { display: inline-block; width: 7px; height: 7px; margin-right: 7px; border-radius: 2px; }
+#logmodes button small { margin-left: 4px; font: 400 11px var(--innerpulse-mono); color: var(--innerpulse-text-3); }
+#logmodes button[aria-pressed="true"] small { color: var(--innerpulse-gunmetal); }
+#logq { width: 260px; max-width: 100%; }
+
+/* The Now page: the dial, then the mode board beside the latest rows. */
+.now-cols { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); gap: 0 clamp(28px, 4vw, 60px); align-items: start; }
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.board th.n, .board td.n { text-align: right; padding: 8px 0 8px 18px; }
+.board td.strong { color: var(--innerpulse-text); }
+.board td.track { width: 100%; min-width: 130px; }
+.board .track div { position: relative; height: 10px; background: var(--innerpulse-surface-3); border-radius: 2px; }
+.board .track i { position: absolute; inset: 0 auto 0 0; width: var(--w); min-width: 2px; background: var(--c); border-radius: 2px; }
+.board .track b { position: absolute; top: 0; bottom: 0; z-index: 1; width: 1px; background: rgba(11, 13, 16, .6); }
+.board .scale { position: relative; height: 12px; margin-right: 16px; }
+.board .track div { margin-right: 16px; }
+.board .scale span { position: absolute; top: 0; transform: translateX(-50%); font: 400 10.5px/12px var(--innerpulse-mono); letter-spacing: 0; text-transform: none; }
+.board .scale span:first-child { transform: none; }
+.board .scale span:last-child { transform: translateX(-100%); }
+
+.dial-scroll { margin-top: 16px; }
+.dial { display: block; width: 100%; min-width: 820px; height: auto; overflow: visible; }
+.dial .db { fill: rgba(227, 230, 233, .04); }
+.dial .dn, .dial .dt { font: 400 11px var(--innerpulse-mono); fill: var(--innerpulse-text-3); }
+.dial .dn { fill: var(--innerpulse-text-2); }
+.dial .dg { fill: none; stroke: var(--innerpulse-line); stroke-dasharray: 2 5; }
+.dial .da { fill: none; stroke: var(--innerpulse-line-2); }
+.dial .dx { fill: none; stroke: var(--innerpulse-text-3); }
+.dial .dw { fill: var(--innerpulse-text-3); }
+.dial .lp path { fill: none; stroke: var(--c); stroke-width: 1.6; stroke-opacity: .7; }
+.dial .lp circle { fill: var(--c); stroke: var(--innerpulse-ground); stroke-width: 1.5; }
+.dial .lp.none circle { fill: var(--innerpulse-ground); stroke: var(--c); stroke-width: 1.6; }
+.dial .lp circle.hit { fill: transparent; stroke: none; cursor: crosshair; }
+.dial .lp.on path { stroke-opacity: 1; stroke-width: 2.6; }
+.dial .lp.on circle:not(.hit) { stroke: var(--innerpulse-text); }
+.dial .needle { pointer-events: none; }
+.dial .needle path { fill: none; stroke: var(--innerpulse-text); stroke-width: 1.2; }
+.dial .needle .cap { fill: var(--innerpulse-text); stroke: none; }
+.dial .needle text { font: 500 11.5px var(--innerpulse-mono); fill: var(--innerpulse-text); }
+@keyframes needle { from { transform: translateX(var(--from)); } }
+@keyframes stem { from { transform: scaleY(0); } }
+@keyframes dot { from { opacity: 0; } }
+.rv.in .dial .needle { animation: needle 1.7s var(--innerpulse-ease) both; }
+.rv.in .dial .lp path { transform-box: fill-box; transform-origin: bottom; animation: stem .8s var(--innerpulse-ease) both; animation-delay: var(--d); }
+.rv.in .dial .lp circle:not(.hit) { animation: dot .5s ease both; animation-delay: calc(var(--d) + .45s); }
+
+/* The line under a figure that says what the pointer is on. */
+.fig-read { min-height: 1.5em; margin-top: 10px; font: 400 13px/1.5 var(--innerpulse-mono); color: var(--innerpulse-text-3); }
+.fig-read.live { color: var(--innerpulse-text); }
+.cells24 i { cursor: crosshair; }
+.cells24 i.on { position: relative; z-index: 1; outline: 1.5px solid var(--innerpulse-text); }
+.tl-track i { cursor: crosshair; }
+.tl-track i.on { filter: brightness(1.35); }
+.key-row .k-ring { background: transparent; border: 1.6px solid var(--innerpulse-text-2); border-radius: 50%; }
+.key-row .k-dwell { width: 3px; background: var(--innerpulse-text-3); border-radius: 1px; }
+
+@media (max-width: 1400px) {
+  .mast-find { display: none; }
+}
 @media (max-width: 1160px) {
   .fresh .age { display: none; }
+}
+@media (max-width: 1000px) {
+  .utc { display: none; }
+  .now-cols { grid-template-columns: minmax(0, 1fr); }
 }
 @media (max-width: 860px) {
   .hero { grid-template-columns: minmax(0, 1fr); }
@@ -395,8 +520,6 @@ dl { margin: 0; }
 }
 @media (max-width: 760px) {
   .twocol { grid-template-columns: minmax(0, 1fr); }
-  .bar { grid-template-columns: 58px minmax(0, 1fr); }
-  .bar em { grid-column: 2; text-align: left; }
   .side { grid-template-columns: minmax(0, 1fr); }
   .traffic-panels { grid-template-columns: minmax(0, 1fr); }
   .stage.tall { height: 110vw; min-height: 340px; }
@@ -405,6 +528,10 @@ dl { margin: 0; }
   .filters > summary { display: block; cursor: pointer; font: 500 var(--innerpulse-text-xs)/1.2 var(--innerpulse-mono); letter-spacing: .12em; text-transform: uppercase; color: var(--innerpulse-text-2); padding: 10px 0; }
   .strip-foot { align-items: flex-start; }
   .hide-s { display: none; }
+  .board .scale span:nth-child(even) { display: none; }
+  .board td.track { min-width: 84px; }
+  .board th.n, .board td.n { padding-left: 12px; }
+  .board .scale, .board .track div { margin-right: 4px; }
   .chain.wide { display: none; }
   .chain.tall { display: block; }
   .chain-steps { grid-template-columns: minmax(0, 1fr); }
@@ -422,7 +549,9 @@ dl { margin: 0; }
   .fresh { margin-left: auto; margin-right: 12px; }
 }
 @media (prefers-reduced-motion: reduce) {
-  button, .pic, .pic img, .nav-tick, .shots img { transition: none; }
+  button, .pic, .pic img, .nav-tick, .shots img, .go, .go::after, .mast-find input { transition: none; }
+  :root .ip-chrome .ip-chrome-mark path.boom, :root.ip-busy .ip-chrome .ip-chrome-mark path.boom-run { animation: none; }
+  :root.ip-busy .ip-chrome .ip-chrome-mark path.boom-run { opacity: 0; }
   .spec-plot img { animation: none; }
   .pulse, .path-sel, .viewer[open] { animation: none; }
   * { scroll-behavior: auto; }

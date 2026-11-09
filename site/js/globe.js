@@ -115,6 +115,8 @@ export function mountGlobe(canvas, map, land) {
   const order = [...recent].sort(() => Math.random() - 0.5);
 
   function draw(nowMs) {
+    // A canvas with no room yet (a hidden tab, a page still laying out) has nothing to draw on.
+    if (!(R > 0)) return;
     const sinL = Math.sin(lon0 * RAD), cosL = Math.cos(lon0 * RAD);
     ctx.clearRect(0, 0, W, W);
     ctx.save();
