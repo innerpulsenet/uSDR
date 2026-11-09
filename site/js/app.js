@@ -639,7 +639,6 @@ async function showStation() {
   const c = health?.checks;
   // Modes only: with a channel on every band, the full list would not fit in the diagram.
   const alongside = (health?.alongside || "").split(", ").map((s) => s.split(" ")[0]).filter(Boolean).join(" ");
-  const fold = (title, body, open) => `<details class="fold"${open ? " open" : ""}><summary>${title}</summary><div>${body}</div></details>`;
   view.innerHTML = `
     <header class="page-head ip-atmos">${atmosphere(listening)}
     <p class="eyebrow">Station</p>
@@ -659,13 +658,6 @@ async function showStation() {
         <h2>One receiver, a scheduled scan.</h2>
         <p class="note-lead">It runs unattended on uSDR. A schedule decides where it tunes and what it decodes there, and channels alongside it decode the other digital frequencies that fall inside the capture.</p>
         <p class="ip-notice ip-notice-warn" role="note">${glyph("warn")}<span><b>This is not a distress monitor.</b> DSC calls appear as logged, the receiver is only there part of the time, and nobody is watching it. If someone is in trouble at sea, contact a rescue coordination center.</span></p>
-        <div class="folds">
-          ${fold("What it listens to", `<p>Amateur digital modes (FT8, FT4, WSPR and JS8), HFDL aircraft datalink, DSC ship calls, SELCAL, radiofax weather charts and SSTV, all below 30 MHz.</p>`)}
-          ${fold("How reception is checked", `<p>Once an hour the receiver checks itself against a time-signal station. A stretch that failed the check or overloaded the receiver is left out of the figures.</p>`)}
-          ${fold("What an empty map means", `<p>Most frequencies are unattended at any given moment. Every stretch of listening is logged, pages divide counts by that time, and hours with none are hatched: an empty cell and a hatched cell mean different things.</p><p>A wire loop this long has a lobed pattern on the higher bands, strong in some directions and weak in others, so a region with no spots does not show the band was closed to it.</p>`)}
-          ${fold("What stays private", `<p>The content of aircraft messages is not published. The station itself stays anonymous, and its position is given only as a four-character grid square. Radio amateurs heard on the air appear by their callsigns and locators, as they do on any public spotting network.</p>`)}
-          ${fold("How aircraft tracks are drawn", `<p>Aircraft queue position reports and sometimes send several together. Tracks follow each fix's own timestamp, and split where two fixes could not belong to one flight.</p>`)}
-        </div>
       </div>
     </div>
     <section aria-labelledby="husdr" class="usdr-sec">
@@ -698,7 +690,17 @@ async function showStation() {
           </div>` : ""}
         </div>
       </div>
-    </section>` : ""}`;
+    </section>` : ""}
+    <section aria-labelledby="hnotes" class="notes-sec">
+      <h2 id="hnotes">Reading the log</h2>
+      <div class="notes">
+        <article><h3>What it listens to</h3><p>Amateur digital modes (FT8 and WSPR), HFDL aircraft datalink, DSC ship calls, SELCAL, radiofax weather charts and SSTV, all below 30 MHz.</p></article>
+        <article><h3>How reception is checked</h3><p>Once an hour the receiver checks itself against a time-signal station. A stretch that failed the check or overloaded the receiver is left out of the figures.</p></article>
+        <article><h3>What stays private</h3><p>The content of aircraft messages is not published. The station itself stays anonymous, and its position is given only as a four-character grid square. Radio amateurs heard on the air appear by their callsigns and locators, as they do on any public spotting network.</p></article>
+        <article class="wide"><h3>What an empty map means</h3><div class="two"><p>Most frequencies are unattended at any given moment. Every stretch of listening is logged, pages divide counts by that time, and hours with none are hatched: an empty cell and a hatched cell mean different things.</p><p>A wire loop this long has a lobed pattern on the higher bands, strong in some directions and weak in others, so a region with no spots does not show the band was closed to it.</p></div></article>
+        <article><h3>How aircraft tracks are drawn</h3><p>Aircraft queue position reports and sometimes send several together. Tracks follow each fix's own timestamp, and split where two fixes could not belong to one flight.</p></article>
+      </div>
+    </section>`;
   const shots = USDR_SHOTS.map((s) => ({ src: `shots/${s.file}`, alt: s.alt, title: s.title }));
   view.querySelectorAll("[data-shot]").forEach((a) => a.addEventListener("click", (ev) => {
     ev.preventDefault();
