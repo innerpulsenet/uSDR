@@ -784,11 +784,11 @@ export function mountMap(root, data, opts) {
       }
     };
     for (const hit of trackHits) {
-      hit.pts.forEach(([ax, ay, , fa], i) => {
+      hit.pts.forEach(([ax, ay, fa], i) => {
         offer(hit, Math.hypot(ax - x, ay - y), fa);
         const next = hit.pts[i + 1];
         if (!next) return;
-        const [bx, by, , fb] = next;
+        const [bx, by, fb] = next;
         const [dx, dy] = [bx - ax, by - ay];
         const span = dx * dx + dy * dy;
         if (!span || Math.abs(dx) + Math.abs(dy) > proj.jump()) return;
