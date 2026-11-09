@@ -628,6 +628,11 @@ pub enum Tone {
 /// An outlined status chip: a glyph and words, never a bare dot. The live
 /// chip (recording) breathes: its lamp swells and dims over two seconds,
 /// so a recording in progress is seen to be in progress.
+/// The color a tone is shown in.
+pub fn tone_color(tone: Tone) -> Color32 {
+    tone_look(tone).0
+}
+
 pub fn chip(ui: &mut Ui, tone: Tone, text: &str) -> Response {
     let (c, _, _) = tone_look(tone);
     let g = ui.painter().layout_no_wrap(text.to_owned(), theme::mono(10.5), c);

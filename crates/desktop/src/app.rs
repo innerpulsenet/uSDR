@@ -1674,10 +1674,10 @@ impl App {
                 .order(egui::Order::Foreground)
                 .interactable(false)
                 .show(ctx, |ui| {
-                    egui::Frame::new()
+                    let card = egui::Frame::new()
                         .fill(alpha(theme::plate(), 0.97 * fade))
                         .stroke(Stroke::new(1.0, alpha(theme::line_2(), fade)))
-                        .corner_radius(CornerRadius::same(5))
+                        .corner_radius(CornerRadius::same(theme::RADIUS))
                         .inner_margin(egui::Margin::symmetric(12, 8))
                         .shadow({
                             let s = theme::shadow(theme::Depth::Floating);
@@ -1695,7 +1695,17 @@ impl App {
                                 });
                                 ui.label(egui::RichText::new(&t.text).color(alpha(theme::text(), fade)));
                             });
-                        });
+                        })
+                        .response
+                        .rect;
+                    // The window's own glass over the card, and its tone
+                    // down the left edge as on the receivers' flags: the
+                    // one flat plate in the window was this.
+                    if fade > 0.6 {
+                        theme::glass_top(ui.painter(), card);
+                    }
+                    let tick = egui::Rect::from_min_max(card.left_top() + vec2(1.0, 4.0), card.left_bottom() + vec2(3.0, -4.0));
+                    ui.painter().rect_filled(tick, CornerRadius::same(1), alpha(widgets::tone_color(t.tone), fade));
                 });
             t.height = r.response.rect.height();
             stack += t.height + 6.0;
