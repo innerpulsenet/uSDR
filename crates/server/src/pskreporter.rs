@@ -435,7 +435,7 @@ pub fn unbracket(call: &str) -> Option<&str> {
 
 /// The spot a decode makes when it names its sender as a real callsign
 /// (not a hash the decoder could not resolve): FT8, FT4, WSPR and JS8.
-fn spot_of(inspect_hz: f64, ev: &scannerd_engine::DecodeEvent) -> Option<Spot> {
+pub(crate) fn spot_of(inspect_hz: f64, ev: &scannerd_engine::DecodeEvent) -> Option<Spot> {
     if !ev.valid {
         return None;
     }

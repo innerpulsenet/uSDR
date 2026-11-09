@@ -16,6 +16,7 @@ mod pskreporter;
 mod wsprnet;
 mod scan;
 mod sdr;
+mod stationlog;
 mod sub_rx;
 
 use sdr::SdrEvent;
@@ -252,6 +253,8 @@ struct AppState {
     /// Pre-serialized JSON for every socket: presence, memories, station.
     meta: tokio::sync::broadcast::Sender<String>,
     reporter: Arc<pskreporter::Reporter>,
+    /// What was heard on HF and when; `None` if its database would not open.
+    station_log: Option<Arc<stationlog::StationLog>>,
 }
 
 /// Minimum spacing between settings-file writes.
@@ -431,6 +434,15 @@ async fn main() -> Result<()> {
         hfdata::set_config(hfdata::sanitize(d));
     }
     let reporter = Arc::new(pskreporter::Reporter::new(settings.station.clone().unwrap_or_default()));
+    // The receiver is worth running without its log, so a database that will
+    // not open is reported and left out rather than stopping the server.
+    let station_log = match stationlog::StationLog::open(config_path.with_file_name("station.sqlite")) {
+        Ok(log) => Some(log),
+        Err(e) => {
+            eprintln!("station log unavailable: {e:#}");
+            None
+        }
+    };
     let state = Arc::new(AppState {
         sdr: Mutex::new(Some(runtime)),
         calls,
@@ -445,7 +457,21 @@ async fn main() -> Result<()> {
         next_client: std::sync::atomic::AtomicU64::new(1),
         meta: tokio::sync::broadcast::channel(16).0,
         reporter,
+        station_log,
     });
+    if let Some(log) = state.station_log.clone() {
+        let events = state.sdr_events.subscribe();
+        let (radio, station) = (Arc::clone(&state), Arc::clone(&state));
+        tokio::spawn(log.run(
+            events,
+            move || {
+                let sdr = radio.sdr.lock().expect("sdr");
+                let s = sdr.as_ref()?.status.lock().expect("sdr status");
+                Some(stationlog::RadioNow { dial_hz: s.inspect_hz, mode: s.mode, rfgr_db: s.rfgr_db })
+            },
+            move || station.reporter.station().callsign,
+        ));
+    }
     {
         // The reporter hears every decode the receiver broadcasts, whether
         // or not a client is connected, and tells the clients what it did.
@@ -494,6 +520,9 @@ async fn main() -> Result<()> {
         .route("/api/sdr/rx2", post(post_sdr_rx2))
         .route("/api/memories", get(get_memories).post(post_memories))
         .route("/api/station", get(get_station).post(post_station))
+        .route("/api/station/summary", get(get_station_summary))
+        .route("/api/station/observations", get(get_station_observations))
+        .route("/api/station/listening", get(get_station_listening))
         .route("/api/sdr/digital", post(post_sdr_digital))
         .route("/api/sdr/fax", get(get_sdr_fax))
         .route("/ws", get(ws_upgrade))
@@ -587,7 +616,7 @@ async fn yield_guard(
 /// What this server is and which API revision it speaks, so a client can say
 /// plainly when it needs a newer one rather than failing on a missing route.
 const API_REVISION: u32 = 2;
-const API_FEATURES: &[&str] = &["presence", "web-policy", "memories", "avg-status", "filter", "filter-shape", "rx2", "stereo", "station", "digital", "fax"];
+const API_FEATURES: &[&str] = &["presence", "web-policy", "memories", "avg-status", "filter", "filter-shape", "rx2", "stereo", "station", "digital", "fax", "station-log"];
 
 fn version_json() -> serde_json::Value {
     serde_json::json!({
@@ -1092,6 +1121,38 @@ async fn post_sdr_mode(
     Ok(Json(
         serde_json::json!({ "ok": true, "mode": req.mode }),
     ))
+}
+
+/// Run a read of the station log off the async threads.
+async fn station_read(
+    st: Arc<AppState>,
+    read: impl FnOnce(&stationlog::StationLog) -> Result<serde_json::Value> + Send + 'static,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let log = st.station_log.clone().ok_or_else(|| anyhow::anyhow!("the station log is not open"))?;
+    let value = tokio::task::spawn_blocking(move || read(&log)).await.context("reading the station log")??;
+    Ok(Json(value))
+}
+
+async fn get_station_summary(
+    State(st): State<Arc<AppState>>,
+    Query(q): Query<stationlog::SummaryQuery>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
+    station_read(st, move |log| log.summary(&q, now)).await
+}
+
+async fn get_station_observations(
+    State(st): State<Arc<AppState>>,
+    Query(q): Query<stationlog::ListQuery>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    station_read(st, move |log| log.observations(&q)).await
+}
+
+async fn get_station_listening(
+    State(st): State<Arc<AppState>>,
+    Query(q): Query<stationlog::ListQuery>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    station_read(st, move |log| log.listening(&q)).await
 }
 
 #[derive(Deserialize)]
