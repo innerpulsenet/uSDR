@@ -47,7 +47,7 @@ class Ingest(unittest.TestCase):
 
     def setUp(self):
         with self.server.conn as c:
-            for t in ("observations", "listening", "gaps", "pictures", "meta", "heard"):
+            for t in ("observations", "listening", "gaps", "pictures", "meta", "heard", "spectrum"):
                 c.execute(f"DELETE FROM {t}")
         shutil.rmtree(hf_warm.OUT, ignore_errors=True)
         shutil.rmtree(hf_api.PICTURES, ignore_errors=True)
@@ -191,6 +191,34 @@ class Ingest(unittest.TestCase):
     def picture(self, body, **meta):
         m = {"id": 7, "start_utc": 1800000000, "end_utc": 1800000600, "mode": "WEFAX", "dial_hz": 8501100, "width": 1809, "lines": 1338, "station": "NMG", "scheduled_title": "Surface analysis", **meta}
         return self.post(body, path="/ingest/picture", headers={"x-hf-picture": json.dumps(m)})
+
+    def test_spectrum_rows_are_stored_and_a_bad_one_costs_the_batch(self):
+        good = {"m": 30000000, "lo": 1400, "d": "50" * 700}
+        status, reply = self.send(batch(spectrum=[good]))
+        self.assertEqual((status, reply["spectrum"]), (200, 1))
+        for bad in ({"m": 30000000, "lo": 2900, "d": "50" * 700}, {"m": 0, "lo": 1400, "d": "50"}, {"m": 30000000, "lo": 1400, "d": "zz"}, {"m": 30000000, "lo": 1400, "d": ""}):
+            self.assertEqual(self.send(batch(spectrum=[bad]))[0], 422, bad)
+        self.assertEqual(self.count("spectrum"), 1)
+
+    def test_the_spectrum_shows_only_what_stands_above_its_own_noise(self):
+        now = 1800000000
+        minute = now // 60 - 10
+        cells = [80] * 700
+        cells[100] = 160  # 40 dB over the floor
+        cells[400] = 84   # 2 dB over: noise, and shown as quiet
+        cells[300] = 0    # no reading
+        with self.server.conn as c:
+            c.execute("INSERT INTO spectrum VALUES (?,?,?)", (minute, 1000, bytes(cells)))
+        out = hf_warm.build_spectrum(self.server.conn, now)
+        self.assertEqual(out["rows"], 1)
+        self.assertEqual(out["earliest_minute"], minute)
+        self.assertEqual(len(out["palette"]), 256)
+        over = hf_warm.above_floor(bytes(cells))
+        self.assertEqual(over[100], 40)
+        self.assertEqual(over[400], 2)
+        self.assertIsNone(over[300])
+        with open(os.path.join(hf_warm.OUT, "spectrum.png"), "rb") as f:
+            self.assertEqual(hf_api.png_size(f.read()), (1440, 700))
 
     def test_a_picture_is_kept_under_a_name_built_here(self):
         self.assertEqual(self.picture(self.png(1809, 1338), scheduled_title="../../etc")[0], 200)

@@ -10,6 +10,7 @@
 mod devices;
 mod drm_audio;
 mod hfdata;
+mod overview;
 mod keys;
 mod p25_keys;
 mod pictures;

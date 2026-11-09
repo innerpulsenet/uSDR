@@ -9,6 +9,7 @@ name = "usdr"
 path = "src/main.rs"
 
 [dependencies]
+rustfft.workspace = true
 anyhow.workspace = true
 axum = { version = "0.8.9", features = ["ws"] }
 clap.workspace = true

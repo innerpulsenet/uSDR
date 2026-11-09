@@ -26,6 +26,7 @@ TOKEN_SHA256 = os.environ.get("HF_TOKEN_SHA256", "").strip().lower()
 PORT = int(os.environ.get("HF_API_PORT", "8767"))
 
 MAX_BODY = 8 << 20
+SPECTRUM_CELLS = 3000
 MAX_JSON = 48 << 20
 MAX_PNG = 16 << 20
 IDENT = re.compile(r"^[A-Za-z0-9/._ -]{1,32}$")
@@ -125,6 +126,18 @@ def clean_gap(g):
 NOW_STATES = {"monitoring", "chart", "checking", "idle", "manual", "off", "failed"}
 
 
+def clean_spectrum(row):
+    """One minute of the span: a run of cells from 0 Hz, as hex."""
+    if not isinstance(row, dict) or not isinstance(row.get("d"), str):
+        raise Reject("bad spectrum row")
+    if not row["d"] or len(row["d"]) > 2 * SPECTRUM_CELLS:
+        raise Reject("bad spectrum row")
+    lo, data = integer(row.get("lo"), "lo", 0, SPECTRUM_CELLS - 1), bytes.fromhex(row["d"])
+    if lo + len(data) > SPECTRUM_CELLS:
+        raise Reject("bad spectrum row")
+    return integer(row.get("m"), "m", 1, 1 << 40), lo, data
+
+
 def clean_now(now):
     """What the receiver says it is doing, for the Now page. Not worth losing a batch over."""
     try:
@@ -160,22 +173,24 @@ def store_batch(conn, batch):
     if not isinstance(batch, dict) or batch.get("station") != "hf1":
         raise Reject("bad station")
     grid = text(batch.get("grid"), STATION_GRID, "grid")
-    rows = {name: batch.get(name) or [] for name in ("observations", "listening", "gaps")}
+    rows = {name: batch.get(name) or [] for name in ("observations", "listening", "gaps", "spectrum")}
     if not all(isinstance(v, list) for v in rows.values()):
         raise Reject("bad rows")
     observations = [clean_observation(o) for o in rows["observations"]]
     listening = [clean_listening(s) for s in rows["listening"]]
     gaps = [clean_gap(g) for g in rows["gaps"]]
+    spectrum = [clean_spectrum(s) for s in rows["spectrum"]]
     now = clean_now(batch.get("now"))
     with conn:
         conn.executemany("INSERT OR IGNORE INTO observations (id,at_utc,dial_hz,freq_hz,mode,kind,ident,grid,lat,lon,loc_kind,snr_db,details) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)", observations)
         conn.executemany("INSERT OR REPLACE INTO listening (id,start_utc,end_utc,dial_hz,mode,cause,noise_dbfs,peak_iq,decodes,valid_decodes,healthy) VALUES (?,?,?,?,?,?,?,?,?,?,?)", listening)
         conn.executemany("INSERT OR IGNORE INTO gaps (id,at_utc,kind,dropped) VALUES (?,?,?,?)", gaps)
+        conn.executemany("INSERT OR REPLACE INTO spectrum (minute,lo,data) VALUES (?,?,?)", spectrum)
         conn.execute("INSERT OR REPLACE INTO meta (name,value) VALUES ('last_ingest_utc',?)", (str(int(time.time())),))
         if grid:
             conn.execute("INSERT OR REPLACE INTO meta (name,value) VALUES ('grid',?)", (grid,))
     write_now(now)
-    return {"observations": len(observations), "listening": len(listening), "gaps": len(gaps)}
+    return {"observations": len(observations), "listening": len(listening), "gaps": len(gaps), "spectrum": len(spectrum)}
 
 
 def png_size(body):

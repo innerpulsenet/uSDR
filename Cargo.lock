@@ -4462,6 +4462,7 @@ dependencies = [
  "num-complex",
  "png",
  "rusqlite",
+ "rustfft",
  "scannerd-dsp",
  "scannerd-engine",
  "scannerd-radio",

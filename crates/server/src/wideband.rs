@@ -284,10 +284,14 @@ fn run(rx: Receiver<Arc<Block>>, specs: Vec<Spec>, events: Sender<SdrEvent>, seq
 pub struct Feed {
     workers: Vec<SyncSender<Arc<Block>>>,
     specs: Vec<Spec>,
+    overview: Option<crate::overview::Tap>,
 }
 
 impl Feed {
     pub fn feed(&self, iq: &[Complex32], rate: f64, center_hz: f64, ms: u64, main: Option<(SdrMode, u64)>) {
+        if let Some(tap) = &self.overview {
+            tap.feed(iq, rate, center_hz, ms);
+        }
         if !self.specs.iter().any(|s| s.heard_in(center_hz, rate)) {
             return;
         }
@@ -319,7 +323,7 @@ pub fn from_env(events: Sender<SdrEvent>) -> Option<Feed> {
         workers.push(tx);
     }
     eprintln!("wideband: {} channels, {} logging", specs.len(), specs.iter().filter(|s| s.logs).count());
-    Some(Feed { workers, specs })
+    Some(Feed { workers, specs, overview: crate::overview::start() })
 }
 
 /// The channels that log, by mode and dial, for the schedule to plan around.

@@ -220,7 +220,7 @@ function antennaSection(m) {
 }
 
 async function showActivity() {
-  const [a, week] = await Promise.all([load("activity.json"), load("map-7d.json")]);
+  const [a, week, spectrum] = await Promise.all([load("activity.json"), load("map-7d.json"), load("spectrum.json").catch(() => null)]);
   shownBuilt = a.generated_utc;
   const historyDays = a.first_listening_utc ? (Date.now() / 1000 - a.first_listening_utc) / 86400 : 0;
   const key = `<div class="heat-key"><span><i style="background:${STEPS[4]}"></i>busiest</span><span><i style="background:${STEPS[0]}"></i>few</span><span><i class="q"></i>listened, heard nothing</span><span><i class="out"></i>not monitored</span></div>`;
@@ -232,6 +232,7 @@ async function showActivity() {
     <h1>When each band came alive.</h1>
     <p class="lede">The log so far covers ${days}, grouped by UTC hour over up to ${a.days} days. Every cell is divided by the time the receiver actually spent there.</p>
     </header>
+    ${spectrumSection(spectrum)}
     <section aria-labelledby="h1"><h2 id="h1">Amateur decodes by band and hour</h2>${a.bands.length ? heatTable(a.bands, "decodes") + key : emptyLog()}</section>
     <section aria-labelledby="h2"><h2 id="h2">All modes by hour</h2>${a.modes.length ? heatTable(a.modes, "decodes") + key : emptyLog()}</section>
     <section aria-labelledby="hrose"><h2 id="hrose">Which way it hears</h2><p class="note">Stations with a locator over the last 7 days, by compass bearing from the station.</p>${antennaSection(week)}</section>
@@ -246,6 +247,137 @@ async function showActivity() {
     <section aria-labelledby="h5"><h2 id="h5">SELCAL calls</h2><p class="note">A SELCAL call is a two-pair code sent to wake one aircraft's radio. It carries no position.</p>
       ${a.selcal.length ? `<div class="scroll"><table><thead><tr><th>Time</th><th>Code</th><th>kHz</th></tr></thead><tbody>${a.selcal.map((c) => `<tr><td>${fmtTime(c.t)}</td><td class="id">${esc(c.code)}</td><td>${khz(c.dial_hz)}</td></tr>`).join("")}</tbody></table></div>` : `<p class="empty">No SELCAL calls logged.</p>`}
     </section>`;
+  wireSpectrum(spectrum);
+}
+
+// Where each amateur band starts, in MHz, for the axis and the readout.
+const SPECTRUM_BANDS = [[3.5, 4, "80 m"], [5.33, 5.41, "60 m"], [7, 7.3, "40 m"], [10.1, 10.15, "30 m"], [14, 14.35, "20 m"], [18.068, 18.168, "17 m"], [21, 21.45, "15 m"], [24.89, 24.99, "12 m"], [28, 29.7, "10 m"]];
+const utcClock = (minute) => new Date(minute * 60000).toISOString().slice(11, 16);
+
+function spectrumSection(s) {
+  if (!s?.rows) return `<section aria-labelledby="hspec"><h2 id="hspec">What the radio saw</h2><p class="empty">The spectrum record has not started yet.</p></section>`;
+  const yOf = (mhz) => ((s.hi_hz / 1e6 - mhz) / ((s.hi_hz - s.lo_hz) / 1e6)) * 100;
+  const hours = [];
+  for (let m = s.first_minute + ((180 - (s.first_minute % 180)) % 180); m < s.first_minute + s.minutes; m += 180) hours.push(m);
+  const late = s.earliest_minute > s.first_minute + 5;
+  const modes = [...new Set(s.marks.map((m) => m[2]))].sort();
+  return `<section aria-labelledby="hspec" class="spec-sec">
+    <h2 id="hspec">What the radio saw, last 24 hours</h2>
+    <p class="note">Each column is one minute, from 2 MHz at the bottom to 30 MHz at the top. Brightness is how far a signal rose above the noise around it, not an average, so quiet spectrum stays dark. Colored marks are what was decoded there.${late ? ` The record began at ${utcClock(s.earliest_minute)} UTC.` : ""}</p>
+    <div class="spec-chart">
+      <div class="spec-y" aria-hidden="true">${SPECTRUM_BANDS.map(([lo, , name]) => `<span style="top:${yOf(lo).toFixed(2)}%">${name}</span>`).join("")}</div>
+      <div class="spec-plot" id="spec-plot" role="img" aria-label="Signal strength above the noise from 2 to 30 MHz over the last 24 hours, with the frequencies decoded marked on it. Hatched areas are frequencies the receiver was not covering.">
+        <img id="spec-img" alt="" src="data/spectrum.png?t=${s.generated_utc}">
+        <canvas id="spec-marks"></canvas>
+        <i class="spec-h" hidden></i><i class="spec-v" hidden></i>
+      </div>
+      <div class="spec-x" aria-hidden="true">${hours.map((m) => `<span style="left:${(((m - s.first_minute) / s.minutes) * 100).toFixed(2)}%">${utcClock(m).slice(0, 2)}</span>`).join("")}</div>
+    </div>
+    <p class="spec-read" id="spec-read" aria-live="off">Point at the chart for a reading.</p>
+    <div class="key-row spec-key">
+      <span><i class="spec-ramp"></i>${s.quiet_db} to ${s.top_db} dB above the noise</span>
+      ${modes.map((m) => `<span><i style="background:${modeColor(m)}"></i>${esc(m)}</span>`).join("")}
+      <span><i class="k-out"></i>Tuned elsewhere</span>
+      <button type="button" class="spec-toggle" id="spec-toggle" aria-pressed="true">Hide decodes</button>
+    </div>
+  </section>`;
+}
+
+function wireSpectrum(s) {
+  const plot = document.getElementById("spec-plot");
+  if (!plot || !s?.rows) return;
+  const [img, canvas, read, toggle] = ["spec-img", "spec-marks", "spec-read", "spec-toggle"].map((id) => document.getElementById(id));
+  const [lineH, lineV] = [plot.querySelector(".spec-h"), plot.querySelector(".spec-v")];
+  const swatch = document.createElement("span");
+  plot.append(swatch);
+  const colors = {};
+  for (const [, , mode] of s.marks) {
+    if (colors[mode]) continue;
+    swatch.style.color = modeColor(mode);
+    colors[mode] = getComputedStyle(swatch).color;
+  }
+  swatch.remove();
+  const span = s.hi_hz - s.lo_hz;
+  let showing = true;
+  const draw = () => {
+    const { width, height } = plot.getBoundingClientRect();
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    canvas.width = Math.round(width * dpr);
+    canvas.height = Math.round(height * dpr);
+    const ctx = canvas.getContext("2d");
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, width, height);
+    if (!showing) return;
+    for (const [x, khz, mode, n] of s.marks) {
+      const px = (x / s.minutes) * width;
+      const py = (1 - (khz * 1000 - s.lo_hz) / span) * height;
+      ctx.fillStyle = "rgba(0,0,0,.6)";
+      ctx.fillRect(px - 2, py - 2, 4, 4);
+      ctx.globalAlpha = 0.6 + 0.4 * Math.min(1, Math.log10(n + 1) / 2);
+      ctx.fillStyle = colors[mode];
+      ctx.fillRect(px - 1.25, py - 1.25, 2.5, 2.5);
+      ctx.globalAlpha = 1;
+    }
+  };
+  let pixels = null;
+  const paletteIndex = new Map(s.palette.map((c, i) => [(c[0] << 16) | (c[1] << 8) | c[2], i]));
+  const grab = () => {
+    const off = document.createElement("canvas");
+    off.width = img.naturalWidth;
+    off.height = img.naturalHeight;
+    const ctx = off.getContext("2d", { willReadFrequently: true });
+    ctx.drawImage(img, 0, 0);
+    pixels = ctx.getImageData(0, 0, off.width, off.height).data;
+  };
+  if (img.complete && img.naturalWidth) grab();
+  else img.addEventListener("load", grab, { once: true });
+  const level = (column, row) => {
+    if (!pixels) return null;
+    const at = (row * s.minutes + column) * 4;
+    if (!pixels[at + 3]) return "tuned elsewhere";
+    const index = paletteIndex.get((pixels[at] << 16) | (pixels[at + 1] << 8) | pixels[at + 2]);
+    if (index === undefined || index <= 1) return "at the noise";
+    const db = s.quiet_db + ((index - 2) / 253) * (s.top_db - s.quiet_db);
+    return index === 255 ? `${s.top_db} dB or more above the noise` : `${Math.round(db)} dB above the noise`;
+  };
+  const where = (ev) => {
+    const box = plot.getBoundingClientRect();
+    const fx = Math.min(0.9999, Math.max(0, (ev.clientX - box.left) / box.width));
+    const fy = Math.min(0.9999, Math.max(0, (ev.clientY - box.top) / box.height));
+    return { fx, fy, x: fx * box.width, y: fy * box.height };
+  };
+  plot.addEventListener("pointermove", (ev) => {
+    const { fx, fy, x, y } = where(ev);
+    lineV.hidden = lineH.hidden = false;
+    lineV.style.transform = `translateX(${x}px)`;
+    lineH.style.transform = `translateY(${y}px)`;
+    const column = Math.floor(fx * s.minutes);
+    const hz = s.hi_hz - fy * span;
+    const mhz = hz / 1e6;
+    const band = SPECTRUM_BANDS.find(([lo, hi]) => mhz >= lo && mhz <= hi);
+    const heard = {};
+    for (const [mx, khz, mode, n] of s.marks) {
+      if (Math.abs(mx + 2.5 - column) <= 5 && Math.abs(khz * 1000 - hz) <= 30000) heard[mode] = (heard[mode] || 0) + n;
+    }
+    const decoded = Object.entries(heard).map(([m, n]) => `${m} ${num(n)}`).join(", ");
+    const parts = [`${mhz.toFixed(2)} MHz${band ? ` (${band[2]})` : ""}`, `${utcClock(s.first_minute + column)} UTC`];
+    const reading = level(column, Math.floor(fy * s.height));
+    if (reading) parts.push(reading);
+    if (decoded) parts.push(`decoded: ${decoded}`);
+    read.textContent = parts.join(" · ");
+  });
+  plot.addEventListener("pointerleave", () => {
+    lineV.hidden = lineH.hidden = true;
+    read.textContent = "Point at the chart for a reading.";
+  });
+  toggle.addEventListener("click", () => {
+    showing = !showing;
+    toggle.setAttribute("aria-pressed", String(showing));
+    toggle.textContent = showing ? "Hide decodes" : "Show decodes";
+    draw();
+  });
+  new ResizeObserver(draw).observe(plot);
+  draw();
 }
 
 async function showPictures() {

@@ -11,6 +11,7 @@ import math
 import os
 import re
 import shutil
+import sqlite3
 import struct
 import sys
 import time
@@ -26,6 +27,7 @@ PICTURES = os.environ.get("HF_PICTURES", "/home/patrickh/www/hf/pictures")
 AMATEUR = ("FT8", "FT4", "WSPR", "JS8")
 AMATEUR_SQL = ",".join(f"'{m}'" for m in AMATEUR)
 KEEP_RAW_S = 365 * 86400
+KEEP_SPECTRUM_S = 15 * 86400
 LOW_DISK_BYTES = 8 << 30
 HAM_BANDS = [(1.8, 2.0, "160 m"), (3.5, 4.0, "80 m"), (5.25, 5.45, "60 m"), (7.0, 7.3, "40 m"), (10.1, 10.15, "30 m"),
              (14.0, 14.35, "20 m"), (18.068, 18.168, "17 m"), (21.0, 21.45, "15 m"), (24.89, 24.99, "12 m"), (28.0, 29.7, "10 m")]
@@ -424,6 +426,96 @@ def write_card(m, now):
     os.replace(target + ".tmp", target)
 
 
+# The all-day spectrum: one column a minute, 2 to 30 MHz, four 10 kHz cells to a pixel.
+SPECTRUM_LO_CELL = 200
+SPECTRUM_HI_CELL = 3000
+SPECTRUM_MERGE = 4
+SPECTRUM_MINUTES = 1440
+SPECTRUM_FLOOR_CHUNK = 50
+SPECTRUM_QUIET_DB = 6
+SPECTRUM_TOP_DB = 40
+# Dark to pale along one hue, so the decodes drawn over it in mode colors stand out.
+SPECTRUM_STOPS = [(30, 24, 16), (92, 56, 18), (190, 120, 30), (245, 180, 90), (255, 240, 210)]
+
+
+def above_floor(data):
+    """How far each cell stands over the noise near it, in dB, and None where the
+    tuner was not. The floor is local, so a gain change or the filter's skirts move
+    the floor and not the picture."""
+    anchors = []
+    for start in range(0, len(data), SPECTRUM_FLOOR_CHUNK):
+        part = sorted(v for v in data[start:start + SPECTRUM_FLOOR_CHUNK] if v)
+        if len(part) >= 10:
+            anchors.append((start + SPECTRUM_FLOOR_CHUNK / 2, part[len(part) // 5]))
+    out = [None] * len(data)
+    if not anchors:
+        return out
+    at = 0
+    for i, v in enumerate(data):
+        if not v:
+            continue
+        while at + 1 < len(anchors) - 1 and anchors[at + 1][0] <= i:
+            at += 1
+        if len(anchors) == 1:
+            floor = anchors[0][1]
+        else:
+            (x0, f0), (x1, f1) = anchors[at], anchors[at + 1]
+            floor = f0 + (f1 - f0) * min(1, max(0, (i - x0) / (x1 - x0)))
+        out[i] = max(0, (v - floor) / 2)
+    return out
+
+
+def spectrum_palette():
+    """Index 0 is not covered and transparent, 1 is covered and quiet, the rest climb."""
+    colors = [(0, 0, 0), SPECTRUM_STOPS[0]]
+    for i in range(254):
+        t = (i / 253) ** 0.8 * (len(SPECTRUM_STOPS) - 1)
+        low = min(int(t), len(SPECTRUM_STOPS) - 2)
+        a, b = SPECTRUM_STOPS[low], SPECTRUM_STOPS[low + 1]
+        colors.append(tuple(round(a[c] + (b[c] - a[c]) * (t - low)) for c in range(3)))
+    return colors
+
+
+def write_indexed_png(target, width, height, px, palette):
+    def chunk(kind, body):
+        return struct.pack(">I", len(body)) + kind + body + struct.pack(">I", zlib.crc32(kind + body))
+    raw = b"".join(b"\0" + bytes(px[y * width:(y + 1) * width]) for y in range(height))
+    with open(target + ".tmp", "wb") as f:
+        f.write(b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 3, 0, 0, 0)) + chunk(b"PLTE", b"".join(bytes(c) for c in palette))
+                + chunk(b"tRNS", b"\0") + chunk(b"IDAT", zlib.compress(raw, 7)) + chunk(b"IEND", b""))
+    os.chmod(target + ".tmp", 0o644)
+    os.replace(target + ".tmp", target)
+
+
+def build_spectrum(conn, now):
+    """The last day of the span as an image, with what was decoded where."""
+    last = now // 60 - 1
+    first = last - SPECTRUM_MINUTES + 1
+    width, height = SPECTRUM_MINUTES, (SPECTRUM_HI_CELL - SPECTRUM_LO_CELL) // SPECTRUM_MERGE
+    px = bytearray(width * height)
+    rows = 0
+    earliest = None
+    for minute, lo, data in conn.execute("SELECT minute, lo, data FROM spectrum WHERE minute BETWEEN ? AND ? ORDER BY minute", (first, last)):
+        x = minute - first
+        rows += 1
+        earliest = minute if earliest is None else earliest
+        for i, over in enumerate(above_floor(data)):
+            cell = lo + i
+            if over is None or not SPECTRUM_LO_CELL <= cell < SPECTRUM_HI_CELL:
+                continue
+            value = 1 if over < SPECTRUM_QUIET_DB else 2 + min(253, int((over - SPECTRUM_QUIET_DB) / (SPECTRUM_TOP_DB - SPECTRUM_QUIET_DB) * 253))
+            at = (height - 1 - (cell - SPECTRUM_LO_CELL) // SPECTRUM_MERGE) * width + x
+            if value > px[at]:
+                px[at] = value
+    palette = spectrum_palette()
+    if rows:
+        write_indexed_png(os.path.join(OUT, "spectrum.png"), width, height, px, palette)
+    marks = [list(r) for r in conn.execute(f"""SELECT (at_utc / 60 - ?) / 5 * 5 AS x, freq_hz / 5000 * 5 AS khz, mode, COUNT(*) FROM observations
+        WHERE at_utc >= ? AND at_utc < ? AND freq_hz BETWEEN 2000000 AND 29999999 AND {unhealthy()} GROUP BY 1, 2, 3""", (first, first * 60, (last + 1) * 60))]
+    return {"generated_utc": now, "first_minute": first, "minutes": width, "height": height, "lo_hz": SPECTRUM_LO_CELL * 10_000, "hi_hz": SPECTRUM_HI_CELL * 10_000,
+            "rows": rows, "earliest_minute": earliest, "quiet_db": SPECTRUM_QUIET_DB, "top_db": SPECTRUM_TOP_DB, "palette": palette, "marks": marks}
+
+
 THUMB_WIDTH = 480
 THUMBS_PER_RUN = 5
 
@@ -521,6 +613,7 @@ def prune(conn, now):
         conn.execute("DELETE FROM observations WHERE at_utc < ?", (cutoff,))
         conn.execute("DELETE FROM listening WHERE end_utc < ?", (cutoff,))
         conn.execute("DELETE FROM pictures WHERE start_utc < ?", (cutoff,))
+        conn.execute("DELETE FROM spectrum WHERE minute < ?", ((now - KEEP_SPECTRUM_S) // 60,))
     for name in gone:
         for victim in (os.path.basename(name), f"thumb-{os.path.basename(name)}"):
             try:
@@ -549,6 +642,10 @@ def main():
     write("pictures.json", picture_list(conn, now))
     write("health.json", build_health(conn, now))
     write("traffic.json", build_traffic(conn, now))
+    try:
+        write("spectrum.json", build_spectrum(conn, now))
+    except (OSError, ValueError, sqlite3.Error) as e:
+        print(f"hf-site: spectrum: {e}", file=sys.stderr)
     free = shutil.disk_usage(os.path.dirname(DB)).free
     if free < LOW_DISK_BYTES:
         print(f"hf-site: low disk, {free >> 30} GB free", file=sys.stderr)

@@ -29,6 +29,8 @@ const LONGEST_WAIT: Duration = Duration::from_secs(15 * 60);
 const HTTP_TIMEOUT: Duration = Duration::from_secs(60);
 /// Rows of each kind in one batch. A long outage catches up over several.
 pub const BATCH_ROWS: u32 = 4_000;
+/// Spectrum rows in one round: an hour of them, so a backlog clears quickly.
+const SPECTRUM_ROWS: usize = 60;
 const STATION_ID: &str = "hf1";
 
 #[derive(Clone, Deserialize)]
@@ -84,7 +86,8 @@ fn gzip(json: &Value) -> Result<Vec<u8>> {
 pub fn send_once(log: &StationLog, grid: Option<&str>, now: u64, status: Option<&Value>, post: &mut dyn FnMut(&str, &str, &BTreeMap<&str, String>, Vec<u8>) -> Result<()>) -> Result<bool> {
     let batch = log.uplink_batch(now, BATCH_ROWS)?;
     let full = batch.full;
-    if !batch.is_empty() || batch.moved() || status.is_some() {
+    let (spectrum, spectrum_through) = crate::overview::pending(SPECTRUM_ROWS);
+    if !batch.is_empty() || batch.moved() || status.is_some() || !spectrum.is_empty() {
         let body = json!({
             "station": STATION_ID,
             "grid": grid,
@@ -93,11 +96,15 @@ pub fn send_once(log: &StationLog, grid: Option<&str>, now: u64, status: Option<
             "observations": batch.observations,
             "listening": batch.listening,
             "gaps": batch.gaps,
+            "spectrum": spectrum,
         });
         let mut headers = BTreeMap::new();
         headers.insert("content-encoding", "gzip".to_string());
         post("", "application/json", &headers, gzip(&body)?).context("sending rows")?;
         log.uplink_advance(batch.cursors);
+        if let Some(minute) = spectrum_through {
+            crate::overview::sent(minute);
+        }
     }
     let mut more = full;
     if let Some(picture) = log.next_picture()? {
