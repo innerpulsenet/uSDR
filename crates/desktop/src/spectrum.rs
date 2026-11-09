@@ -79,6 +79,10 @@ pub enum Style {
     /// rainbow look.
     #[default]
     Prism,
+    /// A lime trace with a sea-foam core over a deep-water pan, and the
+    /// reef waterfall, which leaves black within a few dB of the floor:
+    /// the look for weak signals.
+    Reef,
 }
 
 /// What the panadapter draws above the waterfall.
@@ -108,7 +112,7 @@ pub struct Look {
 }
 
 impl Style {
-    pub const ALL: [Style; 7] = [Style::Ember, Style::Inferno, Style::Prism, Style::Midnight, Style::Classic, Style::Glacier, Style::Phosphor];
+    pub const ALL: [Style; 8] = [Style::Ember, Style::Reef, Style::Inferno, Style::Prism, Style::Midnight, Style::Classic, Style::Glacier, Style::Phosphor];
 
     pub fn label(self) -> &'static str {
         match self {
@@ -119,6 +123,7 @@ impl Style {
             Style::Phosphor => "Phosphor",
             Style::Inferno => "Inferno",
             Style::Prism => "Prism",
+            Style::Reef => "Reef",
         }
     }
 
@@ -165,6 +170,16 @@ impl Style {
                 peak: rgb(0xf2a0ff),
                 max_hold: rgb(0x8a6cff),
                 palette: Colormap::Inferno,
+                ramp: true,
+            },
+            Style::Reef => Look {
+                bg: Some((rgb(0x06162a), rgb(0x010307))),
+                fill: rgb(0x22d3b0),
+                glow: rgb(0x4fdcea),
+                core: rgb(0xeafff4),
+                peak: rgb(0xd9ff5c),
+                max_hold: rgb(0xff7d6b),
+                palette: Colormap::Reef,
                 ramp: true,
             },
             Style::Prism => Look {
