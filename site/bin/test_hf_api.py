@@ -163,6 +163,7 @@ class Ingest(unittest.TestCase):
         h = self.data("health.json")
         self.assertEqual(h["timeline"][0][2], "FT8")
         self.assertEqual(h["bands"][0]["label"], "20 m")
+        self.assertEqual(h["checks"], {"passed": 1, "failed": 0})
         self.assertEqual(self.data("traffic.json")["flights"][0]["i"], "UAL971")
 
     def test_a_chart_gets_a_thumbnail_without_its_phasing_band(self):

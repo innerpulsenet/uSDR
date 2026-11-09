@@ -261,8 +261,13 @@ def write_lookups(conn, now, shards):
 def build_health(conn, now):
     """When the receiver listened, and what the noise and peaks looked like."""
     since = now - 86400
-    timeline = [[r["start_utc"], r["end_utc"], r["mode"], r["dial_hz"], r["healthy"]] for r in conn.execute(
-        "SELECT start_utc, end_utc, mode, dial_hz, healthy FROM listening WHERE end_utc >= ? ORDER BY start_utc", (since,))]
+    timeline = [[r["start_utc"], r["end_utc"], r["mode"], r["dial_hz"], r["healthy"], r["valid_decodes"], r["cause"]] for r in conn.execute(
+        "SELECT start_utc, end_utc, mode, dial_hz, healthy, valid_decodes, cause FROM listening WHERE end_utc >= ? ORDER BY start_utc", (since,))]
+    judged = conn.execute("SELECT COALESCE(SUM(healthy = 1), 0) AS passed, COALESCE(SUM(healthy = 0), 0) AS failed FROM listening WHERE end_utc >= ? AND cause != 'wideband'", (since,)).fetchone()
+    # What is really being decoded alongside, as "FT8 80 / 40 / 30 m".
+    alongside = {}
+    for r in conn.execute("SELECT DISTINCT mode, dial_hz FROM listening WHERE cause = 'wideband' AND end_utc >= ? ORDER BY dial_hz", (since,)):
+        alongside.setdefault(r["mode"], []).append(band(r["dial_hz"]).removesuffix(" m"))
     cells, lowest = {}, {}
     for r in conn.execute("SELECT dial_hz, (start_utc / 3600) % 24 AS h, noise_dbfs, peak_iq, end_utc - start_utc AS s FROM listening WHERE end_utc >= ? AND noise_dbfs IS NOT NULL", (now - 14 * 86400,)):
         label = band(r["dial_hz"])
@@ -274,7 +279,8 @@ def build_health(conn, now):
         c["peak"] = max(c["peak"], r["peak_iq"] or 0)
     labels = sorted(lowest, key=lowest.get)
     bands = [{"label": label, "cells": [[round(cells[(label, h)]["sum"] / cells[(label, h)]["s"], 1), round(cells[(label, h)]["peak"], 3), cells[(label, h)]["s"]] if (label, h) in cells else None for h in range(24)]} for label in labels]
-    return {"generated_utc": now, "since": since, "timeline": timeline, "bands": bands}
+    return {"generated_utc": now, "since": since, "timeline": timeline, "bands": bands, "checks": {"passed": judged["passed"], "failed": judged["failed"]},
+            "alongside": ", ".join(f"{mode} {' / '.join(names)} m" for mode, names in alongside.items())}
 
 
 def details_of(row):

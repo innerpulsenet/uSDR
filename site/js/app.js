@@ -1,6 +1,6 @@
 import { bandGroup, BAND_GROUPS, bearing, gridCenter, SPOT_SIZES, mountMap, STEPS } from "./map.js";
 import { mountGlobe } from "./globe.js";
-import { atmosphere, dress, moveTick } from "./motion.js";
+import { atmosphere, calm, dress, moveTick } from "./motion.js";
 import { ago, esc, fmtClock, fmtTime, hours, khz, num } from "./util.js";
 
 const view = document.getElementById("view");
@@ -415,34 +415,100 @@ async function showWho(params) {
     : `<p class="empty">${esc(q)} is not in this log. The receiver listens to one frequency at a time, so a station missing here may simply have been on the air while it was listening somewhere else.</p>`;
 }
 
-function timelineHtml(h) {
-  const span = h.generated_utc - h.since;
-  const modes = [...new Set(h.timeline.map((r) => r[2]))].sort();
-  const pos = (t) => Math.max(0, Math.min(100, ((t - h.since) / span) * 100));
-  const tickFrom = Math.ceil(h.since / 14400) * 14400;
-  const ticks = [];
-  for (let t = tickFrom; t < h.generated_utc; t += 14400) ticks.push(`<span style="left:${pos(t).toFixed(2)}%">${clock(t)}</span>`);
-  return `<div class="tl">${modes.map((mode) => `<div class="tl-label">${esc(mode)}</div><div class="tl-track">${h.timeline.filter((r) => r[2] === mode).map(([a, b, , dial, healthy]) => {
-    const left = pos(a);
-    return `<i class="${healthy === 0 ? "bad" : ""}" style="left:${left.toFixed(2)}%;width:${Math.max(0.12, pos(b) - left).toFixed(2)}%" title="${esc(mode)} ${khz(dial)} kHz, ${clock(a)} to ${clock(b)}${healthy === 0 ? ", failed its radio check" : ""}"></i>`;
-  }).join("")}</div>`).join("")}<div></div><div class="tl-ticks">${ticks.join("")}</div></div>`;
+// The chain from antenna to log, in the page's own terms. Drawn twice, once for
+// each shape of screen, so its text is always a readable size.
+function chainSvg(alongside, tall) {
+  const label = (x, y, text, cls = "") => `<text x="${x}" y="${y}" text-anchor="middle" class="${cls}">${esc(text)}</text>`;
+  const box = (x, y, w, h, lines, sub) => {
+    const cx = x + w / 2;
+    const first = y + h / 2 + (lines.length === 2 || sub ? -3 : 5);
+    return `<rect class="cn" x="${x}" y="${y}" width="${w}" height="${h}" rx="4"/>${lines.map((t, i) => label(cx, first + i * 18, t)).join("")}${sub ? label(cx, first + 18, sub, "cs") : ""}`;
+  };
+  const arrow = (d, tipX, tipY, dir) => {
+    const heads = { r: `M${tipX - 7} ${tipY - 4}L${tipX} ${tipY}L${tipX - 7} ${tipY + 4}`, d: `M${tipX - 4} ${tipY - 7}L${tipX} ${tipY}L${tipX + 4} ${tipY - 7}` };
+    return `<path class="cl" d="${d}"/><path class="cl" d="${heads[dir]}"/>`;
+  };
+  const flow = (d, delay) => (calm ? "" : `<circle r="2.6" class="cf"><animateMotion dur="4.2s" begin="${delay}s" repeatCount="indefinite" path="${d}"/></circle>`);
+  if (!tall) {
+    const upper = "M152 92H590V46H900V92H1020";
+    const lower = "M152 92H590V138H900V92H1020";
+    return `<svg class="chain wide" viewBox="0 0 1040 200" role="img" aria-label="The signal path: a wire loop antenna feeds one receiver, which takes in 8 MHz at a time. A scheduled decoder and channels alongside it read that capture, and both write to a validated log.">
+      <circle class="cl" cx="90" cy="92" r="62"/><path class="cl" d="M90 154V176M50 176H130"/>${label(90, 88, "Wire loop")}${label(90, 106, "antenna")}
+      ${arrow("M152 92H270", 270, 92, "r")}${label(211, 80, "below 30 MHz", "cs")}
+      ${box(270, 62, 110, 60, ["Software", "receiver"])}${arrow("M380 92H430", 430, 92, "r")}
+      ${box(430, 62, 110, 60, ["8 MHz", "capture"])}
+      <path class="cl" d="M540 92H590M590 46V138"/>${arrow("M590 46H620", 620, 46, "r")}${arrow("M590 138H620", 620, 138, "r")}
+      ${box(620, 22, 230, 48, ["Scheduled decoder"], "one mode, one frequency")}
+      ${box(620, 114, 230, 48, ["Channels alongside"], alongside)}
+      <path class="cl" d="M850 46H870V138H850M870 92H900"/>${arrow("M870 92H900", 900, 92, "r")}
+      ${box(900, 62, 120, 60, ["Validated", "log"])}
+      ${flow(upper, 0)}${flow(lower, 2.1)}
+    </svg>`;
+  }
+  const left = "M170 122V320H90V450H170V520";
+  const right = "M170 122V320H250V450H170V520";
+  return `<svg class="chain tall" viewBox="0 0 340 540" role="img" aria-label="The signal path: a wire loop antenna feeds one receiver, which takes in 8 MHz at a time. A scheduled decoder and channels alongside it read that capture, and both write to a validated log.">
+    <circle class="cl" cx="170" cy="66" r="56"/>${label(170, 62, "Wire loop")}${label(170, 80, "antenna")}
+    ${arrow("M170 122V162", 170, 162, "d")}${label(246, 146, "below 30 MHz", "cs")}
+    ${box(90, 162, 160, 48, ["Software receiver"])}${arrow("M170 210V242", 170, 242, "d")}
+    ${box(90, 242, 160, 48, ["8 MHz capture"])}
+    <path class="cl" d="M170 290V320M90 320H250"/>${arrow("M90 320V342", 90, 342, "d")}${arrow("M250 320V342", 250, 342, "d")}
+    ${box(8, 342, 160, 64, ["Scheduled decoder"], "one at a time")}${box(172, 342, 160, 64, ["Channels alongside"], alongside)}
+    <path class="cl" d="M90 406V450M250 406V450M90 450H250"/>${arrow("M170 450V472", 170, 472, "d")}
+    ${box(90, 472, 160, 48, ["Validated log"])}
+    ${flow(left, 0)}${flow(right, 2.1)}
+  </svg>`;
 }
 
+// A fixed color per mode, in the brand's categorical order. FT4 and SSTV fold into gray.
+const MODE_SLOT = { FT8: 1, HFDL: 2, DSC: 3, WSPR: 4, SELCAL: 5, JS8: 6, WEFAX: 7 };
+const modeColor = (m) => (MODE_SLOT[m] ? `var(--innerpulse-chart-${MODE_SLOT[m]})` : "var(--innerpulse-chart-other)");
+
+function timelineHtml(h) {
+  const span = h.generated_utc - h.since;
+  const pos = (t) => Math.max(0, Math.min(100, ((t - h.since) / span) * 100));
+  const hoursBack = [];
+  for (let t = Math.ceil(h.since / 10800) * 10800; t < h.generated_utc; t += 10800) hoursBack.push(`<span style="left:${pos(t).toFixed(2)}%">${String(new Date(t * 1000).getUTCHours()).padStart(2, "0")}</span>`);
+  const main = h.timeline.filter((r) => r[6] !== "wideband");
+  const wide = h.timeline.filter((r) => r[6] === "wideband");
+  const bar = ([a, b, mode, dial, healthy, decodes], extra) => {
+    const left = pos(a);
+    const note = healthy === 0 ? "failed its radio check" : decodes ? `${num(decodes)} decodes` : "nothing decoded";
+    return `<i class="${extra}" style="left:${left.toFixed(2)}%;width:${Math.max(0.1, pos(b) - left).toFixed(2)}%;--c:${modeColor(mode)}" title="${esc(mode)} ${khz(dial)} kHz, ${clock(a)} to ${clock(b)}, ${note}"></i>`;
+  };
+  const modes = [...new Set(h.timeline.map((r) => r[2]))].sort((x, y) => (MODE_SLOT[x] || 9) - (MODE_SLOT[y] || 9));
+  return `<div class="key-row">${modes.map((m) => `<span><i style="background:${modeColor(m)}"></i>${esc(m)}</span>`).join("")}<span><i class="k-fail"></i>Failed check</span><span><i class="k-out"></i>Not monitored</span></div>
+    <div class="tl lanes">
+      <div class="tl-label">Tuned to</div><div class="tl-track big">${main.map((r) => bar(r, r[4] === 0 ? "bad" : "")).join("")}</div>
+      <div class="tl-label">Heard</div><div class="tl-track thin">${main.map((r) => bar(r, r[5] ? "heard" : "quiet")).join("")}</div>
+      <div class="tl-label">Alongside</div><div class="tl-track thin">${wide.map((r) => bar(r, "")).join("")}</div>
+      <div></div><div class="tl-ticks">${hoursBack.join("")}</div>
+    </div>`;
+}
+
+const hexRgb = (h) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16));
+function rampColor(f) {
+  const x = Math.max(0, Math.min(0.9999, f)) * (STEPS.length - 1);
+  const i = Math.floor(x);
+  const [a, b] = [hexRgb(STEPS[i]), hexRgb(STEPS[i + 1])];
+  return `rgb(${a.map((v, k) => Math.round(v + (b[k] - v) * (x - i))).join(",")})`;
+}
+
+// The amateur bands, top to bottom by frequency; the other dials say less at a glance.
 function noiseHtml(bands) {
-  const values = bands.flatMap((b) => b.cells.filter(Boolean).map((c) => c[0]));
+  const ham = bands.filter((b) => / m$/.test(b.label));
+  const values = ham.flatMap((b) => b.cells.filter(Boolean).map((c) => c[0]));
   if (!values.length) return `<p class="empty">No noise measurements yet.</p>`;
   const [low, high] = [Math.min(...values), Math.max(...values)];
-  const stepOf = (v) => (high === low ? 0 : Math.min(STEPS.length - 1, Math.floor(((v - low) / (high - low)) * STEPS.length)));
   const clipped = bands.flatMap((b) => b.cells.filter((c) => c && c[1] >= 0.99)).length;
   return `<div class="scroll"><div class="heat">
-    ${bands.map((b) => `<div class="rowlabel">${esc(b.label)}</div><div class="cells24">${b.cells.map((c, h) => {
+    ${ham.map((b) => `<div class="rowlabel">${esc(b.label)}</div><div class="cells24">${b.cells.map((c, h) => {
       const at = `${b.label}, ${String(h).padStart(2, "0")}Z`;
-      return c ? `<i style="background:${STEPS[stepOf(c[0])]}" title="${esc(at)}: ${c[0]} dBFS on average, peak ${c[1]} of full scale, ${hours(c[2])} measured"></i>` : `<i class="out" title="${esc(at)}: not monitored"></i>`;
+      return c ? `<i style="background:${rampColor(high === low ? 0 : (c[0] - low) / (high - low))}" title="${esc(at)}: ${c[0]} dBFS on average, peak ${c[1]} of full scale, ${hours(c[2])} measured"></i>` : `<i class="out" title="${esc(at)}: not monitored"></i>`;
     }).join("")}</div>`).join("")}
     <div class="hours">${Array.from({ length: 24 }, (_, h) => `<span>${h % 3 === 0 ? String(h).padStart(2, "0") : ""}</span>`).join("")}</div>
   </div></div>
-  <div class="heat-key"><span><i style="background:${STEPS[0]}"></i>${low} dBFS, quietest</span><span><i style="background:${STEPS[4]}"></i>${high} dBFS, noisiest</span><span><i class="out"></i>not monitored</span></div>
-  <p class="note" style="margin-top:8px">Average noise floor by UTC hour over the last 14 days, as the receiver measures it, not calibrated to a field strength. ${clipped ? `${num(clipped)} band-hours reached full scale and overloaded the receiver.` : "No band-hour reached full scale."}</p>`;
+  <div class="ramp-key"><span>Lower, ${low} dBFS</span><i style="background:linear-gradient(90deg,${STEPS.join(",")})"></i><span>Higher, ${high} dBFS</span><span class="ramp-note">${clipped ? `${num(clipped)} band-hours reached full scale` : "No band-hour reached full scale"}</span></div>`;
 }
 
 function aircraftAirline(flight, table) {
@@ -545,9 +611,12 @@ async function showTraffic(params) {
   }));
 }
 
+const NOW_WORDS = { monitoring: "Monitoring", chart: "Receiving a chart", checking: "Radio check", idle: "Between slots", manual: "In use by hand", off: "Schedule off", failed: "Radio check failing" };
+
 async function showStation() {
-  let health = null;
-  try { health = await load("health.json"); } catch { /* the receiver page still reads without it */ }
+  const [health, status, nowFile] = await Promise.all([
+    load("health.json").catch(() => null), load("status.json").catch(() => null), load("now.json").catch(() => null),
+  ]);
   if (health) shownBuilt = health.generated_utc;
   const listening = new Array(96).fill(0);
   if (health) {
@@ -556,31 +625,63 @@ async function showStation() {
       if (i >= 0 && i < 96) listening[i] += b - a;
     }
   }
+  const fresh = nowFile && Date.now() / 1000 - nowFile.at < 300;
+  const glyph = (name) => `<svg class="ip-i sm" aria-hidden="true"><use href="brand/sprite.svg#ip-s-${name}"/></svg>`;
+  const c = health?.checks;
+  const alongside = health?.alongside?.length ? health.alongside : "FT8 80 / 40 / 30 m";
+  const fold = (title, body, open) => `<details class="fold"${open ? " open" : ""}><summary>${title}</summary><div>${body}</div></details>`;
   view.innerHTML = `
     <header class="page-head ip-atmos">${atmosphere(listening)}
     <p class="eyebrow">Station</p>
-    <h1>How this log is made.</h1>
+    <h1>Inside the listening station.</h1>
     </header>
-    <div class="prose">
-      <p class="lede">A single software-defined receiver on a large wire loop, running unattended. A schedule decides where it tunes and what it decodes there, and FT8 on 80, 40 and 30 meters is decoded alongside whenever those frequencies fall inside the 8 MHz it is taking in.</p>
-      <h2>What it listens to</h2>
-      <p>Amateur digital modes (FT8, FT4, WSPR and JS8), HFDL aircraft datalink, DSC ship calls, SELCAL, radiofax weather charts and SSTV, all below 30 MHz.</p>
-      <h2>Not monitored is not quiet</h2>
-      <p>The receiver gives each mode a share of its time and moves on, so most frequencies are unattended at any given moment. Every stretch of listening is logged. Pages divide counts by that time and hatch out the hours with none. An empty cell and a hatched cell mean different things.</p>
-      <h2>How a stretch is judged</h2>
-      <p>Once an hour the receiver checks itself against a time-signal station. A stretch that failed the check or overloaded the receiver is left out of the figures.</p>
-      <h2>What a blank map does not prove</h2>
-      <p>A wire loop this long on the higher bands has a lobed pattern: strong in some directions, weak in others. A region with no spots does not show that the band was closed to it.</p>
-      <h2>This is not a distress monitor</h2>
-      <p>DSC calls appear here as they are logged, but the receiver spends only part of its time on those frequencies and nobody is watching it. If someone is in trouble at sea, contact a rescue coordination center.</p>
-      <h2>What is left out on purpose</h2>
-      <p>The content of aircraft messages is not published.</p>
-      <p>The station itself stays anonymous, and its position is given only as a four-character grid square. Radio amateurs heard on the air appear by their callsigns and locators, as they do on any public spotting network.</p>
-      <h2>Aircraft positions</h2>
-      <p>Aircraft queue position reports and sometimes send several together. Tracks are drawn in the order of each fix's own timestamp, and split where two fixes could not belong to one flight.</p>
+    <div class="station-top">
+      <div class="card chain-card">
+        ${chainSvg(alongside, false)}${chainSvg(alongside, true)}
+        <ol class="chain-steps">
+          <li><b>Receive.</b> A large wire loop feeds one software receiver covering HF.</li>
+          <li><b>Capture.</b> It takes in 8 MHz of spectrum at a time, and only receives.</li>
+          <li><b>Decode.</b> A schedule picks what to tune and decode, while channels alongside keep listening inside the same capture.</li>
+          <li><b>Log.</b> Only messages that pass their own checks are written to the log.</li>
+        </ol>
+      </div>
+      <div class="station-about">
+        <h2>One receiver, a scheduled scan.</h2>
+        <p class="note-lead">It runs unattended. A schedule decides where it tunes and what it decodes there, and FT8 on 80, 40 and 30 meters is decoded alongside whenever those frequencies fall inside the capture.</p>
+        <p class="ip-notice ip-notice-warn" role="note">${glyph("warn")}<span><b>This is not a distress monitor.</b> DSC calls appear as logged, the receiver is only there part of the time, and nobody is watching it. If someone is in trouble at sea, contact a rescue coordination center.</span></p>
+        <div class="folds">
+          ${fold("What it listens to", `<p>Amateur digital modes (FT8, FT4, WSPR and JS8), HFDL aircraft datalink, DSC ship calls, SELCAL, radiofax weather charts and SSTV, all below 30 MHz.</p>`)}
+          ${fold("How reception is checked", `<p>Once an hour the receiver checks itself against a time-signal station. A stretch that failed the check or overloaded the receiver is left out of the figures.</p>`)}
+          ${fold("What an empty map means", `<p>Most frequencies are unattended at any given moment. Every stretch of listening is logged, pages divide counts by that time, and hours with none are hatched: an empty cell and a hatched cell mean different things.</p><p>A wire loop this long has a lobed pattern on the higher bands, strong in some directions and weak in others, so a region with no spots does not show the band was closed to it.</p>`)}
+          ${fold("What stays private", `<p>The content of aircraft messages is not published. The station itself stays anonymous, and its position is given only as a four-character grid square. Radio amateurs heard on the air appear by their callsigns and locators, as they do on any public spotting network.</p>`)}
+          ${fold("How aircraft tracks are drawn", `<p>Aircraft queue position reports and sometimes send several together. Tracks follow each fix's own timestamp, and split where two fixes could not belong to one flight.</p>`)}
+        </div>
+      </div>
     </div>
-    ${health ? `<section aria-labelledby="htl"><h2 id="htl">What it listened to, last 24 hours</h2><p class="note">Each bar is one stretch on one frequency. Hover for details. Red-outlined bars failed the radio check.</p>${health.timeline.length ? timelineHtml(health) : emptyLog()}</section>
-    <section aria-labelledby="hnoise"><h2 id="hnoise">Noise on each band</h2>${noiseHtml(health.bands)}</section>` : ""}`;
+    ${health ? `<section aria-labelledby="hhealth"><h2 id="hhealth">Station health and activity</h2>
+      <div class="health-grid">
+        <div class="health-main">
+          <div class="card"><h3>Sessions, last 24 hours, UTC</h3>${health.timeline.length ? timelineHtml(health) : emptyLog()}</div>
+          <div class="card" style="margin-top:12px"><h3>Noise by band and UTC hour, up to 14 days</h3><p class="note" style="margin-top:6px">As the receiver measures it, not calibrated to a field strength.</p>${noiseHtml(health.bands)}</div>
+        </div>
+        <div class="health-side">
+          <div class="card"><h3>Station status</h3>
+            <dl class="kv">
+              <dt>Now</dt><dd class="wrap">${fresh ? esc(NOW_WORDS[nowFile.state] || nowFile.state) : "No recent report"}</dd>
+              ${fresh && nowFile.label ? `<dt>On</dt><dd class="wrap">${esc(nowFile.label)}</dd>` : ""}
+              <dt>Receiver</dt><dd>1, receive-only</dd>
+              <dt>Alongside</dt><dd class="wrap">${esc(health.alongside || "None yet")}</dd>
+              ${status ? `<dt>Listening, 24 h</dt><dd>${hours(status.monitored_s)}</dd>` : ""}
+              ${status?.station_grid ? `<dt>Location, coarse</dt><dd>${esc(status.station_grid)}</dd>` : ""}
+            </dl>
+          </div>
+          ${c ? `<div class="card checks"><h3>Radio checks, 24 hours</h3>
+            ${c.passed + c.failed ? `<p>${glyph(c.failed ? "warn" : "ok")}<span>Stretches that passed</span><b>${num(c.passed)} of ${num(c.passed + c.failed)}</b></p>
+            <p>${glyph(c.failed ? "warn" : "ok")}<span>Left out of the figures</span><b>${num(c.failed)}</b></p>` : `<p>${glyph("idle")}<span>No stretch has been judged yet</span></p>`}
+          </div>` : ""}
+        </div>
+      </div>
+    </section>` : ""}`;
 }
 
 const VIEWS = { now: showNow, map: showMap, activity: showActivity, pictures: showPictures, log: showLog, station: showStation, who: showWho, traffic: showTraffic };
