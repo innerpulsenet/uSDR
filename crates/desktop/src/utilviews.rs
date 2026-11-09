@@ -576,7 +576,23 @@ pub fn hell(app: &mut App, ui: &mut Ui) {
     }
 }
 
-/// WWV: the time the code says, which station is heard, and the minute's
+/// How long a WWV frame takes to send. It states the UTC at its own start and
+/// is read as it ends: measured, the event reaches the desktop 60.1 s after
+/// the frame began.
+const WWV_FRAME_S: f64 = 60.0;
+
+/// Past this long since a frame was read, the clock is only this computer's
+/// counting and is drawn dimmed.
+const WWV_STALE_S: f64 = 180.0;
+
+/// The time now, as HH:MM:SS UTC, from the hour and minute of the last frame
+/// and the seconds since it was read.
+fn wwv_clock(hour: u32, minute: u32, since_read_s: f64) -> String {
+    let t = (f64::from(hour * 3600 + minute * 60) + WWV_FRAME_S + since_read_s.max(0.0)).floor() as u64 % 86_400;
+    format!("{:02}:{:02}:{:02}", t / 3600, t % 3600 / 60, t % 60)
+}
+
+/// WWV: the time now by the code, which station is heard, and the minute's
 /// bits as they arrive, with the position markers where the frame puts
 /// them.
 pub fn wwv(app: &mut App, ui: &mut Ui) {
@@ -587,21 +603,29 @@ pub fn wwv(app: &mut App, ui: &mut Ui) {
     ui.add_space(6.0);
     let last = rows(app, "WWV").find(|(_, d)| d.ev.kind == "minute").map(|(_, d)| (d.at, d.ev.fields.clone(), d.ev.summary.clone()));
     ui.horizontal_top(|ui| {
-        // The time read from the air, and how long ago it was read.
+        // The time now, counted on from the last frame read off the air.
         ui.vertical(|ui| {
             ui.set_width(250.0);
             match &last {
                 Some((at, f, _)) => {
                     // "2026-11-06T17:52Z": the time large, the date under it.
                     let iso = f.get("utc").cloned().unwrap_or_default();
-                    let (date, time) = iso.split_once('T').map(|(d, t)| (d.to_string(), t.trim_end_matches('Z').to_string())).unwrap_or((String::new(), "—".into()));
+                    let (date, frame) = iso.split_once('T').map(|(d, t)| (d.to_string(), t.trim_end_matches('Z').to_string())).unwrap_or((String::new(), "—".into()));
+                    let since = at.elapsed().map(|e| e.as_secs_f64()).unwrap_or(0.0);
+                    let field = |k: &str| f.get(k).and_then(|v| v.parse::<u32>().ok());
+                    let clock = match (field("hour"), field("minute")) {
+                        (Some(h), Some(m)) => wwv_clock(h, m, since),
+                        _ => "—".to_string(),
+                    };
+                    let ink = if since > WWV_STALE_S { theme::text_3() } else { theme::text() };
                     ui.horizontal(|ui| {
-                        ui.label(RichText::new(time).font(theme::mono_bold(26.0)).color(theme::text()));
+                        ui.label(RichText::new(clock).font(theme::mono_bold(26.0)).color(ink))
+                            .on_hover_text("The last frame's time, plus the 60 s the frame took to send, plus the time since it was read. Between frames it counts on this computer's clock.");
                         ui.label(mono("UTC", theme::text_3()));
                     });
-                    let ago = at.elapsed().map(|e| e.as_secs()).unwrap_or(0);
                     let day = f.get("dayOfYear").map(|d| format!(" · day {d}")).unwrap_or_default();
-                    ui.label(mono(format!("{date}{day} · read {ago} s ago"), theme::text_3()));
+                    ui.label(mono(format!("{date}{day}"), theme::text_3()));
+                    ui.label(mono(format!("FRAME {frame} · read {} s ago", since as u64), theme::text_3()));
                     ui.add_space(4.0);
                     let rows = [
                         ("station", "STATION", String::new()),
@@ -722,4 +746,22 @@ pub fn drm(app: &mut App, ui: &mut Ui) {
     let cols: &[(&str, &str, f32)] = &[];
     list_head(ui, cols);
     message_list(app, ui, "DRM", cols, "DRM's signal events, services and text messages appear here. DRM needs a clean signal: about 15 dB for 16-QAM, more for 64-QAM. STATIONS lists broadcasts aimed at or heard in North America.");
+}
+
+#[cfg(test)]
+mod wwv_clock_tests {
+    use super::wwv_clock;
+
+    #[test]
+    fn the_clock_counts_on_from_the_end_of_the_frame() {
+        // A frame states its start, so as it is read the minute is over.
+        assert_eq!(wwv_clock(17, 52, 0.0), "17:53:00");
+        assert_eq!(wwv_clock(17, 52, 0.9), "17:53:00");
+        assert_eq!(wwv_clock(17, 52, 59.5), "17:53:59");
+        // Past the hour, and past midnight.
+        assert_eq!(wwv_clock(17, 59, 1.0), "18:00:01");
+        assert_eq!(wwv_clock(23, 59, 0.0), "00:00:00");
+        // A clock stepped back under the desktop does not count backward.
+        assert_eq!(wwv_clock(17, 52, -3.0), "17:53:00");
+    }
 }

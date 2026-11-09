@@ -1982,13 +1982,23 @@ impl App {
             static N: AtomicU64 = AtomicU64::new(0);
             static T: std::sync::Mutex<Option<Instant>> = std::sync::Mutex::new(None);
             let n = N.fetch_add(1, Relaxed) + 1;
+            // The longest wait between two paints in this window of the
+            // readout: an average of 27 frames a second says nothing about
+            // the one that took a quarter of a second.
+            static LAST: std::sync::Mutex<Option<Instant>> = std::sync::Mutex::new(None);
+            static LONGEST_US: AtomicU64 = AtomicU64::new(0);
+            let now = Instant::now();
+            if let Some(prev) = LAST.lock().unwrap().replace(now) {
+                LONGEST_US.fetch_max(now.duration_since(prev).as_micros() as u64, Relaxed);
+            }
             let mut t = T.lock().unwrap();
             let start = *t.get_or_insert_with(Instant::now);
             if start.elapsed() >= Duration::from_secs(2) {
                 let a = self.player.reading();
                 eprintln!(
-                    "ui frames/s {:.1} · audio queue {:.0} ms, {} underruns · loop released {} times, {} spectrum frames let go · motion asked by {:?} · repaint causes {:?}",
+                    "ui frames/s {:.1}, longest frame {:.0} ms · audio queue {:.0} ms, {} underruns · loop released {} times, {} spectrum frames let go · motion asked by {:?} · repaint causes {:?}",
                     n as f64 / start.elapsed().as_secs_f64(),
+                    LONGEST_US.swap(0, Relaxed) as f64 / 1000.0,
                     a.queue_ms,
                     a.underruns,
                     crate::anim::releases(),
@@ -2922,6 +2932,36 @@ mod tests {
                 h.run_steps(2);
                 assert_eq!(h.get_by_label("Scan").rect(), before, "after {} decodes", n + 1);
             }
+        }
+    }
+
+    #[test]
+    fn the_wwv_readout_runs_on_from_the_last_frame() {
+        let mut h = harness_with(Prefs { auto_connect: false, dock_height: 420.0, ..Default::default() }, 1600.0, 1100.0);
+        {
+            let app = &mut h.state_mut().app;
+            app.status.mode = Mode::Wwv;
+            app.status.inspect_hz = 10e6;
+            app.decode_family = Some(crate::decoders::Family::HfData);
+            app.dock_tab = DockTab::Decodes;
+        }
+        h.run_steps(2);
+        let fields = [("utc", "2026-11-09T17:52Z"), ("hour", "17"), ("minute", "52"), ("dayOfYear", "313"), ("station", "WWV"), ("dut1", "0.0"), ("confidence", "100.0"), ("tickOffsetMs", "56.6")]
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+        let ev = proto::DecodeEvent { protocol: "WWV".into(), kind: "minute".into(), summary: "17:52 UTC".into(), valid: true, fields };
+        let at = SystemTime::now() - std::time::Duration::from_millis(5300);
+        h.state().wire.events.send(NetEvent::Decode { inspect_hz: 10e6, event: ev, at }).unwrap();
+        h.run_steps(3);
+        // The frame says 17:52 at its start; 60 s to send and 5 s since.
+        let clock = h.get_by_label_contains("17:53:0").rect();
+        let utc = h.get_by_label("UTC").rect();
+        let frame = h.get_by_label_contains("FRAME 17:52 · read 5 s ago").rect();
+        assert!(clock.right() <= utc.left(), "the clock and its UTC tag overlap");
+        assert!(clock.bottom() <= frame.top(), "the clock and the frame line overlap");
+        if let Some(dir) = std::env::var_os("USDR_QA_DIR") {
+            h.render().expect("render").save(std::path::Path::new(&dir).join("wwv-clock.png")).expect("save");
         }
     }
 
