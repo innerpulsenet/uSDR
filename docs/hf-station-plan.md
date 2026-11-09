@@ -318,6 +318,18 @@ main decoder on the same dial and time: FT8 404 of 416 stations with 14 extra, D
 1 extra, HFDL 31 of 33 with 2 extra, WSPR 20 of 22 with 7 extra. Those four modes log on 39
 channels' worth of dials at about 0.7 of a core with no dropped blocks.
 
+**Stage 4 live, 2026-11-09.** The schedule holds a slice of spectrum for 15 minutes, on the
+side of the 12 MHz filter split that suits the sun at the station's grid: above it by day,
+below it at night. FT4 and JS8 are off the channel list, leaving 29 channels for FT8, WSPR,
+DSC and HFDL. First 20 minutes on the day side: 785 distinct FT8 stations, no dropped blocks,
+no clipping, no restarts. The first night on the low side is still the real overload test.
+
+**All-day spectrum, 2026-11-09.** `crates/server/src/overview.rs` keeps one row a minute on a
+fixed 10 kHz grid, the 98th percentile of ten short FFTs a second. Rows go up with the batch;
+arm2 keeps 15 days and draws the last 24 hours for the Activity page, as height over the local
+noise. Frequencies the tuner did not cover stay hatched. The contrast still needs tuning on a
+full day of real rows.
+
 **What has to change.**
 
 - **Channels from the span.** A narrow channel filter per decoder, one `HfDecoder` per
