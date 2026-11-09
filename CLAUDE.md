@@ -29,6 +29,15 @@ several ways and checks the broadcast stations still sit on their raster. The
 radio and the driver are what strand a tune, so no unit test sees it. It
 retunes the receiver and leaves it on 100.5 MHz WFM.
 
+After changing how FT8 or FT4 decode (`crates/engine/src/ft8`), compare before and
+after on recorded slots, on an idle machine: `cargo run --release -p scannerd-engine
+--example ft8_corpus <dir>` (`plain` is the unaided decoder, `reverse` plays the slots
+backwards, where every decode is false). `USDR_FT8_DUMP=<dir>` in a drop-in on CT 216
+records them; take the drop-in and the directory away afterwards.
+
+The daemon is built for x86-64-v3 and without LTO, both measured on CT 216. Check a
+build-setting change the same way: both binaries back to back on one span, `top -H`.
+
 After touching an HF data decoder (FT8/FT4, any engine module that
 `crates/server/src/hfdata.rs` runs, or `hfdata.rs` itself), run
 `tools/hf-live-check.py MODE DIAL_HZ SECONDS` against the deployed daemon on

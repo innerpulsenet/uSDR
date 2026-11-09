@@ -19,7 +19,7 @@
 set -eu
 host=${USDR_HOST:-root@172.16.0.216}
 root=$(cd "$(dirname "$0")/.." && pwd)
-bin="$root/target/trixie/server/usdr"
+bin="$root/target/trixie/release/usdr"
 
 if [ "${1:-}" != "--no-build" ]; then
     podman run --rm \
@@ -29,7 +29,7 @@ if [ "${1:-}" != "--no-build" ]; then
         -e RUSTFLAGS="-C target-cpu=${USDR_TARGET_CPU:-x86-64-v3}" \
         -w /src docker.io/library/rust:1.93-trixie \
         sh -c 'apt-get update -qq && apt-get install -y -qq libsoapysdr-dev pkg-config >/dev/null &&
-               cargo build --profile server -p usdr-server'
+               cargo build --release -p usdr-server'
 fi
 
 scp -q "$bin" "$host:/usr/local/bin/usdr.new"

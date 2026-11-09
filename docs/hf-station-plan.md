@@ -330,6 +330,28 @@ arm2 keeps 15 days and draws the last 24 hours for the Activity page, as height 
 noise. Frequencies the tuner did not cover stay hatched. The contrast still needs tuning on a
 full day of real rows.
 
+**Review pass, 2026-11-09.** Measured on 147 FT8 slots recorded off 20, 17 and 15 m
+(`cargo run --release -p scannerd-engine --example ft8_corpus <dir>`; `USDR_FT8_DUMP` now
+records the wideband channels too):
+
+- The slot decoder searches up to four times, each after the last one's decodes are taken
+  out, each search with its own share of the time. Candidates belief propagation cannot
+  settle are tried as CQs with a CQ's fixed bits given, and by an ordered-statistics decoder,
+  both screened: a standard message between whole callsigns, few contradicted bits. 3712
+  decodes before, 4394 after (+18%), and none from the same slots played backwards.
+- Leaving repeats of a strong candidate out of the list decoded 1% fewer, and the soft
+  bits' scale made no difference from 14 to 40. Neither was changed.
+- The bounded pool exists: every slot decoder shares it, at lowered priority, with a budget
+  from what is left of the slot. A channel whose last slot is still decoding is counted as
+  dropped, as before.
+- Channels take the span in 4096-sample tiles and share the corrected block instead of
+  copying it. With AVX2 (`-C target-cpu=x86-64-v3`, set in `tools/deploy-server.sh`) the two
+  workers went from 43% to 28% of a core on the night slice, back to back on CT 216. Fat LTO
+  doubled their cost and is not used.
+- Not done: WSPR ordered-statistics decoding and a third WSPR pass (the spots go to
+  wsprnet, and there is no reference decoder here to check new ones against), JS8
+  subtraction (off the channel list), one shared front-end stage per band's group of channels.
+
 **What has to change.**
 
 - **Channels from the span.** A narrow channel filter per decoder, one `HfDecoder` per

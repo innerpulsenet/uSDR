@@ -99,5 +99,20 @@ fn main() {
                 }
             }
         });
+        if tile != usize::MAX {
+            // The other order: each tile through every channel in turn.
+            time(&format!("  tile by tile, {tile}"), &mut |w| {
+                for c in &mut channels {
+                    c.out.clear();
+                }
+                for chunk in w.chunks(tile) {
+                    for c in &mut channels {
+                        c.nco.mix(chunk, &mut c.mixed);
+                        c.chain.process(&c.mixed, &mut c.part);
+                        c.out.extend_from_slice(&c.part);
+                    }
+                }
+            });
+        }
     }
 }
