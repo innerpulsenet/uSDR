@@ -12,6 +12,7 @@ mod drm_audio;
 mod hfdata;
 mod keys;
 mod p25_keys;
+mod pictures;
 mod pskreporter;
 mod wsprnet;
 mod scan;
@@ -19,6 +20,7 @@ mod schedule;
 mod sdr;
 mod stationlog;
 mod sub_rx;
+mod uplink;
 
 use sdr::SdrEvent;
 
@@ -457,6 +459,11 @@ async fn main() -> Result<()> {
         eprintln!("monitoring schedule has no frequencies: {e:#}");
         schedule::Catalog::default()
     });
+    if let Some(log) = &station_log
+        && let Err(e) = pictures::start(Arc::clone(log), catalog.clone())
+    {
+        eprintln!("pictures will not be kept: {e:#}");
+    }
     let scheduler = schedule::Scheduler::new(catalog, settings.schedule_enabled.unwrap_or(false));
     let state = Arc::new(AppState {
         sdr: Mutex::new(Some(runtime)),
@@ -491,6 +498,16 @@ async fn main() -> Result<()> {
             },
             move || station.reporter.station().callsign,
         ));
+    }
+    if let Some(log) = state.station_log.clone() {
+        match uplink::load(&state.config_path.with_file_name("uplink.toml")) {
+            Ok(Some(config)) => {
+                let station = Arc::clone(&state);
+                tokio::spawn(uplink::run(log, config, move || station.reporter.station().grid));
+            }
+            Ok(None) => {}
+            Err(e) => eprintln!("the uplink is off: {e:#}"),
+        }
     }
     tokio::spawn(schedule_loop(Arc::clone(&state)));
     {
@@ -545,6 +562,8 @@ async fn main() -> Result<()> {
         .route("/api/station/observations", get(get_station_observations))
         .route("/api/station/listening", get(get_station_listening))
         .route("/api/station/schedule", get(get_station_schedule).post(post_station_schedule))
+        .route("/api/station/pictures", get(get_station_pictures))
+        .route("/api/station/pictures/{id}", get(get_station_picture))
         .route("/api/sdr/digital", post(post_sdr_digital))
         .route("/api/sdr/fax", get(get_sdr_fax))
         .route("/ws", get(ws_upgrade))
@@ -1294,6 +1313,22 @@ async fn get_station_observations(
     Query(q): Query<stationlog::ListQuery>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     station_read(st, move |log| log.observations(&q)).await
+}
+
+async fn get_station_pictures(
+    State(st): State<Arc<AppState>>,
+    Query(q): Query<stationlog::ListQuery>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    station_read(st, move |log| log.pictures(&q)).await
+}
+
+async fn get_station_picture(State(st): State<Arc<AppState>>, axum::extract::Path(id): axum::extract::Path<i64>) -> Result<Response, ApiError> {
+    let log = st.station_log.clone().ok_or_else(|| anyhow::anyhow!("the station log is not open"))?;
+    let png = tokio::task::spawn_blocking(move || log.picture_png(id)).await.context("reading a picture")??;
+    Ok(match png {
+        Some(body) => ([(header::CONTENT_TYPE, "image/png")], body).into_response(),
+        None => StatusCode::NOT_FOUND.into_response(),
+    })
 }
 
 async fn get_station_listening(

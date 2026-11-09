@@ -141,6 +141,23 @@ fn in_window(window: Option<(u16, u16)>, minute: u16) -> bool {
 
 impl Catalog {
     /// Build the lists from the frequency directory the desktop also uses.
+    /// The timetabled chart a picture beginning at `utc` on `dial_hz` should
+    /// be, as its station and title.
+    pub fn chart_at(&self, dial_hz: u64, utc: u64) -> Option<(&str, &str)> {
+        const DAY_MIN: i64 = 1_440;
+        const WITHIN_MIN: i64 = 5;
+        let minute = (utc % 86_400 / 60) as i64;
+        let off = |c: &Chart| {
+            let d = (minute - i64::from(c.minute)).rem_euclid(DAY_MIN);
+            d.min(DAY_MIN - d)
+        };
+        self.charts
+            .iter()
+            .filter(|c| off(c) <= WITHIN_MIN && c.freqs.iter().any(|f| f.dial_hz.abs_diff(dial_hz) <= 100))
+            .min_by_key(|c| off(c))
+            .map(|c| (c.station.as_str(), c.title.as_str()))
+    }
+
     pub fn from_directory(json: &str) -> Result<Self> {
         let d: Value = serde_json::from_str(json).context("reading the frequency directory")?;
         let mut targets = Vec::new();

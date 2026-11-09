@@ -20,10 +20,11 @@
 //! can never hold up the task that reads the broadcast. What is lost to a full
 //! queue or a lagging subscriber is counted and written down as a gap.
 
+use crate::pictures::PictureRow;
 use crate::pskreporter::spot_of;
 use crate::sdr::{SdrEvent, SdrMode};
 use anyhow::{Context, Result};
-use rusqlite::{Connection, OpenFlags, params};
+use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 use scannerd_engine::DecodeEvent;
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
@@ -41,6 +42,10 @@ const HF_HZ: std::ops::Range<f64> = 100_000.0..30_000_000.0;
 const KEEP_S: u64 = 14 * 86_400;
 /// The most the database may hold. The container has 3.9 GB in all.
 const MAX_BYTES: i64 = 1 << 30;
+/// The most disk the kept pictures may use. Oldest go first past this.
+const MAX_PICTURE_BYTES: i64 = 500 << 20;
+/// How long an uploaded picture stays here after it has gone.
+const KEEP_UPLOADED_S: u64 = 7 * 86_400;
 /// Rows removed at a time once the database is over [`MAX_BYTES`].
 const PRUNE_ROWS: i64 = 5_000;
 /// Decodes waiting for the writer. An FT8 slot is a few dozen.
@@ -109,6 +114,43 @@ CREATE TABLE gaps (
 /// `healthy` is 1 after a radio check passes, 0 after one fails or when the
 /// stay clipped, and empty until something has said either way.
 const MIGRATE_2: &str = "ALTER TABLE listening ADD COLUMN healthy INTEGER;";
+
+/// A row for every picture that ended, kept or not, so the rejects can be
+/// counted. `file` is empty for those.
+const MIGRATE_3: &str = "
+CREATE TABLE pictures (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    start_utc       INTEGER NOT NULL,
+    end_utc         INTEGER NOT NULL,
+    mode            TEXT NOT NULL,
+    dial_hz         INTEGER NOT NULL,
+    width           INTEGER NOT NULL,
+    lines           INTEGER NOT NULL,
+    station         TEXT,
+    scheduled_title TEXT,
+    file            TEXT,
+    bytes           INTEGER NOT NULL,
+    row_corr        REAL NOT NULL,
+    spread          REAL NOT NULL,
+    decision        TEXT NOT NULL,
+    why             TEXT NOT NULL,
+    uploaded_utc    INTEGER
+);
+CREATE INDEX pictures_start ON pictures (start_utc);
+CREATE TABLE uplink (
+    name  TEXT PRIMARY KEY,
+    value INTEGER NOT NULL
+);
+";
+
+/// The modes that may leave this host. Default deny, so a decoder added later
+/// stays home until someone decides otherwise.
+const UPLINK_MODES: [&str; 9] = ["FT8", "FT4", "WSPR", "JS8", "HFDL", "DSC", "SELCAL", "WEFAX", "SSTV"];
+const UPLINK_LIMIT_HZ: i64 = 30_000_000;
+/// A stay's health is settled by the next radio check, or by this long passing.
+const UPLINK_SETTLE_S: u64 = 3 * 3_600;
+/// A stay this recent may still be running.
+const UPLINK_OPEN_S: u64 = 120;
 
 fn unix_now() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
@@ -470,6 +512,48 @@ enum Cmd {
     Observe(Box<Observation>),
     Segment(Segment),
     Health { since: u64, until: u64, healthy: bool },
+    Picture(Box<PictureRow>),
+    Uplinked(UplinkCursors),
+    PictureUploaded { id: i64, at: u64 },
+}
+
+/// How far the backend has acknowledged each table.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct UplinkCursors {
+    pub observations: i64,
+    pub listening: i64,
+    pub gaps: i64,
+}
+
+/// The next rows to send. The cursors can move past rows that are not sent,
+/// when the rules keep those at home.
+#[derive(Debug, Default)]
+pub struct UplinkBatch {
+    pub observations: Vec<Value>,
+    pub listening: Vec<Value>,
+    pub gaps: Vec<Value>,
+    pub cursors: UplinkCursors,
+    /// Where the cursors stood before this batch.
+    pub was: UplinkCursors,
+    /// A table filled the batch, so more are waiting.
+    pub full: bool,
+}
+
+impl UplinkBatch {
+    pub fn is_empty(&self) -> bool {
+        self.observations.is_empty() && self.listening.is_empty() && self.gaps.is_empty()
+    }
+
+    pub fn moved(&self) -> bool {
+        self.cursors != self.was
+    }
+}
+
+/// A picture ready to send.
+pub struct UplinkPicture {
+    pub id: i64,
+    pub path: PathBuf,
+    pub meta: Value,
 }
 
 fn json_or_null(m: &Map<String, Value>) -> Option<String> {
@@ -481,6 +565,11 @@ struct Store {
     conn: Connection,
     /// The row the segment being written lives in.
     current: Option<(u64, i64)>,
+    pictures: PathBuf,
+}
+
+fn pictures_dir(database: &Path) -> PathBuf {
+    database.with_file_name("pictures")
 }
 
 impl Store {
@@ -499,7 +588,10 @@ impl Store {
         if version < 2 {
             conn.execute_batch(&format!("BEGIN; {MIGRATE_2} PRAGMA user_version = 2; COMMIT;"))?;
         }
-        Ok(Store { conn, current: None })
+        if version < 3 {
+            conn.execute_batch(&format!("BEGIN; {MIGRATE_3} PRAGMA user_version = 3; COMMIT;"))?;
+        }
+        Ok(Store { conn, current: None, pictures: pictures_dir(path) })
     }
 
     fn apply(&mut self, cmds: &[Cmd]) -> rusqlite::Result<()> {
@@ -526,6 +618,36 @@ impl Store {
                         json_or_null(&o.public),
                         json_or_null(&o.private),
                     ])?;
+                }
+                Cmd::Picture(p) => {
+                    tx.prepare_cached(
+                        "INSERT INTO pictures (start_utc, end_utc, mode, dial_hz, width, lines, station, scheduled_title, file, bytes, row_corr, spread, decision, why)
+                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+                    )?
+                    .execute(params![
+                        p.start_utc as i64,
+                        p.end_utc as i64,
+                        p.mode,
+                        p.dial_hz as i64,
+                        p.width,
+                        p.lines,
+                        p.station,
+                        p.scheduled_title,
+                        p.file,
+                        p.bytes as i64,
+                        p.row_corr,
+                        p.spread,
+                        p.decision,
+                        p.why,
+                    ])?;
+                }
+                Cmd::Uplinked(c) => {
+                    for (name, value) in [("observations", c.observations), ("listening", c.listening), ("gaps", c.gaps)] {
+                        tx.prepare_cached("INSERT INTO uplink (name, value) VALUES (?1, ?2) ON CONFLICT (name) DO UPDATE SET value = MAX(value, excluded.value)")?.execute(params![name, value])?;
+                    }
+                }
+                Cmd::PictureUploaded { id, at } => {
+                    tx.prepare_cached("UPDATE pictures SET uploaded_utc = ?2 WHERE id = ?1")?.execute(params![id, *at as i64])?;
                 }
                 Cmd::Health { since, until, healthy } => {
                     // A stay already marked bad for clipping stays bad.
@@ -567,6 +689,31 @@ impl Store {
     }
 
     /// Drop what is past its time, then the oldest rows until it fits.
+    /// Remove these pictures, rows and files together.
+    fn delete_pictures(&self, select: &str, value: i64) -> rusqlite::Result<usize> {
+        let doomed: Vec<(i64, Option<String>)> = self.conn.prepare(select)?.query_map([value], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?;
+        for (id, file) in &doomed {
+            if let Some(file) = file {
+                let _ = std::fs::remove_file(self.pictures.join(file));
+            }
+            self.conn.execute("DELETE FROM pictures WHERE id = ?1", [id])?;
+        }
+        Ok(doomed.len())
+    }
+
+    /// Rejects age out with the rest of the log, uploaded pictures a week after
+    /// they went, and the oldest of whatever is left once the folder is too big.
+    fn prune_pictures(&self, now: u64, keep_s: u64, max_bytes: i64) -> rusqlite::Result<()> {
+        self.delete_pictures("SELECT id, file FROM pictures WHERE file IS NULL AND start_utc < ?1", now.saturating_sub(keep_s) as i64)?;
+        self.delete_pictures("SELECT id, file FROM pictures WHERE uploaded_utc IS NOT NULL AND uploaded_utc < ?1", now.saturating_sub(KEEP_UPLOADED_S) as i64)?;
+        loop {
+            let used: i64 = self.conn.query_row("SELECT COALESCE(SUM(bytes), 0) FROM pictures", [], |r| r.get(0))?;
+            if used <= max_bytes || self.delete_pictures("SELECT id, file FROM pictures WHERE file IS NOT NULL ORDER BY id LIMIT ?1", 1)? == 0 {
+                return Ok(());
+            }
+        }
+    }
+
     fn prune(&self, now: u64, keep_s: u64, max_bytes: i64) -> rusqlite::Result<()> {
         let cutoff = now.saturating_sub(keep_s) as i64;
         self.conn.execute("DELETE FROM observations WHERE at_utc < ?1", [cutoff])?;
@@ -623,7 +770,7 @@ fn write_loop(mut store: Store, rx: Receiver<Cmd>, counters: Arc<Counters>) {
         }
         if last_prune.is_none_or(|t| t.elapsed() >= PRUNE_EVERY) {
             last_prune = Some(Instant::now());
-            if let Err(e) = store.prune(unix_now(), KEEP_S, MAX_BYTES) {
+            if let Err(e) = store.prune(unix_now(), KEEP_S, MAX_BYTES).and_then(|()| store.prune_pictures(unix_now(), KEEP_S, MAX_PICTURE_BYTES)) {
                 eprintln!("station log: pruning: {e}");
             }
         }
@@ -674,6 +821,16 @@ impl StationLog {
         if let Err(TrySendError::Full(_) | TrySendError::Disconnected(_)) = self.tx.try_send(cmd) {
             self.counters.queue_dropped.fetch_add(1, Ordering::Relaxed);
         }
+    }
+
+    /// Where the kept pictures live, beside the database.
+    pub fn pictures_dir(&self) -> PathBuf {
+        pictures_dir(&self.path)
+    }
+
+    /// File what became of a finished picture.
+    pub fn add_picture(&self, row: PictureRow) {
+        self.submit(Cmd::Picture(Box::new(row)));
     }
 
     /// Record what a radio check found about the listening between two times.
@@ -763,6 +920,144 @@ impl StationLog {
     }
 
     /// When the radio was listening, newest first.
+    /// What should go to the backend next. Only named columns are read, and
+    /// `private_json` is not one of them.
+    pub fn uplink_batch(&self, now: u64, limit: u32) -> Result<UplinkBatch> {
+        let conn = self.reader()?;
+        let cursor = |name: &str| -> Result<i64> { Ok(conn.query_row("SELECT value FROM uplink WHERE name = ?1", [name], |r| r.get(0)).optional()?.unwrap_or(0)) };
+        let allowed = |mode: &str, dial: i64, freq: i64| UPLINK_MODES.contains(&mode) && dial < UPLINK_LIMIT_HZ && freq < UPLINK_LIMIT_HZ;
+        let mut b = UplinkBatch { was: UplinkCursors { observations: cursor("observations")?, listening: cursor("listening")?, gaps: cursor("gaps")? }, ..Default::default() };
+        b.cursors = b.was;
+
+        let mut stmt = conn.prepare_cached(
+            "SELECT id, at_utc, dial_hz, freq_hz, mode, kind, ident, grid, lat, lon, loc_kind, snr_db, public_json FROM observations
+             WHERE id > ?1 ORDER BY id LIMIT ?2",
+        )?;
+        let mut rows = stmt.query(params![b.was.observations, limit])?;
+        let mut seen = 0;
+        while let Some(r) = rows.next()? {
+            seen += 1;
+            b.cursors.observations = r.get(0)?;
+            let (mode, dial, freq): (String, i64, i64) = (r.get(4)?, r.get(2)?, r.get(3)?);
+            if !allowed(&mode, dial, freq) {
+                continue;
+            }
+            let details = r.get::<_, Option<String>>(12)?.and_then(|t| serde_json::from_str::<Value>(&t).ok());
+            b.observations.push(json!({
+                "id": b.cursors.observations, "at_utc": r.get::<_, i64>(1)?, "dial_hz": dial, "freq_hz": freq, "mode": mode,
+                "kind": r.get::<_, String>(5)?, "ident": r.get::<_, Option<String>>(6)?, "grid": r.get::<_, Option<String>>(7)?,
+                "lat": r.get::<_, Option<f64>>(8)?, "lon": r.get::<_, Option<f64>>(9)?, "loc_kind": r.get::<_, String>(10)?,
+                "snr_db": r.get::<_, Option<f64>>(11)?, "details": details,
+            }));
+        }
+        b.full |= seen == limit;
+
+        let mut stmt = conn.prepare_cached(
+            "SELECT id, start_utc, end_utc, dial_hz, mode, cause, noise_dbfs, peak_iq, decodes, valid_decodes, healthy FROM listening
+             WHERE id > ?1 ORDER BY id LIMIT ?2",
+        )?;
+        let mut rows = stmt.query(params![b.was.listening, limit])?;
+        let mut seen = 0;
+        while let Some(r) = rows.next()? {
+            let (end, healthy): (i64, Option<i64>) = (r.get(2)?, r.get(10)?);
+            let age = now.saturating_sub(end.max(0) as u64);
+            // In order: a stay still running or awaiting its check holds the later ones back too.
+            if age < UPLINK_OPEN_S || (healthy.is_none() && age < UPLINK_SETTLE_S) {
+                break;
+            }
+            seen += 1;
+            b.cursors.listening = r.get(0)?;
+            let (mode, dial): (String, i64) = (r.get(4)?, r.get(3)?);
+            if !allowed(&mode, dial, dial) {
+                continue;
+            }
+            b.listening.push(json!({
+                "id": b.cursors.listening, "start_utc": r.get::<_, i64>(1)?, "end_utc": end, "dial_hz": dial, "mode": mode,
+                "cause": r.get::<_, String>(5)?, "noise_dbfs": r.get::<_, Option<f64>>(6)?, "peak_iq": r.get::<_, Option<f64>>(7)?,
+                "decodes": r.get::<_, i64>(8)?, "valid_decodes": r.get::<_, i64>(9)?, "healthy": healthy,
+            }));
+        }
+        b.full |= seen == limit;
+
+        let mut stmt = conn.prepare_cached("SELECT id, at_utc, kind, dropped FROM gaps WHERE id > ?1 ORDER BY id LIMIT ?2")?;
+        let mut rows = stmt.query(params![b.was.gaps, limit])?;
+        while let Some(r) = rows.next()? {
+            b.cursors.gaps = r.get(0)?;
+            b.gaps.push(json!({ "id": b.cursors.gaps, "at_utc": r.get::<_, i64>(1)?, "kind": r.get::<_, String>(2)?, "dropped": r.get::<_, i64>(3)? }));
+        }
+        Ok(b)
+    }
+
+    pub fn uplink_advance(&self, cursors: UplinkCursors) {
+        self.submit(Cmd::Uplinked(cursors));
+    }
+
+    /// The oldest picture cleared to go and not yet gone.
+    pub fn next_picture(&self) -> Result<Option<UplinkPicture>> {
+        let conn = self.reader()?;
+        let found = conn
+            .query_row(
+                "SELECT id, start_utc, end_utc, mode, dial_hz, width, lines, station, scheduled_title, file FROM pictures
+                 WHERE decision = 'publish' AND file IS NOT NULL AND uploaded_utc IS NULL AND mode = 'WEFAX' AND dial_hz < ?1 ORDER BY id LIMIT 1",
+                [UPLINK_LIMIT_HZ],
+                |r| {
+                    Ok((
+                        r.get::<_, i64>(0)?,
+                        r.get::<_, String>(9)?,
+                        json!({
+                            "id": r.get::<_, i64>(0)?, "start_utc": r.get::<_, i64>(1)?, "end_utc": r.get::<_, i64>(2)?, "mode": r.get::<_, String>(3)?,
+                            "dial_hz": r.get::<_, i64>(4)?, "width": r.get::<_, i64>(5)?, "lines": r.get::<_, i64>(6)?,
+                            "station": r.get::<_, Option<String>>(7)?, "scheduled_title": r.get::<_, Option<String>>(8)?,
+                        }),
+                    ))
+                },
+            )
+            .optional()?;
+        Ok(found.map(|(id, file, meta)| UplinkPicture { id, path: self.pictures_dir().join(file), meta }))
+    }
+
+    pub fn picture_uploaded(&self, id: i64, at: u64) {
+        self.submit(Cmd::PictureUploaded { id, at });
+    }
+
+    /// Pictures that ended, newest first.
+    pub fn pictures(&self, q: &ListQuery) -> Result<Value> {
+        let conn = self.reader()?;
+        let mut stmt = conn.prepare_cached(
+            "SELECT id, start_utc, end_utc, mode, dial_hz, width, lines, station, scheduled_title, file IS NOT NULL, bytes, row_corr, spread, decision, why, uploaded_utc FROM pictures
+             WHERE start_utc >= ?1 AND start_utc <= ?2 AND (?3 IS NULL OR mode = ?3) ORDER BY id DESC LIMIT ?4",
+        )?;
+        let rows = stmt.query_map(params![q.since.unwrap_or(0) as i64, q.until.unwrap_or(i64::MAX as u64) as i64, q.mode, q.limit.unwrap_or(LIST_DEFAULT).min(LIST_MAX)], |r| {
+            Ok(json!({
+                "id": r.get::<_, i64>(0)?,
+                "start_utc": r.get::<_, i64>(1)?,
+                "end_utc": r.get::<_, i64>(2)?,
+                "mode": r.get::<_, String>(3)?,
+                "dial_hz": r.get::<_, i64>(4)?,
+                "width": r.get::<_, i64>(5)?,
+                "lines": r.get::<_, i64>(6)?,
+                "station": r.get::<_, Option<String>>(7)?,
+                "scheduled_title": r.get::<_, Option<String>>(8)?,
+                "has_file": r.get::<_, bool>(9)?,
+                "bytes": r.get::<_, i64>(10)?,
+                "row_corr": r.get::<_, f64>(11)?,
+                "spread": r.get::<_, f64>(12)?,
+                "decision": r.get::<_, String>(13)?,
+                "why": r.get::<_, String>(14)?,
+                "uploaded_utc": r.get::<_, Option<i64>>(15)?,
+            }))
+        })?;
+        Ok(json!({ "pictures": rows.collect::<rusqlite::Result<Vec<_>>>()? }))
+    }
+
+    /// The PNG of a kept picture, if there is one.
+    pub fn picture_png(&self, id: i64) -> Result<Option<Vec<u8>>> {
+        let conn = self.reader()?;
+        let file: Option<Option<String>> = conn.query_row("SELECT file FROM pictures WHERE id = ?1", [id], |r| r.get(0)).optional()?;
+        let Some(file) = file.flatten() else { return Ok(None) };
+        Ok(Some(std::fs::read(self.pictures_dir().join(file)).context("reading a picture")?))
+    }
+
     pub fn listening(&self, q: &ListQuery) -> Result<Value> {
         let conn = self.reader()?;
         let mut stmt = conn.prepare_cached(
@@ -1149,6 +1444,126 @@ mod tests {
         assert_eq!(s["by_mode"][0]["mode"], "FT8");
         assert_eq!(s["by_mode"][0]["idents"], 1);
         assert_eq!(s["by_dial"][0]["dial_hz"], 14_074_000);
+    }
+
+    fn picture_row(start: u64, file: Option<&str>, bytes: u64) -> PictureRow {
+        PictureRow {
+            start_utc: start,
+            end_utc: start + 600,
+            mode: "WEFAX",
+            dial_hz: 8_501_100,
+            width: 1809,
+            lines: 1338,
+            station: Some("NMG".into()),
+            scheduled_title: Some("Surface analysis".into()),
+            file: file.map(String::from),
+            bytes,
+            row_corr: 0.8,
+            spread: 0.4,
+            decision: if file.is_some() { "publish" } else { "reject" },
+            why: "",
+        }
+    }
+
+    #[test]
+    fn a_picture_row_lists_without_its_path_and_pruning_takes_its_file() {
+        let path = temp_db("pictures");
+        let mut store = Store::open(&path).unwrap();
+        let dir = pictures_dir(&path);
+        std::fs::create_dir_all(&dir).unwrap();
+        for name in ["old.png", "new.png"] {
+            std::fs::write(dir.join(name), b"png").unwrap();
+        }
+        let cmds = [Cmd::Picture(Box::new(picture_row(NOW - 100, Some("old.png"), 60))), Cmd::Picture(Box::new(picture_row(NOW - 50, Some("new.png"), 60))), Cmd::Picture(Box::new(picture_row(NOW - KEEP_S - 1, None, 0)))];
+        store.apply(&cmds).unwrap();
+
+        let (tx, _rx) = sync_channel(1);
+        let log = StationLog { tx, path: path.clone(), counters: Arc::default() };
+        let listed = log.pictures(&ListQuery::default()).unwrap();
+        assert_eq!(listed["pictures"].as_array().unwrap().len(), 3);
+        assert_eq!(listed["pictures"][1]["has_file"], true);
+        assert!(listed["pictures"][1].get("file").is_none(), "the folder layout stays private");
+        let id = listed["pictures"][1]["id"].as_i64().unwrap();
+        assert_eq!(log.picture_png(id).unwrap().as_deref(), Some(&b"png"[..]));
+        assert_eq!(log.picture_png(9_999).unwrap(), None);
+
+        store.prune_pictures(NOW, KEEP_S, 100).unwrap();
+        let left = log.pictures(&ListQuery::default()).unwrap();
+        let left = left["pictures"].as_array().unwrap();
+        assert_eq!(left.len(), 1, "the old reject and the oldest file went");
+        assert_eq!(left[0]["start_utc"], NOW - 50);
+        assert!(!dir.join("old.png").exists());
+        assert!(dir.join("new.png").exists());
+    }
+
+    fn uplink_fixture(name: &str) -> (Store, StationLog) {
+        let path = temp_db(name);
+        let store = Store::open(&path).unwrap();
+        let (tx, _rx) = sync_channel(1);
+        std::mem::forget(_rx);
+        (store, StationLog { tx, path, counters: Arc::default() })
+    }
+
+    fn row(mode: &'static str, dial: u64, id: Option<&str>) -> Observation {
+        Observation { at_utc: NOW, dial_hz: dial, freq_hz: dial, mode, kind: "x".into(), ident: id.map(String::from), grid: None, lat: None, lon: None, loc_kind: LocKind::None, snr_db: None, public: Map::new(), private: Map::new() }
+    }
+
+    #[test]
+    fn the_uplink_sends_only_what_may_leave_and_never_the_private_column() {
+        let (mut store, log) = uplink_fixture("uplink-rows");
+        let mut secret = row("HFDL", 8_977_000, Some("BA117"));
+        secret.private.insert("text".into(), Value::from("CREW NOTE"));
+        let cmds = [Cmd::Observe(Box::new(secret)), Cmd::Observe(Box::new(row("RTTY", 10_100_800, Some("X")))), Cmd::Observe(Box::new(row("FT8", 50_313_000, Some("Y")))), Cmd::Observe(Box::new(row("FT8", 14_074_000, Some("Z"))))];
+        store.apply(&cmds).unwrap();
+        let b = log.uplink_batch(NOW, 100).unwrap();
+        let idents: Vec<_> = b.observations.iter().map(|o| o["ident"].as_str().unwrap()).collect();
+        assert_eq!(idents, ["BA117", "Z"]);
+        assert_eq!(b.cursors.observations, 4, "what stays home is still passed over");
+        let text = serde_json::to_string(&b.observations).unwrap();
+        assert!(!text.contains("CREW"), "{text}");
+    }
+
+    #[test]
+    fn the_cursor_moves_only_on_success_and_a_retry_sends_the_same_rows() {
+        let (mut store, log) = uplink_fixture("uplink-cursor");
+        store.apply(&[Cmd::Observe(Box::new(row("FT8", 14_074_000, Some("Z"))))]).unwrap();
+        let first = log.uplink_batch(NOW, 100).unwrap();
+        // Nothing acknowledged it, so the same row comes again.
+        let again = log.uplink_batch(NOW, 100).unwrap();
+        assert_eq!(first.observations, again.observations);
+        store.apply(&[Cmd::Uplinked(first.cursors)]).unwrap();
+        assert!(log.uplink_batch(NOW, 100).unwrap().is_empty());
+        // A stale acknowledgment cannot move it backward.
+        store.apply(&[Cmd::Uplinked(UplinkCursors::default())]).unwrap();
+        assert!(log.uplink_batch(NOW, 100).unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_stay_goes_up_only_once_it_has_ended_and_been_judged() {
+        let (mut store, log) = uplink_fixture("uplink-stays");
+        let mut s = segment(0, NOW - 400, NOW - 300);
+        store.apply(&[Cmd::Segment(s.clone())]).unwrap();
+        assert!(log.uplink_batch(NOW, 100).unwrap().listening.is_empty(), "no verdict yet");
+        store.apply(&[Cmd::Health { since: NOW - 500, until: NOW, healthy: true }]).unwrap();
+        assert_eq!(log.uplink_batch(NOW, 100).unwrap().listening.len(), 1);
+        assert_eq!(log.uplink_batch(NOW + UPLINK_SETTLE_S, 100).unwrap().listening.len(), 1);
+        s.end_utc = NOW;
+        store.apply(&[Cmd::Segment(s)]).unwrap();
+        assert!(log.uplink_batch(NOW, 100).unwrap().listening.is_empty(), "it is still running");
+    }
+
+    #[test]
+    fn only_a_cleared_chart_is_offered_to_the_uplink() {
+        let (mut store, log) = uplink_fixture("uplink-pictures");
+        let mut held = picture_row(NOW - 200, Some("h.png"), 10);
+        held.decision = "hold";
+        let open = picture_row(NOW - 100, Some("o.png"), 10);
+        store.apply(&[Cmd::Picture(Box::new(held)), Cmd::Picture(Box::new(open))]).unwrap();
+        let next = log.next_picture().unwrap().expect("the published one");
+        assert!(next.path.ends_with("o.png"));
+        assert_eq!(next.meta["station"], "NMG");
+        store.apply(&[Cmd::PictureUploaded { id: next.id, at: NOW }]).unwrap();
+        assert!(log.next_picture().unwrap().is_none());
     }
 
     #[test]

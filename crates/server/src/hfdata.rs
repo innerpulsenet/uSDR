@@ -97,8 +97,52 @@ static NEXT_PICTURE: AtomicU32 = AtomicU32::new(1);
 /// The most rows kept for `GET /api/sdr/fax`, past any real transmission.
 const FAX_MAX_ROWS: usize = 4_000;
 
+fn now_utc() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
+}
+
+/// An SSTV picture as its rows arrive. Unlike radiofax it is only streamed to
+/// clients, so the daemon has to collect it to keep it.
+#[derive(Default)]
+struct SstvFrame {
+    started_utc: u64,
+    width: u32,
+    height: u32,
+    rgb: Vec<u8>,
+}
+
+impl SstvFrame {
+    fn begin(width: u32, height: u32) -> Self {
+        SstvFrame { started_utc: now_utc(), width, height, rgb: vec![0; width as usize * height as usize * 3] }
+    }
+
+    fn row(&mut self, line: u32, rgb: &[u8]) {
+        let stride = self.width as usize * 3;
+        let at = line as usize * stride;
+        if rgb.len() == stride && at + stride <= self.rgb.len() {
+            self.rgb[at..at + stride].copy_from_slice(rgb);
+        }
+    }
+
+    /// Send the first `rows` rows on to be kept.
+    fn hand_over(&mut self, rows: u32, dial_hz: f64) {
+        let mut pixels = std::mem::take(&mut self.rgb);
+        pixels.truncate(rows as usize * self.width as usize * 3);
+        crate::pictures::submit(crate::pictures::Finished {
+            kind: crate::pictures::Kind::Sstv,
+            started_utc: self.started_utc,
+            ended_utc: now_utc(),
+            dial_hz: dial_hz.round() as u64,
+            width: self.width,
+            rows,
+            full_rows: Some(self.height),
+            pixels,
+        });
+    }
+}
+
 enum Kind {
-    Wefax { dec: Box<WefaxDecoder>, picture: Option<u32>, rows: u32, started_hz: f64 },
+    Wefax { dec: Box<WefaxDecoder>, picture: Option<u32>, rows: u32, started_hz: f64, started_utc: u64 },
     Rtty(Box<RttyDecoder>),
     Navtex(Box<NavtexDecoder>),
     Psk(Box<PskDecoder>),
@@ -121,7 +165,7 @@ enum Kind {
     /// Feld Hell, and how many columns have gone out.
     Hell { dec: Box<HellDecoder>, sent: u32 },
     Js8(Box<Js8Decoder>),
-    Sstv { dec: Box<SstvDecoder>, picture: Option<u32>, rows: u32 },
+    Sstv { dec: Box<SstvDecoder>, picture: Option<u32>, rows: u32, frame: SstvFrame },
     Drm {
         rx: Box<DrmReceiver>,
         audio: Box<crate::drm_audio::DrmAudio>,
@@ -344,7 +388,7 @@ impl HfDecoder {
                 d.set_ioc(c.fax_ioc);
                 d.set_auto_start(c.fax_auto_start);
                 d.set_slant_ppm(c.fax_slant_ppm as f64);
-                Kind::Wefax { dec: Box::new(d), picture: None, rows: 0, started_hz: 0.0 }
+                Kind::Wefax { dec: Box::new(d), picture: None, rows: 0, started_hz: 0.0, started_utc: 0 }
             }
             SdrMode::Rtty => Kind::Rtty(Box::new(RttyDecoder::new(fs, rtty_config(&c)))),
             SdrMode::Navtex => Kind::Navtex(Box::new(NavtexDecoder::new(fs))),
@@ -366,7 +410,7 @@ impl HfDecoder {
             SdrMode::Mfsk => Kind::Mfsk(Box::new(MfskDecoder::new(fs, MfskConfig::default()))),
             SdrMode::Hell => Kind::Hell { dec: Box::new(HellDecoder::new(fs)), sent: 0 },
             SdrMode::Js8 => Kind::Js8(Box::new(Js8Decoder::new(fs, &Js8Speed::ALL))),
-            SdrMode::Sstv => Kind::Sstv { dec: Box::new(SstvDecoder::new(fs)), picture: None, rows: 0 },
+            SdrMode::Sstv => Kind::Sstv { dec: Box::new(SstvDecoder::new(fs)), picture: None, rows: 0, frame: SstvFrame::default() },
             SdrMode::Drm => Kind::Drm {
                 rx: Box::new(DrmReceiver::new(fs)),
                 audio: Box::new(crate::drm_audio::DrmAudio::new(fs as f64)),
@@ -559,7 +603,7 @@ impl HfDecoder {
             let _ = events.send(SdrEvent::Decode { inspect_hz: dial_hz, event: ev });
         };
         match &mut self.kind {
-            Kind::Wefax { dec, picture, rows, started_hz } => {
+            Kind::Wefax { dec, picture, rows, started_hz, started_utc } => {
                 dec.push(audio);
                 for e in dec.take_events() {
                     match e {
@@ -568,6 +612,7 @@ impl HfDecoder {
                             *picture = Some(id);
                             *rows = 0;
                             *started_hz = dial_hz;
+                            *started_utc = now_utc();
                             if let Ok(mut f) = FAX.lock() {
                                 *f = FaxPicture { id, width: dec.width(), pixels: Vec::new() };
                             }
@@ -594,6 +639,20 @@ impl HfDecoder {
                         }
                         WefaxEvent::Stop { .. } => {
                             if let Some(id) = picture.take() {
+                                let kept = FAX.lock().ok().filter(|f| f.id == id).map(|f| f.pixels.clone());
+                                if let Some(pixels) = kept {
+                                    let width = dec.width() as u32;
+                                    crate::pictures::submit(crate::pictures::Finished {
+                                        kind: crate::pictures::Kind::Wefax,
+                                        started_utc: *started_utc,
+                                        ended_utc: now_utc(),
+                                        dial_hz: started_hz.round() as u64,
+                                        width,
+                                        rows: (pixels.len() / width.max(1) as usize) as u32,
+                                        full_rows: None,
+                                        pixels,
+                                    });
+                                }
                                 send(event(
                                     "WEFAX",
                                     "picture",
@@ -800,13 +859,14 @@ impl HfDecoder {
                     send(hf_event("JS8", &e));
                 }
             }
-            Kind::Sstv { dec, picture, rows } => {
+            Kind::Sstv { dec, picture, rows, frame: collected } => {
                 dec.push(audio);
                 for e in dec.take() {
                     match &e {
-                        SstvEvent::Start { .. } => {
+                        SstvEvent::Start { width, height, .. } => {
                             *picture = Some(NEXT_PICTURE.fetch_add(1, Ordering::Relaxed));
                             *rows = 0;
+                            *collected = SstvFrame::begin(*width, *height);
                             let mut ev = hf_event("SSTV", &e);
                             ev.fields.insert("image".into(), picture.unwrap_or(0).to_string());
                             send(ev);
@@ -816,8 +876,12 @@ impl HfDecoder {
                             let frame = usdr_proto::encode_image_line(0, id, *line, rgb);
                             let _ = events.send(SdrEvent::FaxRow { frame: frame.into() });
                             *rows = (*rows).max(line + 1);
+                            collected.row(*line, rgb);
                         }
                         SstvEvent::End { .. } => {
+                            if picture.is_some() {
+                                collected.hand_over(*rows, dial_hz);
+                            }
                             let mut ev = hf_event("SSTV", &e);
                             if let Some(id) = picture.take() {
                                 ev.fields.insert("image".into(), id.to_string());
