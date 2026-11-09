@@ -409,6 +409,7 @@ fn gain(app: &mut App, ui: &mut Ui) {
         text: |v| if auto { format!("auto · {shown:.0} dB") } else { format!("{v:.0} dB") },
         color: theme::AMBER,
         enabled: !auto,
+        reset: None,
         ticks,
     }
     .show(ui);
@@ -432,7 +433,7 @@ fn gain(app: &mut App, ui: &mut Ui) {
             text: |v| format!("{v:.0} dBFS"),
             color: theme::text_2(),
             enabled: active,
-            ticks: vec![],
+            reset: None, ticks: vec![],
         }
         .show(ui);
         if ch {

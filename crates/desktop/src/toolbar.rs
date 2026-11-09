@@ -123,7 +123,7 @@ fn style(app: &mut App, ui: &mut Ui) {
     if v.spectrum == SpecMode::Ridges {
         let mut secs = v.ridge_secs as f64;
         let ticks = [2.0, 6.0, 10.0].iter().map(|&s: &f64| (((s - 2.0) / 8.0) as f32, format!("{s:.0} s"))).collect();
-        let (ch, _) = Fader { value: &mut secs, min: 2.0, max: 10.0, step: 1.0, fine: 0.5, label: "DEPTH", text: |v| format!("{v:.1} s"), color: theme::AMBER, enabled: true, ticks }.show(ui);
+        let (ch, _) = Fader { value: &mut secs, min: 2.0, max: 10.0, step: 1.0, fine: 0.5, label: "DEPTH", text: |v| format!("{v:.1} s"), color: theme::AMBER, enabled: true, reset: None, ticks }.show(ui);
         if ch {
             v.ridge_secs = secs as f32;
         }
@@ -159,7 +159,7 @@ fn span_zoom(app: &mut App, ui: &mut Ui) {
     });
     let mut z = app.zoom_ui.max(1.0).log2();
     let ticks = (0..=5).map(|i| (i as f32 / 5.0, format!("{}×", 1 << i))).collect();
-    let (ch, _) = Fader { value: &mut z, min: 0.0, max: 5.0, step: 0.25, fine: 0.05, label: "ZOOM", text: |z| format!("{:.1}×", 2f64.powf(z)), color: theme::CYAN, enabled: true, ticks }.show(ui);
+    let (ch, _) = Fader { value: &mut z, min: 0.0, max: 5.0, step: 0.25, fine: 0.05, label: "ZOOM", text: |z| format!("{:.1}×", 2f64.powf(z)), color: theme::CYAN, enabled: true, reset: Some(0.0), ticks }.show(ui);
     if ch {
         app.set_zoom(2f64.powf(z));
     }
@@ -177,8 +177,8 @@ fn range(app: &mut App, ui: &mut Ui) {
     }
     let mut fl = v.floor_db as f64;
     let mut ce = v.ceiling_db as f64;
-    let (a, _) = Fader { value: &mut fl, min: -150.0, max: -20.0, step: 2.0, fine: 1.0, label: "FLOOR", text: |v| format!("{v:.0} dBFS"), color: theme::text_2(), enabled: !v.auto_range, ticks: vec![] }.show(ui);
-    let (b, _) = Fader { value: &mut ce, min: -100.0, max: 10.0, step: 2.0, fine: 1.0, label: "CEILING", text: |v| format!("{v:.0} dBFS"), color: theme::text_2(), enabled: !v.auto_range, ticks: vec![] }.show(ui);
+    let (a, _) = Fader { value: &mut fl, min: -150.0, max: -20.0, step: 2.0, fine: 1.0, label: "FLOOR", text: |v| format!("{v:.0} dBFS"), color: theme::text_2(), enabled: !v.auto_range, reset: Some(f64::from(crate::spectrum::View::default().floor_db)), ticks: vec![] }.show(ui);
+    let (b, _) = Fader { value: &mut ce, min: -100.0, max: 10.0, step: 2.0, fine: 1.0, label: "CEILING", text: |v| format!("{v:.0} dBFS"), color: theme::text_2(), enabled: !v.auto_range, reset: Some(f64::from(crate::spectrum::View::default().ceiling_db)), ticks: vec![] }.show(ui);
     if a || b {
         v.auto_range = false;
         v.floor_db = fl as f32;
@@ -211,12 +211,12 @@ fn waterfall(app: &mut App, ui: &mut Ui) {
     });
     let mut black = v.wf_black as f64;
     let (lo, hi, label) = if v.wf_auto_black { (-20.0, 20.0, "BLACK (from the floor)") } else { (-150.0, -20.0, "BLACK LEVEL") };
-    let (ch, _) = Fader { value: &mut black, min: lo, max: hi, step: 1.0, fine: 0.5, label, text: |v| format!("{v:+.0} dB"), color: theme::text_2(), enabled: true, ticks: vec![] }.show(ui);
+    let (ch, _) = Fader { value: &mut black, min: lo, max: hi, step: 1.0, fine: 0.5, label, text: |v| format!("{v:+.0} dB"), color: theme::text_2(), enabled: true, reset: None, ticks: vec![] }.show(ui);
     if ch {
         v.wf_black = black as f32;
     }
     let mut range = v.wf_range as f64;
-    let (ch, _) = Fader { value: &mut range, min: 10.0, max: 100.0, step: 1.0, fine: 0.5, label: "CONTRAST RANGE", text: |v| format!("{v:.0} dB"), color: theme::text_2(), enabled: true, ticks: vec![] }.show(ui);
+    let (ch, _) = Fader { value: &mut range, min: 10.0, max: 100.0, step: 1.0, fine: 0.5, label: "CONTRAST RANGE", text: |v| format!("{v:.0} dB"), color: theme::text_2(), enabled: true, reset: Some(f64::from(crate::spectrum::View::default().wf_range)), ticks: vec![] }.show(ui);
     if ch {
         v.wf_range = range as f32;
     }

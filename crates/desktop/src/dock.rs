@@ -980,7 +980,7 @@ fn scan(app: &mut App, ui: &mut Ui) {
                 // The house faders, as everywhere else, rather than egui's own sliders.
                 ui.label(mono("SQUELCH", theme::text_3()));
                 let mut v = f.threshold_db as f64;
-                let ch = widgets::Fader { value: &mut v, min: 4.0, max: 20.0, step: 0.5, fine: 0.5, label: "", text: |v| format!("{v:.1} dB"), color: theme::OK, enabled: true, ticks: vec![] }.show_compact(ui).0;
+                let ch = widgets::Fader { value: &mut v, min: 4.0, max: 20.0, step: 0.5, fine: 0.5, label: "", text: |v| format!("{v:.1} dB"), color: theme::OK, enabled: true, reset: None, ticks: vec![] }.show_compact(ui).0;
                 if ch {
                     f.threshold_db = v as f32;
                     touched = true;
@@ -988,7 +988,7 @@ fn scan(app: &mut App, ui: &mut Ui) {
                 ui.end_row();
                 ui.label(mono("RESUME AFTER", theme::text_3()));
                 let mut v = f.resume_delay_s as f64;
-                let ch = widgets::Fader { value: &mut v, min: 0.5, max: 30.0, step: 0.5, fine: 0.1, label: "", text: |v| format!("{v:.1} s"), color: theme::OK, enabled: true, ticks: vec![] }.show_compact(ui).0;
+                let ch = widgets::Fader { value: &mut v, min: 0.5, max: 30.0, step: 0.5, fine: 0.1, label: "", text: |v| format!("{v:.1} s"), color: theme::OK, enabled: true, reset: None, ticks: vec![] }.show_compact(ui).0;
                 if ch {
                     f.resume_delay_s = v as f32;
                     touched = true;

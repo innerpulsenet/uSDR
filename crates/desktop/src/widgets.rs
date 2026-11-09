@@ -493,6 +493,9 @@ pub struct Fader<'a, F: Fn(f64) -> String> {
     pub text: F,
     pub color: Color32,
     pub enabled: bool,
+    /// The value a double click goes back to, for the faders that have
+    /// an obvious one. A gain or a volume has none.
+    pub reset: Option<f64>,
     /// Scale labels under the track: (fraction, text).
     pub ticks: Vec<(f32, String)>,
 }
@@ -522,6 +525,8 @@ impl<F: Fn(f64) -> String> Fader<'_, F> {
         let p = ui.painter();
         let a = if self.enabled { 1.0 } else { theme::DISABLED_ALPHA };
         let value_text = (self.text)(*self.value);
+        // The reading lights up while the fader is in hand.
+        let value_color = if resp.dragged() { theme::lerp(self.color, Color32::WHITE, 0.45) } else { alpha(self.color, a.max(0.7)) };
         let track = if bare {
             Rect::from_min_max(pos2(rect.left() + 6.0, rect.center().y - 3.0), pos2(rect.right() - 6.0, rect.center().y + 3.0))
         } else if compact {
@@ -533,11 +538,11 @@ impl<F: Fn(f64) -> String> Fader<'_, F> {
             let vw = width_of(value_text.clone()).max(width_of((self.text)(self.min))).max(width_of((self.text)(self.max)));
             p.text(pos2(rect.left(), rect.center().y), Align2::LEFT_CENTER, self.label, theme::mono(crate::theme::ty::LABEL), alpha(theme::text_3(), a));
             let track = Rect::from_min_max(pos2(rect.left() + lw + 10.0, rect.center().y - 3.0), pos2(rect.right() - vw - 8.0, rect.center().y + 3.0));
-            p.text(pos2(track.right() + 8.0, rect.center().y), Align2::LEFT_CENTER, &value_text, theme::mono_bold(crate::theme::ty::SMALL), alpha(self.color, a.max(0.7)));
+            p.text(pos2(track.right() + 8.0, rect.center().y), Align2::LEFT_CENTER, &value_text, theme::mono_bold(crate::theme::ty::SMALL), value_color);
             track
         } else {
             p.text(rect.left_top(), Align2::LEFT_TOP, self.label, theme::mono(crate::theme::ty::LABEL), alpha(theme::text_3(), a));
-            p.text(rect.right_top(), Align2::RIGHT_TOP, &value_text, theme::mono_bold(crate::theme::ty::VALUE), alpha(self.color, a.max(0.7)));
+            p.text(rect.right_top(), Align2::RIGHT_TOP, &value_text, theme::mono_bold(crate::theme::ty::VALUE), value_color);
             Rect::from_min_max(pos2(rect.left() + 4.0, rect.top() + 18.0), pos2(rect.right() - 4.0, rect.top() + 24.0))
         };
         p.rect(track, CornerRadius::same(crate::theme::R_CAP), theme::ink(), Stroke::new(1.0, Color32::from_black_alpha(200)), egui::StrokeKind::Outside);
@@ -563,16 +568,33 @@ impl<F: Fn(f64) -> String> Fader<'_, F> {
             p.text(pos2(x, track.bottom() + 6.0), align, label, theme::mono(crate::theme::ty::MICRO), theme::text_3());
         }
         let mut changed = false;
-        if let Some(pos) = resp.interact_pointer_pos()
-            && (resp.dragged() || resp.clicked())
+        // A drag moves the value by as far as the pointer travels, from
+        // wherever on the track it was pressed: the cap never jumps to the
+        // pointer. A click off the cap is one step toward it, and a double
+        // click goes back to the fader's own value, if it has one. Pressing
+        // the track used to set the value there, which for a gain is a
+        // large step nobody asked for.
+        let cap_x = fill.right();
+        let grab_id = resp.id.with("grab");
+        if resp.drag_started()
+            && let Some(pos) = resp.interact_pointer_pos()
         {
-            let ft = ((pos.x - track.left()) / track.width()).clamp(0.0, 1.0) as f64;
-            let fine = ui.input(|i| i.modifiers.shift);
-            let mut v = self.min + ft * span;
-            let st = if fine { self.fine } else { self.step };
-            if st > 0.0 {
-                v = (v / st).round() * st;
+            ui.data_mut(|d| d.insert_temp(grab_id, pos.x - cap_x));
+        }
+        let fine = ui.input(|i| i.modifiers.shift);
+        let st = if fine { self.fine } else { self.step };
+        let target = match resp.interact_pointer_pos() {
+            _ if resp.double_clicked() => self.reset,
+            Some(pos) if resp.dragged() => {
+                let grab: f32 = ui.data(|d| d.get_temp(grab_id)).unwrap_or(0.0);
+                let ft = ((pos.x - grab - track.left()) / track.width()).clamp(0.0, 1.0) as f64;
+                let v = self.min + ft * span;
+                Some(if st > 0.0 { (v / st).round() * st } else { v })
             }
+            Some(pos) if resp.clicked() && (pos.x - cap_x).abs() > 6.0 => Some(*self.value + f64::from((pos.x - cap_x).signum()) * st),
+            _ => None,
+        };
+        if let Some(v) = target {
             let v = v.clamp(self.min, self.max);
             if (v - *self.value).abs() > 1e-9 {
                 *self.value = v;

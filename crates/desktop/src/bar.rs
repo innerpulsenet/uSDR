@@ -1093,7 +1093,7 @@ fn audio(app: &mut App, lcd: &mut Ui, keys: &mut Ui, look: crate::lcd::Look) {
                 text: |v| format!("{v:.0}"),
                 color: if is_b { theme::VIOLET } else { theme::AMBER },
                 enabled: !muted,
-                ticks: vec![],
+                reset: None, ticks: vec![],
             }
             .show_bare(ui)
         })
@@ -1123,7 +1123,7 @@ fn audio(app: &mut App, lcd: &mut Ui, keys: &mut Ui, look: crate::lcd::Look) {
             text: |p| if p.abs() < 0.01 { "center".into() } else if p < 0.0 { format!("L {:.0}", -p * 100.0) } else { format!("R {:.0}", p * 100.0) },
             color: theme::text_2(),
             enabled: true,
-            ticks: vec![],
+            reset: Some(0.0), ticks: vec![],
         }
         .show(ui);
         if ch {
