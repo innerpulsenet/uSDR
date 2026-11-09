@@ -612,7 +612,7 @@ impl SdrMode {
     }
 
     /// The slot decoder a data mode runs on its sideband audio.
-    fn ft8_protocol(self) -> Option<scannerd_engine::ft8::Protocol> {
+    pub(crate) fn ft8_protocol(self) -> Option<scannerd_engine::ft8::Protocol> {
         match self {
             SdrMode::Ft8 => Some(scannerd_engine::ft8::Protocol::Ft8),
             SdrMode::Ft4 => Some(scannerd_engine::ft8::Protocol::Ft4),
@@ -5536,8 +5536,8 @@ fn run_sdr(
         clean.extend_from_slice(&block);
         front.process(&mut clean);
         if let Some(w) = &wide {
-            let main_dial = (current_mode == SdrMode::Ft8).then(|| inspect_hz.round() as u64);
-            w.feed(&clean, current_rate, current_freq + lo_offset_for(current_rate, lo_offset, current_mode), now_ms(), main_dial);
+            let main = crate::stationlog::monitored_mode(current_mode).map(|_| (current_mode, inspect_hz.round() as u64));
+            w.feed(&clean, current_rate, current_freq + lo_offset_for(current_rate, lo_offset, current_mode), now_ms(), main);
         }
 
         // Spectrum is displayed at DEFAULT_FPS. Ingest every block so the

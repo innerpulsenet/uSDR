@@ -1,17 +1,18 @@
-//! FT8 channels cut from the wide span, beside whatever the main receiver is
-//! doing.
+//! Decoder channels cut from the wide span, beside whatever the main receiver
+//! is doing.
 //!
-//! The span is 8 MHz wide, so one tuner position can hold several FT8 dials at
-//! once. Each channel here mixes its dial to baseband, decimates, demodulates
-//! and fills its own slot decoder, on a thread of its own: the radio loop only
-//! copies a block into a bounded queue and never waits. A channel runs whenever
-//! the tuner happens to cover its dial.
+//! The span is 8 MHz wide, so one tuner position can hold many digital dials at
+//! once. Each channel mixes its dial to baseband, decimates, demodulates and
+//! feeds its own decoder, on worker threads of their own: the radio loop only
+//! hands over a shared block through a bounded queue and never waits. A channel
+//! runs whenever the tuner happens to cover its dial.
 //!
-//! Every slot's result is kept for comparing against the main decoder. With
-//! `USDR_WIDE_LOG` set the decodes also go where the main decoder's go, except
-//! while the main decoder is on the same dial, which then speaks for it. Each
-//! channel keeps its own listening record, marked `wideband`, so its airtime is
-//! never mistaken for the receiver's.
+//! `USDR_WIDE` lists the channels, for example `FT8+7074000,WSPR?7038600`. A `+`
+//! channel logs its decodes where the main decoder's go, except while the main
+//! decoder is on the same mode and dial, which then speaks for it. A `?` channel
+//! is a shadow, whose decodes are kept only for comparing with the main decoder.
+//! Each logging channel keeps its own listening record, marked `wideband`, so its
+//! airtime is never mistaken for the receiver's.
 
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -20,51 +21,55 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use num_complex::Complex32;
 use scannerd_dsp::{HalfbandChain, Nco};
-use scannerd_engine::ft8::{Protocol, SlotDecoder};
+use scannerd_engine::DecodeEvent;
+use scannerd_engine::ft8::SlotDecoder;
 use scannerd_engine::ssb::{Sideband, SsbDemod};
 use serde::Serialize;
 use serde_json::{Value, json};
+use tokio::sync::broadcast::{self, Sender};
 
-use tokio::sync::broadcast::Sender;
+use crate::hfdata::HfDecoder;
+use crate::sdr::{SdrEvent, SdrMode, SdrStatus, ft8_event};
+use crate::stationlog::{Listener, RadioNow, StationLog, monitored_mode, observe};
 
-use crate::sdr::{SdrEvent, SdrMode, ft8_event};
-use crate::stationlog::{Listener, RadioNow, StationLog};
-
-/// Marks a decode as from a channel here, not the main receiver.
-pub const CHANNEL_FIELD: &str = "wideChannel";
-
-/// Decimate until the rate is under this. FT8 needs 3.1 kHz of it.
+/// Decimate until the rate is under this. No mode here needs more than a few kHz.
 const CHAIN_RATE_MAX: f64 = 96_000.0;
 /// Flat and alias-free this far either side of the dial.
 const CHAIN_BAND_HZ: f64 = 6_000.0;
 /// How much of the span is good enough to decode from, either side of center.
 const USABLE: f64 = 0.46;
-/// The audio a channel searches sits this high above its dial, at most.
-const TOP_HZ: f64 = 3_100.0;
-/// Blocks waiting for the channels. A long stall drops blocks, and counts them.
+/// Blocks waiting for a worker. A long stall drops blocks, and counts them.
 const QUEUE: usize = 64;
-const KEEP_SLOTS: usize = 4_000;
+const KEEP_RESULTS: usize = 12_000;
 /// The longest a channel's listening record runs before starting a new one.
 const RECORD_S: u64 = 300;
+/// Worker threads, each with its share of the channels.
+const WORKERS: usize = 2;
+
+/// Marks a decode as from a channel here, not the main receiver.
+pub const CHANNEL_FIELD: &str = "wideChannel";
 
 struct Block {
     iq: Vec<Complex32>,
     rate: f64,
     center_hz: f64,
     ms: u64,
-    /// The dial the main FT8 decoder is on, if it is on one.
-    main_dial: Option<u64>,
+    /// What the main receiver is decoding, if it is a mode channels can also run.
+    main: Option<(SdrMode, u64)>,
 }
 
+/// One channel's result: a whole slot's decodes, or a single message.
 #[derive(Clone, Debug, Serialize)]
-pub struct SlotResult {
+pub struct ChannelResult {
+    pub mode: &'static str,
     pub dial_hz: u64,
-    pub slot_ms: u64,
+    pub at_ms: u64,
     pub center_hz: u64,
     pub decodes: Vec<String>,
+    pub idents: Vec<String>,
 }
 
-static RESULTS: OnceLock<Mutex<VecDeque<SlotResult>>> = OnceLock::new();
+static RESULTS: OnceLock<Mutex<VecDeque<ChannelResult>>> = OnceLock::new();
 static DROPPED: AtomicU64 = AtomicU64::new(0);
 static LOG: OnceLock<Arc<StationLog>> = OnceLock::new();
 
@@ -73,23 +78,69 @@ pub fn attach(log: Arc<StationLog>) {
     let _ = LOG.set(log);
 }
 
+fn results() -> &'static Mutex<VecDeque<ChannelResult>> {
+    RESULTS.get_or_init(|| Mutex::new(VecDeque::with_capacity(KEEP_RESULTS)))
+}
+
 fn unix_now() -> u64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs())
 }
 
-fn results() -> &'static Mutex<VecDeque<SlotResult>> {
-    RESULTS.get_or_init(|| Mutex::new(VecDeque::with_capacity(KEEP_SLOTS)))
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Spec {
+    mode: SdrMode,
+    dial_hz: u64,
+    logs: bool,
 }
 
-/// Whether a span holds this dial and all the audio above it.
-fn hears(dial_hz: u64, center_hz: f64, rate: f64) -> bool {
-    let half = rate * USABLE;
-    let dial = dial_hz as f64;
-    (dial - center_hz).abs() < half && (dial + TOP_HZ - center_hz).abs() < half
+impl Spec {
+    /// How far above the dial this mode's audio reaches.
+    fn top_hz(self) -> f64 {
+        let (low, high) = self.mode.filter_edges();
+        f64::from(low.abs().max(high.abs()))
+    }
+
+    /// Whether a span holds this dial and all the audio above it.
+    fn heard_in(self, center_hz: f64, rate: f64) -> bool {
+        let half = rate * USABLE;
+        let dial = self.dial_hz as f64;
+        (dial - center_hz).abs() < half && (dial + self.top_hz() - center_hz).abs() < half
+    }
+}
+
+fn parse_mode(name: &str) -> Option<SdrMode> {
+    Some(match name {
+        "FT8" => SdrMode::Ft8,
+        "FT4" => SdrMode::Ft4,
+        "WSPR" => SdrMode::Wspr,
+        "JS8" => SdrMode::Js8,
+        "DSC" => SdrMode::Dsc,
+        "HFDL" => SdrMode::Hfdl,
+        "SELCAL" => SdrMode::Selcal,
+        _ => return None,
+    })
+}
+
+/// `FT8+7074000,WSPR?7038600`. Anything unreadable, or above HF, is left out.
+fn parse_specs(text: &str) -> Vec<Spec> {
+    text.split(',')
+        .filter_map(|item| {
+            let item = item.trim();
+            let at = item.find(['+', '?'])?;
+            let mode = parse_mode(&item[..at])?;
+            let dial_hz: u64 = item[at + 1..].parse().ok()?;
+            (dial_hz < 30_000_000).then_some(Spec { mode, dial_hz, logs: item.as_bytes()[at] == b'+' })
+        })
+        .collect()
+}
+
+enum Decoder {
+    Slots(Box<SlotDecoder>),
+    Hf(Box<HfDecoder>),
 }
 
 struct Channel {
-    dial_hz: u64,
+    spec: Spec,
     center_hz: f64,
     nco: Nco,
     mixed: Vec<Complex32>,
@@ -98,11 +149,11 @@ struct Channel {
     demod: SsbDemod,
     audio: Vec<f32>,
     linear: Vec<f32>,
-    slots: SlotDecoder,
+    decoder: Decoder,
 }
 
 impl Channel {
-    fn new(dial_hz: u64, center_hz: f64, rate: f64) -> Self {
+    fn new(spec: Spec, center_hz: f64, rate: f64) -> Option<Self> {
         let mut stages = 0_u32;
         while rate / f64::from(1_u32 << stages) > CHAIN_RATE_MAX {
             stages += 1;
@@ -110,85 +161,115 @@ impl Channel {
         let chain = HalfbandChain::new(rate, CHAIN_BAND_HZ, stages);
         let fs = chain.fs_out();
         let mut nco = Nco::new();
-        nco.set_freq(dial_hz as f64 - center_hz, rate);
-        let (low, high) = SdrMode::Ft8.filter_edges();
-        let demod = SsbDemod::with_shape(fs, Sideband::Upper, low.abs().min(high.abs()), low.abs().max(high.abs()), SdrMode::Ft8.filter_shape());
-        let mut slots = SlotDecoder::new(Protocol::Ft8, fs);
-        slots.set_band(low.abs().min(high.abs()), low.abs().max(high.abs()));
-        Self { dial_hz, center_hz, nco, mixed: Vec::new(), chain, baseband: Vec::new(), demod, audio: Vec::new(), linear: Vec::new(), slots }
+        nco.set_freq(spec.dial_hz as f64 - center_hz, rate);
+        let (low, high) = spec.mode.filter_edges();
+        let (low, high) = (low.abs().min(high.abs()), low.abs().max(high.abs()));
+        let demod = SsbDemod::with_shape(fs, Sideband::Upper, low, high, spec.mode.filter_shape());
+        let decoder = match spec.mode.ft8_protocol() {
+            Some(protocol) => {
+                let mut slots = SlotDecoder::new(protocol, fs);
+                slots.set_band(low, high);
+                Decoder::Slots(Box::new(slots))
+            }
+            None => {
+                let mut hf = HfDecoder::new(spec.mode, fs)?;
+                hf.set_band(low, high);
+                Decoder::Hf(Box::new(hf))
+            }
+        };
+        Some(Self { spec, center_hz, nco, mixed: Vec::new(), chain, baseband: Vec::new(), demod, audio: Vec::new(), linear: Vec::new(), decoder })
     }
 
-    fn process(&mut self, iq: &[Complex32], ms: u64) {
+    /// One block of the span. Decodes from audio-driven decoders go to `sink`.
+    fn process(&mut self, iq: &[Complex32], ms: u64, sink: &Sender<SdrEvent>, status: &Arc<Mutex<SdrStatus>>) {
         self.nco.mix(iq, &mut self.mixed);
         self.chain.process(&self.mixed, &mut self.baseband);
         self.demod.process_with_linear(&self.baseband, &mut self.audio, &mut self.linear);
-        self.slots.push(&self.linear, ms);
+        match &mut self.decoder {
+            Decoder::Slots(slots) => slots.push(&self.linear, ms),
+            Decoder::Hf(hf) => hf.push(&self.linear, self.spec.dial_hz as f64, sink, status),
+        }
     }
 
-    /// Finished slots, with each decode as the log carries it.
-    fn collect(&mut self) -> Vec<(SlotResult, Vec<scannerd_engine::DecodeEvent>)> {
-        self.slots
-            .take()
-            .into_iter()
-            .map(|(slot_ms, decodes)| {
-                let events = decodes
-                    .iter()
-                    .map(|d| {
-                        let mut event = ft8_event(slot_ms, d);
-                        event.fields.insert(CHANNEL_FIELD.to_string(), "1".to_string());
-                        event
-                    })
-                    .collect();
-                let result = SlotResult { dial_hz: self.dial_hz, slot_ms, center_hz: self.center_hz as u64, decodes: decodes.into_iter().map(|d| d.text).collect() };
-                (result, events)
-            })
-            .collect()
+    /// Finished FT8 or FT4 slots, each decode as the log carries it.
+    fn slots_done(&mut self) -> Vec<(u64, Vec<DecodeEvent>)> {
+        let Decoder::Slots(slots) = &mut self.decoder else { return Vec::new() };
+        slots.take().into_iter().map(|(slot_ms, decodes)| (slot_ms, decodes.iter().map(|d| ft8_event(slot_ms, d)).collect())).collect()
+    }
+
+    fn busy(&self) -> bool {
+        matches!(&self.decoder, Decoder::Slots(slots) if slots.busy())
     }
 }
 
-fn run(rx: Receiver<Block>, dials: Vec<u64>, events: Sender<SdrEvent>, logging: bool) {
-    // One record per dial, numbered well clear of the main receiver's.
-    let mut records: Vec<(u64, Listener)> = dials.iter().enumerate().map(|(i, d)| (*d, Listener::numbered_from((i as u64 + 1) << 40))).collect();
+/// Keep a result, and send its decodes on if this channel logs.
+fn deliver(spec: Spec, center_hz: f64, at_ms: u64, group: Vec<DecodeEvent>, main: Option<(SdrMode, u64)>, events: &Sender<SdrEvent>, records: &mut [(Spec, Listener)]) {
+    let name = monitored_mode(spec.mode).unwrap_or("?");
+    let idents = group.iter().filter_map(|e| observe(spec.dial_hz as f64, e, "", at_ms / 1_000).and_then(|o| o.ident)).collect();
+    let decodes = group.iter().map(|e| e.summary.clone()).collect();
+    if spec.logs && main != Some((spec.mode, spec.dial_hz)) {
+        let mut record = records.iter_mut().find(|(s, _)| *s == spec).map(|(_, l)| l);
+        for mut event in group {
+            if let Some(record) = record.as_mut() {
+                record.decode(event.valid);
+            }
+            event.fields.insert(CHANNEL_FIELD.to_string(), "1".to_string());
+            let _ = events.send(SdrEvent::Decode { inspect_hz: spec.dial_hz as f64, event });
+        }
+    }
+    let mut kept = results().lock().expect("wideband results");
+    if kept.len() == KEEP_RESULTS {
+        kept.pop_front();
+    }
+    kept.push_back(ChannelResult { mode: name, dial_hz: spec.dial_hz, at_ms, center_hz: center_hz as u64, decodes, idents });
+}
+
+fn run(rx: Receiver<Arc<Block>>, specs: Vec<Spec>, events: Sender<SdrEvent>, seq_base: u64) {
+    // One record per logging channel, numbered well clear of the main receiver's.
+    let mut records: Vec<(Spec, Listener)> =
+        specs.iter().filter(|s| s.logs).enumerate().map(|(i, s)| (*s, Listener::numbered_from((seq_base + i as u64 + 1) << 40))).collect();
     let mut last_second = 0;
     let mut channels: Vec<Channel> = Vec::new();
     // Channels from before a retune, kept until their last decode comes back.
     let mut retired: Vec<Channel> = Vec::new();
     let mut key = None;
+    // The audio decoders report here and to a status nobody reads, so they can
+    // neither speak for the main receiver nor overwrite what it shows.
+    let (sink, mut drained) = broadcast::channel::<SdrEvent>(4_096);
+    let status = Arc::new(Mutex::new(SdrStatus::default()));
     while let Ok(block) = rx.recv() {
         if key != Some((block.rate, block.center_hz)) {
             key = Some((block.rate, block.center_hz));
             retired.append(&mut channels);
-            channels = dials.iter().filter(|d| hears(**d, block.center_hz, block.rate)).map(|d| Channel::new(*d, block.center_hz, block.rate)).collect();
+            channels = specs.iter().filter(|s| s.heard_in(block.center_hz, block.rate)).filter_map(|s| Channel::new(*s, block.center_hz, block.rate)).collect();
         }
         for channel in &mut channels {
-            channel.process(&block.iq, block.ms);
+            channel.process(&block.iq, block.ms, &sink, &status);
         }
-        let done: Vec<_> = channels.iter_mut().chain(retired.iter_mut()).flat_map(Channel::collect).collect();
-        retired.retain(|c| c.slots.busy());
-        for (slot, slot_events) in done {
-            if logging && block.main_dial != Some(slot.dial_hz) {
-                let record = records.iter_mut().find(|(d, _)| *d == slot.dial_hz).map(|(_, l)| l);
-                if let Some(record) = record {
-                    for event in slot_events {
-                        record.decode(event.valid);
-                        let _ = events.send(SdrEvent::Decode { inspect_hz: slot.dial_hz as f64, event });
+        for channel in channels.iter_mut().chain(retired.iter_mut()) {
+            for (slot_ms, group) in channel.slots_done() {
+                deliver(channel.spec, channel.center_hz, slot_ms, group, block.main, &events, &mut records);
+            }
+        }
+        retired.retain(Channel::busy);
+        loop {
+            match drained.try_recv() {
+                Ok(SdrEvent::Decode { inspect_hz, event }) => {
+                    if let Some(channel) = channels.iter().find(|c| c.spec.dial_hz == inspect_hz as u64) {
+                        deliver(channel.spec, channel.center_hz, block.ms, vec![event], block.main, &events, &mut records);
                     }
                 }
+                Ok(_) => {}
+                Err(broadcast::error::TryRecvError::Lagged(_)) => {}
+                Err(_) => break,
             }
-            let mut kept = results().lock().expect("wideband results");
-            if kept.len() == KEEP_SLOTS {
-                kept.pop_front();
-            }
-            kept.push_back(slot);
         }
         let now = unix_now();
-        if logging && now != last_second {
+        if now != last_second {
             last_second = now;
-            for (dial, record) in &mut records {
-                let listening = block.main_dial != Some(*dial) && channels.iter().any(|c| c.dial_hz == *dial);
-                // Ended every few minutes: the uplink sends these rows in order, and one
-                // that stayed open would hold back everything logged after it.
-                let radio = (listening && now % RECORD_S != 0).then_some(RadioNow { dial_hz: *dial as f64, mode: SdrMode::Ft8, rfgr_db: None, cause: "wideband" });
+            for (spec, record) in &mut records {
+                let listening = block.main != Some((spec.mode, spec.dial_hz)) && channels.iter().any(|c| c.spec == *spec) && now % RECORD_S != 0;
+                let radio = listening.then_some(RadioNow { dial_hz: spec.dial_hz as f64, mode: spec.mode, rfgr_db: None, cause: "wideband" });
                 for segment in record.tick(now, radio, true) {
                     if let Some(log) = LOG.get() {
                         log.add_segment(segment);
@@ -199,63 +280,74 @@ fn run(rx: Receiver<Block>, dials: Vec<u64>, events: Sender<SdrEvent>, logging: 
     }
 }
 
-/// The radio loop's end of the queue.
+/// The radio loop's end of the queues.
 pub struct Feed {
-    tx: SyncSender<Block>,
-    dials: Vec<u64>,
+    workers: Vec<SyncSender<Arc<Block>>>,
+    specs: Vec<Spec>,
 }
 
 impl Feed {
-    pub fn feed(&self, iq: &[Complex32], rate: f64, center_hz: f64, ms: u64, main_dial: Option<u64>) {
-        if !self.dials.iter().any(|d| hears(*d, center_hz, rate)) {
+    pub fn feed(&self, iq: &[Complex32], rate: f64, center_hz: f64, ms: u64, main: Option<(SdrMode, u64)>) {
+        if !self.specs.iter().any(|s| s.heard_in(center_hz, rate)) {
             return;
         }
-        let block = Block { iq: iq.to_vec(), rate, center_hz, ms, main_dial };
-        if let Err(TrySendError::Full(_) | TrySendError::Disconnected(_)) = self.tx.try_send(block) {
-            DROPPED.fetch_add(1, Ordering::Relaxed);
+        let block = Arc::new(Block { iq: iq.to_vec(), rate, center_hz, ms, main });
+        for worker in &self.workers {
+            if let Err(TrySendError::Full(_) | TrySendError::Disconnected(_)) = worker.try_send(Arc::clone(&block)) {
+                DROPPED.fetch_add(1, Ordering::Relaxed);
+            }
         }
     }
 }
 
-/// Start the channels named in `USDR_WIDE_FT8`, dials in Hz separated by
-/// commas. Unset, nothing runs and the radio loop does no extra work.
+/// Start the channels named in `USDR_WIDE`. Unset, nothing runs and the radio
+/// loop does no extra work.
 pub fn from_env(events: Sender<SdrEvent>) -> Option<Feed> {
-    let text = std::env::var("USDR_WIDE_FT8").ok()?;
-    let dials: Vec<u64> = text.split(',').filter_map(|d| d.trim().parse().ok()).filter(|d| *d < 30_000_000).collect();
-    if dials.is_empty() {
+    let specs = parse_specs(&std::env::var("USDR_WIDE").ok()?);
+    if specs.is_empty() {
         return None;
     }
-    let logging = std::env::var_os("USDR_WIDE_LOG").is_some();
-    let (tx, rx) = sync_channel(QUEUE);
-    let worker = dials.clone();
-    match std::thread::Builder::new().name("wideband".into()).spawn(move || run(rx, worker, events, logging)) {
-        Ok(_) => {
-            eprintln!("wideband: {} on {dials:?}", if logging { "logging channels" } else { "shadow channels" });
-            Some(Feed { tx, dials })
+    let mut workers = Vec::new();
+    for w in 0..WORKERS {
+        let (tx, rx) = sync_channel(QUEUE);
+        let share: Vec<Spec> = specs.iter().enumerate().filter(|(i, _)| i % WORKERS == w).map(|(_, s)| *s).collect();
+        let (events, base) = (events.clone(), (w * specs.len()) as u64);
+        if let Err(e) = std::thread::Builder::new().name(format!("wideband-{w}")).spawn(move || run(rx, share, events, base)) {
+            eprintln!("wideband: could not start a worker: {e}");
+            return None;
         }
-        Err(e) => {
-            eprintln!("wideband: could not start: {e}");
-            None
-        }
+        workers.push(tx);
     }
+    eprintln!("wideband: {} channels, {} logging", specs.len(), specs.iter().filter(|s| s.logs).count());
+    Some(Feed { workers, specs })
 }
 
-/// What the shadow channels have decoded, for comparing with the main decoder.
+/// What the channels have decoded, for comparing with the main decoder.
 pub fn snapshot() -> Value {
     let kept = results().lock().expect("wideband results");
-    json!({ "dropped_blocks": DROPPED.load(Ordering::Relaxed), "slots": kept.iter().collect::<Vec<_>>() })
+    json!({ "dropped_blocks": DROPPED.load(Ordering::Relaxed), "results": kept.iter().collect::<Vec<_>>() })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    fn spec(mode: SdrMode, dial_hz: u64) -> Spec {
+        Spec { mode, dial_hz, logs: true }
+    }
+
     #[test]
     fn a_dial_needs_its_audio_inside_the_usable_span() {
-        assert!(hears(3_573_000, 7_174_000.0, 8e6));
-        assert!(hears(10_136_000, 7_174_000.0, 8e6));
-        assert!(!hears(14_074_000, 7_174_000.0, 8e6), "the far side of the span");
-        assert!(!hears(3_450_000, 7_174_000.0, 8e6));
+        assert!(spec(SdrMode::Ft8, 3_573_000).heard_in(7_174_000.0, 8e6));
+        assert!(spec(SdrMode::Ft8, 10_136_000).heard_in(7_174_000.0, 8e6));
+        assert!(!spec(SdrMode::Ft8, 14_074_000).heard_in(7_174_000.0, 8e6), "the far side of the span");
+        assert!(!spec(SdrMode::Ft8, 3_450_000).heard_in(7_174_000.0, 8e6));
+    }
+
+    #[test]
+    fn the_channel_list_reads_as_written_and_skips_the_rest() {
+        let got = parse_specs("FT8+7074000, WSPR?7038600,NOPE+1,FT4?not,DSC+50000000");
+        assert_eq!(got, vec![Spec { mode: SdrMode::Ft8, dial_hz: 7_074_000, logs: true }, Spec { mode: SdrMode::Wspr, dial_hz: 7_038_600, logs: false }]);
     }
 
     #[test]
@@ -265,8 +357,10 @@ mod tests {
         let center = 7_044_000.0;
         let dial = 7_074_000_u64;
         let start_ms = 1_800_000_000_000_u64;
-        let audio = scannerd_engine::ft8::synthesize(Protocol::Ft8, "CQ K1ABC FN42", 1_500.0, 0.5, 15.0).expect("a message");
-        let mut channel = Channel::new(dial, center, rate);
+        let audio = scannerd_engine::ft8::synthesize(scannerd_engine::ft8::Protocol::Ft8, "CQ K1ABC FN42", 1_500.0, 0.5, 15.0).expect("a message");
+        let mut channel = Channel::new(spec(SdrMode::Ft8, dial), center, rate).expect("a channel");
+        let (sink, _keep) = broadcast::channel(16);
+        let status = Arc::new(Mutex::new(SdrStatus::default()));
         let total = (rate * 16.0) as usize;
         let mut sent = 0;
         let mut block = Vec::with_capacity(16_384);
@@ -283,16 +377,14 @@ mod tests {
                 block.push(Complex32::new((v * phase.cos()) as f32, (v * phase.sin()) as f32));
             }
             sent += block.len();
-            channel.process(&block, start_ms + (sent as f64 / rate * 1_000.0) as u64);
+            channel.process(&block, start_ms + (sent as f64 / rate * 1_000.0) as u64, &sink, &status);
         }
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
         let mut got = Vec::new();
         while got.is_empty() && std::time::Instant::now() < deadline {
-            got = channel.collect().into_iter().map(|(slot, events)| (slot, events.len())).collect();
+            got = channel.slots_done();
             std::thread::sleep(std::time::Duration::from_millis(50));
         }
-        assert_eq!(got[0].0.dial_hz, dial);
-        assert!(got[0].1 > 0, "the slot's decodes come with their events");
-        assert!(got.iter().flat_map(|(s, _)| &s.decodes).any(|t| t.contains("K1ABC")), "{got:?}");
+        assert!(got.iter().flat_map(|(_, g)| g).any(|e| e.summary.contains("K1ABC")), "{got:?}");
     }
 }

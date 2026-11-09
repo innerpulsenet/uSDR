@@ -312,6 +312,12 @@ stations it heard, plus 3 more. Three channels cost 0.12 of a core with no dropp
 A channel runs whenever the tuner happens to cover its dial, and its rows are marked
 `wideband`. Busy evening slots have not been compared yet.
 
+**Stage 3 in progress, 2026-11-09.** Channels now take any mode, listed in `USDR_WIDE` as
+`FT8+7074000` (logging) or `FT4?14080000` (shadow), on two worker threads. Compared with the
+main decoder on the same dial and time: FT8 404 of 416 stations with 14 extra, DSC 9 of 9 with
+1 extra, HFDL 31 of 33 with 2 extra, WSPR 20 of 22 with 7 extra. Those four modes log on 39
+channels' worth of dials at about 0.7 of a core with no dropped blocks.
+
 **What has to change.**
 
 - **Channels from the span.** A narrow channel filter per decoder, one `HfDecoder` per
