@@ -229,6 +229,8 @@ fn chart(ui: &mut Ui, rect: Rect, resp: &egui::Response, all: &[Vessel], center:
     };
     let cp = p.with_clip_rect(plot);
     // Rings, labeled along the north-east diagonal.
+    // Text drawn on the plot before the vessels' names, which keep clear of it.
+    let mut fixed: Vec<Rect> = Vec::new();
     let step = ring_step(r_nm);
     let mut k = 1;
     while step * k as f32 <= r_nm * 1.5 {
@@ -236,7 +238,7 @@ fn chart(ui: &mut Ui, rect: Rect, resp: &egui::Response, all: &[Vessel], center:
         cp.circle_stroke(o, rr, Stroke::new(1.0, alpha(theme::text_3(), 0.22)));
         let lp = o + vec2(rr * 0.707, -rr * 0.707);
         let t = if step < 1.0 { format!("{} nm", step * k as f32) } else { format!("{:.0} nm", step * k as f32) };
-        cp.text(lp + vec2(3.0, -2.0), Align2::LEFT_BOTTOM, t, theme::mono(9.0), alpha(theme::text_3(), 0.8));
+        fixed.push(cp.text(lp + vec2(3.0, -2.0), Align2::LEFT_BOTTOM, t, theme::mono(9.0), alpha(theme::text_3(), 0.8)));
         k += 1;
     }
     cp.line_segment([pos2(o.x, plot.top()), pos2(o.x, plot.bottom())], Stroke::new(1.0, alpha(theme::text_3(), 0.10)));
@@ -244,7 +246,12 @@ fn chart(ui: &mut Ui, rect: Rect, resp: &egui::Response, all: &[Vessel], center:
     // North.
     let n0 = pos2(plot.right() - 14.0, plot.top() + 20.0);
     p.add(Shape::convex_polygon(vec![n0 + vec2(0.0, -10.0), n0 + vec2(5.0, 4.0), n0 + vec2(0.0, 1.0), n0 + vec2(-5.0, 4.0)], theme::text_2(), Stroke::NONE));
-    p.text(n0 + vec2(0.0, 6.0), Align2::CENTER_TOP, "N", theme::mono_bold(9.0), theme::text_2());
+    fixed.push(p.text(n0 + vec2(0.0, 6.0), Align2::CENTER_TOP, "N", theme::mono_bold(9.0), theme::text_2()).union(Rect::from_center_size(n0, vec2(12.0, 16.0))));
+    // The hint along the foot, drawn last over the glass.
+    let hint = if is_home { "around this station · no coastline · wheel to zoom" } else { "around the vessels · set a station for range and bearing" };
+    let hint_at = rect.left_bottom() + vec2(8.0, -6.0);
+    let hint_size = p.layout_no_wrap(hint.into(), theme::mono(9.0), theme::text_3()).size();
+    fixed.push(Rect::from_min_size(hint_at - vec2(0.0, hint_size.y), hint_size));
     // This station.
     if is_home {
         cp.line_segment([o + vec2(-6.0, 0.0), o + vec2(6.0, 0.0)], Stroke::new(1.5, theme::AMBER));
@@ -253,6 +260,7 @@ fn chart(ui: &mut Ui, rect: Rect, resp: &egui::Response, all: &[Vessel], center:
     // The vessels: oldest first, so the newest draw on top.
     // Every mark's place first, so no name is set over another's mark.
     let mut labels: Vec<Rect> = all.iter().filter_map(|v| Some(Rect::from_center_size(at(v.lat?, v.lon?), vec2(12.0, 12.0)))).collect();
+    labels.append(&mut fixed);
     let mut hovered: Option<&Vessel> = None;
     let pointer = resp.hover_pos();
     let mut best = f32::INFINITY;
@@ -321,7 +329,7 @@ fn chart(ui: &mut Ui, rect: Rect, resp: &egui::Response, all: &[Vessel], center:
         }
     }
     crate::vfo::lcd_glass(&p, rect);
-    p.text(rect.left_bottom() + vec2(8.0, -6.0), Align2::LEFT_BOTTOM, if is_home { "around this station · no coastline · wheel to zoom" } else { "around the vessels · set a station for range and bearing" }, theme::mono(9.0), theme::text_3());
+    p.text(hint_at, Align2::LEFT_BOTTOM, hint, theme::mono(9.0), theme::text_3());
     if let Some(v) = hovered {
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
         resp.clone().on_hover_text_at_pointer(detail(v, center));

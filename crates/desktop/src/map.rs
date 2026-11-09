@@ -302,7 +302,21 @@ pub fn show(app: &mut App, ui: &mut Ui) {
     // Labels take their places in turn: home first, then the ground
     // stations; one that would cover another tries the other side, and is
     // left out if both are taken.
-    let mut taken: Vec<Rect> = Vec::new();
+    // The summary and the coastline's credit have their corners first, so
+    // no station's name is put under either.
+    let count = |f: &dyn Fn(&Mark) -> bool| marks.iter().filter(|m| f(m)).count();
+    let summary = format!(
+        "{} aircraft · {} ships · {} amateur stations · {} ground stations heard",
+        count(&|m| m.kind == Kind::Aircraft),
+        count(&|m| matches!(m.kind, Kind::Ship { .. })),
+        count(&|m| m.kind == Kind::Station),
+        count(&|m| m.kind == Kind::Ground { heard: true })
+    );
+    let summary_g = p.layout_no_wrap(summary, theme::mono(10.0), theme::text_2());
+    let tag = Rect::from_min_size(rect.left_bottom() + vec2(8.0, -summary_g.size().y - 12.0), summary_g.size() + vec2(10.0, 6.0));
+    let credit_g = p.layout_no_wrap("coastline: Natural Earth".into(), theme::mono(9.0), theme::text_3());
+    let credit = Rect::from_min_size(rect.right_bottom() - credit_g.size() - vec2(18.0, 12.0), credit_g.size() + vec2(10.0, 6.0));
+    let mut taken: Vec<Rect> = vec![tag, credit];
     let mut label = |p: &egui::Painter, q: Pos2, text: &str, font: egui::FontId, c: Color32| {
         let g = p.layout_no_wrap(text.to_string(), font, c);
         for r in [Rect::from_min_size(q + vec2(9.0, -g.size().y / 2.0), g.size()), Rect::from_min_size(q + vec2(-9.0 - g.size().x, -g.size().y / 2.0), g.size()), Rect::from_min_size(q + vec2(-g.size().x / 2.0, -g.size().y - 8.0), g.size())] {
@@ -406,20 +420,10 @@ pub fn show(app: &mut App, ui: &mut Ui) {
             app.dock_tab = crate::app::DockTab::Decodes;
         }
     }
-    // What is on the map, counted.
-    let count = |f: &dyn Fn(&Mark) -> bool| marks.iter().filter(|m| f(m)).count();
-    let summary = format!(
-        "{} aircraft · {} ships · {} amateur stations · {} ground stations heard",
-        count(&|m| m.kind == Kind::Aircraft),
-        count(&|m| matches!(m.kind, Kind::Ship { .. })),
-        count(&|m| m.kind == Kind::Station),
-        count(&|m| m.kind == Kind::Ground { heard: true })
-    );
-    let g = p.layout_no_wrap(summary, theme::mono(10.0), theme::text_2());
-    let tag = Rect::from_min_size(rect.left_bottom() + vec2(8.0, -g.size().y - 12.0), g.size() + vec2(10.0, 6.0));
     p.rect_filled(tag, egui::CornerRadius::same(3), alpha(theme::ink(), 0.8));
-    p.galley(tag.min + vec2(5.0, 3.0), g, theme::text_2());
-    p.text(rect.right_bottom() + vec2(-8.0, -6.0), egui::Align2::RIGHT_BOTTOM, "coastline: Natural Earth", theme::mono(9.0), theme::text_3());
+    p.galley(tag.min + vec2(5.0, 3.0), summary_g, theme::text_2());
+    p.rect_filled(credit, egui::CornerRadius::same(3), alpha(theme::ink(), 0.8));
+    p.galley(credit.min + vec2(5.0, 3.0), credit_g, theme::text_3());
     p.rect_stroke(rect, egui::CornerRadius::same(4), Stroke::new(1.0, theme::line()), egui::StrokeKind::Inside);
     app.map = v;
 }
