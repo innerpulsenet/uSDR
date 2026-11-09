@@ -33,11 +33,18 @@ pub enum Colormap {
     /// The whole rainbow, violet to red, over a black floor: every level
     /// its own hue, for picking signals apart by strength at a glance.
     Prism,
+    /// A reef from the deep to the surf: the floor a midnight blue, then
+    /// cobalt, cerulean, teal, emerald, lime and sunlit yellow, and a coral
+    /// foam at the top. It leaves black sooner than the others and only
+    /// ever brightens, so a signal a few dB out of the noise already has a
+    /// color of its own.
+    Reef,
 }
 
 impl Colormap {
-    pub const ALL: [Colormap; 10] = [
+    pub const ALL: [Colormap; 11] = [
         Colormap::Ember,
+        Colormap::Reef,
         Colormap::Inferno,
         Colormap::Prism,
         Colormap::Midnight,
@@ -61,6 +68,7 @@ impl Colormap {
             Colormap::Green => "Phosphor",
             Colormap::Inferno => "Inferno",
             Colormap::Prism => "Prism",
+            Colormap::Reef => "Reef",
         }
     }
 
@@ -90,6 +98,26 @@ impl Colormap {
                 (0.88, [0xff, 0xd8, 0x70]),
                 (0.95, [0xff, 0xf2, 0xc0]),
                 (1.00, [0xff, 0xf8, 0xf0]),
+            ],
+            // Every stop lighter than the one before, by nearly even steps
+            // from the floor up: the ramps that hold the floor dark for a
+            // fifth of the way spend those levels on nothing, and those are
+            // the levels a weak signal sits at. The hue turns at each stop,
+            // so a few dB of difference is a different color.
+            Colormap::Reef => &[
+                (0.00, [0x05, 0x06, 0x0a]),
+                (0.06, [0x09, 0x0d, 0x26]),
+                (0.14, [0x14, 0x24, 0x6e]),
+                (0.23, [0x16, 0x48, 0xb8]),
+                (0.32, [0x0f, 0x7f, 0xc4]),
+                (0.41, [0x10, 0xae, 0xb0]),
+                (0.50, [0x2f, 0xd0, 0x8a]),
+                (0.59, [0x8f, 0xe0, 0x52]),
+                (0.68, [0xe6, 0xe2, 0x3a]),
+                (0.78, [0xfd, 0xe9, 0x8e]),
+                (0.88, [0xff, 0xe0, 0xda]),
+                (0.95, [0xff, 0xf0, 0xf4]),
+                (1.00, [0xff, 0xff, 0xff]),
             ],
             Colormap::Ham => &[
                 (0.00, [0x00, 0x00, 0x00]),
@@ -327,6 +355,59 @@ fn from_oklab(c: [f32; 3]) -> Color32 {
 mod tests {
     use super::*;
 
+    /// Reef is for weak signals: a tenth of the way up it is already as far
+    /// from its floor as the house ramp is at a quarter.
+    #[test]
+    fn reef_leaves_the_floor_early() {
+        let l = |m: Colormap, t: f32| {
+            let c = m.sample(t);
+            to_oklab([c.r(), c.g(), c.b()])[0]
+        };
+        let lift = |m: Colormap, t: f32| l(m, t) - l(m, 0.0);
+        assert!(lift(Colormap::Reef, 0.12) > lift(Colormap::Ember, 0.25), "{} against {}", lift(Colormap::Reef, 0.12), lift(Colormap::Ember, 0.25));
+        assert!(lift(Colormap::Reef, 0.25) > 2.0 * lift(Colormap::Ember, 0.25));
+    }
+
+    /// A made-up waterfall in two palettes side by side, for a look by eye:
+    /// noise, and carriers 3, 6, 10, 15, 25 and 45 dB over it, with the
+    /// black level 3 dB under the floor and a 65 dB range as the display
+    /// sets them. `USDR_QA_DIR=<dir> cargo test -p usdr-desktop
+    /// qa_renders_palettes -- --ignored`.
+    #[test]
+    #[ignore]
+    fn qa_renders_palettes() {
+        let Some(dir) = std::env::var_os("USDR_QA_DIR").map(std::path::PathBuf::from) else { return };
+        let (w, h) = (420u32, 200u32);
+        let pair = [Colormap::Ember, Colormap::Reef];
+        let mut img = image::RgbaImage::new(w * 2 + 8, h);
+        let mut seed = 0x9e37_79b9u32;
+        let mut noise = || {
+            // Exponential power, as a spectrum bin's is: in dB about its mean.
+            seed ^= seed << 13;
+            seed ^= seed >> 17;
+            seed ^= seed << 5;
+            let u = (seed as f32 / u32::MAX as f32).clamp(1e-6, 1.0);
+            10.0 * (-u.ln()).max(1e-6).log10()
+        };
+        for y in 0..h {
+            for x in 0..w {
+                let mut db = noise();
+                for (k, over) in [3.0f32, 6.0, 10.0, 15.0, 25.0, 45.0].into_iter().enumerate() {
+                    let at = 40 + 62 * k as u32;
+                    if x >= at && x < at + 3 {
+                        db = 10.0 * (10f32.powf(db / 10.0) + 10f32.powf(over / 10.0)).log10();
+                    }
+                }
+                let t = ((db + 3.0) / 65.0).clamp(0.0, 1.0).powf(0.86);
+                for (i, m) in pair.iter().enumerate() {
+                    let c = m.sample(t);
+                    img.put_pixel(x + i as u32 * (w + 8), y, image::Rgba([c.r(), c.g(), c.b(), 255]));
+                }
+            }
+        }
+        img.save(dir.join("palettes.png")).expect("save");
+    }
+
     #[test]
     fn a_stop_comes_back_as_itself() {
         for c in [[0x44, 0x01, 0x54], [0xfd, 0xe7, 0x25], [0, 0, 0], [255, 255, 255], [0x21, 0x91, 0x8c]] {
@@ -339,7 +420,7 @@ mod tests {
     /// rises: a stronger signal is never the darker one.
     #[test]
     fn the_level_reading_palettes_only_brighten() {
-        for m in [Colormap::Viridis, Colormap::Inferno, Colormap::Phosphor] {
+        for m in [Colormap::Viridis, Colormap::Inferno, Colormap::Phosphor, Colormap::Reef] {
             let l: Vec<f32> = m.lut().iter().map(|c| to_oklab([c.r(), c.g(), c.b()])[0]).collect();
             for (i, w) in l.windows(2).enumerate() {
                 assert!(w[1] >= w[0] - 0.004, "{} dims at {i}: {} then {}", m.label(), w[0], w[1]);

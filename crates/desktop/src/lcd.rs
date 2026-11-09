@@ -23,12 +23,16 @@ pub enum LcdStyle {
     Ice,
     /// Orange figures, cyan captions, a three-color meter.
     ColorTft,
+    /// A reef in daylight: lime figures, aqua captions, sea-foam readings,
+    /// a coral annunciator, and a meter that runs teal, lime and coral.
+    /// Every role a different hue and all of them bright on the black.
+    Reef,
     /// Colors taken from the waterfall's palette, and following it.
     Waterfall,
 }
 
 impl LcdStyle {
-    pub const ALL: [LcdStyle; 6] = [LcdStyle::Amber, LcdStyle::GreenLcd, LcdStyle::Phosphor, LcdStyle::Ice, LcdStyle::ColorTft, LcdStyle::Waterfall];
+    pub const ALL: [LcdStyle; 7] = [LcdStyle::Amber, LcdStyle::GreenLcd, LcdStyle::Phosphor, LcdStyle::Ice, LcdStyle::ColorTft, LcdStyle::Reef, LcdStyle::Waterfall];
 
     pub fn label(self) -> &'static str {
         match self {
@@ -37,6 +41,7 @@ impl LcdStyle {
             LcdStyle::Phosphor => "PHOSPHOR",
             LcdStyle::Ice => "ICE",
             LcdStyle::ColorTft => "COLOR",
+            LcdStyle::Reef => "REEF",
             LcdStyle::Waterfall => "WATERFALL",
         }
     }
@@ -140,6 +145,11 @@ pub fn look(style: LcdStyle, palette: Colormap, is_b: bool) -> Look {
         LcdStyle::ColorTft => {
             let (digits, caption) = if is_b { (rgb(0x63d6ff), rgb(0xffa94d)) } else { (rgb(0xff9d33), rgb(0x63d6ff)) };
             face(digits, caption, rgb(0xf2f5f8), caption, [rgb(0x5ee38f), rgb(0xffc93d), rgb(0xff5a45)])
+        }
+        LcdStyle::Reef => {
+            // B trades the figures' lime for the annunciator's coral.
+            let (digits, tag) = if is_b { (rgb(0xffa593), rgb(0xd4f75a)) } else { (rgb(0xd9ff5c), rgb(0xff7d6b)) };
+            face(digits, rgb(0x4fdcea), rgb(0xeafff4), tag, [rgb(0x22d3b0), rgb(0xc8f04a), rgb(0xff6b5a)])
         }
         LcdStyle::Waterfall => {
             let at = |t: f32| palette.sample(t);
