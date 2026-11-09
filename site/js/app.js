@@ -263,33 +263,37 @@ async function showPictures() {
     </article>`).join("")}</div>` : `<p class="empty">No charts have been published yet. Charts appear here once they pass a quality check.</p>`}`;
   view.querySelectorAll(".pic a").forEach((a, i) => a.addEventListener("click", (ev) => {
     ev.preventDefault();
-    openViewer(pictures, i);
+    openViewer(pictures.map((p) => ({
+      src: `pictures/${encodeURIComponent(p.file)}`,
+      alt: `Radiofax chart received ${fmtTime(p.start_utc)}${p.scheduled_title ? `, scheduled as ${p.scheduled_title}` : ""}`,
+      title: `${p.scheduled_title || "Untitled picture"} · ${fmtTime(p.start_utc)}`,
+    })), i);
   }));
 }
 
-// A chart at full size in a dialog, stepping through the others with the arrow keys.
-function openViewer(pictures, start) {
+// A picture at full size in a dialog, stepping through the others with the arrow keys.
+function openViewer(items, start) {
   let box = document.getElementById("viewer");
   if (!box) {
     box = document.createElement("dialog");
     box.id = "viewer";
     box.className = "viewer";
-    box.innerHTML = `<div class="viewer-bar"><p id="viewer-title"></p><div class="viewer-nav"><button type="button" data-step="-1" aria-label="Newer picture">Newer</button><button type="button" data-step="1" aria-label="Older picture">Older</button><button type="button" data-close>Close</button></div></div><div class="viewer-pic"><img alt=""></div>`;
+    box.innerHTML = `<div class="viewer-bar"><p id="viewer-title"></p><div class="viewer-nav"><button type="button" data-step="-1" aria-label="Previous picture">Previous</button><button type="button" data-step="1" aria-label="Next picture">Next</button><button type="button" data-close>Close</button></div></div><div class="viewer-pic"><img alt=""></div>`;
     document.body.append(box);
     box.addEventListener("click", (ev) => { if (ev.target === box) box.close(); });
     box.querySelector("[data-close]").addEventListener("click", () => box.close());
   }
   let at = start;
   const show = () => {
-    const p = pictures[at];
+    const p = items[at];
     const img = box.querySelector("img");
-    img.src = `pictures/${encodeURIComponent(p.file)}`;
-    img.alt = `Radiofax chart received ${fmtTime(p.start_utc)}${p.scheduled_title ? `, scheduled as ${p.scheduled_title}` : ""}`;
-    box.querySelector("#viewer-title").textContent = `${p.scheduled_title || "Untitled picture"} · ${fmtTime(p.start_utc)}`;
+    img.src = p.src;
+    img.alt = p.alt;
+    box.querySelector("#viewer-title").textContent = p.title;
     box.querySelector('[data-step="-1"]').disabled = at === 0;
-    box.querySelector('[data-step="1"]').disabled = at === pictures.length - 1;
+    box.querySelector('[data-step="1"]').disabled = at === items.length - 1;
   };
-  const step = (n) => { if (pictures[at + n]) { at += n; show(); } };
+  const step = (n) => { if (items[at + n]) { at += n; show(); } };
   box.querySelectorAll("[data-step]").forEach((b) => { b.onclick = () => step(Number(b.dataset.step)); });
   box.onkeydown = (ev) => {
     if (ev.key === "ArrowLeft") step(-1);
@@ -435,7 +439,7 @@ function chainSvg(alongside, tall) {
     return `<svg class="chain wide" viewBox="0 0 1040 200" role="img" aria-label="The signal path: a wire loop antenna feeds one receiver, which takes in 8 MHz at a time. A scheduled decoder and channels alongside it read that capture, and both write to a validated log.">
       <circle class="cl" cx="90" cy="92" r="62"/><path class="cl" d="M90 154V176M50 176H130"/>${label(90, 88, "Wire loop")}${label(90, 106, "antenna")}
       ${arrow("M152 92H270", 270, 92, "r")}${label(211, 80, "below 30 MHz", "cs")}
-      ${box(270, 62, 110, 60, ["Software", "receiver"])}${arrow("M380 92H430", 430, 92, "r")}
+      ${box(270, 62, 110, 60, ["uSDR", "receiver"])}${arrow("M380 92H430", 430, 92, "r")}
       ${box(430, 62, 110, 60, ["8 MHz", "capture"])}
       <path class="cl" d="M540 92H590M590 46V138"/>${arrow("M590 46H620", 620, 46, "r")}${arrow("M590 138H620", 620, 138, "r")}
       ${box(620, 22, 230, 48, ["Scheduled decoder"], "one mode, one frequency")}
@@ -450,7 +454,7 @@ function chainSvg(alongside, tall) {
   return `<svg class="chain tall" viewBox="0 0 340 540" role="img" aria-label="The signal path: a wire loop antenna feeds one receiver, which takes in 8 MHz at a time. A scheduled decoder and channels alongside it read that capture, and both write to a validated log.">
     <circle class="cl" cx="170" cy="66" r="56"/>${label(170, 62, "Wire loop")}${label(170, 80, "antenna")}
     ${arrow("M170 122V162", 170, 162, "d")}${label(246, 146, "below 30 MHz", "cs")}
-    ${box(90, 162, 160, 48, ["Software receiver"])}${arrow("M170 210V242", 170, 242, "d")}
+    ${box(90, 162, 160, 48, ["uSDR receiver"])}${arrow("M170 210V242", 170, 242, "d")}
     ${box(90, 242, 160, 48, ["8 MHz capture"])}
     <path class="cl" d="M170 290V320M90 320H250"/>${arrow("M90 320V342", 90, 342, "d")}${arrow("M250 320V342", 250, 342, "d")}
     ${box(8, 342, 160, 64, ["Scheduled decoder"], "one at a time")}${box(172, 342, 160, 64, ["Channels alongside"], alongside)}
@@ -611,6 +615,11 @@ async function showTraffic(params) {
   }));
 }
 
+const USDR_SHOTS = [
+  { file: "usdr-ft8.webp", title: "uSDR desktop, FT8 on 20 meters", caption: "FT8 on 20 meters: every signal in the passband, decoded together.", alt: "The uSDR desktop app tuned to FT8 on 14.074 MHz, with spectrum, waterfall and a table of decoded stations." },
+  { file: "usdr-wwv.webp", title: "uSDR desktop, WWV at 10 MHz", caption: "WWV at 10 MHz, the time code read off the air. The station uses this signal for its radio check.", alt: "The uSDR desktop app tuned to WWV on 10 MHz, showing the spectrum and the decoded time code." },
+];
+
 const NOW_WORDS = { monitoring: "Monitoring", chart: "Receiving a chart", checking: "Radio check", idle: "Between slots", manual: "In use by hand", off: "Schedule off", failed: "Radio check failing" };
 
 async function showStation() {
@@ -628,7 +637,8 @@ async function showStation() {
   const fresh = nowFile && Date.now() / 1000 - nowFile.at < 300;
   const glyph = (name) => `<svg class="ip-i sm" aria-hidden="true"><use href="brand/sprite.svg#ip-s-${name}"/></svg>`;
   const c = health?.checks;
-  const alongside = health?.alongside?.length ? health.alongside : "FT8 80 / 40 / 30 m";
+  // Modes only: with a channel on every band, the full list would not fit in the diagram.
+  const alongside = (health?.alongside || "").split(", ").map((s) => s.split(" ")[0]).filter(Boolean).join(" ");
   const fold = (title, body, open) => `<details class="fold"${open ? " open" : ""}><summary>${title}</summary><div>${body}</div></details>`;
   view.innerHTML = `
     <header class="page-head ip-atmos">${atmosphere(listening)}
@@ -639,7 +649,7 @@ async function showStation() {
       <div class="card chain-card">
         ${chainSvg(alongside, false)}${chainSvg(alongside, true)}
         <ol class="chain-steps">
-          <li><b>Receive.</b> A large wire loop feeds one software receiver covering HF.</li>
+          <li><b>Receive.</b> A large wire loop feeds one software-defined receiver covering HF, run by uSDR.</li>
           <li><b>Capture.</b> It takes in 8 MHz of spectrum at a time, and only receives.</li>
           <li><b>Decode.</b> A schedule picks what to tune and decode, while channels alongside keep listening inside the same capture.</li>
           <li><b>Log.</b> Only messages that pass their own checks are written to the log.</li>
@@ -647,7 +657,7 @@ async function showStation() {
       </div>
       <div class="station-about">
         <h2>One receiver, a scheduled scan.</h2>
-        <p class="note-lead">It runs unattended. A schedule decides where it tunes and what it decodes there, and FT8 on 80, 40 and 30 meters is decoded alongside whenever those frequencies fall inside the capture.</p>
+        <p class="note-lead">It runs unattended on uSDR. A schedule decides where it tunes and what it decodes there, and channels alongside it decode the other digital frequencies that fall inside the capture.</p>
         <p class="ip-notice ip-notice-warn" role="note">${glyph("warn")}<span><b>This is not a distress monitor.</b> DSC calls appear as logged, the receiver is only there part of the time, and nobody is watching it. If someone is in trouble at sea, contact a rescue coordination center.</span></p>
         <div class="folds">
           ${fold("What it listens to", `<p>Amateur digital modes (FT8, FT4, WSPR and JS8), HFDL aircraft datalink, DSC ship calls, SELCAL, radiofax weather charts and SSTV, all below 30 MHz.</p>`)}
@@ -658,6 +668,13 @@ async function showStation() {
         </div>
       </div>
     </div>
+    <section aria-labelledby="husdr" class="usdr-sec">
+      <h2 id="husdr">Driven by uSDR</h2>
+      <p class="lede">Everything here is received and decoded by <a href="https://www.innerpulse.net/portfolio/#p-usdr">uSDR</a>, a software-defined radio suite from innerpulse. A daemon sits beside the receiver and does the listening, decoding and logging on its own, and the desktop app connects to it for looking and tuning by hand.</p>
+      <div class="shots">
+        ${USDR_SHOTS.map((s, i) => `<figure><a href="shots/${s.file}" data-shot="${i}"><img loading="lazy" src="shots/${s.file}" width="2000" height="1210" alt="${esc(s.alt)}"></a><figcaption>${esc(s.caption)}</figcaption></figure>`).join("")}
+      </div>
+    </section>
     ${health ? `<section aria-labelledby="hhealth"><h2 id="hhealth">Station health and activity</h2>
       <div class="health-grid">
         <div class="health-main">
@@ -682,6 +699,11 @@ async function showStation() {
         </div>
       </div>
     </section>` : ""}`;
+  const shots = USDR_SHOTS.map((s) => ({ src: `shots/${s.file}`, alt: s.alt, title: s.title }));
+  view.querySelectorAll("[data-shot]").forEach((a) => a.addEventListener("click", (ev) => {
+    ev.preventDefault();
+    openViewer(shots, Number(a.dataset.shot));
+  }));
 }
 
 const VIEWS = { now: showNow, map: showMap, activity: showActivity, pictures: showPictures, log: showLog, station: showStation, who: showWho, traffic: showTraffic };

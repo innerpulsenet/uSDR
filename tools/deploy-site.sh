@@ -18,7 +18,7 @@ sed -i -E "s#href=\"((brand/[^\"]+|css/hf)\.css)\"#href=\"\1?v=$version\"#; s#sr
 sed -i -E "s#from \"(\./[a-z]+\.js)\"#from \"\1?v=$version\"#" "$stamped"/js/*.js
 test "$(grep -c "?v=$version" "$stamped/index.html")" -eq 6
 rsync -a "$stamped/index.html" "$stamped/css" "$stamped/js" arm2:www/hf/
-rsync -a site/favicon.ico site/favicon.svg site/apple-touch-icon.png site/brand arm2:www/hf/
+rsync -a site/favicon.ico site/favicon.svg site/apple-touch-icon.png site/brand site/shots arm2:www/hf/
 rsync -a site/data/coast-110m.json site/data/land-110m.json site/data/coast-50m.json site/data/land-50m.json site/data/lookups-site.json site/data/ground-stations.json arm2:www/hf/data/
 rsync -a --exclude test_hf_api.py --exclude __pycache__ site/bin/ arm2:hf-site/bin/
 ssh arm2 'python3 -m py_compile ~/hf-site/bin/*.py && rm -rf ~/hf-site/bin/__pycache__ && sudo -n systemctl restart hf-site-api && sudo -n systemctl start hf-site-warm'
