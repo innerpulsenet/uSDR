@@ -168,9 +168,9 @@ pub fn show(app: &mut App, ui: &mut Ui) {
     let recent = all.iter().filter(|v| v.age_s() < 600.0).count();
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 10.0;
-        ui.label(RichText::new(format!("{} vessels · {} in the last 10 min · {} reports", all.len(), recent, all.iter().map(|v| v.reports).sum::<usize>())).font(theme::mono(11.0)).color(theme::text_2()));
+        ui.label(RichText::new(format!("{} vessels · {} in the last 10 min · {} reports", all.len(), recent, all.iter().map(|v| v.reports).sum::<usize>())).font(theme::mono(crate::theme::ty::SMALL)).color(theme::text_2()));
         if !hears {
-            ui.label(RichText::new("the span does not reach 161.975–162.025 MHz").font(theme::mono(11.0)).color(theme::WARN));
+            ui.label(RichText::new("the span does not reach 161.975–162.025 MHz").font(theme::mono(crate::theme::ty::SMALL)).color(theme::WARN));
             if widgets::chip_key(ui, "TUNE 162.000", false, theme::CYAN).on_hover_text("Put both AIS channels in the span").clicked() {
                 app.tune(162.0e6, false);
             }
@@ -200,7 +200,7 @@ fn chart(ui: &mut Ui, rect: Rect, resp: &egui::Response, all: &[Vessel], center:
     crate::vfo::lcd_back(&p, rect, widgets::protocol_color("AIS"));
     let plot = rect.shrink(10.0);
     let Some(c) = center else {
-        p.text(plot.center(), Align2::CENTER_CENTER, "No positions heard yet", theme::sans(12.0), theme::text_3());
+        p.text(plot.center(), Align2::CENTER_CENTER, "No positions heard yet", theme::sans(crate::theme::ty::BODY), theme::text_3());
         crate::vfo::lcd_glass(&p, rect);
         return;
     };
@@ -238,7 +238,7 @@ fn chart(ui: &mut Ui, rect: Rect, resp: &egui::Response, all: &[Vessel], center:
         cp.circle_stroke(o, rr, Stroke::new(1.0, alpha(theme::text_3(), 0.22)));
         let lp = o + vec2(rr * 0.707, -rr * 0.707);
         let t = if step < 1.0 { format!("{} nm", step * k as f32) } else { format!("{:.0} nm", step * k as f32) };
-        fixed.push(cp.text(lp + vec2(3.0, -2.0), Align2::LEFT_BOTTOM, t, theme::mono(9.0), alpha(theme::text_3(), 0.8)));
+        fixed.push(cp.text(lp + vec2(3.0, -2.0), Align2::LEFT_BOTTOM, t, theme::mono(crate::theme::ty::MICRO), alpha(theme::text_3(), 0.8)));
         k += 1;
     }
     cp.line_segment([pos2(o.x, plot.top()), pos2(o.x, plot.bottom())], Stroke::new(1.0, alpha(theme::text_3(), 0.10)));
@@ -246,11 +246,11 @@ fn chart(ui: &mut Ui, rect: Rect, resp: &egui::Response, all: &[Vessel], center:
     // North.
     let n0 = pos2(plot.right() - 14.0, plot.top() + 20.0);
     p.add(Shape::convex_polygon(vec![n0 + vec2(0.0, -10.0), n0 + vec2(5.0, 4.0), n0 + vec2(0.0, 1.0), n0 + vec2(-5.0, 4.0)], theme::text_2(), Stroke::NONE));
-    fixed.push(p.text(n0 + vec2(0.0, 6.0), Align2::CENTER_TOP, "N", theme::mono_bold(9.0), theme::text_2()).union(Rect::from_center_size(n0, vec2(12.0, 16.0))));
+    fixed.push(p.text(n0 + vec2(0.0, 6.0), Align2::CENTER_TOP, "N", theme::mono_bold(crate::theme::ty::MICRO), theme::text_2()).union(Rect::from_center_size(n0, vec2(12.0, 16.0))));
     // The hint along the foot, drawn last over the glass.
     let hint = if is_home { "around this station · no coastline · wheel to zoom" } else { "around the vessels · set a station for range and bearing" };
     let hint_at = rect.left_bottom() + vec2(8.0, -6.0);
-    let hint_size = p.layout_no_wrap(hint.into(), theme::mono(9.0), theme::text_3()).size();
+    let hint_size = p.layout_no_wrap(hint.into(), theme::mono(crate::theme::ty::MICRO), theme::text_3()).size();
     fixed.push(Rect::from_min_size(hint_at - vec2(0.0, hint_size.y), hint_size));
     // This station.
     if is_home {
@@ -313,7 +313,7 @@ fn chart(ui: &mut Ui, rect: Rect, resp: &egui::Response, all: &[Vessel], center:
         }
         // A name where it fits clear of the others.
         if fade > 0.5 || sel {
-            let g = cp.layout_no_wrap(v.label(), theme::mono(9.5), col);
+            let g = cp.layout_no_wrap(v.label(), theme::mono(crate::theme::ty::MICRO), col);
             let r = Rect::from_min_size(pos + vec2(9.0, -g.size().y / 2.0), g.size());
             if plot.contains_rect(r) && !labels.iter().any(|o| o.intersects(r.expand(2.0))) {
                 cp.galley(r.min, g, alpha(theme::text_2(), fade));
@@ -329,7 +329,7 @@ fn chart(ui: &mut Ui, rect: Rect, resp: &egui::Response, all: &[Vessel], center:
         }
     }
     crate::vfo::lcd_glass(&p, rect);
-    p.text(hint_at, Align2::LEFT_BOTTOM, hint, theme::mono(9.0), theme::text_3());
+    p.text(hint_at, Align2::LEFT_BOTTOM, hint, theme::mono(crate::theme::ty::MICRO), theme::text_3());
     if let Some(v) = hovered {
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
         resp.clone().on_hover_text_at_pointer(detail(v, center));
@@ -372,7 +372,7 @@ fn detail(v: &Vessel, c: Option<(f64, f64)>) -> String {
 
 /// The table: one row a vessel, newest heard first.
 fn table(ui: &mut Ui, all: &[Vessel], c: Option<(f64, f64)>, selected: &mut Option<String>) {
-    let head = |t: &str| RichText::new(t).font(theme::mono(10.0)).color(theme::text_3()).extra_letter_spacing(0.6);
+    let head = |t: &str| RichText::new(t).font(theme::mono(crate::theme::ty::MICRO)).color(theme::text_3()).extra_letter_spacing(0.6);
     let cols = [150.0, 120.0, 56.0, 46.0, 90.0];
     let cell = |ui: &mut Ui, w: f32, t: RichText| {
         ui.allocate_ui_with_layout(vec2(w, 18.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
@@ -386,10 +386,10 @@ fn table(ui: &mut Ui, all: &[Vessel], c: Option<(f64, f64)>, selected: &mut Opti
         }
         ui.label(head("STATUS · BOUND FOR"));
     });
-    let mono = |t: String, c: Color32| RichText::new(t).font(theme::mono(11.0)).color(c);
+    let mono = |t: String, c: Color32| RichText::new(t).font(theme::mono(crate::theme::ty::SMALL)).color(c);
     egui::ScrollArea::vertical().id_salt("ais-table").auto_shrink([false, false]).show(ui, |ui| {
         if all.is_empty() {
-            ui.add(egui::Label::new(RichText::new("Ships, base stations and aids to navigation appear here as their reports are heard. A ship's position comes every 2 to 10 seconds under way, its name every 6 minutes.").font(theme::sans(12.0)).color(theme::text_3())).wrap());
+            ui.add(egui::Label::new(RichText::new("Ships, base stations and aids to navigation appear here as their reports are heard. A ship's position comes every 2 to 10 seconds under way, its name every 6 minutes.").font(theme::sans(crate::theme::ty::BODY)).color(theme::text_3())).wrap());
         }
         for v in all {
             let sel = selected.as_deref() == Some(v.mmsi.as_str());
@@ -415,7 +415,7 @@ fn table(ui: &mut Ui, all: &[Vessel], c: Option<(f64, f64)>, selected: &mut Opti
             });
             let r = row.response.rect;
             if sel {
-                ui.painter().rect_filled(r.expand2(vec2(2.0, 1.0)), CornerRadius::same(2), alpha(theme::AMBER, 0.10));
+                ui.painter().rect_filled(r.expand2(vec2(2.0, 1.0)), CornerRadius::same(crate::theme::R_CAP), alpha(theme::AMBER, 0.10));
             }
             let resp = ui.interact(r, ui.id().with(("ais-row", &v.mmsi)), Sense::click()).on_hover_text(detail(v, c));
             if resp.clicked() {

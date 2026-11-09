@@ -1317,7 +1317,7 @@ impl App {
             ui.add_space(6.0);
             let s = &self.status;
             if self.have_status {
-                ui.label(egui::RichText::new(s.radio_label()).font(theme::mono(11.5)).color(theme::text_2()));
+                ui.label(egui::RichText::new(s.radio_label()).font(theme::mono(crate::theme::ty::VALUE)).color(theme::text_2()));
                 sep(ui);
                 // The radio's own state only: span, channel width, span lock and
                 // the protocol heard all show in the receiver bar and toolbar.
@@ -1372,7 +1372,7 @@ impl App {
                 }
                 self.view_menu(ui);
                 let utc = utc_hms();
-                let wide = ui.painter().layout_no_wrap("00:00:00 UTC".into(), theme::mono_bold(11.0), egui::Color32::PLACEHOLDER).size().x + 16.0;
+                let wide = ui.painter().layout_no_wrap("00:00:00 UTC".into(), theme::mono_bold(crate::theme::ty::SMALL), egui::Color32::PLACEHOLDER).size().x + 16.0;
                 let look = self.lcd_look(false);
                 widgets::lcd_text(ui, &format!("{utc} UTC"), look.value, &look, wide);
                 self.connection_chip(ui);
@@ -1413,7 +1413,7 @@ impl App {
             for i in 0..4 {
                 let h = 4.0 + i as f32 * 3.0;
                 let b = Rect::from_min_max(pos2(r.left() + i as f32 * 4.5, r.bottom() - h), pos2(r.left() + i as f32 * 4.5 + 3.0, r.bottom()));
-                ui.painter().rect_filled(b, CornerRadius::same(1), if i < bars { theme::OK } else { theme::surface_4() });
+                ui.painter().rect_filled(b, CornerRadius::same(crate::theme::R_CELL), if i < bars { theme::OK } else { theme::surface_4() });
             }
         }
         if resp.interact(Sense::click()).clicked() {
@@ -1467,7 +1467,7 @@ impl App {
                 if ui.small_button("−").clicked() {
                     ui.ctx().set_zoom_factor((z - 0.1).max(0.6));
                 }
-                ui.label(egui::RichText::new(format!("{:.0}%", z * 100.0)).font(theme::mono(11.0)));
+                ui.label(egui::RichText::new(format!("{:.0}%", z * 100.0)).font(theme::mono(crate::theme::ty::SMALL)));
                 if ui.small_button("+").clicked() {
                     ui.ctx().set_zoom_factor((z + 0.1).min(2.0));
                 }
@@ -1510,9 +1510,9 @@ impl App {
         };
         let resp = widgets::chip(ui, Tone::Idle, &text);
         resp.on_hover_ui(|ui| {
-            ui.label(egui::RichText::new("Connected to this receiver").font(theme::sans_semibold(12.0)));
+            ui.label(egui::RichText::new("Connected to this receiver").font(theme::sans_semibold(crate::theme::ty::BODY)));
             for c in &self.presence.clients {
-                ui.label(egui::RichText::new(format!("{} · {} · {}", c.kind, if c.name.is_empty() { "—" } else { &c.name }, c.addr)).font(theme::mono(11.0)).color(theme::text_2()));
+                ui.label(egui::RichText::new(format!("{} · {} · {}", c.kind, if c.name.is_empty() { "—" } else { &c.name }, c.addr)).font(theme::mono(crate::theme::ty::SMALL)).color(theme::text_2()));
             }
             ui.label(egui::RichText::new(format!("Web page: {}", self.presence.web.label())).color(theme::text_3()));
         });
@@ -1522,7 +1522,7 @@ impl App {
         ui.horizontal_centered(|ui| {
             ui.spacing_mut().item_spacing.x = 14.0;
             let small = |ui: &mut Ui, t: String, c| {
-                ui.label(egui::RichText::new(t).font(theme::mono(10.5)).color(c));
+                ui.label(egui::RichText::new(t).font(theme::mono(crate::theme::ty::LABEL)).color(c));
             };
             // Each number is padded to a fixed width in the mono face, so a
             // change in its digit count (the audio queue crosses 100 ms many
@@ -1590,7 +1590,7 @@ impl App {
         };
         let count = format!("{}", rep.spots_sent);
         let tail = format!(" spots · {}/h · {next}", rep.heard_hour);
-        let font = theme::mono(10.5);
+        let font = theme::mono(crate::theme::ty::LABEL);
         let p = ui.painter().clone();
         let w_word = p.layout_no_wrap(word.into(), font.clone(), theme::text_2()).size().x;
         // The count's width is held to its digits plus one, so a new digit
@@ -1600,7 +1600,7 @@ impl App {
         let lamp_w = 12.0;
         let (rect, resp) = ui.allocate_exact_size(vec2(lamp_w + w_word + 8.0 + w_count + w_tail + 8.0, 18.0), Sense::click());
         if resp.hovered() {
-            p.rect_filled(rect, CornerRadius::same(3), alpha(theme::surface_4(), 0.6));
+            p.rect_filled(rect, CornerRadius::same(crate::theme::R_KEY), alpha(theme::surface_4(), 0.6));
         }
         // A flare when the count goes up: an upload just left.
         let flare_id = egui::Id::new("pskr-flare");
@@ -1620,7 +1620,7 @@ impl App {
         let mut x = rect.left() + lamp_w;
         p.text(egui::pos2(x, rect.center().y), Align2::LEFT_CENTER, word, font.clone(), theme::text_2());
         x += w_word + 8.0;
-        crate::widgets::rolling_text(&p, egui::Id::new("pskr-count"), egui::pos2(x + w_count, rect.center().y), Align2::RIGHT_CENTER, &count, theme::mono_bold(10.5), theme::text());
+        crate::widgets::rolling_text(&p, egui::Id::new("pskr-count"), egui::pos2(x + w_count, rect.center().y), Align2::RIGHT_CENTER, &count, theme::mono_bold(crate::theme::ty::LABEL), theme::text());
         x += w_count;
         p.text(egui::pos2(x, rect.center().y), Align2::LEFT_CENTER, &tail, font, theme::text_3());
         let utc = |t: u64| format!("{:02}:{:02} UTC", (t / 3600) % 24, (t / 60) % 60);
@@ -1705,7 +1705,7 @@ impl App {
                         theme::glass_top(ui.painter(), card);
                     }
                     let tick = egui::Rect::from_min_max(card.left_top() + vec2(1.0, 4.0), card.left_bottom() + vec2(3.0, -4.0));
-                    ui.painter().rect_filled(tick, CornerRadius::same(1), alpha(widgets::tone_color(t.tone), fade));
+                    ui.painter().rect_filled(tick, CornerRadius::same(crate::theme::R_CELL), alpha(widgets::tone_color(t.tone), fade));
                 });
             t.height = r.response.rect.height();
             stack += t.height + 6.0;
@@ -1883,14 +1883,14 @@ fn sep(ui: &mut Ui) {
 fn annunciator(ui: &mut Ui, label: &str, value: &str, color: egui::Color32) {
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 4.0;
-        ui.label(egui::RichText::new(label).font(theme::mono(10.5)).color(theme::text_3()));
-        ui.label(egui::RichText::new(value).font(theme::mono_bold(11.0)).color(color));
+        ui.label(egui::RichText::new(label).font(theme::mono(crate::theme::ty::LABEL)).color(theme::text_3()));
+        ui.label(egui::RichText::new(value).font(theme::mono_bold(crate::theme::ty::SMALL)).color(color));
     });
 }
 
 pub fn icon_button(ui: &mut Ui, glyph: &str, tip: &str) -> egui::Response {
     let (r, resp) = ui.allocate_exact_size(vec2(26.0, 24.0), Sense::click());
-    let (press, c) = widgets::paint_key(ui, &resp, r, CornerRadius::same(4), false, theme::AMBER);
+    let (press, c) = widgets::paint_key(ui, &resp, r, CornerRadius::same(crate::theme::RADIUS), false, theme::AMBER);
     ui.painter().text(r.center() + vec2(0.0, press), Align2::CENTER_CENTER, glyph, theme::sans(14.0), c);
     resp.on_hover_text(tip)
 }
@@ -2238,11 +2238,11 @@ fn error_gist(e: &str) -> &str {
 /// A status-bar error: an outlined chip with the subsystem and the gist,
 /// the full message on hover; `retry` says a click tries again.
 fn error_chip(ui: &mut Ui, what: &str, e: &str, retry: bool) -> egui::Response {
-    let text = format!("▲ {what}: {}{}", crate::widgets::ellipsize(ui.painter(), error_gist(e), theme::mono(10.5), 280.0), if retry { " · RETRY" } else { "" });
-    let g = ui.painter().layout_no_wrap(text, theme::mono(10.5), theme::ERR);
+    let text = format!("▲ {what}: {}{}", crate::widgets::ellipsize(ui.painter(), error_gist(e), theme::mono(crate::theme::ty::LABEL), 280.0), if retry { " · RETRY" } else { "" });
+    let g = ui.painter().layout_no_wrap(text, theme::mono(crate::theme::ty::LABEL), theme::ERR);
     let (rect, resp) = ui.allocate_exact_size(g.size() + vec2(14.0, 6.0), if retry { egui::Sense::click() } else { egui::Sense::hover() });
     let hover = crate::anim::ease_bool(ui.ctx(), resp.id.with("hv"), retry && resp.hovered(), crate::anim::HOVER_S);
-    ui.painter().rect(rect, CornerRadius::same(3), alpha(theme::ERR, 0.08 + 0.10 * hover), Stroke::new(1.0, alpha(theme::ERR, 0.55)), egui::StrokeKind::Inside);
+    ui.painter().rect(rect, CornerRadius::same(crate::theme::R_KEY), alpha(theme::ERR, 0.08 + 0.10 * hover), Stroke::new(1.0, alpha(theme::ERR, 0.55)), egui::StrokeKind::Inside);
     ui.painter().galley(rect.min + vec2(7.0, 3.0), g, theme::ERR);
     resp.on_hover_text(if retry { format!("{e}\n\nClick to open the audio output again") } else { e.to_string() })
 }

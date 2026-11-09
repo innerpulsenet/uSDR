@@ -330,7 +330,7 @@ fn controls(app: &mut App, ui: &mut Ui, docked: bool) {
         };
         widgets::chip(ui, tone, &text);
         if let Some(snr) = reading.snr_db.filter(|_| on) {
-            ui.label(RichText::new(format!("{snr:.0} dB")).font(theme::mono(11.0)).color(theme::text_3()));
+            ui.label(RichText::new(format!("{snr:.0} dB")).font(theme::mono(crate::theme::ty::SMALL)).color(theme::text_3()));
         }
         ui.add_space(6.0);
         crate::widgets::enabled_or(ui, on, "Switch the receiver to this mode to use these", |ui| {
@@ -338,12 +338,12 @@ fn controls(app: &mut App, ui: &mut Ui, docked: bool) {
             if let Some(i) = widgets::segmented(ui, "fax-lpm", &["60", "90", "120", "240"], lpms.iter().position(|l| *l == c.fax_lpm), theme::CYAN) {
                 app.post("/api/sdr/digital", json!({ "fax_lpm": lpms[i] }));
             }
-            ui.label(RichText::new("LPM").font(theme::mono(10.0)).color(theme::text_3()));
+            ui.label(RichText::new("LPM").font(theme::mono(crate::theme::ty::MICRO)).color(theme::text_3()));
             let iocs = [576u16, 288];
             if let Some(i) = widgets::segmented(ui, "fax-ioc", &["576", "288"], iocs.iter().position(|v| *v == c.fax_ioc), theme::CYAN) {
                 app.post("/api/sdr/digital", json!({ "fax_ioc": iocs[i] }));
             }
-            ui.label(RichText::new("IOC").font(theme::mono(10.0)).color(theme::text_3()));
+            ui.label(RichText::new("IOC").font(theme::mono(crate::theme::ty::MICRO)).color(theme::text_3()));
             if widgets::chip_key(ui, "AUTO", c.fax_auto_start, theme::CYAN).on_hover_text("Begin a picture on the station's start tone").clicked() {
                 app.post("/api/sdr/digital", json!({ "fax_auto_start": !c.fax_auto_start }));
             }
@@ -376,7 +376,7 @@ fn controls(app: &mut App, ui: &mut Ui, docked: bool) {
     // to the rows it decodes from now on.
     ui.horizontal(|ui| {
         crate::widgets::enabled_or(ui, on, "Switch the receiver to this mode to use these", |ui| {
-            ui.label(RichText::new("SLANT").font(theme::mono(10.0)).color(theme::text_3()));
+            ui.label(RichText::new("SLANT").font(theme::mono(crate::theme::ty::MICRO)).color(theme::text_3()));
             let mut ppm = c.fax_slant_ppm;
             let r = ui.add(egui::Slider::new(&mut ppm, -200.0..=200.0).step_by(1.0).suffix(" ppm").show_value(true));
             if r.drag_stopped() || (r.changed() && !r.dragged()) {
@@ -388,7 +388,7 @@ fn controls(app: &mut App, ui: &mut Ui, docked: bool) {
         });
         if let Some(i) = shown_index(app) {
             ui.add_space(10.0);
-            ui.label(RichText::new("Shift-drag the picture to move its left edge").font(theme::sans(11.0)).color(theme::text_3()));
+            ui.label(RichText::new("Shift-drag the picture to move its left edge").font(theme::sans(crate::theme::ty::SMALL)).color(theme::text_3()));
             let pic = &mut app.fax.pictures[i];
             if pic.rows >= 40
                 && widgets::action_small(ui, "FIND EDGE").on_hover_text("Line the picture up on the chart's white margin").clicked()
@@ -414,7 +414,7 @@ fn canvas(app: &mut App, ui: &mut Ui, h: f32) {
     let w = ui.available_width();
     let (outer, resp) = ui.allocate_exact_size(vec2(w, h), Sense::click_and_drag());
     let p = ui.painter_at(outer);
-    p.rect_filled(outer, CornerRadius::same(4), theme::ink());
+    p.rect_filled(outer, CornerRadius::same(crate::theme::RADIUS), theme::ink());
     let Some(i) = shown_index(app) else {
         empty(ui, &p, outer);
         return;
@@ -487,9 +487,9 @@ fn canvas(app: &mut App, ui: &mut Ui, h: f32) {
         let frac = outer.height() / full_h;
         let th = (track.height() * frac).max(16.0);
         let ty = track.top() + (track.height() - th) * (offset / max_off);
-        p.rect_filled(egui::Rect::from_min_size(pos2(track.left(), ty), vec2(track.width(), th)), CornerRadius::same(2), alpha(theme::text_2(), 0.5));
+        p.rect_filled(egui::Rect::from_min_size(pos2(track.left(), ty), vec2(track.width(), th)), CornerRadius::same(crate::theme::R_CAP), alpha(theme::text_2(), 0.5));
     }
-    p.rect_stroke(outer, CornerRadius::same(4), Stroke::new(1.0, theme::line()), egui::StrokeKind::Inside);
+    p.rect_stroke(outer, CornerRadius::same(crate::theme::RADIUS), Stroke::new(1.0, theme::line()), egui::StrokeKind::Inside);
     let pic = &app.fax.pictures[i];
     let secs = pic.started.duration_since(SystemTime::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
     let label = format!(
@@ -500,9 +500,9 @@ fn canvas(app: &mut App, ui: &mut Ui, h: f32) {
         pic.rows,
         if pic.saved.is_some() { " · saved" } else { "" }
     );
-    let g = p.layout_no_wrap(label, theme::mono(10.5), theme::text());
+    let g = p.layout_no_wrap(label, theme::mono(crate::theme::ty::LABEL), theme::text());
     let tag = egui::Rect::from_min_size(outer.left_top() + vec2(8.0, 8.0), g.size() + vec2(10.0, 6.0));
-    p.rect_filled(tag, CornerRadius::same(3), alpha(theme::ink(), 0.78));
+    p.rect_filled(tag, CornerRadius::same(crate::theme::R_KEY), alpha(theme::ink(), 0.78));
     p.galley(tag.min + vec2(5.0, 3.0), g, theme::text());
     if !app.fax.follow && live && widgets::action_small(&mut ui.new_child(egui::UiBuilder::new().max_rect(egui::Rect::from_min_size(outer.right_bottom() - vec2(120.0, 30.0), vec2(112.0, 24.0)))), "NEWEST ROW").clicked() {
         app.fax.follow = true;
@@ -516,7 +516,7 @@ fn empty(_ui: &Ui, p: &egui::Painter, r: egui::Rect) {
         "A picture begins on the station's start tone; START begins one now.",
     ];
     for (k, l) in lines.iter().enumerate() {
-        let (font, c) = if k == 0 { (theme::sans(14.0), theme::text_2()) } else { (theme::sans(12.0), theme::text_3()) };
+        let (font, c) = if k == 0 { (theme::sans(14.0), theme::text_2()) } else { (theme::sans(crate::theme::ty::BODY), theme::text_3()) };
         p.text(r.center() + vec2(0.0, (k as f32 - 1.0) * 22.0), Align2::CENTER_CENTER, *l, font, c);
     }
 }
@@ -532,7 +532,7 @@ fn filmstrip(app: &mut App, ui: &mut Ui) {
             for (k, pic) in app.fax.pictures.iter_mut().enumerate() {
                 let (r, resp) = ui.allocate_exact_size(vec2(96.0, 66.0), Sense::click());
                 let p = ui.painter_at(r);
-                p.rect_filled(r, CornerRadius::same(3), theme::ink());
+                p.rect_filled(r, CornerRadius::same(crate::theme::R_KEY), theme::ink());
                 let (rows, width) = (pic.rows, pic.width);
                 if let Some(tex) = pic.texture(&ctx).cloned() {
                     let v = rows as f32 / pic.tex_rows.max(1) as f32;
@@ -543,9 +543,9 @@ fn filmstrip(app: &mut App, ui: &mut Ui) {
                 }
                 let on = shown == Some(k);
                 let c = if on { theme::AMBER } else if resp.hovered() { theme::text_2() } else { theme::line() };
-                p.rect_stroke(r, CornerRadius::same(3), Stroke::new(if on { 2.0 } else { 1.0 }, c), egui::StrokeKind::Inside);
+                p.rect_stroke(r, CornerRadius::same(crate::theme::R_KEY), Stroke::new(if on { 2.0 } else { 1.0 }, c), egui::StrokeKind::Inside);
                 if k + 1 == n && !pic.done {
-                    p.text(r.left_bottom() + vec2(4.0, -3.0), Align2::LEFT_BOTTOM, "LIVE", theme::mono_bold(9.5), theme::EMBER);
+                    p.text(r.left_bottom() + vec2(4.0, -3.0), Align2::LEFT_BOTTOM, "LIVE", theme::mono_bold(crate::theme::ty::MICRO), theme::EMBER);
                 }
                 if resp.clicked() {
                     pick = Some(if k + 1 == n { None } else { Some(pic.id) });

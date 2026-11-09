@@ -110,7 +110,7 @@ pub fn show(app: &mut App, ui: &mut Ui, v: HfView) {
 }
 
 fn mono(t: impl Into<String>, c: egui::Color32) -> RichText {
-    RichText::new(t).font(theme::mono(11.0)).color(c)
+    RichText::new(t).font(theme::mono(crate::theme::ty::SMALL)).color(c)
 }
 
 /// The decoder's lock, where it hears the signal, and how well, on one line.
@@ -143,11 +143,11 @@ fn lines<'a>(app: &'a App, protocol: &'a str, keep: impl Fn(&usdr_proto::DecodeE
 /// and kept in view unless the operator scrolls back.
 fn teleprinter<'a>(ui: &mut Ui, id: &str, rows: impl Iterator<Item = &'a crate::app::DecodeRow>, empty: &str) {
     let rows: Vec<&crate::app::DecodeRow> = rows.collect();
-    egui::Frame::new().fill(alpha(theme::ink(), 0.7)).stroke(Stroke::new(1.0, theme::line())).corner_radius(egui::CornerRadius::same(4)).inner_margin(egui::Margin::symmetric(8, 6)).show(ui, |ui| {
+    egui::Frame::new().fill(alpha(theme::ink(), 0.7)).stroke(Stroke::new(1.0, theme::line())).corner_radius(egui::CornerRadius::same(crate::theme::RADIUS)).inner_margin(egui::Margin::symmetric(8, 6)).show(ui, |ui| {
         ui.set_width(ui.available_width());
         ui.set_min_height(ui.available_height());
         if rows.is_empty() {
-            ui.label(RichText::new(empty).font(theme::sans(12.0)).color(theme::text_3()));
+            ui.label(RichText::new(empty).font(theme::sans(crate::theme::ty::BODY)).color(theme::text_3()));
             return;
         }
         egui::ScrollArea::vertical().id_salt(id).auto_shrink([false, false]).stick_to_bottom(true).show_rows(ui, 17.0, rows.len(), |ui, range| {
@@ -155,7 +155,7 @@ fn teleprinter<'a>(ui: &mut Ui, id: &str, rows: impl Iterator<Item = &'a crate::
                 ui.horizontal(|ui| {
                     ui.set_min_height(17.0);
                     ui.label(mono(local_hms(d.at), theme::text_3()));
-                    ui.add(egui::Label::new(RichText::new(&d.ev.summary).font(theme::mono(12.0)).color(theme::text())).wrap());
+                    ui.add(egui::Label::new(RichText::new(&d.ev.summary).font(theme::mono(crate::theme::ty::BODY)).color(theme::text())).wrap());
                 });
             }
         });
@@ -210,7 +210,7 @@ fn navtex(app: &mut App, ui: &mut Ui) {
         let list_w = (avail.x * 0.62).max(240.0);
         ui.allocate_ui_with_layout(vec2(list_w, avail.y), egui::Layout::top_down(egui::Align::Min), |ui| {
             if messages.is_empty() {
-                ui.label(RichText::new("Messages appear here from ZCZC to NNNN, each with its station, subject and number. The station list above tunes 518 kHz (the international channel) or 490 kHz; each station sends every four hours, its times listed there.").font(theme::sans(12.0)).color(theme::text_3()));
+                ui.label(RichText::new("Messages appear here from ZCZC to NNNN, each with its station, subject and number. The station list above tunes 518 kHz (the international channel) or 490 kHz; each station sends every four hours, its times listed there.").font(theme::sans(crate::theme::ty::BODY)).color(theme::text_3()));
                 return;
             }
             egui::ScrollArea::vertical().id_salt("navtex-msgs").auto_shrink([false, false]).show(ui, |ui| {
@@ -221,7 +221,7 @@ fn navtex(app: &mut App, ui: &mut Ui) {
                     let complete = f("complete") != "no";
                     let resp = ui
                         .horizontal(|ui| {
-                            ui.label(RichText::new(f("id")).font(theme::mono_bold(12.0)).color(widgets::protocol_color("NAVTEX")));
+                            ui.label(RichText::new(f("id")).font(theme::mono_bold(crate::theme::ty::BODY)).color(widgets::protocol_color("NAVTEX")));
                             ui.label(mono(f("subjectName"), theme::text()));
                             ui.label(mono(local_hms(d.at), theme::text_3()));
                             if !complete {
@@ -240,7 +240,7 @@ fn navtex(app: &mut App, ui: &mut Ui) {
                     }
                     if d.open {
                         egui::Frame::new().fill(alpha(theme::ink(), 0.6)).inner_margin(egui::Margin::symmetric(8, 4)).show(ui, |ui| {
-                            ui.add(egui::Label::new(RichText::new(&d.ev.summary).font(theme::mono(11.5)).color(theme::text())).wrap());
+                            ui.add(egui::Label::new(RichText::new(&d.ev.summary).font(theme::mono(crate::theme::ty::VALUE)).color(theme::text())).wrap());
                         });
                     } else {
                         let first = d.ev.summary.lines().find(|l| !l.trim().is_empty()).unwrap_or("");
@@ -323,7 +323,7 @@ fn psk_list(app: &mut App, ui: &mut Ui, reading: &usdr_proto::DigitalReading, pi
     }
     rows.sort_by(|a, b| a.1.total_cmp(&b.1));
     if rows.is_empty() {
-        ui.label(RichText::new("Each PSK31 signal in the passband gets a row here, at its audio frequency, with what it is sending. 14.070 MHz is the busiest; the band keys above tune the others.").font(theme::sans(12.0)).color(theme::text_3()));
+        ui.label(RichText::new("Each PSK31 signal in the passband gets a row here, at its audio frequency, with what it is sending. 14.070 MHz is the busiest; the band keys above tune the others.").font(theme::sans(crate::theme::ty::BODY)).color(theme::text_3()));
         return;
     }
     let mut pick = None;
@@ -350,15 +350,15 @@ fn psk_list(app: &mut App, ui: &mut Ui, reading: &usdr_proto::DigitalReading, pi
                     let w = ui.available_width();
                     let room = (w / 7.0) as usize;
                     let shown: String = if tail.chars().count() > room { tail.chars().skip(tail.chars().count() - room).collect() } else { tail.clone() };
-                    ui.add(egui::Label::new(RichText::new(shown).font(theme::mono(12.0)).color(if active { theme::text() } else { theme::text_2() })).truncate());
+                    ui.add(egui::Label::new(RichText::new(shown).font(theme::mono(crate::theme::ty::BODY)).color(if active { theme::text() } else { theme::text_2() })).truncate());
                 })
                 .response
                 .interact(Sense::click());
             if resp.hovered() {
-                ui.painter().rect_filled(resp.rect, egui::CornerRadius::same(3), alpha(theme::AMBER, 0.06));
+                ui.painter().rect_filled(resp.rect, egui::CornerRadius::same(crate::theme::R_KEY), alpha(theme::AMBER, 0.06));
             }
             if picked == Some(id) {
-                ui.painter().rect_filled(resp.rect, egui::CornerRadius::same(3), alpha(theme::AMBER, 0.12));
+                ui.painter().rect_filled(resp.rect, egui::CornerRadius::same(crate::theme::R_KEY), alpha(theme::AMBER, 0.12));
             }
             if resp.on_hover_text("Read all of this signal").clicked() {
                 pick = Some(id);
@@ -395,7 +395,7 @@ fn fax(app: &mut App, ui: &mut Ui) {
     ui.add_space(6.0);
     let rows: Vec<&crate::app::DecodeRow> = app.decodes.iter().filter(|d| d.ev.protocol == "WEFAX").take(60).collect();
     if rows.is_empty() {
-        ui.label(RichText::new("Radiofax pictures draw in their own viewer as they arrive. The viewer's STATIONS menu tunes NOAA's and other stations; the dial goes 1.9 kHz below the assigned frequency.").font(theme::sans(12.0)).color(theme::text_3()));
+        ui.label(RichText::new("Radiofax pictures draw in their own viewer as they arrive. The viewer's STATIONS menu tunes NOAA's and other stations; the dial goes 1.9 kHz below the assigned frequency.").font(theme::sans(crate::theme::ty::BODY)).color(theme::text_3()));
         return;
     }
     egui::ScrollArea::vertical().id_salt("fax-log").auto_shrink([false, false]).show(ui, |ui| {
@@ -438,7 +438,7 @@ fn cw(app: &mut App, ui: &mut Ui) {
         return;
     }
     if reading.channels.is_empty() && !app.decodes.iter().any(|d| d.ev.protocol == "CW") {
-        ui.label(RichText::new("Each Morse signal in the passband gets a row here, at its pitch and speed, with what it is sending. The band keys above tune the QRP and slow-CW calling frequencies; tune anywhere in a CW segment to skim it.").font(theme::sans(12.0)).color(theme::text_3()));
+        ui.label(RichText::new("Each Morse signal in the passband gets a row here, at its pitch and speed, with what it is sending. The band keys above tune the QRP and slow-CW calling frequencies; tune anywhere in a CW segment to skim it.").font(theme::sans(crate::theme::ty::BODY)).color(theme::text_3()));
         return;
     }
     psk_list(app, ui, &reading, None, "CW");

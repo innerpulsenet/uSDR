@@ -225,7 +225,7 @@ impl Meter {
             if db > -108.0 && db < 0.0 {
                 p.line_segment([pos2(tx, bar.bottom() + 1.0), pos2(tx, bar.bottom() + 3.0)], Stroke::new(1.0, theme::alpha(lit_c, 0.5)));
             }
-            let g = p.layout_no_wrap(label.to_string(), theme::mono(10.0), if hi { lit_c } else { look.caption });
+            let g = p.layout_no_wrap(label.to_string(), theme::mono(crate::theme::ty::MICRO), if hi { lit_c } else { look.caption });
             let x0 = if db <= -108.0 { tx } else if db >= 0.0 { tx - g.size().x } else { tx - g.size().x / 2.0 };
             if x0 < last_right + 4.0 {
                 continue;

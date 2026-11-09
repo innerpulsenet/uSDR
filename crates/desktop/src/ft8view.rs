@@ -11,7 +11,7 @@ use egui::{RichText, Ui, vec2};
 use usdr_proto::Mode;
 
 fn mono(t: impl Into<String>, c: egui::Color32) -> RichText {
-    RichText::new(t).font(theme::mono(11.0)).color(c)
+    RichText::new(t).font(theme::mono(crate::theme::ty::SMALL)).color(c)
 }
 
 /// One decode as the view reads it from the event's fields.
@@ -135,7 +135,7 @@ fn table(app: &mut App, ui: &mut Ui, all: &[Row], rows: &[&Row], filter: Filter,
     let gap = ui.spacing().item_spacing.x;
     let fixed: f32 = cols.iter().chain(tail.iter()).map(|(_, w)| w * CHAR_W).sum();
     let msg_w = (ui.available_width() - fixed - gap * (cols.len() + tail.len()) as f32 - 6.0).max(80.0);
-    let head = |t: &str| RichText::new(t).font(theme::mono(10.0)).color(theme::text_3()).extra_letter_spacing(0.6);
+    let head = |t: &str| RichText::new(t).font(theme::mono(crate::theme::ty::MICRO)).color(theme::text_3()).extra_letter_spacing(0.6);
     let r = ui.horizontal(|ui| {
         ui.set_min_height(18.0);
         for (t, w) in &cols {
@@ -151,7 +151,7 @@ fn table(app: &mut App, ui: &mut Ui, all: &[Row], rows: &[&Row], filter: Filter,
     if rows.is_empty() {
         let text = if all.is_empty() { empty } else if filter.mine { "Nothing sent to your callsign in the log yet." } else { "No CQs in the log yet." };
         ui.add_space(6.0);
-        ui.add(egui::Label::new(RichText::new(text).font(theme::sans(12.0)).color(theme::text_3())).wrap());
+        ui.add(egui::Label::new(RichText::new(text).font(theme::sans(crate::theme::ty::BODY)).color(theme::text_3())).wrap());
         return;
     }
     let mut select = None;
@@ -181,7 +181,7 @@ fn table(app: &mut App, ui: &mut Ui, all: &[Row], rows: &[&Row], filter: Filter,
                             badge_label(ui, &badge, bc);
                         }
                     });
-                    let msg = RichText::new(&d.ev.summary).font(theme::mono(11.5));
+                    let msg = RichText::new(&d.ev.summary).font(theme::mono(crate::theme::ty::VALUE));
                     let msg = if row.mine {
                         msg.color(theme::AMBER).strong()
                     } else if row.cq {
@@ -205,10 +205,10 @@ fn table(app: &mut App, ui: &mut Ui, all: &[Row], rows: &[&Row], filter: Filter,
                 ui.painter().line_segment([egui::pos2(resp.rect.left(), y), egui::pos2(resp.rect.right(), y)], egui::Stroke::new(1.0, theme::line()));
             }
             if row.mine {
-                ui.painter().rect_filled(resp.rect, egui::CornerRadius::same(3), alpha(theme::AMBER, 0.07));
+                ui.painter().rect_filled(resp.rect, egui::CornerRadius::same(crate::theme::R_KEY), alpha(theme::AMBER, 0.07));
             }
             if app.selected_decode == Some(row.i) {
-                ui.painter().rect_filled(resp.rect, egui::CornerRadius::same(3), alpha(theme::AMBER, 0.1));
+                ui.painter().rect_filled(resp.rect, egui::CornerRadius::same(crate::theme::R_KEY), alpha(theme::AMBER, 0.1));
             }
             let resp = resp.on_hover_ui(|ui| tip(ui, app, row));
             if resp.clicked() {
@@ -243,9 +243,9 @@ fn kind_of(ev: &usdr_proto::DecodeEvent) -> (String, egui::Color32) {
 }
 
 fn badge_label(ui: &mut Ui, text: &str, c: egui::Color32) {
-    let g = ui.painter().layout_no_wrap(text.to_string(), theme::mono_bold(9.5), c);
+    let g = ui.painter().layout_no_wrap(text.to_string(), theme::mono_bold(crate::theme::ty::MICRO), c);
     let (r, _) = ui.allocate_exact_size(g.size() + vec2(8.0, 4.0), egui::Sense::hover());
-    ui.painter().rect(r, egui::CornerRadius::same(3), alpha(c, 0.1), egui::Stroke::new(1.0, alpha(c, 0.55)), egui::StrokeKind::Inside);
+    ui.painter().rect(r, egui::CornerRadius::same(crate::theme::R_KEY), alpha(c, 0.1), egui::Stroke::new(1.0, alpha(c, 0.55)), egui::StrokeKind::Inside);
     ui.painter().galley(r.min + vec2(4.0, 2.0), g, c);
 }
 
@@ -259,7 +259,7 @@ fn inspector(app: &mut App, ui: &mut Ui, all: &[Row], i: usize) {
     let call = f("de").or_else(|| d.summary.split_whitespace().nth(1).map(str::to_string)).unwrap_or_default();
     let bare = call.trim_matches(|c| c == '<' || c == '>').to_string();
     let row = all.iter().find(|r| r.i == i);
-    egui::Frame::new().fill(alpha(theme::ink(), 0.6)).stroke(egui::Stroke::new(1.0, theme::line())).corner_radius(egui::CornerRadius::same(4)).inner_margin(egui::Margin::symmetric(10, 6)).show(ui, |ui| {
+    egui::Frame::new().fill(alpha(theme::ink(), 0.6)).stroke(egui::Stroke::new(1.0, theme::line())).corner_radius(egui::CornerRadius::same(crate::theme::RADIUS)).inner_margin(egui::Margin::symmetric(10, 6)).show(ui, |ui| {
         ui.set_width(ui.available_width());
         ui.set_min_height(ui.available_height());
         ui.horizontal(|ui| {
@@ -314,7 +314,7 @@ fn inspector(app: &mut App, ui: &mut Ui, all: &[Row], i: usize) {
 fn tip(ui: &mut Ui, app: &App, row: &Row) {
     let d = &app.decodes[row.i];
     let f = |k: &str| d.ev.fields.get(k).cloned();
-    ui.label(RichText::new(&d.ev.summary).font(theme::mono_bold(12.0)).color(theme::text()));
+    ui.label(RichText::new(&d.ev.summary).font(theme::mono_bold(crate::theme::ty::BODY)).color(theme::text()));
     egui::Grid::new(("hf-fields", row.i)).num_columns(2).spacing(vec2(10.0, 1.0)).show(ui, |ui| {
         let mut line = |k: &str, v: String| {
             ui.label(mono(k, theme::text_3()));
@@ -365,7 +365,7 @@ fn clock(app: &App, ui: &mut Ui, rows: &[Row], filter: &mut Filter, has_call: bo
         ui.label(mono(if even { "1ST" } else { "2ND" }, theme::text_3())).on_hover_text("Stations take turns: one sends in the first slot of each pair, the other answers in the second");
         // What the newest slot held: stations, and the farthest one, when
         // the line has room for it beside the keys at its end.
-        let width_of = |ui: &Ui, t: &str| ui.painter().layout_no_wrap(t.to_string(), theme::mono(11.0), egui::Color32::PLACEHOLDER).size().x;
+        let width_of = |ui: &Ui, t: &str| ui.painter().layout_no_wrap(t.to_string(), theme::mono(crate::theme::ty::SMALL), egui::Color32::PLACEHOLDER).size().x;
         let gap = ui.spacing().item_spacing.x;
         let keys = width_of(ui, "CQ") + 14.0 + if has_call { width_of(ui, "TO YOU") + 14.0 + gap } else { 0.0 };
         let room = ui.available_width() - width_of(ui, "decode in 15.0 s") - keys - 4.0 * gap;
@@ -381,9 +381,9 @@ fn clock(app: &App, ui: &mut Ui, rows: &[Row], filter: &mut Filter, has_call: bo
         let w = (room - heard.as_ref().map_or(0.0, |t| width_of(ui, t))).clamp(40.0, (ui.available_width() * 0.32).clamp(80.0, 320.0));
         let (r, _) = ui.allocate_exact_size(vec2(w, 6.0), egui::Sense::hover());
         let p = ui.painter();
-        p.rect_filled(r, egui::CornerRadius::same(3), theme::ink());
+        p.rect_filled(r, egui::CornerRadius::same(crate::theme::R_KEY), theme::ink());
         let done = egui::Rect::from_min_size(r.min, vec2(r.width() * (into / slot) as f32, r.height()));
-        p.rect_filled(done, egui::CornerRadius::same(3), alpha(tally, 0.8));
+        p.rect_filled(done, egui::CornerRadius::same(crate::theme::R_KEY), alpha(tally, 0.8));
         ui.label(mono(format!("decode in {:.1} s", slot - into), theme::text_3()));
         if let Some(text) = heard {
             ui.label(mono(text, theme::text_2())).on_hover_text("In the newest slot");
@@ -423,7 +423,7 @@ fn activity(app: &mut App, ui: &mut Ui, rows: &[Row]) {
     let (outer, _) = ui.allocate_exact_size(vec2(w, lanes as f32 * lane_h + axis_h + 2.0), egui::Sense::hover());
     let plot = egui::Rect::from_min_max(egui::pos2(outer.left() + 44.0, outer.top()), egui::pos2(outer.right() - 4.0, outer.bottom() - axis_h));
     let p = ui.painter().clone();
-    p.rect(plot, egui::CornerRadius::same(3), theme::ink(), egui::Stroke::new(1.0, theme::line()), egui::StrokeKind::Inside);
+    p.rect(plot, egui::CornerRadius::same(crate::theme::R_KEY), theme::ink(), egui::Stroke::new(1.0, theme::line()), egui::StrokeKind::Inside);
     let x_of = |hz: f32| plot.left() + hz / max_hz * plot.width();
     for k in 1..(max_hz / 500.0) as usize + 1 {
         let hz = k as f32 * 500.0;
@@ -432,11 +432,11 @@ fn activity(app: &mut App, ui: &mut Ui, rows: &[Row]) {
             p.line_segment([egui::pos2(x, plot.top() + 1.0), egui::pos2(x, plot.bottom() - 1.0)], egui::Stroke::new(1.0, theme::line()));
         }
         let align = if x > plot.right() - 16.0 { egui::Align2::RIGHT_TOP } else { egui::Align2::CENTER_TOP };
-        p.text(egui::pos2(x.min(plot.right()), plot.bottom() + 1.0), align, format!("{:.1}k", hz / 1000.0), theme::mono(10.0), theme::text_3());
+        p.text(egui::pos2(x.min(plot.right()), plot.bottom() + 1.0), align, format!("{:.1}k", hz / 1000.0), theme::mono(crate::theme::ty::MICRO), theme::text_3());
     }
-    p.text(egui::pos2(plot.left() - 4.0, plot.top()), egui::Align2::RIGHT_TOP, "newest", theme::mono(10.0), theme::text_3());
+    p.text(egui::pos2(plot.left() - 4.0, plot.top()), egui::Align2::RIGHT_TOP, "newest", theme::mono(crate::theme::ty::MICRO), theme::text_3());
     if plot.height() >= 30.0 {
-        p.text(egui::pos2(plot.left() - 4.0, plot.bottom()), egui::Align2::RIGHT_BOTTOM, format!("{} slots", slots.len()), theme::mono(10.0), theme::text_3());
+        p.text(egui::pos2(plot.left() - 4.0, plot.bottom()), egui::Align2::RIGHT_BOTTOM, format!("{} slots", slots.len()), theme::mono(crate::theme::ty::MICRO), theme::text_3());
     }
     // The filter's edges, where the decoder can hear.
     let (flo, fhi) = (app.status.filter_low_hz.abs().min(app.status.filter_high_hz.abs()) as f32, app.status.filter_low_hz.abs().max(app.status.filter_high_hz.abs()) as f32);
@@ -457,10 +457,10 @@ fn activity(app: &mut App, ui: &mut Ui, rows: &[Row]) {
         let tile = egui::Rect::from_min_max(egui::pos2(x_of(df), y + 1.0), egui::pos2(x_of(df + width_hz).max(x_of(df) + 3.0), y + lane_h - 1.0));
         let c = r.snr.map_or(theme::text_3(), snr_color);
         let sel = app.selected_decode == Some(r.i);
-        p.rect_filled(tile, egui::CornerRadius::same(2), alpha(c, if lane == 0 { 0.95 } else { 0.75 - lane as f32 * 0.06 }));
+        p.rect_filled(tile, egui::CornerRadius::same(crate::theme::R_CAP), alpha(c, if lane == 0 { 0.95 } else { 0.75 - lane as f32 * 0.06 }));
         if r.cq || r.mine || sel {
             let ring = if sel { theme::text() } else if r.mine { theme::AMBER } else { theme::OK };
-            p.rect_stroke(tile.expand(1.0), egui::CornerRadius::same(2), egui::Stroke::new(1.0, ring), egui::StrokeKind::Outside);
+            p.rect_stroke(tile.expand(1.0), egui::CornerRadius::same(crate::theme::R_CAP), egui::Stroke::new(1.0, ring), egui::StrokeKind::Outside);
         }
         if hover.is_some_and(|h| tile.expand(1.5).contains(h)) {
             tip = Some(r.i);

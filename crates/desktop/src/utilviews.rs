@@ -17,7 +17,7 @@ use serde_json::json;
 use usdr_proto::{DigitalReading, Mode};
 
 fn mono(t: impl Into<String>, c: egui::Color32) -> RichText {
-    RichText::new(t).font(theme::mono(11.0)).color(c)
+    RichText::new(t).font(theme::mono(crate::theme::ty::SMALL)).color(c)
 }
 
 fn reading(app: &App) -> DigitalReading {
@@ -65,7 +65,7 @@ fn message_list(app: &mut App, ui: &mut Ui, protocol: &str, columns: &[(&str, &s
     let idx: Vec<usize> = rows(app, protocol).map(|(i, _)| i).take(500).collect();
     if idx.is_empty() {
         ui.add_space(4.0);
-        ui.add(egui::Label::new(RichText::new(empty).font(theme::sans(12.0)).color(theme::text_3())).wrap());
+        ui.add(egui::Label::new(RichText::new(empty).font(theme::sans(crate::theme::ty::BODY)).color(theme::text_3())).wrap());
         return;
     }
     let tally = widgets::protocol_color(protocol);
@@ -77,17 +77,17 @@ fn message_list(app: &mut App, ui: &mut Ui, protocol: &str, columns: &[(&str, &s
                 .horizontal(|ui| {
                     ui.set_min_height(18.0);
                     ui.label(mono(local_hms(d.at), theme::text_3()));
-                    ui.add_sized(vec2(86.0, 16.0), egui::Label::new(RichText::new(d.ev.kind.to_uppercase()).font(theme::mono_bold(10.0)).color(if d.ev.valid { tally } else { theme::WARN })).truncate());
+                    ui.add_sized(vec2(86.0, 16.0), egui::Label::new(RichText::new(d.ev.kind.to_uppercase()).font(theme::mono_bold(crate::theme::ty::MICRO)).color(if d.ev.valid { tally } else { theme::WARN })).truncate());
                     for (key, _, w) in columns {
                         let v = derived(&d.ev, key).unwrap_or_else(|| d.ev.fields.get(*key).cloned().unwrap_or_default());
                         ui.add_sized(vec2(*w, 16.0), egui::Label::new(mono(v, theme::text_2())).truncate());
                     }
-                    ui.add(egui::Label::new(RichText::new(d.ev.summary.lines().next().unwrap_or("")).font(theme::mono(11.5)).color(theme::text())).truncate());
+                    ui.add(egui::Label::new(RichText::new(d.ev.summary.lines().next().unwrap_or("")).font(theme::mono(crate::theme::ty::VALUE)).color(theme::text())).truncate());
                 })
                 .response
                 .interact(Sense::click());
             if resp.hovered() {
-                ui.painter().rect_filled(resp.rect, egui::CornerRadius::same(3), alpha(tally, 0.06));
+                ui.painter().rect_filled(resp.rect, egui::CornerRadius::same(crate::theme::R_KEY), alpha(tally, 0.06));
             }
             if resp.clicked() {
                 toggle = Some(i);
@@ -95,7 +95,7 @@ fn message_list(app: &mut App, ui: &mut Ui, protocol: &str, columns: &[(&str, &s
             if d.open {
                 egui::Frame::new().fill(alpha(theme::ink(), 0.6)).inner_margin(egui::Margin::symmetric(10, 4)).show(ui, |ui| {
                     if d.ev.summary.contains('\n') {
-                        ui.add(egui::Label::new(RichText::new(&d.ev.summary).font(theme::mono(11.5)).color(theme::text())).wrap());
+                        ui.add(egui::Label::new(RichText::new(&d.ev.summary).font(theme::mono(crate::theme::ty::VALUE)).color(theme::text())).wrap());
                         ui.add_space(4.0);
                     }
                     // What its identifiers stand for, then every field.
@@ -204,8 +204,8 @@ fn translations(ev: &usdr_proto::DecodeEvent) -> Vec<(&'static str, String, Opti
 /// The column heads over a message list, lined up with its columns.
 fn list_head(ui: &mut Ui, columns: &[(&str, &str, f32)]) {
     ui.horizontal(|ui| {
-        let head = |t: &str| RichText::new(t).font(theme::mono(10.0)).color(theme::text_3()).extra_letter_spacing(0.6);
-        ui.add_sized(vec2(ui.painter().layout_no_wrap("00:00:00".into(), theme::mono(11.0), theme::text()).size().x, 14.0), egui::Label::new(head("UTC")));
+        let head = |t: &str| RichText::new(t).font(theme::mono(crate::theme::ty::MICRO)).color(theme::text_3()).extra_letter_spacing(0.6);
+        ui.add_sized(vec2(ui.painter().layout_no_wrap("00:00:00".into(), theme::mono(crate::theme::ty::SMALL), theme::text()).size().x, 14.0), egui::Label::new(head("UTC")));
         ui.add_sized(vec2(86.0, 14.0), egui::Label::new(head("KIND")));
         for (_, title, w) in columns {
             ui.add_sized(vec2(*w, 14.0), egui::Label::new(head(title)));
@@ -217,11 +217,11 @@ fn list_head(ui: &mut Ui, columns: &[(&str, &str, f32)]) {
 /// A teleprinter page of one protocol's text, newest at the bottom.
 fn teleprinter(app: &App, ui: &mut Ui, protocol: &str, side_field: Option<&str>, empty: &str) {
     let lines: Vec<&DecodeRow> = app.decodes.iter().rev().filter(|d| d.ev.protocol.to_ascii_uppercase().contains(protocol)).collect();
-    egui::Frame::new().fill(alpha(theme::ink(), 0.7)).stroke(Stroke::new(1.0, theme::line())).corner_radius(egui::CornerRadius::same(4)).inner_margin(egui::Margin::symmetric(8, 6)).show(ui, |ui| {
+    egui::Frame::new().fill(alpha(theme::ink(), 0.7)).stroke(Stroke::new(1.0, theme::line())).corner_radius(egui::CornerRadius::same(crate::theme::RADIUS)).inner_margin(egui::Margin::symmetric(8, 6)).show(ui, |ui| {
         ui.set_width(ui.available_width());
         ui.set_min_height(ui.available_height());
         if lines.is_empty() {
-            ui.add(egui::Label::new(RichText::new(empty).font(theme::sans(12.0)).color(theme::text_3())).wrap());
+            ui.add(egui::Label::new(RichText::new(empty).font(theme::sans(crate::theme::ty::BODY)).color(theme::text_3())).wrap());
             return;
         }
         egui::ScrollArea::vertical().id_salt(("tp", protocol)).auto_shrink([false, false]).stick_to_bottom(true).show(ui, |ui| {
@@ -231,10 +231,10 @@ fn teleprinter(app: &App, ui: &mut Ui, protocol: &str, side_field: Option<&str>,
                     let text = d.ev.summary.as_str();
                     let event = d.ev.kind != "text";
                     if let Some(side) = side_field.and_then(|k| d.ev.fields.get(k)) {
-                        ui.add_sized(vec2(70.0, 16.0), egui::Label::new(RichText::new(side).font(theme::mono_bold(10.5)).color(widgets::protocol_color(protocol))).truncate());
+                        ui.add_sized(vec2(70.0, 16.0), egui::Label::new(RichText::new(side).font(theme::mono_bold(crate::theme::ty::LABEL)).color(widgets::protocol_color(protocol))).truncate());
                     }
                     let c = if event { theme::text_2() } else { theme::text() };
-                    ui.add(egui::Label::new(RichText::new(text).font(if event { theme::mono(11.0) } else { theme::mono(12.0) }).color(c)).wrap());
+                    ui.add(egui::Label::new(RichText::new(text).font(if event { theme::mono(crate::theme::ty::SMALL) } else { theme::mono(crate::theme::ty::BODY) }).color(c)).wrap());
                 });
             }
         });
@@ -246,7 +246,7 @@ fn teleprinter(app: &App, ui: &mut Ui, protocol: &str, side_field: Option<&str>,
 pub fn constellation(ui: &mut Ui, pts: &[[f32; 2]], size: f32, tally: egui::Color32) {
     let (r, _) = ui.allocate_exact_size(vec2(size, size), Sense::hover());
     let p = ui.painter_at(r);
-    p.rect_filled(r, egui::CornerRadius::same(4), theme::ink());
+    p.rect_filled(r, egui::CornerRadius::same(crate::theme::RADIUS), theme::ink());
     let c = r.center();
     let scale = size * 0.36;
     p.line_segment([pos2(r.left() + 4.0, c.y), pos2(r.right() - 4.0, c.y)], Stroke::new(1.0, theme::line()));
@@ -260,9 +260,9 @@ pub fn constellation(ui: &mut Ui, pts: &[[f32; 2]], size: f32, tally: egui::Colo
         p.circle_filled(pos2(x, y), 1.6, alpha(tally, 0.25 + 0.7 * age));
     }
     if pts.is_empty() {
-        p.text(c, egui::Align2::CENTER_CENTER, "no symbols", theme::mono(10.0), theme::text_3());
+        p.text(c, egui::Align2::CENTER_CENTER, "no symbols", theme::mono(crate::theme::ty::MICRO), theme::text_3());
     }
-    p.rect_stroke(r, egui::CornerRadius::same(4), Stroke::new(1.0, theme::line()), egui::StrokeKind::Inside);
+    p.rect_stroke(r, egui::CornerRadius::same(crate::theme::RADIUS), Stroke::new(1.0, theme::line()), egui::StrokeKind::Inside);
 }
 
 pub fn sitor(app: &mut App, ui: &mut Ui) {
@@ -301,9 +301,9 @@ pub fn dsc(app: &mut App, ui: &mut Ui) {
     if let Some((at, text)) = distress
         && at.elapsed().map(|e| e.as_secs() < 3_600).unwrap_or(false)
     {
-        egui::Frame::new().fill(alpha(theme::ERR, 0.12)).stroke(Stroke::new(1.0, alpha(theme::ERR, 0.6))).corner_radius(egui::CornerRadius::same(4)).inner_margin(egui::Margin::symmetric(8, 4)).show(ui, |ui| {
+        egui::Frame::new().fill(alpha(theme::ERR, 0.12)).stroke(Stroke::new(1.0, alpha(theme::ERR, 0.6))).corner_radius(egui::CornerRadius::same(crate::theme::RADIUS)).inner_margin(egui::Margin::symmetric(8, 4)).show(ui, |ui| {
             ui.horizontal(|ui| {
-                ui.label(RichText::new("DISTRESS").font(theme::mono_bold(11.0)).color(theme::ERR));
+                ui.label(RichText::new("DISTRESS").font(theme::mono_bold(crate::theme::ty::SMALL)).color(theme::ERR));
                 ui.label(mono(local_hms(at), theme::text_2()));
                 ui.add(egui::Label::new(mono(text, theme::text())).truncate());
             });
@@ -357,7 +357,7 @@ fn ground_stations(app: &mut App, ui: &mut Ui) {
     }
     if heard.is_empty() {
         ui.label(mono("GROUND STATIONS HEARD", theme::text_3()));
-        ui.add(egui::Label::new(RichText::new("Each ground station sends a squitter every 32 seconds, naming the frequencies it has on. They are listed here as they are heard.").font(theme::sans(11.0)).color(theme::text_3())).wrap());
+        ui.add(egui::Label::new(RichText::new("Each ground station sends a squitter every 32 seconds, naming the frequencies it has on. They are listed here as they are heard.").font(theme::sans(crate::theme::ty::SMALL)).color(theme::text_3())).wrap());
         return;
     }
     let table_here = crate::stations_data::HFDL_TABLE_VERSION;
@@ -374,7 +374,7 @@ fn ground_stations(app: &mut App, ui: &mut Ui) {
         let st = crate::stations_data::HFDL.iter().find(|s| s.call == id.to_string());
         // A station on two lines: who and when, then its frequencies.
         ui.horizontal(|ui| {
-            ui.add_sized(vec2(22.0, 16.0), egui::Label::new(RichText::new(id.to_string()).font(theme::mono_bold(11.0)).color(tally)));
+            ui.add_sized(vec2(22.0, 16.0), egui::Label::new(RichText::new(id.to_string()).font(theme::mono_bold(crate::theme::ty::SMALL)).color(tally)));
             ui.add(egui::Label::new(mono(st.map_or("not in the table", |s| s.name), theme::text())).truncate());
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.label(mono(format!("{} s ago", at.elapsed().map(|e| e.as_secs()).unwrap_or(0)), theme::text_3()));
@@ -408,7 +408,7 @@ pub fn stanag(app: &mut App, ui: &mut Ui) {
     let cols: &[(&str, &str, f32)] = &[("waveform", "WAVEFORM", 130.0), ("dataRateBps", "BPS", 44.0), ("dpduTypeName", "D_PDU", 90.0)];
     ui.horizontal_wrapped(|ui| reading_strip(app, ui, Mode::Stanag, "LOOKING FOR A SERIAL TONE"));
     ui.add_space(2.0);
-    ui.add(egui::Label::new(RichText::new("Identifies STANAG 4285 and MIL-STD-188-110 serial tones, demodulates them and reads STANAG 5066 headers where the data is sent in the clear. Most military traffic is encrypted: its waveform, rate and addresses are what can be read. The constellation is in the Scope panel.").font(theme::sans(11.0)).color(theme::text_3())).wrap());
+    ui.add(egui::Label::new(RichText::new("Identifies STANAG 4285 and MIL-STD-188-110 serial tones, demodulates them and reads STANAG 5066 headers where the data is sent in the clear. Most military traffic is encrypted: its waveform, rate and addresses are what can be read. The constellation is in the Scope panel.").font(theme::sans(crate::theme::ty::SMALL)).color(theme::text_3())).wrap());
     ui.add_space(4.0);
     list_head(ui, cols);
     message_list(app, ui, "STANAG", cols, "Waveforms and decoded headers appear here as they are found.");
@@ -442,7 +442,7 @@ pub fn wspr(app: &mut App, ui: &mut Ui) {
     ui.add_space(4.0);
     let here = app.station.as_ref().and_then(|(st, _)| usdr_proto::station::grid_center(&st.grid));
     let idx: Vec<usize> = rows(app, "WSPR").map(|(i, _)| i).take(400).collect();
-    let head = |t: &str| RichText::new(t).font(theme::mono(10.0)).color(theme::text_3()).extra_letter_spacing(0.6);
+    let head = |t: &str| RichText::new(t).font(theme::mono(crate::theme::ty::MICRO)).color(theme::text_3()).extra_letter_spacing(0.6);
     let cols = [("UTC", 64.0), ("dB", 34.0), ("Hz", 44.0), ("DRIFT", 50.0), ("CALL", 90.0), ("GRID", 56.0), ("POWER", 76.0), ("KM", 56.0), ("KM/W", 70.0)];
     ui.horizontal(|ui| {
         for (t, w) in cols {
@@ -450,7 +450,7 @@ pub fn wspr(app: &mut App, ui: &mut Ui) {
         }
     });
     if idx.is_empty() {
-        ui.add(egui::Label::new(RichText::new("WSPR beacons appear here at the end of each even-minute slot: call, locator and power, with the path from your locator (Settings › Station). The band keys above tune WSJT-X's WSPR dials.").font(theme::sans(12.0)).color(theme::text_3())).wrap());
+        ui.add(egui::Label::new(RichText::new("WSPR beacons appear here at the end of each even-minute slot: call, locator and power, with the path from your locator (Settings › Station). The band keys above tune WSJT-X's WSPR dials.").font(theme::sans(crate::theme::ty::BODY)).color(theme::text_3())).wrap());
         return;
     }
     egui::ScrollArea::vertical().id_salt("wspr-rows").auto_shrink([false, false]).show(ui, |ui| {
@@ -552,9 +552,9 @@ pub fn hell(app: &mut App, ui: &mut Ui) {
     let px = ((ui.available_height() - 20.0) / (2.0 * rows as f32)).clamp(2.0, 5.0);
     let (r, _) = ui.allocate_exact_size(vec2(w, 2.0 * rows as f32 * px + 8.0), Sense::hover());
     let p = ui.painter_at(r);
-    p.rect_filled(r, egui::CornerRadius::same(4), theme::ink());
+    p.rect_filled(r, egui::CornerRadius::same(crate::theme::RADIUS), theme::ink());
     if cols == 0 {
-        p.text(r.center(), egui::Align2::CENTER_CENTER, "Feld Hell paints here, newest at the right. The band keys above tune the Feld Hell Club's activity ranges.", theme::sans(12.0), theme::text_3());
+        p.text(r.center(), egui::Align2::CENTER_CENTER, "Feld Hell paints here, newest at the right. The band keys above tune the Feld Hell Club's activity ranges.", theme::sans(crate::theme::ty::BODY), theme::text_3());
         return;
     }
     let shown = ((w - 8.0) / px) as usize;
@@ -667,7 +667,7 @@ pub fn wwv(app: &mut App, ui: &mut Ui) {
                 }
                 None => {
                     ui.label(RichText::new("--:--").font(theme::mono_bold(26.0)).color(theme::text_3()));
-                    ui.add(egui::Label::new(RichText::new("A minute of the code decodes after a full frame: up to two minutes from tuning. 5, 10 and 15 MHz are the strongest; WWV and WWVH share them.").font(theme::sans(11.5)).color(theme::text_3())).wrap());
+                    ui.add(egui::Label::new(RichText::new("A minute of the code decodes after a full frame: up to two minutes from tuning. 5, 10 and 15 MHz are the strongest; WWV and WWVH share them.").font(theme::sans(crate::theme::ty::VALUE)).color(theme::text_3())).wrap());
                 }
             }
         });
@@ -694,7 +694,7 @@ fn bit_strip(ui: &mut Ui, bits: &[u8], w: f32) {
         let x = r.left() + gutter + col as f32 * cell;
         let y = r.top() + row as f32 * (h + 4.0);
         let slot = egui::Rect::from_min_size(pos2(x + 1.0, y), vec2(cell - 2.0, h));
-        p.rect_filled(slot, egui::CornerRadius::same(2), theme::ink());
+        p.rect_filled(slot, egui::CornerRadius::same(crate::theme::R_CAP), theme::ink());
         let (frac, c) = match bits.get(s).copied() {
             Some(0) => (0.2, theme::text_2()),
             Some(1) => (0.5, theme::AMBER),
@@ -703,10 +703,10 @@ fn bit_strip(ui: &mut Ui, bits: &[u8], w: f32) {
         };
         if frac > 0.0 {
             let pulse = egui::Rect::from_min_size(slot.min + vec2(1.0, 3.0), vec2((slot.width() - 2.0) * frac, h - 6.0));
-            p.rect_filled(pulse, egui::CornerRadius::same(1), alpha(c, 0.9));
+            p.rect_filled(pulse, egui::CornerRadius::same(crate::theme::R_CELL), alpha(c, 0.9));
         }
         if col == 0 {
-            p.text(pos2(r.left() + gutter - 6.0, slot.center().y), egui::Align2::RIGHT_CENTER, format!("{s}"), theme::mono(10.0), theme::text_3());
+            p.text(pos2(r.left() + gutter - 6.0, slot.center().y), egui::Align2::RIGHT_CENTER, format!("{s}"), theme::mono(crate::theme::ty::MICRO), theme::text_3());
         }
     }
 }

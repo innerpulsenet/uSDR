@@ -11,7 +11,7 @@ use serde_json::{Value, json};
 use usdr_proto::Mode;
 
 fn small(t: impl Into<String>) -> RichText {
-    RichText::new(t).font(theme::mono(10.5)).color(theme::text_3())
+    RichText::new(t).font(theme::mono(crate::theme::ty::LABEL)).color(theme::text_3())
 }
 
 pub fn side(app: &mut App, ui: &mut Ui) {
@@ -25,7 +25,7 @@ pub fn side(app: &mut App, ui: &mut Ui) {
                     Some(_) => ("LOST", theme::text_3()),
                     None => ("SEARCHING", theme::text_3()),
                 };
-                ui.label(RichText::new(t).font(theme::mono(10.5)).color(c));
+                ui.label(RichText::new(t).font(theme::mono(crate::theme::ty::LABEL)).color(c));
             };
             widgets::applet(ui, "rds", "Station · RDS", head, |ui| station(app, ui));
         }
@@ -33,7 +33,7 @@ pub fn side(app: &mut App, ui: &mut Ui) {
         let on = front_end_on(&app.status);
         let head = |ui: &mut Ui| {
             let (t, c) = if on == 0 { ("ALL OFF".to_string(), theme::text_3()) } else { (format!("{on} ON"), theme::AMBER) };
-            ui.label(RichText::new(t).font(theme::mono(10.5)).color(c));
+            ui.label(RichText::new(t).font(theme::mono(crate::theme::ty::LABEL)).color(c));
         };
         widgets::applet(ui, "frontend", "Front end", head, |ui| front_end(app, ui));
         if app.status.processing.is_some() {
@@ -99,7 +99,7 @@ fn station_body(app: &App, ui: &mut Ui) {
     let p = ui.painter().clone();
     let mut room = w;
     if let Some(pty) = r.and_then(|r| r.pty_name.clone().filter(|_| r.pty != Some(0))) {
-        let g = p.layout_no_wrap(pty.to_uppercase(), theme::mono(10.0), fade(rds_c));
+        let g = p.layout_no_wrap(pty.to_uppercase(), theme::mono(crate::theme::ty::MICRO), fade(rds_c));
         let tag = egui::Rect::from_min_size(egui::pos2(rect.right() - g.size().x - 12.0, rect.center().y - 9.0), g.size() + vec2(12.0, 0.0)).with_max_y(rect.center().y + 9.0);
         p.rect(tag, egui::CornerRadius::same(9), alpha(fade(rds_c), 0.10), egui::Stroke::new(1.0, alpha(fade(rds_c), 0.5)), egui::StrokeKind::Inside);
         p.galley(tag.center() - g.size() / 2.0, g, fade(rds_c));
@@ -137,12 +137,12 @@ fn station_body(app: &App, ui: &mut Ui) {
     };
     let ps_word = r.and_then(|r| r.ps.clone().filter(|_| r.ps_dynamic || !r.ps_steady).map(|ps| (ps, r.ps_dynamic)));
     let right_w = match &ps_word {
-        Some((ps, _)) => p.layout_no_wrap(format!("PS {ps}"), theme::mono(10.5), theme::text_2()).size().x + 8.0,
+        Some((ps, _)) => p.layout_no_wrap(format!("PS {ps}"), theme::mono(crate::theme::ty::LABEL), theme::text_2()).size().x + 8.0,
         None => 0.0,
     };
-    p.text(egui::pos2(rect.left(), rect.center().y), Align2::LEFT_CENTER, fit(ui, &id, theme::mono(10.5), w - right_w - 8.0), theme::mono(10.5), theme::text_3());
+    p.text(egui::pos2(rect.left(), rect.center().y), Align2::LEFT_CENTER, fit(ui, &id, theme::mono(crate::theme::ty::LABEL), w - right_w - 8.0), theme::mono(crate::theme::ty::LABEL), theme::text_3());
     if let Some((ps, scrolling)) = &ps_word {
-        p.text(egui::pos2(rect.right(), rect.center().y), Align2::RIGHT_CENTER, format!("PS {ps}"), theme::mono(10.5), fade(if *scrolling { theme::text_2() } else { theme::text_3() }));
+        p.text(egui::pos2(rect.right(), rect.center().y), Align2::RIGHT_CENTER, format!("PS {ps}"), theme::mono(crate::theme::ty::LABEL), fade(if *scrolling { theme::text_2() } else { theme::text_3() }));
     }
     resp.on_hover_text(match &ps_word {
         Some((_, true)) => "Call letters come from the PI code by the RBDS mapping. The PS at the right scrolls a message a word at a time.",
@@ -163,25 +163,25 @@ fn station_body(app: &App, ui: &mut Ui) {
             let t = r.title.clone().unwrap_or_default();
             let a = r.artist.clone().unwrap_or_default();
             p.text(line1.left_center(), Align2::LEFT_CENTER, fit(ui, &t, theme::sans_semibold(14.0), w), theme::sans_semibold(14.0), fade(theme::text()));
-            p.text(line2.left_center(), Align2::LEFT_CENTER, fit(ui, &a, theme::sans(12.5), w), theme::sans(12.5), fade(theme::text_2()));
+            p.text(line2.left_center(), Align2::LEFT_CENTER, fit(ui, &a, theme::sans(crate::theme::ty::LEDE), w), theme::sans(crate::theme::ty::LEDE), fade(theme::text_2()));
         }
         (Some(r), _) if partial.is_some() || r.rt.is_some() => {
             let text = partial.as_ref().map(|p| p.0.clone()).or_else(|| r.rt.clone()).unwrap_or_default();
-            let mut job = crate::bar::gapped(&text, theme::sans(12.5), fade(theme::text()));
+            let mut job = crate::bar::gapped(&text, theme::sans(crate::theme::ty::LEDE), fade(theme::text()));
             job.wrap = egui::text::TextWrapping { max_width: w, max_rows: 2, break_anywhere: false, overflow_character: Some('…') };
             let g = p.layout_job(job);
             let y = rect.top() + (rect.height() - g.size().y).max(0.0) / 2.0;
             p.galley(egui::pos2(rect.left(), y), g, theme::text());
         }
         _ => {
-            p.text(line1.left_center(), Align2::LEFT_CENTER, "no RadioText yet", theme::sans(12.5), theme::text_3());
+            p.text(line1.left_center(), Align2::LEFT_CENTER, "no RadioText yet", theme::sans(crate::theme::ty::LEDE), theme::text_3());
         }
     }
     let (bar, _) = row(ui, 3.0);
     if let Some((_, progress)) = &partial {
         let p = ui.painter();
-        p.rect_filled(bar, egui::CornerRadius::same(1), alpha(rds_c, 0.15));
-        p.rect_filled(egui::Rect::from_min_size(bar.min, vec2(bar.width() * progress.clamp(0.0, 1.0), 3.0)), egui::CornerRadius::same(1), alpha(rds_c, 0.8));
+        p.rect_filled(bar, egui::CornerRadius::same(crate::theme::R_CELL), alpha(rds_c, 0.15));
+        p.rect_filled(egui::Rect::from_min_size(bar.min, vec2(bar.width() * progress.clamp(0.0, 1.0), 3.0)), egui::CornerRadius::same(crate::theme::R_CELL), alpha(rds_c, 0.8));
     }
 
     // How it is being received: a meter of the blocks read (out of every 50),
@@ -197,7 +197,7 @@ fn station_body(app: &App, ui: &mut Ui) {
         let x = meter.left() + k as f32 * (meter.width() / segs as f32);
         let seg = egui::Rect::from_min_size(egui::pos2(x, meter.top()), vec2(meter.width() / segs as f32 - 1.5, meter.height()));
         let lit = (k as f32 + 0.5) / segs as f32 <= good;
-        p.rect_filled(seg, egui::CornerRadius::same(1), if lit { c } else { alpha(theme::text_3(), 0.25) });
+        p.rect_filled(seg, egui::CornerRadius::same(crate::theme::R_CELL), if lit { c } else { alpha(theme::text_3(), 0.25) });
     }
     let status = match r {
         Some(r) if r.locked => {
@@ -211,7 +211,7 @@ fn station_body(app: &App, ui: &mut Ui) {
         None => "listening for RDS".into(),
     };
     let x0 = meter.right() + 8.0;
-    p.text(egui::pos2(x0, rect.center().y), Align2::LEFT_CENTER, fit(ui, &status, theme::mono(10.0), rect.right() - x0), theme::mono(10.0), theme::text_3());
+    p.text(egui::pos2(x0, rect.center().y), Align2::LEFT_CENTER, fit(ui, &status, theme::mono(crate::theme::ty::MICRO), rect.right() - x0), theme::mono(crate::theme::ty::MICRO), theme::text_3());
     if let Some(r) = r {
         let at = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_millis(r.updated_ms);
         let mut tip = format!(
@@ -259,7 +259,7 @@ fn activity(app: &App, ui: &mut Ui, live: bool) {
         p.add(egui::Shape::line(pts, egui::Stroke::new(1.0, theme::AMBER)));
     } else {
         let note = if live { "nothing measured on this channel yet".to_string() } else { format!("{} keeps no buffer", app.status.mode.label()) };
-        p.text(r.center(), egui::Align2::CENTER_CENTER, note, theme::mono(10.5), theme::text_3());
+        p.text(r.center(), egui::Align2::CENTER_CENTER, note, theme::mono(crate::theme::ty::LABEL), theme::text_3());
     }
     ui.horizontal(|ui| {
         ui.label(small("−20 s"));
@@ -354,7 +354,7 @@ fn memories(app: &mut App, ui: &mut Ui) {
         let i = *i;
         ui.horizontal(|ui| {
             ui.label(small(format!("slot {}", i + 1)));
-            let r = ui.add(egui::TextEdit::singleline(name).char_limit(24).desired_width(140.0).font(theme::mono(11.5)));
+            let r = ui.add(egui::TextEdit::singleline(name).char_limit(24).desired_width(140.0).font(theme::mono(crate::theme::ty::VALUE)));
             r.request_focus();
             if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) || widgets::action(ui, "OK").clicked() {
                 rename_done = Some((i, name.trim().to_string()));
@@ -470,11 +470,11 @@ fn gain_staging(ui: &mut Ui, s: &usdr_proto::Status) {
     let row = |ui: &mut Ui, label: &str, value: String, value_c: egui::Color32, tip: &str, draw: &dyn Fn(&egui::Painter, egui::Rect)| {
         let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 18.0), egui::Sense::hover());
         let p = ui.painter();
-        p.text(egui::pos2(rect.left(), rect.center().y), egui::Align2::LEFT_CENTER, label, theme::mono(10.5), theme::text_3());
-        p.text(egui::pos2(rect.right(), rect.center().y), egui::Align2::RIGHT_CENTER, value, theme::mono_bold(11.0), value_c);
+        p.text(egui::pos2(rect.left(), rect.center().y), egui::Align2::LEFT_CENTER, label, theme::mono(crate::theme::ty::LABEL), theme::text_3());
+        p.text(egui::pos2(rect.right(), rect.center().y), egui::Align2::RIGHT_CENTER, value, theme::mono_bold(crate::theme::ty::SMALL), value_c);
         let track = egui::Rect::from_min_max(egui::pos2(rect.left() + label_w, rect.center().y - 5.0), egui::pos2(rect.right() - value_w, rect.center().y + 5.0));
         // On the glass, a faint channel for the cells to light in.
-        p.rect_filled(track, egui::CornerRadius::same(2), alpha(theme::ink(), 0.5));
+        p.rect_filled(track, egui::CornerRadius::same(crate::theme::R_CAP), alpha(theme::ink(), 0.5));
         draw(p, track.shrink2(vec2(3.0, 2.5)));
         resp.on_hover_text(tip);
     };
@@ -496,7 +496,7 @@ fn gain_staging(ui: &mut Ui, s: &usdr_proto::Status) {
         for w in steps.windows(2) {
             let seg = egui::Rect::from_min_max(egui::pos2(x(w[0]) + 0.5, t.top()), egui::pos2(x(w[1]) - 0.5, t.bottom()));
             let lit = lna_db.is_some_and(|d| d >= w[1] - 0.01);
-            p.rect_filled(seg, egui::CornerRadius::same(1), if lit { alpha(theme::AMBER, 0.85) } else { alpha(theme::AMBER, 0.10) });
+            p.rect_filled(seg, egui::CornerRadius::same(crate::theme::R_CELL), if lit { alpha(theme::AMBER, 0.85) } else { alpha(theme::AMBER, 0.10) });
         }
     });
     // The IF stage: reduction lit from the left, the take-over window
@@ -515,11 +515,11 @@ fn gain_staging(ui: &mut Ui, s: &usdr_proto::Status) {
         let x = |db: f64| t.left() + t.width() * ((db - if_min) / (if_max - if_min)).clamp(0.0, 1.0) as f32;
         if s.lna_auto {
             let band = egui::Rect::from_min_max(egui::pos2(x(30.0), t.top() - 1.0), egui::pos2(x(50.0), t.bottom() + 1.0));
-            p.rect_filled(band, egui::CornerRadius::same(1), alpha(theme::AMBER, 0.14));
+            p.rect_filled(band, egui::CornerRadius::same(crate::theme::R_CELL), alpha(theme::AMBER, 0.14));
         }
         if let Some(v) = ifgr {
             let c = if pinned { theme::ERR } else { theme::AMBER };
-            p.rect_filled(egui::Rect::from_min_max(t.min, egui::pos2(x(v), t.bottom())), egui::CornerRadius::same(1), alpha(c, 0.55));
+            p.rect_filled(egui::Rect::from_min_max(t.min, egui::pos2(x(v), t.bottom())), egui::CornerRadius::same(crate::theme::R_CELL), alpha(c, 0.55));
             p.line_segment([egui::pos2(x(v), t.top() - 2.0), egui::pos2(x(v), t.bottom() + 2.0)], egui::Stroke::new(2.0, c));
         }
     });
@@ -532,7 +532,7 @@ fn gain_staging(ui: &mut Ui, s: &usdr_proto::Status) {
     ui.horizontal(|ui| {
         // The count goes beside the note only where both fit with room
         // between them; otherwise it is the note's hover.
-        let width = |t: &str| ui.painter().layout_no_wrap(t.to_owned(), theme::mono(10.5), theme::text_3()).size().x;
+        let width = |t: &str| ui.painter().layout_no_wrap(t.to_owned(), theme::mono(crate::theme::ty::LABEL), theme::text_3()).size().x;
         let fits = past.as_ref().is_some_and(|p| width(note) + width(p) + 16.0 <= ui.available_width());
         let r = ui.label(small(note));
         if let Some(p) = past.as_ref().filter(|_| !fits) {
@@ -615,7 +615,7 @@ fn front_end(app: &mut App, ui: &mut Ui) {
         let label = if s.if_bandwidth_manual { crate::tuning::fmt_hz(cur) } else { format!("AUTO · {}", crate::tuning::fmt_hz(cur)) };
         ui.horizontal(|ui| {
             ui.label(small("IF FILTER"));
-            let w = (ui.painter().layout_no_wrap(label.clone(), theme::mono_bold(12.0), egui::Color32::PLACEHOLDER).size().x + 32.0).max(90.0);
+            let w = (ui.painter().layout_no_wrap(label.clone(), theme::mono_bold(crate::theme::ty::BODY), egui::Color32::PLACEHOLDER).size().x + 32.0).max(90.0);
             widgets::lcd_selector(ui, "iffilter", "", &label, theme::AMBER, w, |ui| {
                 if ui.selectable_label(!s.if_bandwidth_manual, "Auto · follow the span").clicked() {
                     app.post("/api/sdr/frontend", json!({ "if_bandwidth": 0 }));
@@ -693,7 +693,7 @@ fn processing(app: &mut App, ui: &mut Ui) {
     // Two lines kept for it, whichever mode's note it is.
     let w = ui.available_width();
     let (rect, resp) = ui.allocate_exact_size(vec2(w, 30.0), egui::Sense::hover());
-    let mut job = egui::text::LayoutJob::simple(note.to_string(), theme::mono(10.5), theme::text_3(), w);
+    let mut job = egui::text::LayoutJob::simple(note.to_string(), theme::mono(crate::theme::ty::LABEL), theme::text_3(), w);
     job.wrap.max_rows = 2;
     job.wrap.overflow_character = Some('…');
     let g = ui.painter().layout_job(job);
@@ -929,9 +929,9 @@ fn p25(app: &mut App, ui: &mut Ui) {
     let need = ALGS.iter().find(|a| a.0 == f.algorithm).map(|a| a.2).unwrap_or(64);
     ui.horizontal(|ui| {
         ui.label(small("KEY ID"));
-        ui.add(egui::TextEdit::singleline(&mut f.key_id).desired_width(70.0).hint_text("hex").font(theme::mono(11.5)));
+        ui.add(egui::TextEdit::singleline(&mut f.key_id).desired_width(70.0).hint_text("hex").font(theme::mono(crate::theme::ty::VALUE)));
     });
-    ui.add(egui::TextEdit::singleline(&mut f.key).password(true).hint_text(format!("{need} hex digits")).font(theme::mono(11.5)).desired_width(f32::INFINITY));
+    ui.add(egui::TextEdit::singleline(&mut f.key).password(true).hint_text(format!("{need} hex digits")).font(theme::mono(crate::theme::ty::VALUE)).desired_width(f32::INFINITY));
     let mut post: Option<Value> = None;
     ui.horizontal(|ui| {
         if widgets::action(ui, "SAVE KEY").clicked() {
@@ -963,7 +963,7 @@ fn p25(app: &mut App, ui: &mut Ui) {
     });
     for (hz, alg, kid) in &f.entries {
         let cur = (*hz - freq as f64).abs() < 1.0;
-        ui.label(RichText::new(format!("{} MHz · {} · KID 0x{kid:04X}", crate::tuning::fmt_mhz(*hz, 6), alg_name(*alg))).font(theme::mono(10.5)).color(if cur { theme::AMBER } else { theme::text_3() }));
+        ui.label(RichText::new(format!("{} MHz · {} · KID 0x{kid:04X}", crate::tuning::fmt_mhz(*hz, 6), alg_name(*alg))).font(theme::mono(crate::theme::ty::LABEL)).color(if cur { theme::AMBER } else { theme::text_3() }));
     }
     if let (Some(body), Some(l)) = (post, &app.link) {
         l.post_get("/api/sdr/p25/key", body, Get::P25Key);

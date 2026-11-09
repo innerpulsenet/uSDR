@@ -11,7 +11,7 @@ use crate::decoders::Family;
 use usdr_proto::Mode;
 
 fn mono(t: impl Into<String>, c: egui::Color32) -> RichText {
-    RichText::new(t).font(theme::mono(11.0)).color(c)
+    RichText::new(t).font(theme::mono(crate::theme::ty::SMALL)).color(c)
 }
 
 pub fn dock(app: &mut App, ui: &mut Ui) {
@@ -283,7 +283,7 @@ fn decode_log(app: &mut App, ui: &mut Ui) {
                 // Column heads over the columns, the count at the end: there
                 // from the start, so the first frame does not push the list
                 // down a row.
-                let head = |t: &str| RichText::new(t).font(theme::mono(10.0)).color(theme::text_3()).extra_letter_spacing(0.6);
+                let head = |t: &str| RichText::new(t).font(theme::mono(crate::theme::ty::MICRO)).color(theme::text_3()).extra_letter_spacing(0.6);
                 let r = ui.horizontal(|ui| {
                     ui.set_min_height(18.0);
                     ui.label(mono("▸", egui::Color32::TRANSPARENT));
@@ -328,7 +328,7 @@ fn decode_log(app: &mut App, ui: &mut Ui) {
                     ui.add_space(4.0);
                     ui.horizontal(|ui| {
                         let n = if total == 1 { "1 frame in the log is".to_string() } else { format!("{total} frames in the log are") };
-                        ui.label(RichText::new(format!("{n} outside this view.")).font(theme::sans(12.0)).color(theme::text_2()));
+                        ui.label(RichText::new(format!("{n} outside this view.")).font(theme::sans(crate::theme::ty::BODY)).color(theme::text_2()));
                         show_all = widgets::action_small(ui, "SHOW ALL").clicked();
                     });
                 }
@@ -357,12 +357,12 @@ fn decode_log(app: &mut App, ui: &mut Ui) {
                             let c = if d.ev.valid { widgets::protocol_color(&d.ev.protocol) } else { theme::ERR };
                             cell(ui, proto_w, mono(format!("[{}]", d.ev.protocol), c), egui::Sense::hover());
                             cell(ui, kind_w, mono(&d.ev.kind, theme::text_2()), egui::Sense::hover());
-                            ui.add(egui::Label::new(RichText::new(&d.ev.summary).font(theme::sans(12.0)).color(theme::text())).truncate());
+                            ui.add(egui::Label::new(RichText::new(&d.ev.summary).font(theme::sans(crate::theme::ty::BODY)).color(theme::text())).truncate());
                         })
                         .response;
                     let resp = resp.interact(egui::Sense::click());
                     if sel {
-                        ui.painter().rect_filled(resp.rect, egui::CornerRadius::same(3), alpha(theme::AMBER, 0.08));
+                        ui.painter().rect_filled(resp.rect, egui::CornerRadius::same(crate::theme::R_KEY), alpha(theme::AMBER, 0.08));
                     }
                     // A frame new to the log is tinted in its protocol's
                     // color for a moment and fades to the row it is, so an
@@ -370,7 +370,7 @@ fn decode_log(app: &mut App, ui: &mut Ui) {
                     let t = ((now - born) / 1.4).clamp(0.0, 1.0) as f32;
                     if t < 1.0 {
                         let c = widgets::protocol_color(&d.ev.protocol);
-                        ui.painter().rect_filled(resp.rect, egui::CornerRadius::same(3), alpha(c, 0.16 * (1.0 - t).powi(2)));
+                        ui.painter().rect_filled(resp.rect, egui::CornerRadius::same(crate::theme::R_KEY), alpha(c, 0.16 * (1.0 - t).powi(2)));
                         // And a band of light runs once across it, left to
                         // right, in the first half second.
                         let s = ((now - born) / 0.6).clamp(0.0, 1.0) as f32;
@@ -421,7 +421,7 @@ fn decode_log(app: &mut App, ui: &mut Ui) {
                 // Reading older frames: say what has arrived above, and offer the way back.
                 let n = app.decodes_unseen;
                 let text = if n > 0 { format!("↑ {n} new · back to newest") } else { "⏸ scrolled back · back to newest".into() };
-                let g = ui.painter().layout_no_wrap(text.clone(), theme::mono_bold(10.5), egui::Color32::PLACEHOLDER);
+                let g = ui.painter().layout_no_wrap(text.clone(), theme::mono_bold(crate::theme::ty::LABEL), egui::Color32::PLACEHOLDER);
                 let r = egui::Rect::from_center_size(egui::pos2(out.inner_rect.center().x, out.inner_rect.top() + 14.0), g.size() + vec2(18.0, 8.0));
                 let b = ui.interact(r, ui.id().with("decode-jump"), egui::Sense::click());
                 let fill = if b.hovered() { theme::AMBER } else { alpha(theme::AMBER, 0.88) };
@@ -473,8 +473,8 @@ fn decode_log(app: &mut App, ui: &mut Ui) {
                                 ui.ctx().copy_text(v.clone());
                             }
                         });
-                        egui::Frame::new().fill(theme::ink()).corner_radius(egui::CornerRadius::same(3)).inner_margin(egui::Margin::same(6)).show(ui, |ui| {
-                            ui.label(RichText::new(dump).font(theme::mono(10.5)).color(theme::text_2()));
+                        egui::Frame::new().fill(theme::ink()).corner_radius(egui::CornerRadius::same(crate::theme::R_KEY)).inner_margin(egui::Margin::same(6)).show(ui, |ui| {
+                            ui.label(RichText::new(dump).font(theme::mono(crate::theme::ty::LABEL)).color(theme::text_2()));
                         });
                     }
                 });
@@ -494,16 +494,16 @@ fn decode_log(app: &mut App, ui: &mut Ui) {
 /// What a log will hold, said once while it holds nothing.
 fn empty_state(ui: &mut Ui, text: &str) {
     ui.add_space(6.0);
-    ui.add(egui::Label::new(RichText::new(text).font(theme::sans(12.0)).color(theme::text_3())).wrap());
+    ui.add(egui::Label::new(RichText::new(text).font(theme::sans(crate::theme::ty::BODY)).color(theme::text_3())).wrap());
 }
 
 /// How far through a recording the speaker is, as a slim bar; keeps the
 /// frames coming while it moves.
 pub fn progress_bar(ui: &mut Ui, p: f32, w: f32) {
     let (r, _) = ui.allocate_exact_size(vec2(w, 4.0), egui::Sense::hover());
-    ui.painter().rect_filled(r, egui::CornerRadius::same(2), theme::ink());
+    ui.painter().rect_filled(r, egui::CornerRadius::same(crate::theme::R_CAP), theme::ink());
     let done = egui::Rect::from_min_size(r.min, vec2(r.width() * p.clamp(0.0, 1.0), r.height()));
-    ui.painter().rect_filled(done, egui::CornerRadius::same(2), theme::AMBER);
+    ui.painter().rect_filled(done, egui::CornerRadius::same(crate::theme::R_CAP), theme::AMBER);
     crate::anim::more(ui.ctx());
 }
 
@@ -539,12 +539,12 @@ fn scope(app: &mut App, ui: &mut Ui) {
         .then(|| format!("{:.0}–{:.0} Hz", app.status.filter_low_hz.abs().min(app.status.filter_high_hz.abs()), app.status.filter_low_hz.abs().max(app.status.filter_high_hz.abs())));
     let note = note.map(str::to_string).or(edges);
     ui.horizontal(|ui| {
-        ui.label(RichText::new(title).font(theme::sans_semibold(12.0)).color(theme::text()));
+        ui.label(RichText::new(title).font(theme::sans_semibold(crate::theme::ty::BODY)).color(theme::text()));
         // Every view the mode offers, named, rather than a click that cycles.
         let views = crate::scope::Scope::views(mode, kind);
         if views.is_empty() {
             if let Some(n) = note {
-                ui.label(RichText::new(n).font(theme::mono(10.0)).color(theme::text_3()));
+                ui.label(RichText::new(n).font(theme::mono(crate::theme::ty::MICRO)).color(theme::text_3()));
             }
         } else {
             ui.add_space(4.0);
@@ -588,7 +588,7 @@ fn scope(app: &mut App, ui: &mut Ui) {
         ui.horizontal_top(|ui| {
             crate::utilviews::constellation(ui, &r.constellation, size, widgets::protocol_color(mode.label()));
             ui.vertical(|ui| {
-                ui.label(RichText::new(r.variant.clone().unwrap_or_else(|| "no lock".into())).font(theme::mono_bold(11.0)).color(theme::text()));
+                ui.label(RichText::new(r.variant.clone().unwrap_or_else(|| "no lock".into())).font(theme::mono_bold(crate::theme::ty::SMALL)).color(theme::text()));
                 if let Some(snr) = r.snr_db {
                     ui.label(mono(format!("SNR {snr:+.0} dB"), theme::text_2()));
                 }
@@ -596,7 +596,7 @@ fn scope(app: &mut App, ui: &mut Ui) {
                     ui.label(mono(format!("{} {}", f.label, f.value), theme::text_3()));
                 }
                 ui.add_space(4.0);
-                ui.add(egui::Label::new(RichText::new("The last equalized symbols, newest brightest; tight clusters on the points mean a clean copy.").font(theme::sans(10.5)).color(theme::text_3())).wrap());
+                ui.add(egui::Label::new(RichText::new("The last equalized symbols, newest brightest; tight clusters on the points mean a clean copy.").font(theme::sans(crate::theme::ty::LABEL)).color(theme::text_3())).wrap());
             });
         });
         ui.advance_cursor_after_rect(rect);
@@ -647,7 +647,7 @@ fn signal_details(app: &App, ui: &mut Ui) {
             c.center_offset_hz
         ), theme::text_2())).truncate());
         if let Some(d) = &c.details {
-            ui.add(egui::Label::new(RichText::new(d).font(theme::sans(11.5)).color(theme::text_3())).truncate());
+            ui.add(egui::Label::new(RichText::new(d).font(theme::sans(crate::theme::ty::VALUE)).color(theme::text_3())).truncate());
         }
     }
     if let Some(sweep) = &app.status.pager_sweep {
@@ -700,7 +700,7 @@ fn classifier(app: &mut App, ui: &mut Ui) {
                 ui.label(mono(&row.c.modulation, theme::text_2()));
                 ui.label(mono(format!("SNR {:+.1} dB", row.c.snr_db), theme::text_2()));
                 if let Some(d) = &row.c.details {
-                    ui.add(egui::Label::new(RichText::new(d).font(theme::sans(12.0)).color(theme::text_3())).truncate());
+                    ui.add(egui::Label::new(RichText::new(d).font(theme::sans(crate::theme::ty::BODY)).color(theme::text_3())).truncate());
                 }
             });
         }
@@ -721,7 +721,7 @@ fn calls(app: &mut App, ui: &mut Ui) {
             empty_state(ui, "Finished voice calls are kept here with their audio, the most recent sixteen, so a call that went past can be played again. P25, DMR and NFM calls arrive once the receiver, or the scanner, hears one.");
         }
         for c in &app.calls {
-            egui::Frame::new().fill(theme::surface_2()).corner_radius(egui::CornerRadius::same(4)).inner_margin(egui::Margin::symmetric(8, 6)).show(ui, |ui| {
+            egui::Frame::new().fill(theme::surface_2()).corner_radius(egui::CornerRadius::same(crate::theme::RADIUS)).inner_margin(egui::Margin::symmetric(8, 6)).show(ui, |ui| {
                 ui.set_width(ui.available_width());
                 ui.horizontal(|ui| {
                     let t = std::time::UNIX_EPOCH + std::time::Duration::from_millis(c.started_ms);

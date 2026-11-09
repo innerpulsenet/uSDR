@@ -159,6 +159,38 @@ pub const WARN: Color32 = rgb(0xffe45e);
 pub const ERR: Color32 = rgb(0xff9a8f);
 
 pub const RADIUS: u8 = 4;
+/// The other corner radii, by what they round: a meter cell or a hairline
+/// track, a fader cap or a small swatch, a key or a readout plate, (panels
+/// and wells take [`RADIUS`]), a floating card of glass, a window.
+pub const R_CELL: u8 = 1;
+pub const R_CAP: u8 = 2;
+pub const R_KEY: u8 = 3;
+pub const R_GLASS: u8 = 5;
+pub const R_WINDOW: u8 = 6;
+
+/// The lit lip along an edge the light catches, as white alpha: under a
+/// groove or along a quiet foot, along a panel's or a key's top, and the
+/// hard edge of raised metal.
+pub const LIP_SOFT: u8 = 16;
+pub const LIP: u8 = 24;
+pub const LIP_HARD: u8 = 36;
+
+/// The type scale for everything but the large readouts, which set their
+/// own size. Nothing is set smaller than `MICRO`.
+pub mod ty {
+    /// Captions, axis figures, tags.
+    pub const MICRO: f32 = 10.0;
+    /// Labels beside controls, chips.
+    pub const LABEL: f32 = 10.5;
+    /// Keys and small values.
+    pub const SMALL: f32 = 11.0;
+    /// Values and readouts in the panels.
+    pub const VALUE: f32 = 11.5;
+    /// Running text.
+    pub const BODY: f32 = 12.0;
+    /// Running text that leads a card.
+    pub const LEDE: f32 = 12.5;
+}
 
 pub fn alpha(c: Color32, a: f32) -> Color32 {
     let [r, g, b, _] = c.to_array();
@@ -255,11 +287,11 @@ pub fn set_ground(ctx: &egui::Context, g: Ground) {
     ctx.request_repaint();
     ctx.all_styles_mut(|style| {
         style.text_styles = [
-            (TextStyle::Small, sans(11.0)),
+            (TextStyle::Small, sans(ty::SMALL)),
             (TextStyle::Body, sans(13.0)),
-            (TextStyle::Button, mono(11.5)),
+            (TextStyle::Button, mono(ty::VALUE)),
             (TextStyle::Heading, headline(17.0)),
-            (TextStyle::Monospace, mono(12.0)),
+            (TextStyle::Monospace, mono(ty::BODY)),
         ]
         .into();
         style.spacing.item_spacing = egui::vec2(6.0, 6.0);
@@ -277,7 +309,7 @@ pub fn set_ground(ctx: &egui::Context, g: Ground) {
         v.faint_bg_color = surface_2();
         v.code_bg_color = surface_3();
         v.window_stroke = Stroke::new(1.0, line_2());
-        v.window_corner_radius = egui::CornerRadius::same(6);
+        v.window_corner_radius = egui::CornerRadius::same(R_WINDOW);
         v.menu_corner_radius = egui::CornerRadius::same(RADIUS);
         v.window_shadow = shadow(Depth::Floating);
         v.popup_shadow = egui::Shadow { blur: 18, offset: [0, 6], ..shadow(Depth::Floating) };
@@ -354,7 +386,7 @@ pub fn glass_top(painter: &egui::Painter, r: egui::Rect) {
     painter.add(egui::Shape::mesh(mesh));
     painter.line_segment(
         [r.left_top() + egui::vec2(RADIUS as f32, 0.5), r.right_top() + egui::vec2(-(RADIUS as f32), 0.5)],
-        Stroke::new(1.0, Color32::from_white_alpha((26.0 * strength) as u8)),
+        Stroke::new(1.0, Color32::from_white_alpha((LIP as f32 * strength) as u8)),
     );
 }
 
@@ -376,7 +408,7 @@ pub fn well(painter: &egui::Painter, r: egui::Rect, tint: Option<Color32>) {
     painter.add(egui::Shape::mesh(mesh));
     painter.line_segment(
         [r.left_bottom() + egui::vec2(RADIUS as f32, 1.5), r.right_bottom() + egui::vec2(-(RADIUS as f32), 1.5)],
-        Stroke::new(1.0, Color32::from_white_alpha(28)),
+        Stroke::new(1.0, Color32::from_white_alpha(LIP)),
     );
     let edge = tint.map_or(line(), |t| alpha(t, 0.30));
     painter.rect_stroke(r, cr, Stroke::new(1.0, edge), egui::StrokeKind::Inside);
@@ -579,20 +611,20 @@ pub fn px(ctx: &egui::Context, v: f32) -> f32 {
 pub fn groove_h(painter: &egui::Painter, x0: f32, x1: f32, y: f32) {
     let y = y.round();
     painter.line_segment([egui::pos2(x0, y + 0.5), egui::pos2(x1, y + 0.5)], Stroke::new(1.0, Color32::from_black_alpha(158)));
-    painter.line_segment([egui::pos2(x0, y + 1.5), egui::pos2(x1, y + 1.5)], Stroke::new(1.0, Color32::from_white_alpha(23)));
+    painter.line_segment([egui::pos2(x0, y + 1.5), egui::pos2(x1, y + 1.5)], Stroke::new(1.0, Color32::from_white_alpha(LIP)));
 }
 
 /// A groove cut down the plate at `x`.
 pub fn groove_v(painter: &egui::Painter, x: f32, y0: f32, y1: f32) {
     let x = x.round();
     painter.line_segment([egui::pos2(x + 0.5, y0), egui::pos2(x + 0.5, y1)], Stroke::new(1.0, Color32::from_black_alpha(158)));
-    painter.line_segment([egui::pos2(x + 1.5, y0), egui::pos2(x + 1.5, y1)], Stroke::new(1.0, Color32::from_white_alpha(23)));
+    painter.line_segment([egui::pos2(x + 1.5, y0), egui::pos2(x + 1.5, y1)], Stroke::new(1.0, Color32::from_white_alpha(LIP)));
 }
 
 /// A fader's machined cap, its center line cut across the grip.
 pub fn fader_cap(painter: &egui::Painter, r: egui::Rect, hover: f32) {
     let stops = [(0.0, rgb(0x8d939b)), (0.45, rgb(0xe7eaee)), (0.47, rgb(0x4b5057)), (0.55, rgb(0xc4c8ce)), (1.0, rgb(0x777c84))];
-    painter.rect_stroke(r, egui::CornerRadius::same(2), Stroke::new(1.0, Color32::BLACK), egui::StrokeKind::Outside);
+    painter.rect_stroke(r, egui::CornerRadius::same(R_CAP), Stroke::new(1.0, Color32::BLACK), egui::StrokeKind::Outside);
     let mut m = egui::Mesh::default();
     for (i, (f, c)) in stops.iter().enumerate() {
         let x = r.left() + r.width() * f;
@@ -618,7 +650,7 @@ pub fn key_face(painter: &egui::Painter, r: egui::Rect, radius: u8, press: f32) 
     if up > 0.0 {
         painter.line_segment(
             [r.left_top() + egui::vec2(rr, 1.5), r.right_top() + egui::vec2(-rr, 1.5)],
-            Stroke::new(1.0, Color32::from_white_alpha((16.0 * up) as u8)),
+            Stroke::new(1.0, Color32::from_white_alpha((LIP_SOFT as f32 * up) as u8)),
         );
         painter.line_segment(
             [r.left_bottom() + egui::vec2(rr, 0.5), r.right_bottom() + egui::vec2(-rr, 0.5)],
@@ -690,7 +722,7 @@ pub fn key_body(painter: &egui::Painter, r: egui::Rect, radius: egui::CornerRadi
     painter.rect(r, radius, lerp(top, foot, 0.5), Stroke::new(1.0, Color32::from_black_alpha(215)), egui::StrokeKind::Outside);
     painter.line_segment(
         [r.left_bottom() + egui::vec2(inset, 1.5), r.right_bottom() + egui::vec2(-inset, 1.5)],
-        Stroke::new(1.0, Color32::from_white_alpha(26)),
+        Stroke::new(1.0, Color32::from_white_alpha(LIP)),
     );
     // The glass in one mesh: the sheen across its upper half is in the top
     // band's colors. Every key on the window draws this every frame.
@@ -714,7 +746,7 @@ pub fn key_body(painter: &egui::Painter, r: egui::Rect, radius: egui::CornerRadi
     }
     painter.line_segment(
         [r.left_top() + egui::vec2(inset, 0.5), r.right_top() + egui::vec2(-inset, 0.5)],
-        Stroke::new(1.0, Color32::from_white_alpha(36)),
+        Stroke::new(1.0, Color32::from_white_alpha(LIP_HARD)),
     );
     if k.focus {
         painter.rect_stroke(r.expand(1.5), egui::CornerRadius::same(RADIUS + 1), Stroke::new(1.0, EMBER), egui::StrokeKind::Outside);
@@ -805,7 +837,7 @@ pub fn bezel(painter: &egui::Painter, screen: egui::Rect, width: f32) {
     painter.rect_stroke(s, egui::CornerRadius::ZERO, Stroke::new(1.0, Color32::from_black_alpha(200)), egui::StrokeKind::Outside);
     painter.line_segment(
         [s.left_bottom() + egui::vec2(0.0, 1.5), s.right_bottom() + egui::vec2(0.0, 1.5)],
-        Stroke::new(1.0, Color32::from_white_alpha(if ground() == Ground::Carbon { 22 } else { 16 })),
+        Stroke::new(1.0, Color32::from_white_alpha(if ground() == Ground::Carbon { LIP } else { LIP_SOFT })),
     );
 }
 

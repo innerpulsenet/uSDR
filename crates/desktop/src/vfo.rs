@@ -207,8 +207,8 @@ impl Vfo {
                 let t = big.t();
                 let c = pos2(x + point / 2.0 - t * 0.2, baseline - t / 2.0);
                 let dot = Rect::from_center_size(c, vec2(t * 1.05, t * 1.05));
-                painter.rect_filled(dot.expand(t * 0.35), CornerRadius::same(2), theme::alpha(lit, 0.10));
-                painter.rect_filled(dot, CornerRadius::same(1), lit);
+                painter.rect_filled(dot.expand(t * 0.35), CornerRadius::same(crate::theme::R_CAP), theme::alpha(lit, 0.10));
+                painter.rect_filled(dot, CornerRadius::same(crate::theme::R_CELL), lit);
                 x += point;
             } else if i == 7 {
                 x += gap;
@@ -219,7 +219,7 @@ impl Vfo {
             let hot = pointer.is_some_and(|p| cell.contains(p));
             if hot {
                 hovered_digit = Some(i);
-                painter.rect_filled(cell.expand2(vec2(1.0, -1.0)), CornerRadius::same(3), theme::alpha(tint, 0.09));
+                painter.rect_filled(cell.expand2(vec2(1.0, -1.0)), CornerRadius::same(crate::theme::R_KEY), theme::alpha(tint, 0.09));
             }
             let lead = i < first_sig;
             let g = if i >= 7 { &small } else { &big };
@@ -249,7 +249,7 @@ impl Vfo {
             if i == self.selected {
                 painter.rect_filled(
                     Rect::from_min_max(pos2(cell.left() + 1.0, rect.bottom() + 1.0), pos2(cell.right() - 1.0, rect.bottom() + 3.0)),
-                    CornerRadius::same(1),
+                    CornerRadius::same(crate::theme::R_CELL),
                     tint,
                 );
             }
@@ -302,12 +302,12 @@ impl Vfo {
     fn paint_strip(&self, p: &egui::Painter, outer: Rect, pad_x: f32, tint: Color32, lit: Color32, lit_hz: Color32) {
         let a = &self.annun;
         let y = outer.top() + if self.bare { 7.0 } else { 12.0 };
-        let f = theme::mono_bold(10.0);
+        let f = theme::mono_bold(crate::theme::ty::MICRO);
         let mut x = outer.left() + pad_x - 2.0;
         if self.bare {
             // The band has a zone for the receiver; this one is named.
             let mut job = egui::text::LayoutJob::default();
-            job.append("FREQUENCY", 0.0, egui::TextFormat { font_id: theme::mono(9.5), color: self.look.map_or(lit, |l| l.caption), extra_letter_spacing: 1.0, ..Default::default() });
+            job.append("FREQUENCY", 0.0, egui::TextFormat { font_id: theme::mono(crate::theme::ty::MICRO), color: self.look.map_or(lit, |l| l.caption), extra_letter_spacing: 1.0, ..Default::default() });
             let g = p.layout_job(job);
             p.galley(pos2(x, y - g.size().y / 2.0), g.clone(), lit);
             x += g.size().x + 12.0;
@@ -315,8 +315,8 @@ impl Vfo {
             // The receiver: a block of lit segment with the letter cut out.
             let g = p.layout_no_wrap(format!("RX {}", a.rx), f.clone(), Color32::PLACEHOLDER);
             let block = Rect::from_min_size(pos2(x, y - 7.0), vec2(g.size().x + 8.0, 14.0));
-            p.rect_filled(block.expand(1.5), CornerRadius::same(3), theme::alpha(tint, 0.12));
-            p.rect_filled(block, CornerRadius::same(2), theme::alpha(tint, 0.85));
+            p.rect_filled(block.expand(1.5), CornerRadius::same(crate::theme::R_KEY), theme::alpha(tint, 0.12));
+            p.rect_filled(block, CornerRadius::same(crate::theme::R_CAP), theme::alpha(tint, 0.85));
             p.galley(pos2(block.left() + 4.0, y - g.size().y / 2.0), g, theme::lerp(theme::ink(), Color32::BLACK, 0.4));
             x = block.right() + 8.0;
         }
@@ -344,7 +344,7 @@ impl Vfo {
         p.galley(pos2(r - unit.size().x, y - unit.size().y / 2.0), unit.clone(), theme::alpha(lit_hz, 0.8));
         r -= unit.size().x + 10.0;
         for (name, on, c) in a.flags.iter().rev() {
-            let g = p.layout_no_wrap(name.to_string(), theme::mono_bold(9.0), Color32::PLACEHOLDER);
+            let g = p.layout_no_wrap(name.to_string(), theme::mono_bold(crate::theme::ty::MICRO), Color32::PLACEHOLDER);
             let w = g.size().x;
             if r - w < left_end {
                 break;
@@ -352,7 +352,7 @@ impl Vfo {
             let col = if *on { *c } else { theme::alpha(lit, 0.08) };
             if *on {
                 let glow = Rect::from_min_size(pos2(r - w, y - g.size().y / 2.0), g.size()).expand2(vec2(3.0, 1.0));
-                p.rect_filled(glow, CornerRadius::same(2), theme::alpha(*c, 0.12));
+                p.rect_filled(glow, CornerRadius::same(crate::theme::R_CAP), theme::alpha(*c, 0.12));
             }
             p.galley(pos2(r - w, y - g.size().y / 2.0), g, col);
             r -= w + 8.0;
@@ -419,9 +419,9 @@ pub fn tune_strip(ui: &mut Ui, hz: f64, step: f64, width: f32, height: f32) -> O
 /// index at the middle is fixed, as on the radio's case.
 fn paint_wheel(ui: &Ui, rect: Rect, hz: f64, st: f64, offset: f32, hovered: bool) {
     let p = ui.painter_at(rect.expand(2.0));
-    let cr = CornerRadius::same(4);
+    let cr = CornerRadius::same(crate::theme::RADIUS);
     // The slot the wheel turns in.
-    p.rect_filled(rect.expand(1.0), CornerRadius::same(5), Color32::from_black_alpha(160));
+    p.rect_filled(rect.expand(1.0), CornerRadius::same(crate::theme::R_GLASS), Color32::from_black_alpha(160));
     let body = rect.shrink2(vec2(2.0, 2.0));
     let (cx, r) = (body.center().x, body.width() / 2.0);
     let steel = theme::lerp(theme::surface_3(), theme::text_2(), 0.18);
@@ -578,11 +578,11 @@ impl Seg {
 /// of dark glass lit from behind in the receiver's color, brightest at its
 /// middle as a backlight falls off toward the frame.
 pub fn lcd_back(p: &egui::Painter, r: Rect, tint: Color32) {
-    let cr = CornerRadius::same(5);
+    let cr = CornerRadius::same(crate::theme::R_GLASS);
     // The bezel: a dark lip outside the glass and a catch of light below.
     let bezel = r.expand(2.0);
     p.rect_filled(bezel, CornerRadius::same(7), Color32::from_black_alpha(150));
-    p.line_segment([bezel.left_bottom() + vec2(6.0, 0.5), bezel.right_bottom() + vec2(-6.0, 0.5)], Stroke::new(1.0, Color32::from_white_alpha(16)));
+    p.line_segment([bezel.left_bottom() + vec2(6.0, 0.5), bezel.right_bottom() + vec2(-6.0, 0.5)], Stroke::new(1.0, Color32::from_white_alpha(theme::LIP_SOFT)));
     let base = theme::lerp(theme::ink(), Color32::BLACK, 0.35);
     p.rect_filled(r, cr, base);
     // The backlight: a wash of the tint, an ellipse fading from the middle.
@@ -605,8 +605,8 @@ pub fn lcd_back(p: &egui::Painter, r: Rect, tint: Color32) {
 pub fn lcd_back_look(p: &egui::Painter, r: Rect, look: &crate::lcd::Look) {
     let bezel = r.expand(2.0);
     p.rect_filled(bezel, CornerRadius::same(7), Color32::from_black_alpha(150));
-    p.line_segment([bezel.left_bottom() + vec2(6.0, 0.5), bezel.right_bottom() + vec2(-6.0, 0.5)], Stroke::new(1.0, Color32::from_white_alpha(16)));
-    p.rect_filled(r, CornerRadius::same(5), look.panel);
+    p.line_segment([bezel.left_bottom() + vec2(6.0, 0.5), bezel.right_bottom() + vec2(-6.0, 0.5)], Stroke::new(1.0, Color32::from_white_alpha(theme::LIP_SOFT)));
+    p.rect_filled(r, CornerRadius::same(crate::theme::R_GLASS), look.panel);
     let mut m = egui::Mesh::default();
     let c = r.center();
     m.colored_vertex(c, look.wash);
@@ -648,9 +648,9 @@ pub fn lcd_glass(p: &egui::Painter, r: Rect) {
     m.add_triangle(0, 1, 2);
     m.add_triangle(0, 2, 3);
     cp.add(Shape::mesh(m));
-    let cr = CornerRadius::same(5);
-    p.rect_stroke(r, cr, Stroke::new(1.0, Color32::from_white_alpha(22)), egui::StrokeKind::Inside);
-    p.line_segment([r.left_top() + vec2(5.0, 1.5), r.right_top() + vec2(-5.0, 1.5)], Stroke::new(1.0, Color32::from_white_alpha(26)));
+    let cr = CornerRadius::same(crate::theme::R_GLASS);
+    p.rect_stroke(r, cr, Stroke::new(1.0, Color32::from_white_alpha(theme::LIP)), egui::StrokeKind::Inside);
+    p.line_segment([r.left_top() + vec2(5.0, 1.5), r.right_top() + vec2(-5.0, 1.5)], Stroke::new(1.0, Color32::from_white_alpha(theme::LIP)));
 }
 
 #[cfg(test)]

@@ -197,9 +197,9 @@ pub fn list(app: &mut App, ui: &mut Ui, dir: &Directory, tally: egui::Color32, c
     let mut soon_only = ui.ctx().data(|d| d.get_temp::<bool>(soon_id)).unwrap_or(false);
     let scheduled = dir.stations.iter().any(|s| !s.schedule.is_empty());
     ui.horizontal(|ui| {
-        ui.label(RichText::new(dir.title).font(theme::mono_bold(11.0)).color(theme::text_2()));
+        ui.label(RichText::new(dir.title).font(theme::mono_bold(crate::theme::ty::SMALL)).color(theme::text_2()));
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            ui.label(RichText::new(format!("{} UTC", hhmm(utc_minute_now()))).font(theme::mono(10.5)).color(theme::text_3()));
+            ui.label(RichText::new(format!("{} UTC", hhmm(utc_minute_now()))).font(theme::mono(crate::theme::ty::LABEL)).color(theme::text_3()));
             if scheduled {
                 ui.spacing_mut().item_spacing.x = 3.0;
                 if widgets::chip_key(ui, "ON AIR", soon_only, theme::OK).on_hover_text("Only stations on the air now or due within the hour").clicked() {
@@ -216,7 +216,7 @@ pub fn list(app: &mut App, ui: &mut Ui, dir: &Directory, tally: egui::Color32, c
     if dir.dial_offset_hz != 0.0 {
         ui.label(
             RichText::new(format!("Published frequencies; the dial goes {:.1} kHz {}.", dir.dial_offset_hz.abs() / 1e3, if dir.dial_offset_hz < 0.0 { "below" } else { "above" }))
-                .font(theme::sans(11.0))
+                .font(theme::sans(crate::theme::ty::SMALL))
                 .color(theme::text_3()),
         );
     }
@@ -243,7 +243,7 @@ pub fn list(app: &mut App, ui: &mut Ui, dir: &Directory, tally: egui::Color32, c
             if region != Some(st.region) {
                 region = Some(st.region);
                 ui.add_space(4.0);
-                ui.label(RichText::new(st.region.label()).font(theme::mono(9.5)).color(theme::text_3()).extra_letter_spacing(0.8));
+                ui.label(RichText::new(st.region.label()).font(theme::mono(crate::theme::ty::MICRO)).color(theme::text_3()).extra_letter_spacing(0.8));
                 let y = ui.cursor().top();
                 ui.painter().line_segment([egui::pos2(ui.max_rect().left(), y), egui::pos2(ui.max_rect().right(), y)], egui::Stroke::new(1.0, theme::line()));
                 ui.add_space(3.0);
@@ -259,21 +259,21 @@ pub fn list(app: &mut App, ui: &mut Ui, dir: &Directory, tally: egui::Color32, c
                 next.map(|(s, d)| (format!("{} {}", hhmm(s.start_min), until(d)), theme::text_3(), s.title.to_string()))
             };
             ui.horizontal(|ui| {
-                ui.add_sized(vec2(CALL_W, 16.0), egui::Label::new(RichText::new(st.call).font(theme::mono_bold(11.5)).color(if here { tally } else { theme::text() })).truncate());
+                ui.add_sized(vec2(CALL_W, 16.0), egui::Label::new(RichText::new(st.call).font(theme::mono_bold(crate::theme::ty::VALUE)).color(if here { tally } else { theme::text() })).truncate());
                 let gap = 10.0;
                 let sched_w = sched.as_ref().map_or(0.0, |(t, ..)| {
-                    let w = ui.painter().layout_no_wrap(t.clone(), theme::mono(10.0), egui::Color32::PLACEHOLDER).size().x;
+                    let w = ui.painter().layout_no_wrap(t.clone(), theme::mono(crate::theme::ty::MICRO), egui::Color32::PLACEHOLDER).size().x;
                     w.min(ui.available_width() * 0.5) + gap
                 });
                 let name_w = (ui.available_width() - sched_w).max(40.0);
                 ui.allocate_ui_with_layout(vec2(name_w, 16.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
                     ui.set_width(name_w);
-                    ui.add(egui::Label::new(RichText::new(st.name).font(theme::sans(11.5)).color(theme::text_2())).truncate())
+                    ui.add(egui::Label::new(RichText::new(st.name).font(theme::sans(crate::theme::ty::VALUE)).color(theme::text_2())).truncate())
                         .on_hover_text(st.name);
                 });
                 if let Some((text, color, tip)) = sched {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.add(egui::Label::new(RichText::new(text).font(theme::mono(10.0)).color(color)).truncate()).on_hover_text(tip);
+                        ui.add(egui::Label::new(RichText::new(text).font(theme::mono(crate::theme::ty::MICRO)).color(color)).truncate()).on_hover_text(tip);
                     });
                 }
             });
@@ -305,17 +305,17 @@ pub fn list(app: &mut App, ui: &mut Ui, dir: &Directory, tally: egui::Color32, c
             if !st.note.is_empty() {
                 ui.horizontal(|ui| {
                     ui.add_space(CALL_W + ui.spacing().item_spacing.x);
-                    ui.add(egui::Label::new(RichText::new(st.note).font(theme::sans(10.5)).color(theme::text_3())).wrap());
+                    ui.add(egui::Label::new(RichText::new(st.note).font(theme::sans(crate::theme::ty::LABEL)).color(theme::text_3())).wrap());
                 });
             }
             ui.add_space(5.0);
         }
         if hidden > 0 {
             ui.add_space(4.0);
-            ui.label(RichText::new(format!("{hidden} more off the air for the next hour · ALL shows them")).font(theme::sans(10.5)).color(theme::text_3()));
+            ui.label(RichText::new(format!("{hidden} more off the air for the next hour · ALL shows them")).font(theme::sans(crate::theme::ty::LABEL)).color(theme::text_3()));
         }
         ui.add_space(4.0);
-        ui.label(RichText::new(dir.source).font(theme::sans(10.0)).color(theme::text_3()));
+        ui.label(RichText::new(dir.source).font(theme::sans(crate::theme::ty::MICRO)).color(theme::text_3()));
     });
     if let Some(khz) = pick {
         tune(app, dir, khz);
@@ -363,9 +363,9 @@ pub fn schedule_menu(app: &mut App, ui: &mut Ui, dir: &Directory, tally: egui::C
         ui.set_width(WIDTH + 60.0);
         let (day, now) = utc_now();
         ui.horizontal(|ui| {
-            ui.label(RichText::new(format!("{} · NEXT 3 HOURS", dir.title)).font(theme::mono_bold(11.0)).color(theme::text_2()));
+            ui.label(RichText::new(format!("{} · NEXT 3 HOURS", dir.title)).font(theme::mono_bold(crate::theme::ty::SMALL)).color(theme::text_2()));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.label(RichText::new(format!("{} UTC", hhmm(now))).font(theme::mono(10.5)).color(theme::text_3()));
+                ui.label(RichText::new(format!("{} UTC", hhmm(now))).font(theme::mono(crate::theme::ty::LABEL)).color(theme::text_3()));
             });
         });
         ui.add_space(4.0);
@@ -379,18 +379,18 @@ pub fn schedule_menu(app: &mut App, ui: &mut Ui, dir: &Directory, tally: egui::C
                 let r = ui
                     .horizontal(|ui| {
                         ui.set_min_height(18.0);
-                        ui.add_sized(vec2(40.0, 16.0), egui::Label::new(RichText::new(hhmm(sl.start_min)).font(theme::mono_bold(11.0)).color(theme::text())));
-                        ui.add_sized(vec2(64.0, 16.0), egui::Label::new(RichText::new(until(d).replace("in ", "")).font(theme::mono(10.0)).color(theme::text_3())));
-                        ui.add_sized(vec2(64.0, 16.0), egui::Label::new(RichText::new(st.call).font(theme::mono_bold(11.0)).color(tally)).truncate());
+                        ui.add_sized(vec2(40.0, 16.0), egui::Label::new(RichText::new(hhmm(sl.start_min)).font(theme::mono_bold(crate::theme::ty::SMALL)).color(theme::text())));
+                        ui.add_sized(vec2(64.0, 16.0), egui::Label::new(RichText::new(until(d).replace("in ", "")).font(theme::mono(crate::theme::ty::MICRO)).color(theme::text_3())));
+                        ui.add_sized(vec2(64.0, 16.0), egui::Label::new(RichText::new(st.call).font(theme::mono_bold(crate::theme::ty::SMALL)).color(tally)).truncate());
                         if let Some(k) = khz {
-                            ui.add_sized(vec2(58.0, 16.0), egui::Label::new(RichText::new(format!("{k:.1}")).font(theme::mono(10.5)).color(theme::AMBER)));
+                            ui.add_sized(vec2(58.0, 16.0), egui::Label::new(RichText::new(format!("{k:.1}")).font(theme::mono(crate::theme::ty::LABEL)).color(theme::AMBER)));
                         }
-                        ui.add(egui::Label::new(RichText::new(sl.title).font(theme::sans(11.0)).color(theme::text_2())).truncate());
+                        ui.add(egui::Label::new(RichText::new(sl.title).font(theme::sans(crate::theme::ty::SMALL)).color(theme::text_2())).truncate());
                     })
                     .response
                     .interact(egui::Sense::click());
                 if r.hovered() {
-                    ui.painter().rect_filled(r.rect, egui::CornerRadius::same(3), theme::alpha(tally, 0.08));
+                    ui.painter().rect_filled(r.rect, egui::CornerRadius::same(crate::theme::R_KEY), theme::alpha(tally, 0.08));
                 }
                 if r.on_hover_text(format!("{} · {}", st.name, st.call)).clicked()
                     && let Some(k) = khz
@@ -399,7 +399,7 @@ pub fn schedule_menu(app: &mut App, ui: &mut Ui, dir: &Directory, tally: egui::C
                 }
             }
             ui.add_space(4.0);
-            ui.label(RichText::new("Click a line to tune its station on a frequency it uses at that hour.").font(theme::sans(10.0)).color(theme::text_3()));
+            ui.label(RichText::new("Click a line to tune its station on a frequency it uses at that hour.").font(theme::sans(crate::theme::ty::MICRO)).color(theme::text_3()));
         });
         if let Some(k) = pick {
             tune(app, dir, k);

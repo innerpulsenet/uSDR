@@ -10,7 +10,7 @@ use egui::{RichText, Ui, vec2};
 use serde_json::json;
 
 fn small(t: impl Into<String>) -> RichText {
-    RichText::new(t).font(theme::mono(10.5)).color(theme::text_3())
+    RichText::new(t).font(theme::mono(crate::theme::ty::LABEL)).color(theme::text_3())
 }
 
 fn divider(ui: &mut Ui) {
@@ -40,7 +40,7 @@ pub fn toolbar(app: &mut App, ui: &mut Ui) {
         }
         // Padded to the widest zoom (32.0×), so + does not move under the
         // pointer as the zoom grows.
-        ui.label(RichText::new(format!("{:>5.1}×", app.zoom_ui.max(1.0))).font(theme::mono(10.5)).color(theme::text_2()));
+        ui.label(RichText::new(format!("{:>5.1}×", app.zoom_ui.max(1.0))).font(theme::mono(crate::theme::ty::LABEL)).color(theme::text_2()));
         if widgets::chip_key(ui, "+", false, theme::CYAN).on_hover_text("Zoom in (+)").clicked() {
             app.set_zoom(app.zoom_ui * 2.0);
         }

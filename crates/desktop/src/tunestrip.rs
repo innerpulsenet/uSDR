@@ -106,7 +106,7 @@ pub fn strip(app: &mut App, ui: &mut Ui, room: f32) {
         let need = 44.0 + if crate::stations::for_mode(mode).is_some() { 110.0 } else { 0.0 }
             + list.iter().map(|d| { let l = label_of(d); band_key_w(&l, ui.painter().layout_no_wrap(l.clone(), widgets::key_font(), egui::Color32::PLACEHOLDER).size().x) + gap }).sum::<f32>();
         let pick = if need <= room {
-            ui.label(RichText::new("BAND").font(theme::mono(9.5)).color(theme::text_3()));
+            ui.label(RichText::new("BAND").font(theme::mono(crate::theme::ty::MICRO)).color(theme::text_3()));
             keys(rx, ui, &list)
         } else {
             let here = list.iter().find(|d| (rx - d.hz).abs() < 50.0);
@@ -174,7 +174,7 @@ fn stations(app: &mut App, ui: &mut Ui, dir: &'static Directory, tally: egui::Co
         directory::tune(app, dir, k);
     }
     if tuned.is_none() && dir.stations.iter().all(|s| s.schedule.is_empty()) {
-        ui.label(RichText::new("pick a station").font(theme::mono(10.0)).color(theme::text_3()));
+        ui.label(RichText::new("pick a station").font(theme::mono(crate::theme::ty::MICRO)).color(theme::text_3()));
     }
 }
 

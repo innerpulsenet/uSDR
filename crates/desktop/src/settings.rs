@@ -121,7 +121,7 @@ pub fn window(app: &mut App, ctx: &egui::Context) {
                 ui.vertical(|ui| {
                     let page = app.settings_page;
                     ui.label(RichText::new(page.label()).font(theme::headline(15.0)).color(theme::text()));
-                    ui.label(RichText::new(page.blurb()).font(theme::sans(12.0)).color(theme::text_3()));
+                    ui.label(RichText::new(page.blurb()).font(theme::sans(crate::theme::ty::BODY)).color(theme::text_3()));
                     ui.add_space(6.0);
                     egui::ScrollArea::vertical().id_salt(("settings-page", page as u8)).auto_shrink([false, false]).show(ui, |ui| {
                         ui.set_width(ui.available_width() - 6.0);
@@ -162,18 +162,18 @@ fn rail(app: &mut App, ui: &mut Ui) {
     let idx = Page::ALL.iter().position(|p| *p == app.settings_page).unwrap_or(0) as f32;
     let y = if rm { idx } else { crate::anim::ease_value(ui.ctx(), egui::Id::new("settings-rail"), idx, crate::anim::SLIDE_S) };
     let lit = egui::Rect::from_min_size(pos2(outer.left() + 4.0, top + y * row_h), vec2(RAIL_W - 8.0, row_h - 2.0));
-    p.rect_filled(lit, CornerRadius::same(4), alpha(theme::AMBER, 0.12));
-    p.rect_filled(egui::Rect::from_min_size(lit.left_top() + vec2(0.0, 6.0), vec2(2.0, row_h - 14.0)), CornerRadius::same(1), theme::AMBER);
+    p.rect_filled(lit, CornerRadius::same(crate::theme::RADIUS), alpha(theme::AMBER, 0.12));
+    p.rect_filled(egui::Rect::from_min_size(lit.left_top() + vec2(0.0, 6.0), vec2(2.0, row_h - 14.0)), CornerRadius::same(crate::theme::R_CELL), theme::AMBER);
     for (i, page) in Page::ALL.into_iter().enumerate() {
         let r = egui::Rect::from_min_size(pos2(outer.left() + 4.0, top + i as f32 * row_h), vec2(RAIL_W - 8.0, row_h - 2.0));
         let resp = ui.interact(r, egui::Id::new(("settings-page-key", i)), Sense::click());
         let on = app.settings_page == page;
         resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, on, page.label()));
         if resp.hovered() && !on {
-            p.rect_filled(r, CornerRadius::same(4), alpha(theme::surface_4(), 0.5));
+            p.rect_filled(r, CornerRadius::same(crate::theme::RADIUS), alpha(theme::surface_4(), 0.5));
         }
         let c = if on { theme::text() } else if resp.hovered() { theme::text_2() } else { theme::text_3() };
-        p.text(pos2(r.left() + 14.0, r.center().y), Align2::LEFT_CENTER, page.label(), theme::mono(11.5), c);
+        p.text(pos2(r.left() + 14.0, r.center().y), Align2::LEFT_CENTER, page.label(), theme::mono(crate::theme::ty::VALUE), c);
         // A lamp on the Station page says how reporting is doing.
         if page == Page::Station
             && let Some((_, rep)) = &app.station
@@ -196,7 +196,7 @@ fn rail(app: &mut App, ui: &mut Ui) {
 
 fn section(ui: &mut Ui, title: &str) {
     ui.add_space(12.0);
-    theme::engraved(ui, &title.to_uppercase(), theme::mono(10.5), theme::text_3(), 1.2, Sense::hover());
+    theme::engraved(ui, &title.to_uppercase(), theme::mono(crate::theme::ty::LABEL), theme::text_3(), 1.2, Sense::hover());
     let r = ui.available_rect_before_wrap();
     ui.painter().line_segment([pos2(r.left(), r.top() + 2.0), pos2(r.right(), r.top() + 2.0)], Stroke::new(1.0, theme::line()));
     ui.add_space(8.0);
@@ -206,7 +206,7 @@ fn section(ui: &mut Ui, title: &str) {
 fn row<R>(ui: &mut Ui, label: &str, add: impl FnOnce(&mut Ui) -> R) -> R {
     ui.horizontal(|ui| {
         let (r, _) = ui.allocate_exact_size(vec2(LABEL_W, 22.0), Sense::hover());
-        ui.painter().text(pos2(r.left(), r.center().y), Align2::LEFT_CENTER, label, theme::sans(12.5), theme::text_2());
+        ui.painter().text(pos2(r.left(), r.center().y), Align2::LEFT_CENTER, label, theme::sans(crate::theme::ty::LEDE), theme::text_2());
         add(ui)
     })
     .inner
@@ -216,7 +216,7 @@ fn row<R>(ui: &mut Ui, label: &str, add: impl FnOnce(&mut Ui) -> R) -> R {
 fn note(ui: &mut Ui, text: impl Into<String>, color: egui::Color32) {
     ui.horizontal(|ui| {
         ui.add_space(LABEL_W + ui.spacing().item_spacing.x);
-        ui.add(egui::Label::new(RichText::new(text).font(theme::sans(11.5)).color(color)).wrap());
+        ui.add(egui::Label::new(RichText::new(text).font(theme::sans(crate::theme::ty::VALUE)).color(color)).wrap());
     });
 }
 
@@ -247,7 +247,7 @@ fn station_page(app: &mut App, ui: &mut Ui) {
         } else {
             "This server does not keep a station; it needs a newer uSDR server."
         };
-        ui.add(egui::Label::new(RichText::new(why).font(theme::sans(12.0)).color(theme::text_2())).wrap());
+        ui.add(egui::Label::new(RichText::new(why).font(theme::sans(crate::theme::ty::BODY)).color(theme::text_2())).wrap());
         return;
     };
     section(ui, "Station");
@@ -280,7 +280,7 @@ fn station_page(app: &mut App, ui: &mut Ui) {
         if let Some((lat, lon)) = grid_center(&app.station_form.grid) {
             let ns = if lat >= 0.0 { "N" } else { "S" };
             let ew = if lon >= 0.0 { "E" } else { "W" };
-            ui.label(RichText::new(format!("{:.2}° {ns}  {:.2}° {ew}", lat.abs(), lon.abs())).font(theme::mono(11.5)).color(theme::text_3()));
+            ui.label(RichText::new(format!("{:.2}° {ns}  {:.2}° {ew}", lat.abs(), lon.abs())).font(theme::mono(crate::theme::ty::VALUE)).color(theme::text_3()));
         }
         r
     });
@@ -294,7 +294,7 @@ fn station_page(app: &mut App, ui: &mut Ui) {
     ui.add_space(4.0);
     let r = row(ui, "Antenna", |ui| {
         let mut s = app.station_form.antenna.clone();
-        let r = ui.add(egui::TextEdit::singleline(&mut s).font(theme::sans(12.5)).desired_width(ui.available_width().min(320.0)).hint_text("optional, e.g. 40 m end-fed wire").char_limit(64));
+        let r = ui.add(egui::TextEdit::singleline(&mut s).font(theme::sans(crate::theme::ty::LEDE)).desired_width(ui.available_width().min(320.0)).hint_text("optional, e.g. 40 m end-fed wire").char_limit(64));
         if r.changed() {
             app.station_form.antenna = s;
             app.station_form.synced = false;
@@ -317,7 +317,7 @@ fn station_page(app: &mut App, ui: &mut Ui) {
             app.station_form = StationForm::from_station(&st);
         }
         if dirty {
-            ui.label(RichText::new("unsaved").font(theme::mono(10.5)).color(theme::WARN));
+            ui.label(RichText::new("unsaved").font(theme::mono(crate::theme::ty::LABEL)).color(theme::WARN));
         }
     });
 
@@ -325,7 +325,7 @@ fn station_page(app: &mut App, ui: &mut Ui) {
     let mut on = st.report_spots;
     let complete = parsed.as_ref().is_ok_and(|s| s.complete());
     if ui
-        .checkbox(&mut on, RichText::new("Report spots to PSKReporter, and WSPR to WSPRnet").font(theme::sans(12.5)))
+        .checkbox(&mut on, RichText::new("Report spots to PSKReporter, and WSPR to WSPRnet").font(theme::sans(crate::theme::ty::LEDE)))
         .on_hover_text("Each station heard goes on the map at pskreporter.info, with its signal report, under your callsign.")
         .changed()
     {
@@ -341,7 +341,7 @@ fn station_page(app: &mut App, ui: &mut Ui) {
             RichText::new(
                 "FT8, FT4, WSPR and JS8 decodes name their sender. In PSK31/63, RTTY, CW, Olivia and MFSK a station is reported only when it signs, as \"DE K1ABC K1ABC\" or \"CQ K1ABC K1ABC\". The server keeps one spot per station, band and mode and uploads every five minutes; a station is reported again within the hour only when its locator becomes known. WSPR decodes also go to WSPRnet as they are heard. Decodes the receiver hears while this app is closed are reported too.",
             )
-            .font(theme::sans(11.5))
+            .font(theme::sans(crate::theme::ty::VALUE))
             .color(theme::text_3()),
         )
         .wrap(),
@@ -356,14 +356,14 @@ fn reporter_card(app: &App, ui: &mut Ui, st: &Station, rep: &ReporterStatus, com
     egui::Frame::new()
         .fill(alpha(theme::ink(), 0.6))
         .stroke(Stroke::new(1.0, theme::line()))
-        .corner_radius(CornerRadius::same(5))
+        .corner_radius(CornerRadius::same(crate::theme::R_GLASS))
         .inner_margin(egui::Margin::same(12))
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
             ui.horizontal(|ui| {
                 widgets::chip(ui, tone, word);
                 if rep.state == ReporterState::Incomplete && complete {
-                    ui.label(RichText::new("save the fields above").font(theme::sans(11.5)).color(theme::text_3()));
+                    ui.label(RichText::new("save the fields above").font(theme::sans(crate::theme::ty::VALUE)).color(theme::text_3()));
                 }
             });
             ui.add_space(6.0);
@@ -371,7 +371,7 @@ fn reporter_card(app: &App, ui: &mut Ui, st: &Station, rep: &ReporterStatus, com
             let utc = |t: u64| format!("{:02}:{:02} UTC", (t / 3600) % 24, (t / 60) % 60);
             let stat = |ui: &mut Ui, k: &str, v: String| {
                 ui.vertical(|ui| {
-                    ui.label(RichText::new(k).font(theme::mono(9.5)).color(theme::text_3()).extra_letter_spacing(0.8));
+                    ui.label(RichText::new(k).font(theme::mono(crate::theme::ty::MICRO)).color(theme::text_3()).extra_letter_spacing(0.8));
                     ui.label(RichText::new(v).font(theme::mono_bold(13.0)).color(theme::text()));
                 });
                 ui.add_space(14.0);
@@ -393,13 +393,13 @@ fn reporter_card(app: &App, ui: &mut Ui, st: &Station, rep: &ReporterStatus, com
                 stat(ui, "WSPRNET", rep.wsprnet_sent.to_string());
             });
             if let Some(t) = rep.last_sent {
-                ui.label(RichText::new(format!("last upload {}", utc(t))).font(theme::mono(10.5)).color(theme::text_3()));
+                ui.label(RichText::new(format!("last upload {}", utc(t))).font(theme::mono(crate::theme::ty::LABEL)).color(theme::text_3()));
             }
             if let Some(e) = &rep.last_error {
-                ui.add(egui::Label::new(RichText::new(e).font(theme::mono(10.5)).color(theme::ERR)).wrap());
+                ui.add(egui::Label::new(RichText::new(e).font(theme::mono(crate::theme::ty::LABEL)).color(theme::ERR)).wrap());
             }
             if let Some(e) = &rep.wsprnet_error {
-                ui.add(egui::Label::new(RichText::new(format!("WSPRnet: {e}")).font(theme::mono(10.5)).color(theme::ERR)).wrap());
+                ui.add(egui::Label::new(RichText::new(format!("WSPRnet: {e}")).font(theme::mono(crate::theme::ty::LABEL)).color(theme::ERR)).wrap());
             }
             if rep.state != ReporterState::Off {
                 // The card counts down while it is open.
@@ -421,21 +421,21 @@ fn connection_page(app: &mut App, ui: &mut Ui) {
         Some(l) => {
             let base = l.base.clone();
             row(ui, "Address", |ui| {
-                ui.label(RichText::new(base).font(theme::mono(12.5)).color(theme::text()));
+                ui.label(RichText::new(base).font(theme::mono(crate::theme::ty::LEDE)).color(theme::text()));
                 if widgets::action_small(ui, "DISCONNECT").clicked() {
                     app.disconnect();
                 }
             });
         }
         None => {
-            row(ui, "Address", |ui| ui.label(RichText::new("not connected").font(theme::mono(12.0)).color(theme::text_3())));
+            row(ui, "Address", |ui| ui.label(RichText::new("not connected").font(theme::mono(crate::theme::ty::BODY)).color(theme::text_3())));
         }
     }
     ui.add_space(4.0);
     ui.checkbox(&mut app.prefs.auto_connect, "Connect to the last server on start");
 
     section(ui, "Web page on this server");
-    ui.add(egui::Label::new(RichText::new("What the browser page may do while this app is connected. Receiver state is shared either way: a change made in one shows in the other.").font(theme::sans(12.0)).color(theme::text_3())).wrap());
+    ui.add(egui::Label::new(RichText::new("What the browser page may do while this app is connected. Receiver state is shared either way: a change made in one shows in the other.").font(theme::sans(crate::theme::ty::BODY)).color(theme::text_3())).wrap());
     ui.add_space(4.0);
     let cur = app.presence.web;
     crate::widgets::enabled_or(ui, app.link.is_some(), "Connect to a server to change this", |ui| {
@@ -453,7 +453,7 @@ fn connection_page(app: &mut App, ui: &mut Ui) {
     });
     let web = app.presence.web_count();
     let desk = app.presence.desktop_count();
-    ui.label(RichText::new(format!("{web} web page(s) and {desk} app(s) connected now")).font(theme::mono(11.0)).color(theme::text_3()));
+    ui.label(RichText::new(format!("{web} web page(s) and {desk} app(s) connected now")).font(theme::mono(crate::theme::ty::SMALL)).color(theme::text_3()));
 }
 
 fn audio_page(app: &mut App, ui: &mut Ui) {
@@ -487,7 +487,7 @@ fn recordings_page(app: &mut App, ui: &mut Ui) {
     section(ui, "Folder");
     row(ui, "Save to", |ui| {
         let mut dir = app.prefs.record_dir().display().to_string();
-        if ui.add(egui::TextEdit::singleline(&mut dir).font(theme::mono(11.5)).desired_width((ui.available_width() - 90.0).max(160.0))).changed() {
+        if ui.add(egui::TextEdit::singleline(&mut dir).font(theme::mono(crate::theme::ty::VALUE)).desired_width((ui.available_width() - 90.0).max(160.0))).changed() {
             app.prefs.record_dir = Some(dir.into());
         }
         if widgets::action_small(ui, "CHOOSE…").clicked() {
@@ -541,15 +541,15 @@ fn interface_page(app: &mut App, ui: &mut Ui, ctx: &egui::Context) {
 
 fn about_page(app: &mut App, ui: &mut Ui) {
     section(ui, "This app");
-    row(ui, "Version", |ui| ui.label(RichText::new(format!("uSDR desktop {}", env!("CARGO_PKG_VERSION"))).font(theme::mono(12.0)).color(theme::text())));
+    row(ui, "Version", |ui| ui.label(RichText::new(format!("uSDR desktop {}", env!("CARGO_PKG_VERSION"))).font(theme::mono(crate::theme::ty::BODY)).color(theme::text())));
     section(ui, "Server");
     match &app.server {
         Some(s) => {
-            row(ui, "Version", |ui| ui.label(RichText::new(format!("{} {} · API {}", s.name, s.version, s.api)).font(theme::mono(12.0)).color(theme::text())));
-            row(ui, "Offers", |ui| ui.add(egui::Label::new(RichText::new(s.features.join(" · ")).font(theme::mono(11.0)).color(theme::text_2())).wrap()));
+            row(ui, "Version", |ui| ui.label(RichText::new(format!("{} {} · API {}", s.name, s.version, s.api)).font(theme::mono(crate::theme::ty::BODY)).color(theme::text())));
+            row(ui, "Offers", |ui| ui.add(egui::Label::new(RichText::new(s.features.join(" · ")).font(theme::mono(crate::theme::ty::SMALL)).color(theme::text_2())).wrap()));
         }
         None => {
-            row(ui, "Version", |ui| ui.label(RichText::new(if app.link.is_some() { "an older server" } else { "not connected" }).font(theme::mono(12.0)).color(theme::text_3())));
+            row(ui, "Version", |ui| ui.label(RichText::new(if app.link.is_some() { "an older server" } else { "not connected" }).font(theme::mono(crate::theme::ty::BODY)).color(theme::text_3())));
         }
     }
     ui.add_space(16.0);

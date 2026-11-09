@@ -21,7 +21,7 @@ pub fn connect_screen(app: &mut App, ui: &mut Ui) {
     egui::Frame::new()
         .fill(alpha(theme::plate(), 0.98))
         .stroke(egui::Stroke::new(1.0, theme::line_2()))
-        .corner_radius(egui::CornerRadius::same(6))
+        .corner_radius(egui::CornerRadius::same(crate::theme::R_WINDOW))
         .inner_margin(egui::Margin::same(24))
         .shadow(egui::Shadow { offset: [0, 18], blur: 40, spread: 0, color: egui::Color32::from_black_alpha(160) })
         .show(&mut child, |ui| {
@@ -37,7 +37,7 @@ pub fn connect_screen(app: &mut App, ui: &mut Ui) {
                 });
             });
             ui.add_space(14.0);
-            ui.label(RichText::new("SERVER").font(theme::mono(10.5)).color(theme::text_3()));
+            ui.label(RichText::new("SERVER").font(theme::mono(crate::theme::ty::LABEL)).color(theme::text_3()));
             let resp = ui.add(
                 egui::TextEdit::singleline(&mut app.connect_input)
                     .font(theme::mono(14.0))
@@ -49,9 +49,9 @@ pub fn connect_screen(app: &mut App, ui: &mut Ui) {
             let recent: Vec<String> = app.prefs.servers.iter().filter(|s| **s != app.connect_input).take(4).cloned().collect();
             if !recent.is_empty() {
                 ui.horizontal_wrapped(|ui| {
-                    ui.label(RichText::new("recent").font(theme::mono(10.5)).color(theme::text_3()));
+                    ui.label(RichText::new("recent").font(theme::mono(crate::theme::ty::LABEL)).color(theme::text_3()));
                     for s in recent {
-                        if ui.add(egui::Button::new(RichText::new(&s).font(theme::mono(11.0))).small()).clicked() {
+                        if ui.add(egui::Button::new(RichText::new(&s).font(theme::mono(crate::theme::ty::SMALL))).small()).clicked() {
                             app.connect_input = s;
                         }
                     }
@@ -68,7 +68,7 @@ pub fn connect_screen(app: &mut App, ui: &mut Ui) {
                     let s = app.connect_input.clone();
                     app.connect(&ctx, &s);
                 }
-                ui.checkbox(&mut app.prefs.auto_connect, RichText::new("Connect on start").font(theme::sans(12.0)));
+                ui.checkbox(&mut app.prefs.auto_connect, RichText::new("Connect on start").font(theme::sans(crate::theme::ty::BODY)));
             });
             ui.add_space(8.0);
             match &app.conn {
@@ -77,13 +77,13 @@ pub fn connect_screen(app: &mut App, ui: &mut Ui) {
                         Some(r) => format!("{r} · retrying"),
                         None => format!("connecting · attempt {attempt}"),
                     };
-                    ui.label(RichText::new(text).font(theme::mono(11.0)).color(theme::WARN));
+                    ui.label(RichText::new(text).font(theme::mono(crate::theme::ty::SMALL)).color(theme::WARN));
                 }
                 Conn::Idle => {
-                    ui.label(RichText::new("The radio stays with the server; this app streams its spectrum, audio and decodes.").font(theme::sans(12.0)).color(theme::text_3()));
+                    ui.label(RichText::new("The radio stays with the server; this app streams its spectrum, audio and decodes.").font(theme::sans(crate::theme::ty::BODY)).color(theme::text_3()));
                 }
                 Conn::Live => {
-                    ui.label(RichText::new("waiting for the receiver").font(theme::mono(11.0)).color(theme::text_2()));
+                    ui.label(RichText::new("waiting for the receiver").font(theme::mono(crate::theme::ty::SMALL)).color(theme::text_2()));
                 }
             }
         });
@@ -108,15 +108,15 @@ pub fn reconnect_veil(app: &mut App, ctx: &egui::Context) {
             egui::Frame::new()
                 .fill(alpha(theme::plate(), 0.97))
                 .stroke(egui::Stroke::new(1.0, alpha(theme::WARN, 0.5)))
-                .corner_radius(egui::CornerRadius::same(6))
+                .corner_radius(egui::CornerRadius::same(crate::theme::R_WINDOW))
                 .inner_margin(egui::Margin::symmetric(16, 10))
                 .show(ui, |ui| {
                     ui.horizontal(|ui| {
                         brand::mark(ui, 48.0, 2.4, rm);
                         ui.vertical(|ui| {
                             ui.label(RichText::new("Reconnecting").font(theme::headline(15.0)).color(theme::text()));
-                            ui.label(RichText::new(text).font(theme::mono(11.0)).color(theme::text_2()));
-                            ui.label(RichText::new("The display below is the last frame received.").font(theme::sans(11.5)).color(theme::text_3()));
+                            ui.label(RichText::new(text).font(theme::mono(crate::theme::ty::SMALL)).color(theme::text_2()));
+                            ui.label(RichText::new("The display below is the last frame received.").font(theme::sans(crate::theme::ty::VALUE)).color(theme::text_3()));
                         });
                     });
                 });
@@ -169,7 +169,7 @@ pub fn help_window(app: &mut App, ctx: &egui::Context) {
             ];
             egui::Grid::new("help").num_columns(2).spacing(vec2(18.0, 6.0)).show(ui, |ui| {
                 for (k, v) in rows {
-                    ui.label(RichText::new(*k).font(theme::mono(11.5)).color(theme::AMBER));
+                    ui.label(RichText::new(*k).font(theme::mono(crate::theme::ty::VALUE)).color(theme::AMBER));
                     ui.label(RichText::new(*v).color(theme::text_2()));
                     ui.end_row();
                 }
@@ -196,8 +196,8 @@ pub fn diagnostics_window(app: &mut App, ctx: &egui::Context) {
         .collapsible(false)
         .default_width(440.0)
         .show(ctx, |ui| {
-            let mono = |t: String| RichText::new(t).font(theme::mono(11.5)).color(theme::text());
-            let label = |t: &str| RichText::new(t).font(theme::sans(12.0)).color(theme::text_3());
+            let mono = |t: String| RichText::new(t).font(theme::mono(crate::theme::ty::VALUE)).color(theme::text());
+            let label = |t: &str| RichText::new(t).font(theme::sans(crate::theme::ty::BODY)).color(theme::text_3());
             egui::Grid::new("diag").num_columns(2).spacing(vec2(16.0, 4.0)).show(ui, |ui| {
                 ui.label(label("Server"));
                 ui.label(mono(match (&app.link, &app.server) {
@@ -238,7 +238,7 @@ pub fn diagnostics_window(app: &mut App, ctx: &egui::Context) {
                 ui.label(RichText::new(format!(
                     "{} dropped · {} lagged blocks · {} lost samples in {} gaps",
                     s.dropped_blocks, s.lagged_blocks, s.lost_samples, s.gap_events
-                )).font(theme::mono(11.5)).color(tone));
+                )).font(theme::mono(crate::theme::ty::VALUE)).color(tone));
                 ui.end_row();
                 if app.have_status {
                     let s = &app.status;
@@ -275,7 +275,7 @@ pub fn diagnostics_window(app: &mut App, ctx: &egui::Context) {
                     });
                 });
                 let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), 34.0), egui::Sense::hover());
-                ui.painter().rect_filled(r, egui::CornerRadius::same(3), theme::ink());
+                ui.painter().rect_filled(r, egui::CornerRadius::same(crate::theme::R_KEY), theme::ink());
                 if vals.len() > 1 && max > 0.0 {
                     let pts: Vec<egui::Pos2> = vals
                         .iter()

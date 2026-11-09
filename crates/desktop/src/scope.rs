@@ -447,7 +447,7 @@ impl Scope {
         let painter = ui.painter_at(rect);
         theme::well(ui.painter(), rect, None);
         let Some(live) = f else {
-            painter.text(rect.center(), Align2::CENTER_CENTER, "no signal yet", theme::sans(12.0), theme::text_3());
+            painter.text(rect.center(), Align2::CENTER_CENTER, "no signal yet", theme::sans(crate::theme::ty::BODY), theme::text_3());
             return;
         };
         let sub = self.sub_for(mode);
@@ -495,8 +495,8 @@ impl Scope {
             grid(&painter, right, 8, 4);
             self.eye(&painter, left, live, mode, wave_fresh);
             self.slicer(&painter, right, mode);
-            painter.text(pos2(left.left() + 4.0, text_y), Align2::LEFT_BOTTOM, &self.level_text, theme::mono(10.0), theme::text_2());
-            painter.text(pos2(right.right() - 4.0, text_y), Align2::RIGHT_BOTTOM, &self.time_text, theme::mono(10.0), theme::text_3());
+            painter.text(pos2(left.left() + 4.0, text_y), Align2::LEFT_BOTTOM, &self.level_text, theme::mono(crate::theme::ty::MICRO), theme::text_2());
+            painter.text(pos2(right.right() - 4.0, text_y), Align2::RIGHT_BOTTOM, &self.time_text, theme::mono(crate::theme::ty::MICRO), theme::text_3());
             return;
         }
 
@@ -532,10 +532,10 @@ impl Scope {
             }
             painter.rect_filled(Rect::from_min_max(pos2(x0, spec.top() + 1.0), pos2(x1, spec.bottom() - 1.0)), CornerRadius::ZERO, alpha(b.tone, 0.06));
             let pill = Rect::from_min_max(pos2(x0, ruler.top() + 2.0), pos2(x1, ruler.bottom() - 1.0));
-            painter.rect_filled(pill, CornerRadius::same(2), alpha(b.tone, 0.2));
+            painter.rect_filled(pill, CornerRadius::same(crate::theme::R_CAP), alpha(b.tone, 0.2));
             painter.line_segment([pos2(x0, pill.bottom()), pos2(x1, pill.bottom())], Stroke::new(1.0, alpha(b.tone, 0.7)));
             placed.push(pill);
-            let g = painter.layout_no_wrap(b.name.to_string(), theme::mono(10.0), b.tone);
+            let g = painter.layout_no_wrap(b.name.to_string(), theme::mono(crate::theme::ty::MICRO), b.tone);
             if g.size().x + 6.0 <= pill.width() && !tagged {
                 names.push(Rect::from_center_size(pill.center(), g.size()));
                 painter.galley(pill.center() - g.size() / 2.0, g, b.tone);
@@ -547,7 +547,7 @@ impl Scope {
             }
             let x = x_of(m.hz);
             crate::spectrum::dashed_v(&painter, x, spec.top() + 1.0, spec.bottom() - 1.0, alpha(theme::AMBER, 0.45));
-            let g = painter.layout_no_wrap(m.name.to_string(), theme::mono(10.0), theme::AMBER);
+            let g = painter.layout_no_wrap(m.name.to_string(), theme::mono(crate::theme::ty::MICRO), theme::AMBER);
             let r = Rect::from_center_size(pos2(x, ruler.center().y + 0.5), g.size());
             if r.left() >= ruler.left() && r.right() <= ruler.right() && !placed.iter().any(|p| p.intersects(r.expand(2.0))) {
                 painter.galley(r.min, g, alpha(theme::AMBER, 0.95));
@@ -572,7 +572,7 @@ impl Scope {
             for (hz, name) in order {
                 let x = x_of(*hz);
                 painter.line_segment([pos2(x, spec.top() + 1.0), pos2(x, spec.top() + 6.0)], Stroke::new(1.5, c));
-                let g = painter.layout_no_wrap(name.clone(), theme::mono(10.0), c);
+                let g = painter.layout_no_wrap(name.clone(), theme::mono(crate::theme::ty::MICRO), c);
                 let w = g.size().x;
                 let want = x - w / 2.0;
                 let mut left = want.max(ruler.left() + 2.0).max(last_right + 4.0);
@@ -587,7 +587,7 @@ impl Scope {
                 let r = Rect::from_min_size(pos2(left, ruler.center().y + 0.5 - g.size().y / 2.0), g.size());
                 let clear = !names.iter().any(|p| p.intersects(r.expand(2.0)));
                 if clear && r.right() <= ruler.right() - 2.0 && left - want <= w {
-                    painter.rect_filled(r.expand2(vec2(2.0, 0.0)), CornerRadius::same(2), theme::ink());
+                    painter.rect_filled(r.expand2(vec2(2.0, 0.0)), CornerRadius::same(crate::theme::R_CAP), theme::ink());
                     if (r.center().x - x).abs() > 1.5 {
                         painter.line_segment([pos2(r.center().x, r.bottom()), pos2(x, spec.top() + 1.0)], Stroke::new(1.0, alpha(c, 0.6)));
                     }
@@ -599,10 +599,10 @@ impl Scope {
                 }
             }
             if folded > 0 {
-                let g = painter.layout_no_wrap(format!("+{folded}"), theme::mono_bold(10.0), c);
+                let g = painter.layout_no_wrap(format!("+{folded}"), theme::mono_bold(crate::theme::ty::MICRO), c);
                 let r = Rect::from_min_size(pos2((last_right + 4.0).max(ruler.left() + 2.0), ruler.center().y + 0.5 - g.size().y / 2.0), g.size());
                 if r.right() <= ruler.right() - 2.0 && !names.iter().any(|p| p.intersects(r.expand(2.0))) {
-                    painter.rect(r.expand2(vec2(3.0, 0.0)), CornerRadius::same(2), alpha(c, 0.18), Stroke::new(1.0, alpha(c, 0.6)), egui::StrokeKind::Inside);
+                    painter.rect(r.expand2(vec2(3.0, 0.0)), CornerRadius::same(crate::theme::R_CAP), alpha(c, 0.18), Stroke::new(1.0, alpha(c, 0.6)), egui::StrokeKind::Inside);
                     painter.galley(r.min, g, c);
                 }
             }
@@ -616,11 +616,11 @@ impl Scope {
             let y = y_of(db);
             if y > spec.top() + 6.0 && y < spec.bottom() - 4.0 {
                 painter.line_segment([pos2(spec.left() + 1.0, y), pos2(spec.right() - 1.0, y)], Stroke::new(1.0, theme::line()));
-                painter.text(pos2(spec.left() - 4.0, y), Align2::RIGHT_CENTER, format!("{db:.0}"), theme::mono(10.0), theme::text_3());
+                painter.text(pos2(spec.left() - 4.0, y), Align2::RIGHT_CENTER, format!("{db:.0}"), theme::mono(crate::theme::ty::MICRO), theme::text_3());
             }
             db += step;
         }
-        painter.text(pos2(spec.left() - 4.0, spec.bottom() + 1.0), Align2::RIGHT_TOP, "dB", theme::mono(10.0), theme::text_3());
+        painter.text(pos2(spec.left() - 4.0, spec.bottom() + 1.0), Align2::RIGHT_TOP, "dB", theme::mono(crate::theme::ty::MICRO), theme::text_3());
         // Frequency ticks on a 1-2-5 step, labeled under the plot.
         let fstep = crate::spectrum::nice_step(f64::from(span.hi - span.lo), (spec.width() / 64.0).clamp(3.0, 8.0) as f64) as f32;
         let mut hz = (span.lo / fstep).ceil() * fstep;
@@ -630,7 +630,7 @@ impl Scope {
                 painter.line_segment([pos2(x, spec.top() + 1.0), pos2(x, spec.bottom() - 1.0)], Stroke::new(1.0, theme::line()));
             }
             let align = if x <= spec.left() + 1.0 { Align2::LEFT_TOP } else if x >= spec.right() - 12.0 { Align2::RIGHT_TOP } else { Align2::CENTER_TOP };
-            painter.text(pos2(x.clamp(spec.left(), spec.right()), spec.bottom() + 1.0), align, fmt_khz(hz, fstep, span.signed), theme::mono(10.0), theme::text_3());
+            painter.text(pos2(x.clamp(spec.left(), spec.right()), spec.bottom() + 1.0), align, fmt_khz(hz, fstep, span.signed), theme::mono(crate::theme::ty::MICRO), theme::text_3());
             hz += fstep;
         }
         // Peak hold first, faint, then the spectrum in the display's own style
@@ -670,8 +670,8 @@ impl Scope {
             }
             painter.rect_stroke(mini, egui::CornerRadius::ZERO, Stroke::new(1.0, theme::line()), egui::StrokeKind::Inside);
             let secs = MINI_H as f32 / self.rate_hz.max(1.0);
-            painter.text(pos2(mini.left() - 4.0, mini.top()), Align2::RIGHT_TOP, "now", theme::mono(10.0), theme::text_3());
-            painter.text(pos2(mini.left() - 4.0, mini.bottom()), Align2::RIGHT_BOTTOM, format!("−{secs:.0}s"), theme::mono(10.0), theme::text_3());
+            painter.text(pos2(mini.left() - 4.0, mini.top()), Align2::RIGHT_TOP, "now", theme::mono(crate::theme::ty::MICRO), theme::text_3());
+            painter.text(pos2(mini.left() - 4.0, mini.bottom()), Align2::RIGHT_BOTTOM, format!("−{secs:.0}s"), theme::mono(crate::theme::ty::MICRO), theme::text_3());
         }
         // The spectrum's readout: under the cursor while it is over the plot,
         // otherwise what the mode's bands measure.
@@ -698,17 +698,17 @@ impl Scope {
         // Cut at a field boundary to the left plot's width, so it never runs
         // into the time domain's readout.
         let mut parts: Vec<&str> = readout.split(" · ").collect();
-        let fits = |p: &[&str]| painter.layout_no_wrap(p.join(" · "), theme::mono(10.0), Color32::PLACEHOLDER).size().x <= left.width() - 6.0;
+        let fits = |p: &[&str]| painter.layout_no_wrap(p.join(" · "), theme::mono(crate::theme::ty::MICRO), Color32::PLACEHOLDER).size().x <= left.width() - 6.0;
         while parts.len() > 1 && !fits(&parts) {
             parts.pop();
         }
-        painter.text(pos2(left.left() + 4.0, text_y), Align2::LEFT_BOTTOM, parts.join(" · "), theme::mono(10.0), theme::text_2());
+        painter.text(pos2(left.left() + 4.0, text_y), Align2::LEFT_BOTTOM, parts.join(" · "), theme::mono(crate::theme::ty::MICRO), theme::text_2());
 
         // ---- right: time domain
         grid(&painter, right, 8, 4);
         self.oscilloscope(&painter, right, live, mode == Mode::Pager && sub == Sub::Disc, wave_fresh);
-        painter.text(pos2(right.left() + 4.0, text_y), Align2::LEFT_BOTTOM, &self.level_text, theme::mono(10.0), theme::text_2());
-        painter.text(pos2(right.right() - 4.0, text_y), Align2::RIGHT_BOTTOM, &self.time_text, theme::mono(10.0), theme::text_3());
+        painter.text(pos2(right.left() + 4.0, text_y), Align2::LEFT_BOTTOM, &self.level_text, theme::mono(crate::theme::ty::MICRO), theme::text_2());
+        painter.text(pos2(right.right() - 4.0, text_y), Align2::RIGHT_BOTTOM, &self.time_text, theme::mono(crate::theme::ty::MICRO), theme::text_3());
     }
 
     /// The spectrum bin nearest a frequency on the span.
@@ -774,7 +774,7 @@ impl Scope {
             for (lvl, name) in [(0.6, "+3"), (0.2, "+1"), (-0.2, "−1"), (-0.6, "−3")] {
                 let y = r.center().y - lvl * (r.height() / 2.0 - 4.0);
                 crate::spectrum::dashed_h(painter, r.left(), r.left() + r.width() * 0.76, y, alpha(theme::AMBER, 0.35));
-                painter.text(pos2(r.left() + r.width() * 0.77, y), Align2::LEFT_CENTER, name, theme::mono(10.0), alpha(theme::AMBER, 0.8));
+                painter.text(pos2(r.left() + r.width() * 0.77, y), Align2::LEFT_CENTER, name, theme::mono(crate::theme::ty::MICRO), alpha(theme::AMBER, 0.8));
             }
         }
         let to_screen = |p: &[f32; 2]| pos2(r.left() + p[0] * r.width(), r.center().y - p[1] * (r.height() / 2.0 - 4.0));
@@ -947,7 +947,7 @@ impl Scope {
         let cx = r.left() + r.width() * 0.25;
         painter.line_segment([pos2(cx - 6.0, r.center().y - open_h), pos2(cx + 6.0, r.center().y - open_h)], Stroke::new(1.5, theme::AMBER));
         painter.line_segment([pos2(cx - 6.0, r.center().y + open_h), pos2(cx + 6.0, r.center().y + open_h)], Stroke::new(1.5, theme::AMBER));
-        painter.text(pos2(cx + 8.0, r.center().y - open_h - 2.0), Align2::LEFT_BOTTOM, format!("EYE {:.0}%", self.eye_open), theme::mono(10.0), theme::AMBER);
+        painter.text(pos2(cx + 8.0, r.center().y - open_h - 2.0), Align2::LEFT_BOTTOM, format!("EYE {:.0}%", self.eye_open), theme::mono(crate::theme::ty::MICRO), theme::AMBER);
     }
 }
 
@@ -999,7 +999,7 @@ impl Scope {
         for (k, (l, h)) in levels.iter().zip(&self.hist).enumerate() {
             let y = y_of(*l);
             let w = h * 58.0;
-            painter.rect_filled(Rect::from_min_max(pos2(area.right() - 4.0 - w, y - 3.0), pos2(area.right() - 4.0, y + 3.0)), CornerRadius::same(1), alpha(level_color(n, k), 0.75));
+            painter.rect_filled(Rect::from_min_max(pos2(area.right() - 4.0 - w, y - 3.0), pos2(area.right() - 4.0, y + 3.0)), CornerRadius::same(crate::theme::R_CELL), alpha(level_color(n, k), 0.75));
         }
         // The dibit tape.
         let names: &[&str] = if n == 2 { &["1", "0"] } else { &["01", "00", "10", "11"] };
@@ -1012,7 +1012,7 @@ impl Scope {
                 pos2(tape.left() + 8.0 + i as f32 * 20.0, tape.center().y),
                 Align2::LEFT_CENTER,
                 names[(*k).min(n - 1)],
-                theme::mono(10.0),
+                theme::mono(crate::theme::ty::MICRO),
                 level_color(n, *k),
             );
         }

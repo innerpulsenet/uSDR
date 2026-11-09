@@ -99,7 +99,7 @@ fn window_key(ui: &mut Ui, glyph: Glyph, tip: &str, danger: bool) -> egui::Respo
             p.line_segment([pos2(m.x - d, m.y + 3.0), pos2(m.x + d, m.y + 3.0)], s);
         }
         Glyph::Maximize => {
-            p.rect_stroke(Rect::from_center_size(m, vec2(2.0 * d, 2.0 * d)), CornerRadius::same(1), s, egui::StrokeKind::Middle);
+            p.rect_stroke(Rect::from_center_size(m, vec2(2.0 * d, 2.0 * d)), CornerRadius::same(crate::theme::R_CELL), s, egui::StrokeKind::Middle);
         }
         Glyph::Restore => {
             let back = Rect::from_center_size(m + vec2(1.5, -1.5), vec2(2.0 * d - 2.0, 2.0 * d - 2.0));
@@ -108,7 +108,7 @@ fn window_key(ui: &mut Ui, glyph: Glyph, tip: &str, danger: bool) -> egui::Respo
             p.line_segment([back.left_top(), back.right_top()], s);
             p.line_segment([back.right_top(), back.right_bottom()], s);
             p.line_segment([back.right_bottom(), pos2(front.right(), back.bottom())], s);
-            p.rect_stroke(front, CornerRadius::same(1), s, egui::StrokeKind::Middle);
+            p.rect_stroke(front, CornerRadius::same(crate::theme::R_CELL), s, egui::StrokeKind::Middle);
         }
         Glyph::Close => {
             p.line_segment([m + vec2(-d, -d), m + vec2(d, d)], s);

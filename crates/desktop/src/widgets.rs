@@ -132,7 +132,7 @@ fn applet_opened<R>(ui: &mut Ui, id: &str, title: &str, first_open: bool, extra:
                 let pts = [vec2(-3.0, -4.0), vec2(3.0, 0.0), vec2(-3.0, 4.0)]
                     .map(|v| c + egui::emath::Rot2::from_angle(rot) * v);
                 ui.painter().add(egui::Shape::convex_polygon(pts.to_vec(), theme::text_3(), Stroke::NONE));
-                let label = theme::engraved(ui, &title.to_uppercase(), theme::mono(10.5), theme::text_2(), 1.2, Sense::click());
+                let label = theme::engraved(ui, &title.to_uppercase(), theme::mono(crate::theme::ty::LABEL), theme::text_2(), 1.2, Sense::click());
                 if resp.clicked() || label.clicked() {
                     open = !open;
                 }
@@ -225,15 +225,15 @@ pub fn menu_chip_fit<R>(ui: &mut Ui, label: &str, labels: &[&str], tally: Color3
 /// A menu chip that stays lit while what it chooses among is in use, as a
 /// `chip_key` is while its choice is.
 pub fn menu_chip_lit<R>(ui: &mut Ui, label: &str, labels: &[&str], tally: Color32, lit: bool, add: impl FnOnce(&mut Ui) -> R) -> Option<R> {
-    let galley = ui.painter().layout_no_wrap(format!("{label} ▾"), theme::mono_bold(10.5), Color32::PLACEHOLDER);
+    let galley = ui.painter().layout_no_wrap(format!("{label} ▾"), theme::mono_bold(crate::theme::ty::LABEL), Color32::PLACEHOLDER);
     let widest = labels
         .iter()
-        .map(|l| ui.painter().layout_no_wrap(format!("{l} ▾"), theme::mono_bold(10.5), Color32::PLACEHOLDER).size().x)
+        .map(|l| ui.painter().layout_no_wrap(format!("{l} ▾"), theme::mono_bold(crate::theme::ty::LABEL), Color32::PLACEHOLDER).size().x)
         .fold(galley.size().x, f32::max);
     let (rect, resp) = ui.allocate_exact_size(vec2(widest + 14.0, KEY_H_SMALL), Sense::click());
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, label));
     let open = egui::Popup::is_id_open(ui.ctx(), egui::Popup::default_response_id(&resp));
-    let (press, c) = paint_key(ui, &resp, rect, CornerRadius::same(3), open || lit, tally);
+    let (press, c) = paint_key(ui, &resp, rect, CornerRadius::same(crate::theme::R_KEY), open || lit, tally);
     ui.painter().galley(rect.center() - galley.size() / 2.0 + vec2(0.0, press), galley, c);
     egui::Popup::menu(&resp).show(add).map(|r| r.inner)
 }
@@ -244,7 +244,7 @@ pub fn menu_glyph<R>(ui: &mut Ui, glyph: &str, width: f32, add: impl FnOnce(&mut
     let (rect, resp) = ui.allocate_exact_size(vec2(width, KEY_H_SMALL), Sense::click());
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, glyph));
     let open = egui::Popup::is_id_open(ui.ctx(), egui::Popup::default_response_id(&resp));
-    let (press, c) = paint_key(ui, &resp, rect, CornerRadius::same(3), open, theme::AMBER);
+    let (press, c) = paint_key(ui, &resp, rect, CornerRadius::same(crate::theme::R_KEY), open, theme::AMBER);
     ui.painter().galley(rect.center() - galley.size() / 2.0 + vec2(0.0, press), galley, c);
     egui::Popup::menu(&resp).show(add).map(|r| r.inner)
 }
@@ -252,7 +252,7 @@ pub fn menu_glyph<R>(ui: &mut Ui, glyph: &str, width: f32, add: impl FnOnce(&mut
 /// A selector: the chosen value in mono with a chevron, opening a menu of
 /// the choices. The house take on a combo box.
 pub fn selector<R>(ui: &mut Ui, id: &str, text: &str, color: Color32, width: f32, add: impl FnOnce(&mut Ui) -> R) -> Option<R> {
-    let font = theme::mono(11.0);
+    let font = theme::mono(crate::theme::ty::SMALL);
     let w = if width > 0.0 { width } else { ui.painter().layout_no_wrap(text.to_owned(), font.clone(), Color32::PLACEHOLDER).size().x + 34.0 };
     let (rect, resp) = ui.allocate_exact_size(vec2(w, 24.0), Sense::click());
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, true, text));
@@ -260,7 +260,7 @@ pub fn selector<R>(ui: &mut Ui, id: &str, text: &str, color: Color32, width: f32
     let p = ui.painter();
     let shown = ellipsize(p, text, font.clone(), w - 30.0);
     p.text(pos2(rect.left() + 8.0, rect.center().y + press), Align2::LEFT_CENTER, shown, font, color);
-    p.text(pos2(rect.right() - 7.0, rect.center().y), Align2::RIGHT_CENTER, "▾", theme::mono(10.0), theme::text_3());
+    p.text(pos2(rect.right() - 7.0, rect.center().y), Align2::RIGHT_CENTER, "▾", theme::mono(crate::theme::ty::MICRO), theme::text_3());
     egui::Popup::menu(&resp).id(egui::Id::new(("selector", id))).width(w.max(160.0)).show(add).map(|r| r.inner)
 }
 
@@ -306,13 +306,13 @@ pub fn lcd_selector<R>(ui: &mut Ui, id: &str, caption: &str, value: &str, tint: 
     let lit = theme::lerp(theme::text(), tint, 0.28);
     let mut x = rect.left() + 8.0;
     if !caption.is_empty() {
-        let g = p.layout_no_wrap(caption.to_string(), theme::mono(9.5), alpha(lit, 0.5));
+        let g = p.layout_no_wrap(caption.to_string(), theme::mono(crate::theme::ty::MICRO), alpha(lit, 0.5));
         p.galley(pos2(x, rect.center().y - g.size().y / 2.0), g.clone(), alpha(lit, 0.5));
         x += g.size().x + 6.0;
     }
-    let v = ellipsize(&p, value, theme::mono_bold(12.0), rect.right() - 18.0 - x);
-    p.text(pos2(x, rect.center().y), Align2::LEFT_CENTER, v, theme::mono_bold(12.0), lit);
-    p.text(pos2(rect.right() - 8.0, rect.center().y), Align2::RIGHT_CENTER, "▾", theme::mono(10.0), alpha(lit, 0.45 + 0.4 * hover));
+    let v = ellipsize(&p, value, theme::mono_bold(crate::theme::ty::BODY), rect.right() - 18.0 - x);
+    p.text(pos2(x, rect.center().y), Align2::LEFT_CENTER, v, theme::mono_bold(crate::theme::ty::BODY), lit);
+    p.text(pos2(rect.right() - 8.0, rect.center().y), Align2::RIGHT_CENTER, "▾", theme::mono(crate::theme::ty::MICRO), alpha(lit, 0.45 + 0.4 * hover));
     crate::vfo::lcd_glass(&p, rect);
     if resp.hovered() {
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
@@ -325,7 +325,7 @@ pub fn lcd_selector<R>(ui: &mut Ui, id: &str, caption: &str, value: &str, tint: 
 pub fn numeric(ui: &mut Ui, value: &mut f64, range: std::ops::RangeInclusive<f64>, speed: f64, decimals: usize, width: f32) -> Response {
     ui.scope(|ui| {
         ui.style_mut().drag_value_text_style = egui::TextStyle::Monospace;
-        ui.style_mut().text_styles.insert(egui::TextStyle::Monospace, theme::mono(11.0));
+        ui.style_mut().text_styles.insert(egui::TextStyle::Monospace, theme::mono(crate::theme::ty::SMALL));
         ui.spacing_mut().interact_size.y = 24.0;
         ui.spacing_mut().button_padding = vec2(8.0, 4.0);
         ui.add_sized([width, 24.0], egui::DragValue::new(value).range(range).speed(speed).fixed_decimals(decimals))
@@ -352,7 +352,7 @@ fn action_sized(ui: &mut Ui, label: &str, pad: f32, height: f32, radius: u8) -> 
 const KEY_H_SMALL: f32 = 22.0;
 
 pub fn key_font() -> egui::FontId {
-    theme::mono_bold(10.5)
+    theme::mono_bold(crate::theme::ty::LABEL)
 }
 
 /// Draw `resp`'s key over `rect`: the one body every key has, its hover,
@@ -407,7 +407,7 @@ pub fn chip_key_named(ui: &mut Ui, label: &str, name: &str, on: bool, tally: Col
     let (rect, resp) = ui.allocate_exact_size(vec2(w, KEY_H_SMALL), Sense::click());
     let enabled = ui.is_enabled();
     resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, enabled, on, name));
-    let (press, c) = paint_key(ui, &resp, rect, CornerRadius::same(3), on, tally);
+    let (press, c) = paint_key(ui, &resp, rect, CornerRadius::same(crate::theme::R_KEY), on, tally);
     ui.painter().galley(rect.center() - galley.size() / 2.0 + vec2(0.0, press), galley, c);
     resp
 }
@@ -427,17 +427,17 @@ pub fn lcd_tag_in(ui: &mut Ui, text: &str, look: &crate::lcd::Look, lit: bool) -
 }
 
 fn lcd_tag_colored(ui: &mut Ui, text: &str, color: Color32, word: Color32, lit: bool) -> Response {
-    let font = theme::mono_bold(10.0);
+    let font = theme::mono_bold(crate::theme::ty::MICRO);
     let g = ui.painter().layout_no_wrap(text.to_string(), font, Color32::PLACEHOLDER);
     let (r, resp) = ui.allocate_exact_size(vec2(g.size().x + 10.0, 16.0), Sense::click());
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, text));
     let p = ui.painter();
     if lit {
-        p.rect_filled(r.expand(1.5), CornerRadius::same(3), alpha(color, 0.14));
-        p.rect_filled(r, CornerRadius::same(2), alpha(color, 0.88));
+        p.rect_filled(r.expand(1.5), CornerRadius::same(crate::theme::R_KEY), alpha(color, 0.14));
+        p.rect_filled(r, CornerRadius::same(crate::theme::R_CAP), alpha(color, 0.88));
         p.galley(r.center() - g.size() / 2.0, g, word);
     } else {
-        p.rect_stroke(r, CornerRadius::same(2), Stroke::new(1.0, alpha(color, 0.18)), egui::StrokeKind::Inside);
+        p.rect_stroke(r, CornerRadius::same(crate::theme::R_CAP), Stroke::new(1.0, alpha(color, 0.18)), egui::StrokeKind::Inside);
         p.galley(r.center() - g.size() / 2.0, g, alpha(color, 0.38));
     }
     resp
@@ -448,7 +448,7 @@ fn lcd_tag_colored(ui: &mut Ui, text: &str, color: Color32, word: Color32, lit: 
 pub fn step_chip(ui: &mut Ui, wider: bool, enabled: bool) -> Response {
     let (rect, resp) = ui.allocate_exact_size(vec2(20.0, KEY_H_SMALL), if enabled { Sense::click() } else { Sense::hover() });
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, if wider { "wider" } else { "narrower" }));
-    let (press, c) = paint_key(ui, &resp, rect, CornerRadius::same(3), false, theme::AMBER);
+    let (press, c) = paint_key(ui, &resp, rect, CornerRadius::same(crate::theme::R_KEY), false, theme::AMBER);
     let c = if enabled { c } else { theme::text_3() };
     let p = ui.painter();
     let (x, y, d) = (rect.center().x, rect.center().y + press, if wider { 1.0 } else { -1.0 });
@@ -467,7 +467,7 @@ pub fn primary(ui: &mut Ui, label: &str) -> Response {
     // Amber, the house accent: crimson stays for recording, live and
     // destructive keys, so a SAVE or Connect never reads as a stop.
     let text = Color32::from_rgb(0x1e, 0x14, 0x06);
-    let galley = ui.painter().layout_no_wrap(label.to_uppercase(), theme::mono_bold(11.5), text);
+    let galley = ui.painter().layout_no_wrap(label.to_uppercase(), theme::mono_bold(crate::theme::ty::VALUE), text);
     let (rect, resp) = ui.allocate_exact_size(vec2(galley.size().x + 32.0, 32.0), Sense::click());
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, label));
     let hover = crate::anim::ease_bool(ui.ctx(), resp.id.with("hv"), resp.hovered(), crate::anim::HOVER_S);
@@ -525,23 +525,23 @@ impl<F: Fn(f64) -> String> Fader<'_, F> {
         let track = if bare {
             Rect::from_min_max(pos2(rect.left() + 6.0, rect.center().y - 3.0), pos2(rect.right() - 6.0, rect.center().y + 3.0))
         } else if compact {
-            let lw = p.layout_no_wrap(self.label.to_string(), theme::mono(10.5), theme::text_3()).size().x;
+            let lw = p.layout_no_wrap(self.label.to_string(), theme::mono(crate::theme::ty::LABEL), theme::text_3()).size().x;
             // Room for the widest the readout gets over the range, no more,
             // and the value set just after the track's end, so a short
             // reading sits by the thumb rather than across a gap.
-            let width_of = |t: String| p.layout_no_wrap(t, theme::mono_bold(11.0), theme::text()).size().x;
+            let width_of = |t: String| p.layout_no_wrap(t, theme::mono_bold(crate::theme::ty::SMALL), theme::text()).size().x;
             let vw = width_of(value_text.clone()).max(width_of((self.text)(self.min))).max(width_of((self.text)(self.max)));
-            p.text(pos2(rect.left(), rect.center().y), Align2::LEFT_CENTER, self.label, theme::mono(10.5), alpha(theme::text_3(), a));
+            p.text(pos2(rect.left(), rect.center().y), Align2::LEFT_CENTER, self.label, theme::mono(crate::theme::ty::LABEL), alpha(theme::text_3(), a));
             let track = Rect::from_min_max(pos2(rect.left() + lw + 10.0, rect.center().y - 3.0), pos2(rect.right() - vw - 8.0, rect.center().y + 3.0));
-            p.text(pos2(track.right() + 8.0, rect.center().y), Align2::LEFT_CENTER, &value_text, theme::mono_bold(11.0), alpha(self.color, a.max(0.7)));
+            p.text(pos2(track.right() + 8.0, rect.center().y), Align2::LEFT_CENTER, &value_text, theme::mono_bold(crate::theme::ty::SMALL), alpha(self.color, a.max(0.7)));
             track
         } else {
-            p.text(rect.left_top(), Align2::LEFT_TOP, self.label, theme::mono(10.5), alpha(theme::text_3(), a));
-            p.text(rect.right_top(), Align2::RIGHT_TOP, &value_text, theme::mono_bold(11.5), alpha(self.color, a.max(0.7)));
+            p.text(rect.left_top(), Align2::LEFT_TOP, self.label, theme::mono(crate::theme::ty::LABEL), alpha(theme::text_3(), a));
+            p.text(rect.right_top(), Align2::RIGHT_TOP, &value_text, theme::mono_bold(crate::theme::ty::VALUE), alpha(self.color, a.max(0.7)));
             Rect::from_min_max(pos2(rect.left() + 4.0, rect.top() + 18.0), pos2(rect.right() - 4.0, rect.top() + 24.0))
         };
-        p.rect(track, CornerRadius::same(2), theme::ink(), Stroke::new(1.0, Color32::from_black_alpha(200)), egui::StrokeKind::Outside);
-        p.line_segment([pos2(track.left() + 2.0, track.bottom() + 1.5), pos2(track.right() - 2.0, track.bottom() + 1.5)], Stroke::new(1.0, Color32::from_white_alpha(26)));
+        p.rect(track, CornerRadius::same(crate::theme::R_CAP), theme::ink(), Stroke::new(1.0, Color32::from_black_alpha(200)), egui::StrokeKind::Outside);
+        p.line_segment([pos2(track.left() + 2.0, track.bottom() + 1.5), pos2(track.right() - 2.0, track.bottom() + 1.5)], Stroke::new(1.0, Color32::from_white_alpha(theme::LIP)));
         let span = (self.max - self.min).max(1e-9);
         let t = ((*self.value - self.min) / span).clamp(0.0, 1.0) as f32;
         let fill = Rect::from_min_max(track.min, pos2(track.left() + track.width() * t, track.bottom()));
@@ -560,7 +560,7 @@ impl<F: Fn(f64) -> String> Fader<'_, F> {
             let x = track.left() + track.width() * f;
             p.line_segment([pos2(x, track.bottom() + 2.0), pos2(x, track.bottom() + 5.0)], Stroke::new(1.0, theme::text_3()));
             let align = if *f <= 0.0 { Align2::LEFT_TOP } else if *f >= 1.0 { Align2::RIGHT_TOP } else { Align2::CENTER_TOP };
-            p.text(pos2(x, track.bottom() + 6.0), align, label, theme::mono(10.0), theme::text_3());
+            p.text(pos2(x, track.bottom() + 6.0), align, label, theme::mono(crate::theme::ty::MICRO), theme::text_3());
         }
         let mut changed = false;
         if let Some(pos) = resp.interact_pointer_pos()
@@ -635,12 +635,12 @@ pub fn tone_color(tone: Tone) -> Color32 {
 
 pub fn chip(ui: &mut Ui, tone: Tone, text: &str) -> Response {
     let (c, _, _) = tone_look(tone);
-    let g = ui.painter().layout_no_wrap(text.to_owned(), theme::mono(10.5), c);
+    let g = ui.painter().layout_no_wrap(text.to_owned(), theme::mono(crate::theme::ty::LABEL), c);
     let lamp_w = 13.0;
     let (rect, resp) = ui.allocate_exact_size(g.size() + vec2(12.0 + lamp_w, 6.0), Sense::hover());
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, text));
     let p = ui.painter();
-    p.rect(rect, CornerRadius::same(3), alpha(c, 0.08), Stroke::new(1.0, alpha(c, 0.5)), egui::StrokeKind::Inside);
+    p.rect(rect, CornerRadius::same(crate::theme::R_KEY), alpha(c, 0.08), Stroke::new(1.0, alpha(c, 0.5)), egui::StrokeKind::Inside);
     let at = pos2(rect.left() + 6.0 + 4.0, rect.center().y);
     tone_lamp(ui, at, tone);
     p.galley(pos2(rect.left() + 6.0 + lamp_w, rect.top() + 3.0), g, c);
@@ -677,7 +677,7 @@ fn tone_lamp(ui: &Ui, at: egui::Pos2, tone: Tone) {
 pub fn lamp_label(ui: &mut Ui, tone: Tone, text: &str) -> Response {
     let (c, _, _) = tone_look(tone);
     let color = if matches!(tone, Tone::Ok | Tone::Idle) { theme::text_2() } else { c };
-    let g = ui.painter().layout_no_wrap(text.to_owned(), theme::mono(10.5), Color32::PLACEHOLDER);
+    let g = ui.painter().layout_no_wrap(text.to_owned(), theme::mono(crate::theme::ty::LABEL), Color32::PLACEHOLDER);
     let (rect, resp) = ui.allocate_exact_size(g.size() + vec2(13.0, 4.0), Sense::hover());
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, text));
     tone_lamp(ui, pos2(rect.left() + 4.0, rect.center().y), tone);
@@ -687,7 +687,7 @@ pub fn lamp_label(ui: &mut Ui, tone: Tone, text: &str) -> Response {
 
 /// A word on a small LCD let into the plate, at least `min_w` wide.
 pub fn lcd_text(ui: &mut Ui, text: &str, color: Color32, look: &crate::lcd::Look, min_w: f32) -> Response {
-    let font = theme::mono_bold(11.0);
+    let font = theme::mono_bold(crate::theme::ty::SMALL);
     let g = ui.painter().layout_no_wrap(text.to_owned(), font, color);
     let (rect, resp) = ui.allocate_exact_size(vec2((g.size().x + 16.0).max(min_w), 24.0), Sense::click());
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, text));
@@ -719,7 +719,7 @@ pub fn spinner(ui: &mut Ui, size: f32, color: Color32) {
 /// palette, the color its trace takes when it has one, and the name, lit
 /// when it is the one in use. Clicked chooses it.
 pub fn swatch_item(ui: &mut Ui, label: &str, palette: crate::colormap::Colormap, trace: Option<Color32>, on: bool) -> Response {
-    let font = theme::sans(12.5);
+    let font = theme::sans(crate::theme::ty::LEDE);
     let g = ui.painter().layout_no_wrap(label.to_owned(), font, Color32::PLACEHOLDER);
     let dot_w = if trace.is_some() { 14.0 } else { 0.0 };
     let w = ui.available_width().max(dot_w + 56.0 + 8.0 + g.size().x + 16.0);
@@ -728,7 +728,7 @@ pub fn swatch_item(ui: &mut Ui, label: &str, palette: crate::colormap::Colormap,
     let hover = crate::anim::ease_bool(ui.ctx(), resp.id.with("hv"), resp.hovered(), crate::anim::HOVER_S);
     let p = ui.painter();
     if on || hover > 0.0 {
-        p.rect_filled(rect, CornerRadius::same(3), if on { alpha(theme::AMBER, 0.14 + 0.06 * hover) } else { alpha(theme::surface_4(), 0.8 * hover) });
+        p.rect_filled(rect, CornerRadius::same(crate::theme::R_KEY), if on { alpha(theme::AMBER, 0.14 + 0.06 * hover) } else { alpha(theme::surface_4(), 0.8 * hover) });
     }
     let mut x = rect.left() + 6.0;
     if let Some(c) = trace {

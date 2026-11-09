@@ -35,7 +35,7 @@ fn skirt_hz(shape: Option<FilterShape>, width: f32) -> f32 {
 #[allow(clippy::too_many_arguments)]
 pub fn show(ui: &mut Ui, height: f32, lo: f32, hi: f32, range: &FilterRange, shape: Option<FilterShape>, look: &Look, (edges, width): (&str, &str), around: &dyn Fn(f32) -> (f32, f32)) -> Option<(f32, f32)> {
     let tint = look.accent;
-    let (edge_font, width_font) = (crate::theme::mono(9.0), crate::theme::mono_bold(11.0));
+    let (edge_font, width_font) = (crate::theme::mono(crate::theme::ty::MICRO), crate::theme::mono_bold(crate::theme::ty::SMALL));
     let tw = |t: &str, f: &egui::FontId| ui.painter().layout_no_wrap(t.into(), f.clone(), Color32::PLACEHOLDER).size().x;
     let rw = tw(edges, &edge_font).max(tw(width, &width_font)).max(30.0);
     let w = ui.available_width();

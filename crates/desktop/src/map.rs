@@ -234,7 +234,7 @@ pub fn show(app: &mut App, ui: &mut Ui) {
         if widgets::action_small(ui, "ATLANTIC").clicked() {
             v = MapView { layers: v.layers, ..MapView::default() };
         }
-        ui.label(RichText::new("drag to pan · scroll to zoom · click a mark to open its decode").font(theme::mono(10.0)).color(theme::text_3()));
+        ui.label(RichText::new("drag to pan · scroll to zoom · click a mark to open its decode").font(theme::mono(crate::theme::ty::MICRO)).color(theme::text_3()));
     });
     ui.add_space(4.0);
     let (marks, tracks) = gather(app, v.layers);
@@ -262,7 +262,7 @@ pub fn show(app: &mut App, ui: &mut Ui) {
         pos2(rect.center().x + dl * scale, rect.center().y - (lat - v.lat) * scale)
     };
     let p = ui.painter_at(rect);
-    p.rect_filled(rect, egui::CornerRadius::same(4), theme::ink());
+    p.rect_filled(rect, egui::CornerRadius::same(crate::theme::RADIUS), theme::ink());
     // The grid: every 30 degrees, the equator a little brighter.
     for k in -6..=6 {
         let lon = k as f32 * 30.0;
@@ -312,9 +312,9 @@ pub fn show(app: &mut App, ui: &mut Ui) {
         count(&|m| m.kind == Kind::Station),
         count(&|m| m.kind == Kind::Ground { heard: true })
     );
-    let summary_g = p.layout_no_wrap(summary, theme::mono(10.0), theme::text_2());
+    let summary_g = p.layout_no_wrap(summary, theme::mono(crate::theme::ty::MICRO), theme::text_2());
     let tag = Rect::from_min_size(rect.left_bottom() + vec2(8.0, -summary_g.size().y - 12.0), summary_g.size() + vec2(10.0, 6.0));
-    let credit_g = p.layout_no_wrap("coastline: Natural Earth".into(), theme::mono(9.0), theme::text_3());
+    let credit_g = p.layout_no_wrap("coastline: Natural Earth".into(), theme::mono(crate::theme::ty::MICRO), theme::text_3());
     let credit = Rect::from_min_size(rect.right_bottom() - credit_g.size() - vec2(18.0, 12.0), credit_g.size() + vec2(10.0, 6.0));
     let mut taken: Vec<Rect> = vec![tag, credit];
     let mut label = |p: &egui::Painter, q: Pos2, text: &str, font: egui::FontId, c: Color32| {
@@ -361,15 +361,15 @@ pub fn show(app: &mut App, ui: &mut Ui) {
             }
             Kind::Ground { heard } => {
                 let r = egui::Rect::from_center_size(q, vec2(7.0, 7.0));
-                p.rect_stroke(r, egui::CornerRadius::same(1), Stroke::new(1.5, c), egui::StrokeKind::Middle);
+                p.rect_stroke(r, egui::CornerRadius::same(crate::theme::R_CELL), Stroke::new(1.5, c), egui::StrokeKind::Middle);
                 if heard {
-                    label(&p, q, &m.label, theme::mono(9.5), c);
+                    label(&p, q, &m.label, theme::mono(crate::theme::ty::MICRO), c);
                 }
             }
             Kind::Home => {
                 p.circle_filled(q, 4.0, c);
                 p.circle_stroke(q, 7.0, Stroke::new(1.0, c));
-                label(&p, q, &m.label, theme::mono_bold(10.0), c);
+                label(&p, q, &m.label, theme::mono_bold(crate::theme::ty::MICRO), c);
             }
         }
         if let Some(h) = hover {
@@ -404,11 +404,11 @@ pub fn show(app: &mut App, ui: &mut Ui) {
         }
         let tip_pos = at(m.lat, m.lon);
         egui::Tooltip::always_open(ui.ctx().clone(), ui.layer_id(), egui::Id::new("map-tip"), egui::PopupAnchor::Position(tip_pos + vec2(10.0, 10.0))).show(|ui| {
-            ui.label(RichText::new(&m.label).font(theme::mono_bold(12.0)).color(theme::text()));
-            ui.add(egui::Label::new(RichText::new(&m.detail).font(theme::mono(10.5)).color(theme::text_2())).wrap());
-            ui.label(RichText::new(format!("{:.2}°, {:.2}°", m.lat, m.lon)).font(theme::mono(10.0)).color(theme::text_3()));
+            ui.label(RichText::new(&m.label).font(theme::mono_bold(crate::theme::ty::BODY)).color(theme::text()));
+            ui.add(egui::Label::new(RichText::new(&m.detail).font(theme::mono(crate::theme::ty::LABEL)).color(theme::text_2())).wrap());
+            ui.label(RichText::new(format!("{:.2}°, {:.2}°", m.lat, m.lon)).font(theme::mono(crate::theme::ty::MICRO)).color(theme::text_3()));
             if !path_text.is_empty() {
-                ui.label(RichText::new(path_text).font(theme::mono(10.0)).color(theme::AMBER));
+                ui.label(RichText::new(path_text).font(theme::mono(crate::theme::ty::MICRO)).color(theme::AMBER));
             }
         });
         if resp.clicked()
@@ -420,11 +420,11 @@ pub fn show(app: &mut App, ui: &mut Ui) {
             app.dock_tab = crate::app::DockTab::Decodes;
         }
     }
-    p.rect_filled(tag, egui::CornerRadius::same(3), alpha(theme::ink(), 0.8));
+    p.rect_filled(tag, egui::CornerRadius::same(crate::theme::R_KEY), alpha(theme::ink(), 0.8));
     p.galley(tag.min + vec2(5.0, 3.0), summary_g, theme::text_2());
-    p.rect_filled(credit, egui::CornerRadius::same(3), alpha(theme::ink(), 0.8));
+    p.rect_filled(credit, egui::CornerRadius::same(crate::theme::R_KEY), alpha(theme::ink(), 0.8));
     p.galley(credit.min + vec2(5.0, 3.0), credit_g, theme::text_3());
-    p.rect_stroke(rect, egui::CornerRadius::same(4), Stroke::new(1.0, theme::line()), egui::StrokeKind::Inside);
+    p.rect_stroke(rect, egui::CornerRadius::same(crate::theme::RADIUS), Stroke::new(1.0, theme::line()), egui::StrokeKind::Inside);
     app.map = v;
 }
 

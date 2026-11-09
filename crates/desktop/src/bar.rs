@@ -15,7 +15,7 @@ use usdr_proto::{FilterShape, Mode};
 const B_MODES: [Mode; 5] = [Mode::Nfm, Mode::Am, Mode::Usb, Mode::Lsb, Mode::Wfm];
 
 fn small(t: impl Into<String>) -> RichText {
-    RichText::new(t).font(theme::mono(10.5)).color(theme::text_3())
+    RichText::new(t).font(theme::mono(crate::theme::ty::LABEL)).color(theme::text_3())
 }
 
 /// The key row under the LCD, and the gap between them.
@@ -61,7 +61,7 @@ fn zones(w: f32, digits: f32) -> Zones {
 
 /// A caption printed on the LCD.
 fn caption(t: impl Into<String>, look: &crate::lcd::Look) -> RichText {
-    RichText::new(t).font(theme::mono(9.5)).color(look.caption).extra_letter_spacing(1.0)
+    RichText::new(t).font(theme::mono(crate::theme::ty::MICRO)).color(look.caption).extra_letter_spacing(1.0)
 }
 
 pub fn receiver_bar(app: &mut App, ui: &mut Ui) {
@@ -127,7 +127,7 @@ fn rx(app: &mut App, lcd: &mut Ui, keys: &mut Ui, look: crate::lcd::Look, band_h
         (true, true) => "A ON",
         (true, false) => "B ON",
     };
-    lcd.label(RichText::new(other).font(theme::mono(10.0)).color(alpha(lit, if has_b { 0.8 } else { 0.32 })));
+    lcd.label(RichText::new(other).font(theme::mono(crate::theme::ty::MICRO)).color(alpha(lit, if has_b { 0.8 } else { 0.32 })));
     keys.spacing_mut().item_spacing.x = 3.0;
     let half = (keys.available_width() - 3.0) / 2.0;
     if widgets::chip_key_w(keys, "A", !is_b, theme::AMBER, half).on_hover_text("Drive receiver A (B toggles)").clicked() {
@@ -245,7 +245,7 @@ fn tuning(app: &mut App, lcd: &mut Ui, keys: &mut Ui, look: crate::lcd::Look, ba
     lcd.horizontal(|ui| {
         ui.label(caption("STEP", &look));
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            ui.label(RichText::new(word).font(theme::mono(10.0)).color(lit));
+            ui.label(RichText::new(word).font(theme::mono(crate::theme::ty::MICRO)).color(lit));
         });
     });
     let font = theme::mono_bold(if band_h > 100.0 { 34.0 } else { 26.0 });
@@ -253,8 +253,8 @@ fn tuning(app: &mut App, lcd: &mut Ui, keys: &mut Ui, look: crate::lcd::Look, ba
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, true, format!("{word} {value}")));
     let p = lcd.painter();
     let shown = p.text(rect.left_center(), egui::Align2::LEFT_CENTER, &value, font, lit);
-    let unit = p.text(egui::pos2(shown.right() + 5.0, rect.center().y + 6.0), egui::Align2::LEFT_CENTER, "Hz", theme::mono(10.0), alpha(lit, 0.66));
-    p.text(egui::pos2(unit.right() + 5.0, unit.center().y), egui::Align2::LEFT_CENTER, "▾", theme::mono(11.0), alpha(lit, if resp.hovered() { 1.0 } else { 0.66 }));
+    let unit = p.text(egui::pos2(shown.right() + 5.0, rect.center().y + 6.0), egui::Align2::LEFT_CENTER, "Hz", theme::mono(crate::theme::ty::MICRO), alpha(lit, 0.66));
+    p.text(egui::pos2(unit.right() + 5.0, unit.center().y), egui::Align2::LEFT_CENTER, "▾", theme::mono(crate::theme::ty::SMALL), alpha(lit, if resp.hovered() { 1.0 } else { 0.66 }));
     if resp.hovered() {
         lcd.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
     }
@@ -461,7 +461,7 @@ fn modes(app: &mut App, lcd: &mut Ui, keys: &mut Ui, look: crate::lcd::Look, ban
         }
     });
     if b.is_some() {
-        lcd.add(egui::Label::new(RichText::new(B_NOTE).font(theme::mono(9.5)).color(alpha(lit, 0.66))).truncate());
+        lcd.add(egui::Label::new(RichText::new(B_NOTE).font(theme::mono(crate::theme::ty::MICRO)).color(alpha(lit, 0.66))).truncate());
     } else if width >= 170.0 {
         // Printed on the glass, the family lit; the keys under it are what
         // a screen reader finds.
@@ -469,7 +469,7 @@ fn modes(app: &mut App, lcd: &mut Ui, keys: &mut Ui, look: crate::lcd::Look, ban
         let p = lcd.painter();
         let mut x = row.left();
         for (name, on) in VOICE.iter().map(|m| (m.label(), *m == cur)).chain([("DATA", data)]) {
-            x = p.text(egui::pos2(x, row.center().y), egui::Align2::LEFT_CENTER, name, theme::mono(9.5), alpha(lit, if on { 1.0 } else { 0.3 })).right() + 8.0;
+            x = p.text(egui::pos2(x, row.center().y), egui::Align2::LEFT_CENTER, name, theme::mono(crate::theme::ty::MICRO), alpha(lit, if on { 1.0 } else { 0.3 })).right() + 8.0;
         }
     }
     let board = keys.available_width();
@@ -599,7 +599,7 @@ fn data_matrix(app: &App, ui: &mut Ui, current: Mode) -> Option<Mode> {
     let mut out = None;
     const TILE: f32 = 104.0;
     ui.set_width(2.0 * (4.0 * TILE + 3.0 * 4.0) + 3.0 * 10.0);
-    ui.label(RichText::new("DATA · EVERY DECODER").font(theme::mono_bold(11.0)).color(theme::text_2()));
+    ui.label(RichText::new("DATA · EVERY DECODER").font(theme::mono_bold(crate::theme::ty::SMALL)).color(theme::text_2()));
     ui.add_space(4.0);
     // Cards with nothing the server offers are left out, and the rest
     // paired up again so no row holds a gap.
@@ -607,9 +607,9 @@ fn data_matrix(app: &App, ui: &mut Ui, current: Mode) -> Option<Mode> {
     for pair in domains.chunks(2) {
         ui.horizontal_top(|ui| {
             for &&(title, modes) in pair {
-                egui::Frame::new().fill(theme::surface_2()).stroke(Stroke::new(1.0, theme::line())).corner_radius(egui::CornerRadius::same(4)).inner_margin(egui::Margin::same(6)).show(ui, |ui| ui.vertical(|ui| {
+                egui::Frame::new().fill(theme::surface_2()).stroke(Stroke::new(1.0, theme::line())).corner_radius(egui::CornerRadius::same(crate::theme::RADIUS)).inner_margin(egui::Margin::same(6)).show(ui, |ui| ui.vertical(|ui| {
                     ui.set_width(4.0 * TILE + 3.0 * 4.0);
-                    ui.label(RichText::new(title).font(theme::mono(9.5)).color(theme::text_3()).extra_letter_spacing(0.6));
+                    ui.label(RichText::new(title).font(theme::mono(crate::theme::ty::MICRO)).color(theme::text_3()).extra_letter_spacing(0.6));
                     ui.add_space(3.0);
                     // Four tiles to a row; a domain with more takes rows.
                     ui.horizontal_wrapped(|ui| {
@@ -637,12 +637,12 @@ fn data_matrix(app: &App, ui: &mut Ui, current: Mode) -> Option<Mode> {
     }
     ui.data_mut(|d| d.insert_temp(hover_id, focus));
     // Where to hear the mode under the pointer.
-    egui::Frame::new().fill(alpha(theme::ink(), 0.6)).stroke(Stroke::new(1.0, theme::line())).corner_radius(egui::CornerRadius::same(4)).inner_margin(egui::Margin::same(6)).show(ui, |ui| {
+    egui::Frame::new().fill(alpha(theme::ink(), 0.6)).stroke(Stroke::new(1.0, theme::line())).corner_radius(egui::CornerRadius::same(crate::theme::RADIUS)).inner_margin(egui::Margin::same(6)).show(ui, |ui| {
         ui.set_width(ui.available_width());
         let dials = crate::tunestrip::dials(focus);
         let dir = crate::stations::for_mode(focus);
         let what = if !dials.is_empty() { "BANDS" } else if dir.is_some() { "STATIONS" } else { "" };
-        ui.label(RichText::new(format!("{} {what} · a key sets the mode and tunes", focus.label())).font(theme::mono(9.5)).color(theme::text_3()).extra_letter_spacing(0.4));
+        ui.label(RichText::new(format!("{} {what} · a key sets the mode and tunes", focus.label())).font(theme::mono(crate::theme::ty::MICRO)).color(theme::text_3()).extra_letter_spacing(0.4));
         ui.add_space(2.0);
         let tally = crate::widgets::protocol_color(focus.label());
         let mut pick: Option<crate::tunestrip::Dial> = None;
@@ -672,7 +672,7 @@ fn data_matrix(app: &App, ui: &mut Ui, current: Mode) -> Option<Mode> {
                 }
             }
             if dials.is_empty() && dir.is_none() {
-                ui.label(RichText::new("Tune where you hear it: this mode has no fixed bands or stations.").font(theme::sans(11.0)).color(theme::text_3()));
+                ui.label(RichText::new("Tune where you hear it: this mode has no fixed bands or stations.").font(theme::sans(crate::theme::ty::SMALL)).color(theme::text_3()));
             }
         });
         if let Some(d) = pick {
@@ -692,10 +692,10 @@ pub fn take_quick_tune(ui: &Ui) -> Option<(Mode, crate::tunestrip::Dial)> {
 fn hf_tile(ui: &mut Ui, m: Mode, on: bool, w: f32) -> egui::Response {
     let (r, resp) = ui.allocate_exact_size(vec2(w, 36.0), Sense::click());
     resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::RadioButton, true, on, m.label()));
-    let (press, c) = widgets::paint_key(ui, &resp, r, egui::CornerRadius::same(3), on, theme::AMBER);
+    let (press, c) = widgets::paint_key(ui, &resp, r, egui::CornerRadius::same(crate::theme::R_KEY), on, theme::AMBER);
     let p = ui.painter();
-    p.text(r.left_top() + vec2(8.0, 5.0 + press), egui::Align2::LEFT_TOP, m.label(), theme::mono_bold(11.5), c);
-    p.text(r.left_bottom() + vec2(8.0, -5.0), egui::Align2::LEFT_BOTTOM, hf_spec(m), theme::mono(9.5), theme::text_3());
+    p.text(r.left_top() + vec2(8.0, 5.0 + press), egui::Align2::LEFT_TOP, m.label(), theme::mono_bold(crate::theme::ty::VALUE), c);
+    p.text(r.left_bottom() + vec2(8.0, -5.0), egui::Align2::LEFT_BOTTOM, hf_spec(m), theme::mono(crate::theme::ty::MICRO), theme::text_3());
     if resp.hovered() {
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
     }
@@ -743,13 +743,13 @@ pub fn shape_glyph(p: &egui::Painter, r: egui::Rect, shape: FilterShape, color: 
 /// The header key that shows the filter's shape and opens the choice of
 /// the three, each drawn and with what it trades.
 fn shape_key(ui: &mut Ui, shape: FilterShape, height: f32) -> Option<FilterShape> {
-    let font = theme::mono_bold(10.0);
+    let font = theme::mono_bold(crate::theme::ty::MICRO);
     let label = format!("{} ▾", shape.label());
     let tw = ui.painter().layout_no_wrap(label.clone(), font.clone(), egui::Color32::PLACEHOLDER).size().x;
     let (rect, resp) = ui.allocate_exact_size(vec2(18.0 + 5.0 + tw + 8.0, height), Sense::click());
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, true, format!("Filter shape {}", shape.label())));
     let open = egui::Popup::is_id_open(ui.ctx(), egui::Popup::default_response_id(&resp));
-    let (press, c) = widgets::paint_key(ui, &resp, rect, egui::CornerRadius::same(3), open, theme::AMBER);
+    let (press, c) = widgets::paint_key(ui, &resp, rect, egui::CornerRadius::same(crate::theme::R_KEY), open, theme::AMBER);
     let p = ui.painter();
     let g = egui::Rect::from_center_size(egui::pos2(rect.left() + 12.0, rect.center().y + press), vec2(16.0, (height - 5.0).max(6.0)));
     shape_glyph(p, g, shape, theme::AMBER);
@@ -768,16 +768,16 @@ fn shape_key(ui: &mut Ui, shape: FilterShape, height: f32) -> Option<FilterShape
             let on = s == shape;
             let p = ui.painter();
             if on || hv > 0.0 {
-                p.rect(row, egui::CornerRadius::same(3), alpha(theme::AMBER, if on { 0.16 } else { 0.07 * hv }), Stroke::new(1.0, alpha(theme::AMBER, if on { 0.6 } else { 0.0 })), egui::StrokeKind::Inside);
+                p.rect(row, egui::CornerRadius::same(crate::theme::R_KEY), alpha(theme::AMBER, if on { 0.16 } else { 0.07 * hv }), Stroke::new(1.0, alpha(theme::AMBER, if on { 0.6 } else { 0.0 })), egui::StrokeKind::Inside);
             }
             let g = egui::Rect::from_min_size(row.left_top() + vec2(8.0, 9.0), vec2(40.0, 22.0));
             shape_glyph(p, g, s, if on { theme::AMBER } else { theme::lerp(theme::text_3(), theme::AMBER, 0.5 + 0.5 * hv) });
             let trade = s.describe().split_once(": ").map_or("", |(_, t)| t);
-            p.text(egui::pos2(g.right() + 10.0, row.top() + 7.0), egui::Align2::LEFT_TOP, s.label(), theme::mono_bold(11.0), if on { theme::text() } else { theme::text_2() });
+            p.text(egui::pos2(g.right() + 10.0, row.top() + 7.0), egui::Align2::LEFT_TOP, s.label(), theme::mono_bold(crate::theme::ty::SMALL), if on { theme::text() } else { theme::text_2() });
             let skirt = format!("{:.0} Hz skirt", s.skirt_hz());
-            p.text(egui::pos2(row.right() - 8.0, row.top() + 7.0), egui::Align2::RIGHT_TOP, skirt, theme::mono(10.0), theme::text_3());
+            p.text(egui::pos2(row.right() - 8.0, row.top() + 7.0), egui::Align2::RIGHT_TOP, skirt, theme::mono(crate::theme::ty::MICRO), theme::text_3());
             let short = trade.split(". ").last().unwrap_or(trade);
-            p.text(egui::pos2(g.right() + 10.0, row.top() + 22.0), egui::Align2::LEFT_TOP, short, theme::sans(11.0), theme::text_3());
+            p.text(egui::pos2(g.right() + 10.0, row.top() + 22.0), egui::Align2::LEFT_TOP, short, theme::sans(crate::theme::ty::SMALL), theme::text_3());
             if r.hovered() {
                 ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
             }
@@ -886,7 +886,7 @@ fn filter(app: &mut App, lcd: &mut Ui, keys: &mut Ui, look: crate::lcd::Look) {
         } else {
             ("fixed on this server", "This server predates the adjustable filter".to_string())
         };
-        lcd.label(RichText::new(note).font(theme::mono(10.0)).color(alpha(lit, 0.66))).on_hover_text(tip);
+        lcd.label(RichText::new(note).font(theme::mono(crate::theme::ty::MICRO)).color(alpha(lit, 0.66))).on_hover_text(tip);
         return;
     };
     let ui = keys;
@@ -926,7 +926,7 @@ fn filter(app: &mut App, lcd: &mut Ui, keys: &mut Ui, look: crate::lcd::Look) {
         // Between them, as many presets as fit, grown outward from the one
         // nearest the width in use so its neighbors on both sides show.
         const GAP_X: f32 = 3.0;
-        let chip_w = |p: &Preset| ui.painter().layout_no_wrap(p.label.clone(), theme::mono_bold(10.5), egui::Color32::PLACEHOLDER).size().x + 14.0 + GAP_X;
+        let chip_w = |p: &Preset| ui.painter().layout_no_wrap(p.label.clone(), theme::mono_bold(crate::theme::ty::LABEL), egui::Color32::PLACEHOLDER).size().x + 14.0 + GAP_X;
         let widths: Vec<f32> = presets.iter().map(chip_w).collect();
         let room = width_px - 2.0 * (20.0 + GAP_X);
         let near = presets.iter().position(is_on).unwrap_or_else(|| presets.iter().enumerate().min_by(|a, b| (a.1.width - width).abs().total_cmp(&(b.1.width - width).abs())).map_or(0, |(i, _)| i));
@@ -1167,7 +1167,7 @@ fn level_meter(ui: &mut Ui, w: f32, rms: f32, peak: f32, look: crate::lcd::Look)
         let c = if d >= -3.0 { theme::ERR } else { look.meter[0] };
         let seg = egui::Rect::from_min_max(egui::pos2(x, bar.top()), egui::pos2((x + 2.0).min(bar.right()), bar.bottom()));
         if x < lit_to {
-            p.rect_filled(seg.expand2(vec2(1.0, 2.0)), egui::CornerRadius::same(1), alpha(c, 0.18));
+            p.rect_filled(seg.expand2(vec2(1.0, 2.0)), egui::CornerRadius::same(crate::theme::R_CELL), alpha(c, 0.18));
             p.rect_filled(seg, egui::CornerRadius::ZERO, c);
             p.rect_filled(egui::Rect::from_min_size(seg.min, vec2(seg.width(), 2.0)), egui::CornerRadius::ZERO, alpha(theme::lerp(c, egui::Color32::WHITE, 0.45), 0.9));
         } else {
@@ -1225,7 +1225,7 @@ fn signal(app: &mut App, ui: &mut Ui, look: crate::lcd::Look) {
         ui.spacing_mut().item_spacing.x = 8.0;
         ui.label(caption(label, &look));
         fixed(ui, &s_txt, reading.clone(), lit, "S9+60");
-        fixed(ui, &db_txt, theme::mono(11.0), if db_col == theme::ERR { theme::ERR } else { lit }, "-100.0 dBFS");
+        fixed(ui, &db_txt, theme::mono(crate::theme::ty::SMALL), if db_col == theme::ERR { theme::ERR } else { lit }, "-100.0 dBFS");
         if let Some(e) = err {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let t = if e.abs() >= 1_000.0 { format!("CAL {:+.1}k", e / 1000.0) } else { format!("CAL {e:+.0}") };
@@ -1241,7 +1241,7 @@ fn signal(app: &mut App, ui: &mut Ui, look: crate::lcd::Look) {
     if is_b {
         app.meter_b.ui_bar_bare(ui, rm, mark, &look);
         let snr = app.meter_b.snr.map_or(format!("{:>4} dB", "—"), |s| format!("{s:>4.1} dB"));
-        ui.add(egui::Label::new(RichText::new(format!("SNR {snr} · measured from the spectrum")).font(theme::mono(10.5)).color(dim)).truncate());
+        ui.add(egui::Label::new(RichText::new(format!("SNR {snr} · measured from the spectrum")).font(theme::mono(crate::theme::ty::LABEL)).color(dim)).truncate());
     } else {
         app.meter.ui_bar_bare(ui, rm, mark, &look);
         status_row(app, ui, rm, lit, dim, look);
@@ -1257,7 +1257,7 @@ fn signal(app: &mut App, ui: &mut Ui, look: crate::lcd::Look) {
 fn status_row(app: &App, ui: &mut Ui, rm: bool, lit: egui::Color32, dim: egui::Color32, look: crate::lcd::Look) {
     let s = &app.status;
     let snr = app.meter.snr.map_or(format!("{:>4} dB", "—"), |d| format!("{d:>4.1} dB"));
-    let small_lit = |t: String| RichText::new(t).font(theme::mono(10.5)).color(lit);
+    let small_lit = |t: String| RichText::new(t).font(theme::mono(crate::theme::ty::LABEL)).color(lit);
     let mut notches = Vec::new();
     if s.rf_notch == Some(true) {
         notches.push("AM/FM".to_string());
@@ -1303,7 +1303,7 @@ fn status_row(app: &App, ui: &mut Ui, rm: bool, lit: egui::Color32, dim: egui::C
                 widgets::lcd_tag_in(ui, &format!("NOTCH {}", notches.join(" ")), &look, true);
             }
             ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                let r = ui.add(egui::Label::new(RichText::new(txt).font(theme::sans(12.0)).color(col)).truncate());
+                let r = ui.add(egui::Label::new(RichText::new(txt).font(theme::sans(crate::theme::ty::BODY)).color(col)).truncate());
                 if let Some(t) = tip {
                     r.on_hover_text(t);
                 }
@@ -1386,8 +1386,8 @@ fn stereo_badge(ui: &mut Ui, st: &usdr_proto::StereoReading, mp: Option<(f32, bo
         "STEREO".to_string()
     };
     // Laid out at its widest, so the row does not shift as the blend moves.
-    let wide = ui.painter().layout_no_wrap("STEREO 100%".into(), theme::mono(10.5), col).size().x;
-    let g = ui.painter().layout_no_wrap(word, theme::mono(10.5), col);
+    let wide = ui.painter().layout_no_wrap("STEREO 100%".into(), theme::mono(crate::theme::ty::LABEL), col).size().x;
+    let g = ui.painter().layout_no_wrap(word, theme::mono(crate::theme::ty::LABEL), col);
     let (rect, resp) = ui.allocate_exact_size(vec2(22.0 + wide, 18.0), Sense::hover());
     let p = ui.painter();
     let (cy, r) = (rect.center().y, 4.5);
@@ -1552,8 +1552,8 @@ const SLOTS_SHOWN: usize = 6;
 /// its name in the mode's color, the name cut to the slot; the free slot
 /// after them is a short dashed "+ N" that stores the receiver there.
 fn memory_pill(ui: &mut Ui, slot: usize, m: Option<&crate::prefs::Memory>, lit: bool, armed: bool, slot_w: f32) -> egui::Response {
-    let num_f = theme::mono(10.0);
-    let font = theme::mono_bold(10.5);
+    let num_f = theme::mono(crate::theme::ty::MICRO);
+    let font = theme::mono_bold(crate::theme::ty::LABEL);
     let p = ui.painter().clone();
     let num = p.layout_no_wrap(slot.to_string(), num_f, egui::Color32::PLACEHOLDER);
     let parts = m.map(|m| {
@@ -1561,10 +1561,10 @@ fn memory_pill(ui: &mut Ui, slot: usize, m: Option<&crate::prefs::Memory>, lit: 
         let mhz = mhz.trim_end_matches('0').trim_end_matches('.').to_string();
         let f = p.layout_no_wrap(mhz, font.clone(), egui::Color32::PLACEHOLDER);
         let room = slot_w - 8.0 - num.size().x - 6.0 - f.size().x - 5.0 - 8.0;
-        let name = widgets::ellipsize(&p, &m.name, theme::mono_bold(10.0), room);
-        (f, p.layout_no_wrap(name, theme::mono_bold(10.0), egui::Color32::PLACEHOLDER))
+        let name = widgets::ellipsize(&p, &m.name, theme::mono_bold(crate::theme::ty::MICRO), room);
+        (f, p.layout_no_wrap(name, theme::mono_bold(crate::theme::ty::MICRO), egui::Color32::PLACEHOLDER))
     });
-    let plus = m.is_none().then(|| p.layout_no_wrap(format!("+ {slot}"), theme::mono(10.0), egui::Color32::PLACEHOLDER));
+    let plus = m.is_none().then(|| p.layout_no_wrap(format!("+ {slot}"), theme::mono(crate::theme::ty::MICRO), egui::Color32::PLACEHOLDER));
     let w = plus.as_ref().map_or(slot_w, |g| g.size().x + 20.0);
     let (rect, resp) = ui.allocate_exact_size(vec2(w, 22.0), Sense::click());
     let name = m.map_or_else(|| format!("empty slot {slot}"), |m| m.name.clone());
@@ -1573,7 +1573,7 @@ fn memory_pill(ui: &mut Ui, slot: usize, m: Option<&crate::prefs::Memory>, lit: 
     let y = rect.center().y;
     match parts {
         Some((f, n)) => {
-            let (press, c) = widgets::paint_key(ui, &resp, rect, egui::CornerRadius::same(3), lit, theme::AMBER);
+            let (press, c) = widgets::paint_key(ui, &resp, rect, egui::CornerRadius::same(crate::theme::R_KEY), lit, theme::AMBER);
             let y = y + press;
             let mut x = rect.left() + 8.0;
             p.galley(egui::pos2(x, y - num.size().y / 2.0), num.clone(), theme::text_3());

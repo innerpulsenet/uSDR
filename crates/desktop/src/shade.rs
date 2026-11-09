@@ -119,8 +119,8 @@ fn frequency(app: &mut App, ui: &mut Ui, tint: egui::Color32, b_on: bool) {
     crate::vfo::lcd_back_look(ui.painter(), rect, &look);
     let lit = look.digits;
     let tab = Rect::from_center_size(pos2(rect.left() + 13.0, rect.center().y), vec2(14.0, 14.0));
-    ui.painter().rect_filled(tab, CornerRadius::same(3), alpha(tint, 0.9));
-    ui.painter().text(tab.center(), Align2::CENTER_CENTER, if b_on { "B" } else { "A" }, theme::mono_bold(10.0), theme::ink());
+    ui.painter().rect_filled(tab, CornerRadius::same(crate::theme::R_KEY), alpha(tint, 0.9));
+    ui.painter().text(tab.center(), Align2::CENTER_CENTER, if b_on { "B" } else { "A" }, theme::mono_bold(crate::theme::ty::MICRO), theme::ink());
     widgets::rolling_text(ui.painter(), egui::Id::new("shade-freq"), pos2(rect.left() + 26.0, rect.center().y), Align2::LEFT_CENTER, &text, font, lit);
     crate::vfo::lcd_glass(ui.painter(), rect);
     if resp.hovered() {
@@ -139,8 +139,8 @@ fn frequency(app: &mut App, ui: &mut Ui, tint: egui::Color32, b_on: bool) {
     };
     ui.vertical(|ui| {
         ui.spacing_mut().item_spacing.y = 0.0;
-        ui.label(egui::RichText::new(mode.label()).font(theme::mono_bold(11.0)).color(tint));
-        ui.label(egui::RichText::new(crate::tuning::fmt_short_hz(bw)).font(theme::mono(10.5)).color(theme::text_3()));
+        ui.label(egui::RichText::new(mode.label()).font(theme::mono_bold(crate::theme::ty::SMALL)).color(tint));
+        ui.label(egui::RichText::new(crate::tuning::fmt_short_hz(bw)).font(theme::mono(crate::theme::ty::LABEL)).color(theme::text_3()));
     });
 }
 
@@ -180,16 +180,16 @@ fn latest(app: &App, ui: &mut Ui) {
         (String::new(), theme::text_3(), crate::app::mode_idle_text(app.status.mode).to_owned())
     };
     let p = ui.painter().clone();
-    let tag = widgets::ellipsize(&p, &tag, theme::mono_bold(11.0), room * 0.4);
-    let tag_w = if tag.is_empty() { 0.0 } else { p.layout_no_wrap(tag.clone(), theme::mono_bold(11.0), tag_c).size().x + 10.0 };
-    let body = widgets::ellipsize(&p, &body.replace('\n', " "), theme::sans(12.0), (room - tag_w).max(0.0));
+    let tag = widgets::ellipsize(&p, &tag, theme::mono_bold(crate::theme::ty::SMALL), room * 0.4);
+    let tag_w = if tag.is_empty() { 0.0 } else { p.layout_no_wrap(tag.clone(), theme::mono_bold(crate::theme::ty::SMALL), tag_c).size().x + 10.0 };
+    let body = widgets::ellipsize(&p, &body.replace('\n', " "), theme::sans(crate::theme::ty::BODY), (room - tag_w).max(0.0));
     let (rect, _) = ui.allocate_exact_size(vec2(room, 20.0), Sense::hover());
     // Laid right to left: the text starts at the left of what is left.
     let mut x = rect.left();
     if !tag.is_empty() {
-        p.text(pos2(x, rect.center().y), Align2::LEFT_CENTER, &tag, theme::mono_bold(11.0), tag_c);
+        p.text(pos2(x, rect.center().y), Align2::LEFT_CENTER, &tag, theme::mono_bold(crate::theme::ty::SMALL), tag_c);
         x += tag_w;
     }
-    p.text(pos2(x, rect.center().y), Align2::LEFT_CENTER, body, theme::sans(12.0), theme::text());
+    p.text(pos2(x, rect.center().y), Align2::LEFT_CENTER, body, theme::sans(crate::theme::ty::BODY), theme::text());
     p.line_segment([pos2(rect.left() - 6.0, rect.top()), pos2(rect.left() - 6.0, rect.bottom())], Stroke::new(1.0, theme::line()));
 }

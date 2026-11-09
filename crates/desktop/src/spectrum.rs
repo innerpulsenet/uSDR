@@ -931,7 +931,7 @@ impl Panafall {
                 pos2(time_axis.right() - 7.0, y + 1.0),
                 Align2::RIGHT_TOP,
                 format!("{:02}:{:02}", (secs / 60) % 60, secs % 60),
-                theme::mono(10.0),
+                theme::mono(crate::theme::ty::MICRO),
                 theme::text_2(),
             );
         }
@@ -1307,7 +1307,7 @@ impl Panafall {
                 pos2(db_axis.right() - 6.0, y),
                 Align2::RIGHT_CENTER,
                 format!("{db:.0}"),
-                theme::mono(10.5),
+                theme::mono(crate::theme::ty::LABEL),
                 theme::text_3(),
             );
             db += db_step;
@@ -1316,7 +1316,7 @@ impl Panafall {
             pos2(db_axis.right() - 6.0, db_axis.top() + 8.0),
             Align2::RIGHT_CENTER,
             "dBFS",
-            theme::mono(10.0),
+            theme::mono(crate::theme::ty::MICRO),
             theme::text_3(),
         );
         let f_step = nice_step(self.span_hz, (pan.width() / 110.0).max(3.0) as f64);
@@ -1358,7 +1358,7 @@ impl Panafall {
                     pos2(x, labels_top + 12.0),
                     Align2::CENTER_CENTER,
                     crate::tuning::fmt_mhz(f, decimals),
-                    theme::mono(10.5),
+                    theme::mono(crate::theme::ty::LABEL),
                     theme::text_2(),
                 );
             }
@@ -1383,7 +1383,7 @@ impl Panafall {
                 let r = Rect::from_min_max(pos2(x0, strip.top()), pos2(x1.max(x0 + 2.0), strip.bottom()));
                 painter.rect_filled(r, CornerRadius::ZERO, alpha(c, 0.16));
                 painter.rect_filled(Rect::from_min_size(r.min, vec2(r.width(), 2.0)), CornerRadius::ZERO, alpha(c, 0.85));
-                let g = painter.layout_no_wrap(b.name.to_owned(), theme::mono(10.0), c);
+                let g = painter.layout_no_wrap(b.name.to_owned(), theme::mono(crate::theme::ty::MICRO), c);
                 if g.size().x + 12.0 < r.width() {
                     painter.galley(pos2(r.left() + 6.0, r.center().y + 1.0 - g.size().y / 2.0), g, c);
                 }
@@ -1472,7 +1472,7 @@ impl Panafall {
                         pos2(time_axis.right() - 7.0, y),
                         Align2::RIGHT_CENTER,
                         fmt_age(next_mark, step_s, visible_s >= 60.0),
-                        theme::mono(10.0),
+                        theme::mono(crate::theme::ty::MICRO),
                         theme::text_3(),
                     );
                     next_mark += step_s;
@@ -1502,7 +1502,7 @@ impl Panafall {
                     }
                 }
                 painter.add(Shape::mesh(mesh));
-                painter.rect_stroke(ramp.expand(0.5), CornerRadius::same(1), Stroke::new(1.0, theme::line()), egui::StrokeKind::Outside);
+                painter.rect_stroke(ramp.expand(0.5), CornerRadius::same(crate::theme::R_CELL), Stroke::new(1.0, theme::line()), egui::StrokeKind::Outside);
                 ui.interact(time_axis, resp.id.with("ramp"), Sense::hover())
                     .on_hover_text(format!("Waterfall colors: {black:.0} dBFS and below is the ground, {top:.0} dBFS and above the top of the palette"));
             }
@@ -1515,7 +1515,7 @@ impl Panafall {
         {
             let held = self.held_age();
             let label = if held.is_some() { "LIVE" } else { "HOLD" };
-            let g = painter.layout_no_wrap(label.into(), theme::mono_bold(10.5), Color32::PLACEHOLDER);
+            let g = painter.layout_no_wrap(label.into(), theme::mono_bold(crate::theme::ty::LABEL), Color32::PLACEHOLDER);
             let r = Rect::from_min_size(pos2(wf.right() - g.size().x - 22.0, wf.top() + 8.0), g.size() + vec2(14.0, 8.0));
             let b = ui.interact(r, resp.id.with("hold"), Sense::click());
             let hover = b.hovered();
@@ -1530,22 +1530,22 @@ impl Panafall {
                     _ => 0.0,
                 };
                 let mmss = |t: f64| format!("−{:.0}:{:04.1}", (t / 60.0).floor(), t - (t / 60.0).floor() * 60.0);
-                let label = painter.layout_no_wrap(format!("HELD {}", mmss(age)), theme::mono_bold(10.5), theme::WARN);
-                let ends = painter.layout_no_wrap(format!("−{:.0}:{:02.0}", (span_s / 60.0).floor(), (span_s % 60.0).floor()), theme::mono(10.0), theme::text_3());
+                let label = painter.layout_no_wrap(format!("HELD {}", mmss(age)), theme::mono_bold(crate::theme::ty::LABEL), theme::WARN);
+                let ends = painter.layout_no_wrap(format!("−{:.0}:{:02.0}", (span_s / 60.0).floor(), (span_s % 60.0).floor()), theme::mono(crate::theme::ty::MICRO), theme::text_3());
                 let track_w = 180.0f32.min(wf.width() * 0.3);
                 let track = Rect::from_min_size(pos2(r.left() - 12.0 - track_w, r.center().y - 3.0), vec2(track_w, 6.0));
                 let ends_x = track.left() - 8.0 - ends.size().x;
                 let label_x = ends_x - 12.0 - label.size().x;
                 let plate = Rect::from_min_max(pos2(label_x - 8.0, r.top() - 4.0), pos2(r.right() + 4.0, r.bottom() + 4.0));
-                frost.plate(&painter, plate, 5, theme::line_2());
+                frost.plate(&painter, plate, theme::R_KEY, theme::line_2());
                 painter.galley(pos2(label_x, r.center().y - label.size().y / 2.0), label, theme::WARN);
                 // A hairline between where the display is and where the history starts.
                 painter.line_segment([pos2(ends_x - 6.0, r.top()), pos2(ends_x - 6.0, r.bottom())], Stroke::new(1.0, theme::line_2()));
                 painter.galley(pos2(ends_x, r.center().y - ends.size().y / 2.0), ends, theme::text_3());
-                painter.rect_filled(track, CornerRadius::same(3), theme::surface_4());
+                painter.rect_filled(track, CornerRadius::same(crate::theme::R_KEY), theme::surface_4());
                 let back = self.hold.as_ref().map_or(0, |h| h.back.min(max_back));
                 let knob_x = if max_back == 0 { track.right() } else { track.right() - back as f32 / max_back as f32 * track.width() };
-                painter.rect_filled(Rect::from_min_max(pos2(knob_x, track.top()), track.right_bottom()), CornerRadius::same(3), alpha(theme::WARN, 0.35));
+                painter.rect_filled(Rect::from_min_max(pos2(knob_x, track.top()), track.right_bottom()), CornerRadius::same(crate::theme::R_KEY), alpha(theme::WARN, 0.35));
                 painter.circle(pos2(knob_x, track.center().y), 6.0, theme::WARN, Stroke::new(1.5, theme::ink()));
                 let t = ui.interact(track.expand2(vec2(6.0, 8.0)), resp.id.with("hold-track"), Sense::click_and_drag());
                 if let Some(p) = t.interact_pointer_pos().filter(|_| t.dragged() || t.clicked()) {
@@ -1557,11 +1557,11 @@ impl Panafall {
                 t.on_hover_text("Drag or click to move through the held history; the wheel steps a second a notch");
             }
             if held.is_some() {
-                painter.rect(r, CornerRadius::same(3), theme::ACTION, Stroke::new(1.0, theme::ACTION), egui::StrokeKind::Inside);
+                painter.rect(r, CornerRadius::same(crate::theme::R_KEY), theme::ACTION, Stroke::new(1.0, theme::ACTION), egui::StrokeKind::Inside);
             } else {
-                frost.plate(&painter, r, 3, theme::line_2());
+                frost.plate(&painter, r, theme::R_KEY, theme::line_2());
                 if hover {
-                    painter.rect_filled(r, CornerRadius::same(3), alpha(theme::surface_4(), 0.45));
+                    painter.rect_filled(r, CornerRadius::same(crate::theme::R_KEY), alpha(theme::surface_4(), 0.45));
                 }
             }
             painter.galley(r.min + vec2(7.0, 4.0), g, text_c);
@@ -1700,7 +1700,7 @@ impl Panafall {
                 continue;
             }
             dashed_v(&painter, x, pan.top(), pan.bottom(), alpha(theme::ERR, 0.8));
-            painter.text(pos2(x + 3.0, pan.top() + 10.0), Align2::LEFT_CENTER, "NOTCH", theme::mono(10.0), theme::ERR);
+            painter.text(pos2(x + 3.0, pan.top() + 10.0), Align2::LEFT_CENTER, "NOTCH", theme::mono(crate::theme::ty::MICRO), theme::ERR);
         }
 
         // ---- the LO's notch: with the tuner parked off the receiver, the
@@ -1731,9 +1731,9 @@ impl Panafall {
                 }
                 let band = bands[0].union(bands[1]);
                 if x1 - x0 >= 20.0 {
-                    let g = painter.layout_no_wrap("LO".into(), theme::mono_bold(9.5), c);
+                    let g = painter.layout_no_wrap("LO".into(), theme::mono_bold(crate::theme::ty::MICRO), c);
                     let r = Rect::from_center_size(pos2((x0 + x1) / 2.0, pan.top() + 30.0), g.size() + vec2(6.0, 2.0));
-                    painter.rect_filled(r, CornerRadius::same(2), theme::ink());
+                    painter.rect_filled(r, CornerRadius::same(crate::theme::R_CAP), theme::ink());
                     painter.galley(r.center() - g.size() / 2.0, g, c);
                 }
                 if resp.hover_pos().is_some_and(|p| band.contains(p)) {
@@ -1905,7 +1905,7 @@ impl Panafall {
                 ));
                 if let Some(label) = &p.label {
                     let text = format!("{label} {}", crate::tuning::fmt_mhz(p.freq_hz, 3));
-                    let g = painter.layout_no_wrap(text, theme::mono(10.0), theme::text());
+                    let g = painter.layout_no_wrap(text, theme::mono(crate::theme::ty::MICRO), theme::text());
                     let w = g.size().x + 10.0;
                     let mut r = Rect::from_min_size(pos2(x + 6.0, pan.bottom() - 30.0), vec2(w, 16.0));
                     if r.right() > pan.right() {
@@ -1924,7 +1924,7 @@ impl Panafall {
                         continue;
                     }
                     placed.push(r);
-                    frost.plate(&painter, r, 3, alpha(c, 0.6));
+                    frost.plate(&painter, r, theme::R_KEY, alpha(c, 0.6));
                     painter.galley(pos2(r.left() + 5.0, r.center().y - g.size().y / 2.0), g, theme::text());
                 }
             }
@@ -1970,9 +1970,9 @@ impl Panafall {
             let y = self.y_for(sql, pan);
             let c = if self.sql_drag { theme::ERR } else { alpha(theme::ERR, 0.7) };
             dashed_h(&painter, pan.left(), pan.right(), y, c);
-            let g = painter.layout_no_wrap(format!("MARK {sql:.0} dB"), theme::mono(10.0), theme::ERR);
+            let g = painter.layout_no_wrap(format!("MARK {sql:.0} dB"), theme::mono(crate::theme::ty::MICRO), theme::ERR);
             let r = Rect::from_min_size(pos2(pan.left() + 6.0, y - 8.0), vec2(g.size().x + 8.0, 15.0));
-            frost.plate(&painter, r, 3, alpha(theme::ERR, 0.6));
+            frost.plate(&painter, r, theme::R_KEY, alpha(theme::ERR, 0.6));
             painter.galley(pos2(r.left() + 4.0, r.center().y - g.size().y / 2.0), g, theme::ERR);
         }
 
@@ -2050,7 +2050,7 @@ impl Panafall {
         {
             let hot = crate::anim::ease_bool(&ctx, resp.id.with("split-hot"), split_resp.hovered() || split_resp.dragged(), crate::anim::HOVER_S);
             let grip = Rect::from_center_size(pos2(pan.center().x, axis.top()), vec2(40.0 + 8.0 * hot, 4.0));
-            painter.rect(grip, CornerRadius::same(2), theme::lerp(theme::surface_4(), theme::AMBER, hot), Stroke::new(1.0, theme::ink()), egui::StrokeKind::Outside);
+            painter.rect(grip, CornerRadius::same(crate::theme::R_CAP), theme::lerp(theme::surface_4(), theme::AMBER, hot), Stroke::new(1.0, theme::ink()), egui::StrokeKind::Outside);
         }
 
         // dB axis: drag shifts the range, wheel widens or narrows it.
@@ -2104,10 +2104,10 @@ impl Panafall {
                 hp.line_segment([pos2(x, area.bottom()), pos2(x + area.height(), area.top())], Stroke::new(1.0, alpha(theme::WARN, 0.10)));
                 x += 14.0;
             }
-            let g = painter.layout_no_wrap("LAST FRAME RECEIVED · NOT LIVE".into(), theme::mono_bold(10.5), theme::WARN);
+            let g = painter.layout_no_wrap("LAST FRAME RECEIVED · NOT LIVE".into(), theme::mono_bold(crate::theme::ty::LABEL), theme::WARN);
             let plate = Rect::from_min_size(pos2(pan.left() + 10.0, pan.bottom() - g.size().y - 16.0), g.size() + vec2(14.0, 8.0));
-            painter.rect_filled(plate, CornerRadius::same(3), alpha(theme::ink(), 0.9));
-            painter.rect_stroke(plate, CornerRadius::same(3), Stroke::new(1.0, alpha(theme::WARN, 0.5)), egui::StrokeKind::Inside);
+            painter.rect_filled(plate, CornerRadius::same(crate::theme::R_KEY), alpha(theme::ink(), 0.9));
+            painter.rect_stroke(plate, CornerRadius::same(crate::theme::R_KEY), Stroke::new(1.0, alpha(theme::WARN, 0.5)), egui::StrokeKind::Inside);
             painter.galley(plate.min + vec2(7.0, 4.0), g, theme::WARN);
         }
         if let Some(p) = pointer.filter(|p| in_area(*p)) {
@@ -2149,12 +2149,12 @@ impl Panafall {
                 let y = self.y_for(l, pan);
                 painter.line_segment([pos2(lx, y), pos2(db_axis.left(), y)], Stroke::new(1.0, Color32::from_white_alpha(40)));
                 painter.circle(pos2(lx, y), 3.0, look.core, Stroke::new(1.0, theme::ink()));
-                let g = painter.layout_no_wrap(format!("{l:.0}"), theme::mono_bold(10.0), theme::text());
+                let g = painter.layout_no_wrap(format!("{l:.0}"), theme::mono_bold(crate::theme::ty::MICRO), theme::text());
                 let plate = Rect::from_center_size(pos2(db_axis.right() - 6.0 - g.size().x / 2.0, y), g.size() + vec2(8.0, 4.0));
-                frost.plate(&painter, plate, 3, theme::line_2());
+                frost.plate(&painter, plate, theme::R_KEY, theme::line_2());
                 painter.galley(plate.min + vec2(4.0, 2.0), g, theme::text());
             }
-            let g = painter.layout_no_wrap(text, theme::mono(11.0), theme::text());
+            let g = painter.layout_no_wrap(text, theme::mono(crate::theme::ty::SMALL), theme::text());
             let mut r = Rect::from_min_size(pos2(p.x + 12.0, p.y + 14.0), g.size() + vec2(12.0, 8.0));
             if r.right() > full.right() - 4.0 {
                 r = r.translate(vec2(-r.width() - 24.0, 0.0));
@@ -2162,7 +2162,7 @@ impl Panafall {
             if r.bottom() > full.bottom() - 4.0 {
                 r = r.translate(vec2(0.0, -r.height() - 28.0));
             }
-            frost.plate(&painter, r, 4, theme::line_2());
+            frost.plate(&painter, r, theme::R_KEY, theme::line_2());
             painter.galley(r.min + vec2(6.0, 4.0), g, theme::text());
 
             // Squelch mark drag.
@@ -2248,7 +2248,7 @@ impl Panafall {
                     let t = crate::anim::ease_bool(&ctx, resp.id.with(key), held(e), crate::anim::HOVER_S);
                     let g = Rect::from_center_size(pos2(x, pan.center().y), vec2(4.0, 22.0 + 6.0 * t));
                     if pan.contains_rect(g) && !self.flags[0].is_some_and(|f| f.intersects(g.expand(2.0))) {
-                        painter.rect(g, CornerRadius::same(2), alpha(theme::AMBER, 0.55 + 0.45 * t), Stroke::new(1.0, alpha(theme::ink(), 0.8)), egui::StrokeKind::Outside);
+                        painter.rect(g, CornerRadius::same(crate::theme::R_CAP), alpha(theme::AMBER, 0.55 + 0.45 * t), Stroke::new(1.0, alpha(theme::ink(), 0.8)), egui::StrokeKind::Outside);
                     }
                 }
             }
@@ -2273,14 +2273,14 @@ impl Panafall {
                     // On a plate, so the figures read over whatever trace
                     // is behind them.
                     let edges = format!("{:+.2}k … {:+.2}k", nlo / 1000.0, nhi / 1000.0);
-                    let eg = painter.layout_no_wrap(edges.clone(), theme::mono(11.0), theme::AMBER);
+                    let eg = painter.layout_no_wrap(edges.clone(), theme::mono(crate::theme::ty::SMALL), theme::AMBER);
                     let plate = Rect::from_center_size(pos2(p.x.clamp(pan.left() + eg.size().x / 2.0 + 8.0, pan.right() - eg.size().x / 2.0 - 8.0), pan.top() + 72.0 - eg.size().y / 2.0), eg.size() + vec2(10.0, 6.0));
-                    frost.plate(&painter, plate, 3, alpha(theme::AMBER, 0.5));
+                    frost.plate(&painter, plate, theme::R_KEY, alpha(theme::AMBER, 0.5));
                     painter.text(
                         plate.center_bottom() - vec2(0.0, 3.0),
                         Align2::CENTER_BOTTOM,
                         edges,
-                        theme::mono(11.0),
+                        theme::mono(crate::theme::ty::SMALL),
                         theme::AMBER,
                     );
                 }
@@ -2371,7 +2371,7 @@ impl Panafall {
         }
         let menu_hz = self.menu_hz;
         resp.context_menu(|ui| {
-            ui.label(egui::RichText::new(format!("{} MHz", crate::tuning::fmt_mhz(menu_hz, 5))).font(theme::mono(12.0)).color(theme::AMBER));
+            ui.label(egui::RichText::new(format!("{} MHz", crate::tuning::fmt_mhz(menu_hz, 5))).font(theme::mono(crate::theme::ty::BODY)).color(theme::AMBER));
             ui.separator();
             if ui.button("Tune here").clicked() {
                 acts.push(Act::Tune { hz: menu_hz, lock: false });
@@ -2499,6 +2499,8 @@ impl Frost {
 
     /// A frosted plate over `r`: what is behind it blurred and dimmed, a
     /// rim in `rim`, and the glass sheen lit from above.
+    /// `radius` is [`theme::R_KEY`] for a readout and [`theme::RADIUS`] for a
+    /// receiver's flag, which is a card: the two sizes of plate on the display.
     pub(crate) fn plate(&self, painter: &egui::Painter, r: Rect, radius: u8, rim: Color32) {
         let cr = CornerRadius::same(radius);
         painter.rect_filled(r, cr, theme::surface_2());
@@ -2649,7 +2651,7 @@ impl SliceFlag {
         let right_side = !on_left;
         // Keep the card clear of the trace where there is room above it.
         let r = Rect::from_min_size(pos2(left, pan.top() + 8.0), vec2(w, h));
-        frost.plate(painter, r, 4, alpha(theme::AMBER, 0.45));
+        frost.plate(painter, r, theme::RADIUS, alpha(theme::AMBER, 0.45));
         // The index tick: the active receiver.
         if active {
             painter.rect_filled(Rect::from_min_size(r.left_top(), vec2(16.0, 2.0)), CornerRadius::ZERO, theme::EMBER);
@@ -2659,14 +2661,14 @@ impl SliceFlag {
         painter.line_segment([pos2(x, r.top() + 14.0), pos2(anchor_x, r.top() + 14.0)], Stroke::new(1.0, alpha(theme::AMBER, 0.5)));
         crate::widgets::rolling_text(painter, egui::Id::new("flag-a-freq"), r.left_top() + vec2(27.0, 7.0), Align2::LEFT_TOP, &crate::tuning::fmt_mhz(self.freq_hz, 4), theme::mono_bold(14.0), theme::text());
         let chip = format!("{} · {}", self.mode.label(), crate::tuning::fmt_short_hz(self.bandwidth_hz));
-        painter.text(r.right_top() + vec2(-8.0, 9.0), Align2::RIGHT_TOP, chip, theme::mono(10.0), theme::AMBER);
+        painter.text(r.right_top() + vec2(-8.0, 9.0), Align2::RIGHT_TOP, chip, theme::mono(crate::theme::ty::MICRO), theme::AMBER);
         // Mini S-meter.
         let bar = Rect::from_min_size(r.left_top() + vec2(8.0, 30.0), vec2(w - 64.0, 6.0));
         mini_meter(painter, bar, self.meter, theme::OK);
-        painter.text(pos2(r.right() - 8.0, bar.center().y), Align2::RIGHT_CENTER, &self.s_label, theme::mono_bold(11.0), theme::text());
+        painter.text(pos2(r.right() - 8.0, bar.center().y), Align2::RIGHT_CENTER, &self.s_label, theme::mono_bold(crate::theme::ty::SMALL), theme::text());
         // The bottom line is cut to the card, clear of the recording dot.
-        let bottom = crate::widgets::ellipsize(painter, &bottom, theme::sans(11.0), w - 16.0 - rec_w);
-        painter.text(r.left_top() + vec2(8.0, 44.0), Align2::LEFT_TOP, bottom, theme::sans(11.0), theme::text_2());
+        let bottom = crate::widgets::ellipsize(painter, &bottom, theme::sans(crate::theme::ty::SMALL), w - 16.0 - rec_w);
+        painter.text(r.left_top() + vec2(8.0, 44.0), Align2::LEFT_TOP, bottom, theme::sans(crate::theme::ty::SMALL), theme::text_2());
         if self.recording {
             painter.circle_filled(pos2(r.right() - 12.0, r.bottom() - 10.0), 4.0, theme::EMBER);
         }
@@ -2683,7 +2685,7 @@ impl SliceFlag {
         let (x, trace_y) = (at.x, at.y);
         let rec_w = if self.recording { 16.0 } else { 0.0 };
         let fade = |c: Color32| if rds.locked { c } else { theme::text_3() };
-        let who_font = theme::sans_semibold(12.5);
+        let who_font = theme::sans_semibold(crate::theme::ty::LEDE);
         let kind = rds.kind.as_deref().map(|k| format!(" · {k}")).unwrap_or_default();
         let snr = self.snr_db.map(|s| format!("SNR {s:.1} dB"));
         // Sized by what it says, within bounds, and by the widest SNR so it
@@ -2697,7 +2699,7 @@ impl SliceFlag {
         let right_side = !on_left;
         let top = (pan.top() + 8.0).max((trace_y - h - 14.0).min(pan.top() + 8.0));
         let r = Rect::from_min_size(pos2(left, top), vec2(w, h));
-        frost.plate(painter, r, 4, alpha(theme::AMBER, 0.45));
+        frost.plate(painter, r, theme::RADIUS, alpha(theme::AMBER, 0.45));
         if active {
             painter.rect_filled(Rect::from_min_size(r.left_top(), vec2(16.0, 2.0)), CornerRadius::ZERO, theme::EMBER);
         }
@@ -2706,15 +2708,15 @@ impl SliceFlag {
         painter.line_segment([pos2(x, r.top() + 14.0), pos2(anchor_x, r.top() + 14.0)], Stroke::new(1.0, alpha(theme::AMBER, 0.5)));
         crate::widgets::rolling_text(painter, egui::Id::new("flag-a-freq"), r.left_top() + vec2(27.0, 7.0), Align2::LEFT_TOP, &crate::tuning::fmt_mhz(self.freq_hz, 4), theme::mono_bold(14.0), theme::text());
         let chip = format!("{} · {}", self.mode.label(), crate::tuning::fmt_short_hz(self.bandwidth_hz));
-        painter.text(r.right_top() + vec2(-8.0, 9.0), Align2::RIGHT_TOP, chip, theme::mono(10.0), theme::AMBER);
+        painter.text(r.right_top() + vec2(-8.0, 9.0), Align2::RIGHT_TOP, chip, theme::mono(crate::theme::ty::MICRO), theme::AMBER);
         let bar = Rect::from_min_size(r.left_top() + vec2(8.0, 30.0), vec2(w - 64.0, 6.0));
         mini_meter(painter, bar, self.meter, theme::OK);
-        painter.text(pos2(r.right() - 8.0, bar.center().y), Align2::RIGHT_CENTER, &self.s_label, theme::mono_bold(11.0), theme::text());
+        painter.text(pos2(r.right() - 8.0, bar.center().y), Align2::RIGHT_CENTER, &self.s_label, theme::mono_bold(crate::theme::ty::SMALL), theme::text());
         // Who: the name, the program type after it, the SNR at the right.
         let y_who = r.top() + 50.0;
         let mut right = r.right() - 8.0;
         if let Some(s) = &snr {
-            let g = painter.layout_no_wrap(s.clone(), theme::mono(10.0), theme::text_2());
+            let g = painter.layout_no_wrap(s.clone(), theme::mono(crate::theme::ty::MICRO), theme::text_2());
             painter.galley(pos2(right - g.size().x, y_who - g.size().y / 2.0), g.clone(), theme::text_2());
             right -= g.size().x + 10.0;
         }
@@ -2724,22 +2726,22 @@ impl SliceFlag {
         let name_w = g.size().x;
         painter.galley(pos2(r.left() + 8.0, y_who - g.size().y / 2.0), g, fade(theme::text()));
         if !kind.is_empty() && name_w + 20.0 < room {
-            let k = crate::widgets::ellipsize(painter, &kind, theme::sans(11.0), room - name_w);
-            let g = painter.layout_no_wrap(k, theme::sans(11.0), fade(widgets_rds_color()));
+            let k = crate::widgets::ellipsize(painter, &kind, theme::sans(crate::theme::ty::SMALL), room - name_w);
+            let g = painter.layout_no_wrap(k, theme::sans(crate::theme::ty::SMALL), fade(widgets_rds_color()));
             painter.galley(pos2(r.left() + 8.0 + name_w, y_who - g.size().y / 2.0), g, fade(widgets_rds_color()));
         }
         // What is on, cut to the card; a text arriving keeps its gaps.
         if let Some((now, progress)) = &rds.now {
             let y_now = r.top() + 67.0;
             let room = w - 16.0 - rec_w;
-            let shown = crate::widgets::ellipsize(painter, now, theme::sans(11.5), room);
-            let job = crate::bar::gapped(&shown, theme::sans(11.5), fade(theme::text_2()));
+            let shown = crate::widgets::ellipsize(painter, now, theme::sans(crate::theme::ty::VALUE), room);
+            let job = crate::bar::gapped(&shown, theme::sans(crate::theme::ty::VALUE), fade(theme::text_2()));
             let g = painter.layout_job(job);
             painter.galley(pos2(r.left() + 8.0, y_now - g.size().y / 2.0), g, theme::text_2());
             if let Some(p) = progress {
                 let track = Rect::from_min_size(pos2(r.left() + 8.0, r.bottom() - 5.0), vec2(room, 2.0));
-                painter.rect_filled(track, CornerRadius::same(1), alpha(widgets_rds_color(), 0.15));
-                painter.rect_filled(Rect::from_min_size(track.min, vec2(room * p.clamp(0.0, 1.0), 2.0)), CornerRadius::same(1), alpha(widgets_rds_color(), 0.8));
+                painter.rect_filled(track, CornerRadius::same(crate::theme::R_CELL), alpha(widgets_rds_color(), 0.15));
+                painter.rect_filled(Rect::from_min_size(track.min, vec2(room * p.clamp(0.0, 1.0), 2.0)), CornerRadius::same(crate::theme::R_CELL), alpha(widgets_rds_color(), 0.8));
             }
         }
         if self.recording {
@@ -2760,23 +2762,23 @@ impl SliceFlag {
             Some(r) if !r.station.is_empty() => r.station.clone(),
             _ => format!("{} · {}", self.mode.label(), crate::tuning::fmt_short_hz(self.bandwidth_hz)),
         };
-        let what = crate::widgets::ellipsize(painter, &what, theme::mono(10.0), 110.0);
-        let wg = painter.layout_no_wrap(what, theme::mono(10.0), theme::AMBER);
-        let sg = painter.layout_no_wrap(self.s_label.clone(), theme::mono_bold(10.5), theme::text());
-        let fw = painter.layout_no_wrap(crate::tuning::fmt_mhz(self.freq_hz, 4), theme::mono_bold(12.5), Color32::PLACEHOLDER).size().x;
+        let what = crate::widgets::ellipsize(painter, &what, theme::mono(crate::theme::ty::MICRO), 110.0);
+        let wg = painter.layout_no_wrap(what, theme::mono(crate::theme::ty::MICRO), theme::AMBER);
+        let sg = painter.layout_no_wrap(self.s_label.clone(), theme::mono_bold(crate::theme::ty::LABEL), theme::text());
+        let fw = painter.layout_no_wrap(crate::tuning::fmt_mhz(self.freq_hz, 4), theme::mono_bold(crate::theme::ty::LEDE), Color32::PLACEHOLDER).size().x;
         let rec_w = if self.recording { 12.0 } else { 0.0 };
         let w = 24.0 + fw + 10.0 + wg.size().x + 10.0 + sg.size().x + rec_w + 8.0;
         let (on_left, left) = flag_side(x, w, pan, prefer_left);
         let r = Rect::from_min_size(pos2(left, pan.top() + 4.0), vec2(w, h));
-        frost.plate(painter, r, 4, alpha(theme::AMBER, 0.45));
+        frost.plate(painter, r, theme::RADIUS, alpha(theme::AMBER, 0.45));
         // The letter tab, set to this height.
         let tab = Rect::from_min_size(r.left_top() + vec2(5.0, 4.0), vec2(14.0, 14.0));
-        painter.rect_filled(tab, CornerRadius::same(3), alpha(theme::AMBER, if active { 0.9 } else { 0.3 }));
-        painter.text(tab.center(), Align2::CENTER_CENTER, "A", theme::mono_bold(10.0), if active { theme::ink() } else { theme::text() });
+        painter.rect_filled(tab, CornerRadius::same(crate::theme::R_KEY), alpha(theme::AMBER, if active { 0.9 } else { 0.3 }));
+        painter.text(tab.center(), Align2::CENTER_CENTER, "A", theme::mono_bold(crate::theme::ty::MICRO), if active { theme::ink() } else { theme::text() });
         let anchor = if on_left { r.right() } else { r.left() };
         painter.line_segment([pos2(x, r.center().y), pos2(anchor, r.center().y)], Stroke::new(1.0, alpha(theme::AMBER, 0.5)));
         let y = r.center().y - 1.0;
-        crate::widgets::rolling_text(painter, egui::Id::new("flag-a-freq"), pos2(r.left() + 24.0, y - 8.0), Align2::LEFT_TOP, &crate::tuning::fmt_mhz(self.freq_hz, 4), theme::mono_bold(12.5), theme::text());
+        crate::widgets::rolling_text(painter, egui::Id::new("flag-a-freq"), pos2(r.left() + 24.0, y - 8.0), Align2::LEFT_TOP, &crate::tuning::fmt_mhz(self.freq_hz, 4), theme::mono_bold(crate::theme::ty::LEDE), theme::text());
         let mut cx = r.left() + 24.0 + fw + 10.0;
         painter.galley(pos2(cx, y - wg.size().y / 2.0), wg.clone(), theme::AMBER);
         cx += wg.size().x + 10.0;
@@ -2786,8 +2788,8 @@ impl SliceFlag {
         }
         // The meter along the foot.
         let bar = Rect::from_min_max(pos2(r.left() + 4.0, r.bottom() - 3.0), pos2(r.right() - 4.0, r.bottom() - 1.5));
-        painter.rect_filled(bar, CornerRadius::same(1), alpha(theme::OK, 0.15));
-        painter.rect_filled(Rect::from_min_size(bar.min, vec2(bar.width() * self.meter.clamp(0.0, 1.0), bar.height())), CornerRadius::same(1), if self.meter >= crate::meter::frac(crate::meter::S9_DBFS) { theme::AMBER } else { theme::OK });
+        painter.rect_filled(bar, CornerRadius::same(crate::theme::R_CELL), alpha(theme::OK, 0.15));
+        painter.rect_filled(Rect::from_min_size(bar.min, vec2(bar.width() * self.meter.clamp(0.0, 1.0), bar.height())), CornerRadius::same(crate::theme::R_CELL), if self.meter >= crate::meter::frac(crate::meter::S9_DBFS) { theme::AMBER } else { theme::OK });
         r
     }
 }
@@ -2811,7 +2813,7 @@ fn widgets_rds_color() -> Color32 {
 fn mini_meter(painter: &egui::Painter, bar: Rect, pos: f32, below: Color32) {
     let s9 = bar.left() + bar.width() * crate::meter::frac(crate::meter::S9_DBFS);
     let lit_to = bar.left() + bar.width() * pos.clamp(0.0, 1.0);
-    painter.rect_filled(bar.expand(1.0), CornerRadius::same(1), theme::ink());
+    painter.rect_filled(bar.expand(1.0), CornerRadius::same(crate::theme::R_CELL), theme::ink());
     let mut x = bar.left();
     while x < bar.right() - 0.5 {
         let c = if x < s9 { below } else { theme::AMBER };
@@ -2826,8 +2828,8 @@ fn mini_meter(painter: &egui::Painter, bar: Rect, pos: f32, below: Color32) {
 /// when that receiver is the one being driven.
 fn receiver_tab(painter: &egui::Painter, r: Rect, letter: &str, color: Color32, active: bool) {
     let tab = Rect::from_min_size(r.left_top() + vec2(8.0, 8.0), vec2(14.0, 14.0));
-    painter.rect_filled(tab, CornerRadius::same(3), alpha(color, if active { 0.9 } else { 0.3 }));
-    painter.text(tab.center(), Align2::CENTER_CENTER, letter, theme::mono_bold(10.0), if active { theme::ink() } else { theme::text() });
+    painter.rect_filled(tab, CornerRadius::same(crate::theme::R_KEY), alpha(color, if active { 0.9 } else { 0.3 }));
+    painter.text(tab.center(), Align2::CENTER_CENTER, letter, theme::mono_bold(crate::theme::ty::MICRO), if active { theme::ink() } else { theme::text() });
 }
 
 /// A waterfall age for the time axis: m:ss on an axis that reaches a
@@ -2874,24 +2876,24 @@ fn paint_b_flag(painter: &egui::Painter, frost: &Frost, pan: Rect, x: f32, b: &R
     let right = x + 10.0 + w < pan.right() - 4.0;
     let left = if right { x + 10.0 } else { x - 10.0 - w };
     let r = Rect::from_min_size(pos2(left, top), vec2(w, h));
-    frost.plate(painter, r, 4, alpha(theme::VIOLET, 0.55));
+    frost.plate(painter, r, theme::RADIUS, alpha(theme::VIOLET, 0.55));
     if b.active {
         painter.rect_filled(Rect::from_min_size(r.left_top(), vec2(16.0, 2.0)), CornerRadius::ZERO, theme::EMBER);
     }
     receiver_tab(painter, r, "B", theme::VIOLET, b.active);
     let anchor = if right { r.left() } else { r.right() };
     painter.line_segment([pos2(x, r.top() + 12.0), pos2(anchor, r.top() + 12.0)], Stroke::new(1.0, alpha(theme::VIOLET, 0.5)));
-    crate::widgets::rolling_text(painter, egui::Id::new("flag-b-freq"), r.left_top() + vec2(27.0, 6.0), Align2::LEFT_TOP, &crate::tuning::fmt_mhz(b.freq_hz, 4), theme::mono_bold(12.5), theme::text());
-    painter.text(r.right_top() + vec2(-8.0, 7.0), Align2::RIGHT_TOP, b.mode.label(), theme::mono(10.0), theme::VIOLET);
+    crate::widgets::rolling_text(painter, egui::Id::new("flag-b-freq"), r.left_top() + vec2(27.0, 6.0), Align2::LEFT_TOP, &crate::tuning::fmt_mhz(b.freq_hz, 4), theme::mono_bold(crate::theme::ty::LEDE), theme::text());
+    painter.text(r.right_top() + vec2(-8.0, 7.0), Align2::RIGHT_TOP, b.mode.label(), theme::mono(crate::theme::ty::MICRO), theme::VIOLET);
     match (&b.note, b.level) {
         (Some(n), _) => {
-            let n = crate::widgets::ellipsize(painter, n, theme::sans(11.0), w - 16.0);
-            painter.text(r.left_top() + vec2(8.0, 25.0), Align2::LEFT_TOP, n, theme::sans(11.0), theme::WARN);
+            let n = crate::widgets::ellipsize(painter, n, theme::sans(crate::theme::ty::SMALL), w - 16.0);
+            painter.text(r.left_top() + vec2(8.0, 25.0), Align2::LEFT_TOP, n, theme::sans(crate::theme::ty::SMALL), theme::WARN);
         }
         (None, Some(l)) => {
             let bar = Rect::from_min_size(r.left_top() + vec2(8.0, 29.0), vec2(w - 64.0, 5.0));
             mini_meter(painter, bar, crate::meter::frac(l), theme::VIOLET);
-            painter.text(pos2(r.right() - 8.0, bar.center().y), Align2::RIGHT_CENTER, crate::meter::s_label(Some(l)), theme::mono_bold(10.5), theme::text());
+            painter.text(pos2(r.right() - 8.0, bar.center().y), Align2::RIGHT_CENTER, crate::meter::s_label(Some(l)), theme::mono_bold(crate::theme::ty::LABEL), theme::text());
         }
         _ => {}
     }

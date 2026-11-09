@@ -158,7 +158,7 @@ pub fn view(app: &mut App, ui: &mut Ui) {
             _ => widgets::chip(ui, Tone::Idle, "WAITING FOR A VIS CODE"),
         };
         for f in &r.facts {
-            ui.label(RichText::new(format!("{} {}", f.label, f.value)).font(theme::mono(10.5)).color(theme::text_2()));
+            ui.label(RichText::new(format!("{} {}", f.label, f.value)).font(theme::mono(crate::theme::ty::LABEL)).color(theme::text_2()));
         }
         crate::widgets::enabled_or(ui, on, "Switch the receiver to this mode to use these", |ui| {
             let receiving = r.fax_state.as_deref() == Some("receiving");
@@ -211,10 +211,10 @@ fn canvas(app: &mut App, ui: &mut Ui, h: f32) {
     let w = ui.available_width();
     let (outer, _) = ui.allocate_exact_size(vec2(w, h), Sense::hover());
     let p = ui.painter_at(outer);
-    p.rect_filled(outer, CornerRadius::same(4), theme::ink());
+    p.rect_filled(outer, CornerRadius::same(crate::theme::RADIUS), theme::ink());
     let ctx = ui.ctx().clone();
     let Some(i) = app.sstv.shown_index() else {
-        p.text(outer.center(), egui::Align2::CENTER_CENTER, "Pictures draw here as they arrive. 14.230 MHz carries the most; the band keys above tune it.", theme::sans(12.0), theme::text_3());
+        p.text(outer.center(), egui::Align2::CENTER_CENTER, "Pictures draw here as they arrive. 14.230 MHz carries the most; the band keys above tune it.", theme::sans(crate::theme::ty::BODY), theme::text_3());
         return;
     };
     let newest = i + 1 == app.sstv.pictures.len();
@@ -234,15 +234,15 @@ fn canvas(app: &mut App, ui: &mut Ui, h: f32) {
         let top_left = pos2(outer.center().x - size.x / 2.0, outer.top() + (outer.height() - total_rows * scale) / 2.0);
         let r = egui::Rect::from_min_size(top_left, size);
         p.image(tex, r, uv, egui::Color32::WHITE);
-        p.rect_stroke(egui::Rect::from_min_size(top_left, vec2(size.x, total_rows * scale)), CornerRadius::same(2), Stroke::new(1.0, theme::line()), egui::StrokeKind::Outside);
+        p.rect_stroke(egui::Rect::from_min_size(top_left, vec2(size.x, total_rows * scale)), CornerRadius::same(crate::theme::R_CAP), Stroke::new(1.0, theme::line()), egui::StrokeKind::Outside);
         if live {
             let y = r.bottom();
             p.line_segment([pos2(r.left(), y), pos2(r.right(), y)], Stroke::new(2.0, alpha(theme::AMBER, 0.8)));
         }
     }
-    let g = p.layout_no_wrap(label, theme::mono(10.5), theme::text());
+    let g = p.layout_no_wrap(label, theme::mono(crate::theme::ty::LABEL), theme::text());
     let tag = egui::Rect::from_min_size(outer.left_top() + vec2(8.0, 8.0), g.size() + vec2(10.0, 6.0));
-    p.rect_filled(tag, CornerRadius::same(3), alpha(theme::ink(), 0.78));
+    p.rect_filled(tag, CornerRadius::same(crate::theme::R_KEY), alpha(theme::ink(), 0.78));
     p.galley(tag.min + vec2(5.0, 3.0), g, theme::text());
 }
 
@@ -256,12 +256,12 @@ fn strip(app: &mut App, ui: &mut Ui) {
             for (k, pic) in app.sstv.pictures.iter_mut().enumerate() {
                 let (r, resp) = ui.allocate_exact_size(vec2(84.0, 63.0), Sense::click());
                 let p = ui.painter_at(r);
-                p.rect_filled(r, CornerRadius::same(3), theme::ink());
+                p.rect_filled(r, CornerRadius::same(crate::theme::R_KEY), theme::ink());
                 if let Some(tex) = pic.texture(&ctx).map(|t| t.id()) {
                     p.image(tex, r.shrink(1.0), pic.uv(), egui::Color32::WHITE);
                 }
                 let c = if shown == Some(k) { theme::AMBER } else if resp.hovered() { theme::text_2() } else { theme::line() };
-                p.rect_stroke(r, CornerRadius::same(3), Stroke::new(if shown == Some(k) { 2.0 } else { 1.0 }, c), egui::StrokeKind::Inside);
+                p.rect_stroke(r, CornerRadius::same(crate::theme::R_KEY), Stroke::new(if shown == Some(k) { 2.0 } else { 1.0 }, c), egui::StrokeKind::Inside);
                 if resp.on_hover_text(pic.mode.clone()).clicked() {
                     pick = Some(if k + 1 == n { None } else { Some(pic.id) });
                 }

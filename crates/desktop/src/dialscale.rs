@@ -52,7 +52,7 @@ pub fn show(app: &mut App, ui: &mut Ui, width: f32) {
             let h = if major { 9.0 } else if k == 5 { 5.0 } else { 3.0 };
             cp.line_segment([pos2(x, inner.top()), pos2(x, inner.top() + h)], Stroke::new(1.0, alpha(text, if major { 0.65 } else { 0.28 })));
             if major && x - last_label > 34.0 && x + 30.0 < inner.right() {
-                let g = cp.layout_no_wrap(decade(hz), theme::mono_bold(9.0), text);
+                let g = cp.layout_no_wrap(decade(hz), theme::mono_bold(crate::theme::ty::MICRO), text);
                 let (l, r) = (x + 3.0, x + 3.0 + g.size().x);
                 if !needles.iter().any(|n| *n > l - 5.0 && *n < r + 5.0) {
                     cp.galley(pos2(l, inner.top() + 1.0), g, alpha(text, 0.8));
@@ -69,8 +69,8 @@ pub fn show(app: &mut App, ui: &mut Ui, width: f32) {
         let (x0, x1) = (x_of(pan.center_hz - pan.span_hz / 2.0), x_of(pan.center_hz + pan.span_hz / 2.0));
         let (x0, x1) = if x1 - x0 < 3.0 { ((x0 + x1) / 2.0 - 1.5, (x0 + x1) / 2.0 + 1.5) } else { (x0, x1) };
         let win = Rect::from_min_max(pos2(x0, inner.top()), pos2(x1, inner.bottom()));
-        cp.rect_filled(win, CornerRadius::same(1), alpha(tint, 0.13));
-        cp.rect_stroke(win, CornerRadius::same(1), Stroke::new(1.0, alpha(tint, 0.35)), egui::StrokeKind::Inside);
+        cp.rect_filled(win, CornerRadius::same(crate::theme::R_CELL), alpha(tint, 0.13));
+        cp.rect_stroke(win, CornerRadius::same(crate::theme::R_CELL), Stroke::new(1.0, alpha(tint, 0.35)), egui::StrokeKind::Inside);
     }
 
     // A drag or click sets a needle that follows the pointer; it tunes on

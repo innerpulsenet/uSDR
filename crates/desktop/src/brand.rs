@@ -250,7 +250,7 @@ pub fn vtx(pos: Pos2, color: Color32) -> egui::epaint::Vertex {
 pub fn credit(ui: &mut egui::Ui) {
     let galley = ui.painter().layout_no_wrap(
         "innerpulse".into(),
-        theme::mono(11.0),
+        theme::mono(crate::theme::ty::SMALL),
         theme::text_3(),
     );
     let (rect, resp) = ui.allocate_exact_size(
@@ -264,7 +264,7 @@ pub fn credit(ui: &mut egui::Ui) {
         pos2(mark.right() + 5.0, rect.center().y),
         egui::Align2::LEFT_CENTER,
         "innerpulse",
-        theme::mono(11.0),
+        theme::mono(crate::theme::ty::SMALL),
         color,
     );
     if resp.on_hover_text("An innerpulse project").clicked() {

@@ -287,7 +287,7 @@ impl Colormap {
             }
         }
         painter.add(egui::Shape::mesh(mesh));
-        painter.rect_stroke(r, egui::CornerRadius::same(2), egui::Stroke::new(1.0, crate::theme::line_2()), egui::StrokeKind::Outside);
+        painter.rect_stroke(r, egui::CornerRadius::same(crate::theme::R_CAP), egui::Stroke::new(1.0, crate::theme::line_2()), egui::StrokeKind::Outside);
     }
 }
 
