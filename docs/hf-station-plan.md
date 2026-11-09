@@ -206,7 +206,8 @@ files are immutable and can cache for a long time.
 
 **Access until launch.** `/etc/apache2/hf-access.conf` on arm2 lists the addresses allowed to
 read the pages, and is not in this repo. Launching means replacing its contents with
-`Require all granted`, then `sudo systemctl reload apache2`. Ingest stays open to the token.
+`Require all granted`, then `sudo systemctl reload apache2`. Until then IPv6 access is by
+/64, because a home computer's temporary IPv6 address rotates. Ingest stays open to the token.
 
 **Done when:** a day of data arrives with no gaps or duplicates, a forced outage of
 arm2 catches up by itself, and ingest rejects bad tokens, unlisted modes and
@@ -214,7 +215,7 @@ anything above 30 MHz.
 
 ## Phase 5: the site
 
-Static HTML, CSS and JS in the innerpulse Carbon look with the shared masthead,
+Static HTML, CSS and JS on the innerpulse brand kit in Carbon, copied into `site/brand`,
 linked with `dx.innerpulse.net`.
 
 **Pages:** Now, Map, Activity, Pictures, Log, and Station (how it works and what
@@ -224,12 +225,15 @@ was monitored).
 
 - SVG, with Natural Earth 110m, 50m and 10m simplified at build time by a new
   `tools/gen-site-map.py`, swapped in by zoom level. No tile service.
-- Wheel zoom, drag to pan, drag a box to zoom to an area, presets (North Atlantic,
-  Caribbean, Europe, Pacific), and the view kept in the URL.
-- Two projections: equirectangular, and azimuthal centered on the station, where
-  distance and bearing read directly.
-- **Stations are drawn as squares, not pins.** Grid fields at world zoom, 4-character
-  squares when closer. Only positions a decoder actually reported get a point.
+- Wheel zoom, drag to pan, drag a box to zoom to an area, presets (North America,
+  Caribbean, South America, Europe), and the view kept in the URL.
+- Two projections: Miller with filled land, and azimuthal centered on the station,
+  where distance and bearing read directly.
+- **One dot per 4-character square, at the square's center.** Size is spots in decades,
+  color is one of three band groups (the most the brand's chart rules allow where marks
+  can touch). Close in, each square's true extent is drawn, so a dot never claims more
+  precision than a square. Only positions a decoder actually reported get a point of
+  their own.
 - Layers: amateur squares, HFDL tracks and ground stations, DSC positions, great
   circle paths, day/night line.
 - HFDL tracks are ordered by each fix's own `fixUtc`, never by `at_utc`: aircraft
@@ -267,6 +271,70 @@ The legal side of repeating non-broadcast traffic deserves a check before launch
 publication rules are confirmed against the live API output, including a search of
 every public file for the station's callsign. The site goes public at this point.
 
+## Wideband: several decoders from one capture
+
+Added 2026-11-09. Today the receiver runs one HF decoder and the schedule hops it
+between dials, so most of the 8 MHz span feeds only the waterfall. On the first day
+40 m FT8 got about 2.4 hours of air and the map covered 11 hours of 24. One capture
+can carry many of the digital channels at once; the schedule would then choose a
+slice of spectrum instead of a single frequency.
+
+Takes effect after Phase 5 and before Phase 6. The Claude planner should reason about
+slices, and yields measured while hopping are not directly comparable with these.
+
+| Slice | Center | What fits inside it | Span of the amateur channels |
+|---|---|---|---|
+| Low (night) | About 6.9 MHz | FT8, FT4, WSPR, JS8 on 80, 40, 30 m; DSC 4, 6, 8 MHz; HFDL 5.5, 6.6, 8.9, 10 MHz; SELCAL; WWV 5 and 10 MHz | 3.57 to 10.14 MHz |
+| Middle (day) | About 17.6 MHz | FT8, FT4, WSPR, JS8 on 20, 17, 15 m; DSC 16 MHz; HFDL 15 and 17.9 MHz; WWV 15 MHz | 14.07 to 21.14 MHz |
+| High (openings) | About 24.6 MHz | FT8, FT4, WSPR, JS8 on 15, 12, 10 m | 21.07 to 28.18 MHz |
+
+An 8 MHz capture reaches about 4 MHz either side of center, less the filter's roll-off.
+DSC 12 MHz, HFDL 11.3, 13.3 and 21.9 MHz, and FT8 on 17 m together with 10 m do not fit
+in these slices, so they stay on hops or wait for a turn. The slices may move once real
+yields are in.
+
+**What has to change.**
+
+- **Channels from the span.** A narrow channel filter per decoder, one `HfDecoder` per
+  channel. The AIS path in `sdr.rs` already takes both its channels from the span and
+  is the model; `sub_rx.rs` has no decoders today.
+- **FT8 and FT4 bursts.** Every channel's slot ends at the same instant. Decodes go through
+  a bounded pool on CT 216's two cores, with a time budget per slot. A channel that
+  misses its budget is counted and recorded as a gap, never silently dropped.
+- **The schedule.** A slot becomes a slice plus a channel list. Timetabled charts run as
+  one more channel when their frequency is inside the slice and otherwise take the radio as
+  they do now. Operator holds and pictures in progress keep their priority.
+- **Radio check.** WWV sits inside the low and middle slices, so the check can run
+  continuously from a channel instead of costing a hop.
+- **Log.** One `listening` row per channel, so rows overlap in time and yield per
+  dial stays correct. A new column tells a slice's rows apart from hopped ones.
+- **Site.** "Time on air" becomes channel-hours beside receiver-hours, and
+  "decodes per hour on air" stays per channel. Both have to be labeled so the figures
+  stay honest.
+- **Uplink and backend.** Rows already carry dial and mode, so these should need no
+  change beyond the new column.
+
+**Stages.**
+
+1. **Measure before building.** Confirm the RSP1A's front-end filter edges; from memory it
+   switches at 12 MHz, which is why no slice crosses it. Then record clipping and noise floor
+   at 8 MHz on each slice, day and night, on the real antenna, and bench three FT8 channels
+   on CT 216 for CPU. If the low slice clips at any usable gain, narrow the slice or stop here.
+2. **FT8 on 80, 40 and 30 m together**, behind a setting, with decode counts compared to
+   hopped slots on the same dials.
+3. **The other amateur modes and DSC** on the same capture, then HFDL.
+4. **The schedule picks slices**, the log and site show overlapping channels, then the middle
+   and high slices.
+
+Measurements can run as manual interruptions during the 72-hour soak. The first wideband
+deploy waits until that soak passes, because any daemon deploy restarts its clock.
+
+**Done when:** a slice holds every planned channel for 72 hours with no clipped or
+unhealthy stretches beyond what hopping shows, no channel misses its decode budget, FT8
+decodes per dial per hour are at least what a dedicated hop gets, and the site's figures
+say what they measure. Run `tools/tune-roundtrip.py` and `tools/hf-live-check.py` per
+the working rules.
+
 ## Phase 6: Claude planner (desktop)
 
 Only after a few weeks of Phase 2 data, so it has real yield numbers to reason from.
@@ -291,13 +359,6 @@ Later uses can share this module: identify-a-signal, and captions for the site.
 
 **Done when:** a generated plan beats the plain scorer on measured valid decodes per
 monitored hour over two comparable weeks. If it doesn't, keep the scorer.
-
-## Later: several decoders at once
-
-An 8 MHz span holds 7.074, 10.136 and 14.074 MHz together. Running one decoder per
-channel would multiply coverage, at the cost of CPU on CT 216's two cores and
-possibly dynamic range on HF. Worth measuring once the log shows what time-sharing
-misses. With a loop this size, test for clipping at the wide span first.
 
 ## Risks
 
