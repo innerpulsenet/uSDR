@@ -85,7 +85,7 @@ fn window_key(ui: &mut Ui, glyph: Glyph, tip: &str, danger: bool) -> egui::Respo
     let (r, resp) = ui.allocate_exact_size(vec2(30.0, 26.0), Sense::click());
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, tip));
     let (_, label) = crate::widgets::paint_key(ui, &resp, r, CornerRadius::same(theme::RADIUS), false, theme::AMBER);
-    let h = ui.ctx().animate_bool_with_time(resp.id.with("danger"), danger && resp.hovered(), 0.12);
+    let h = crate::anim::ease_bool(ui.ctx(), resp.id.with("danger"), danger && resp.hovered(), crate::anim::HOVER_S);
     let p = ui.painter();
     if h > 0.0 {
         p.rect_filled(r, CornerRadius::same(theme::RADIUS), alpha(theme::ACTION, 0.9 * h));

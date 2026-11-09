@@ -1987,6 +1987,7 @@ impl App {
     pub fn tick(&mut self, ctx: &egui::Context) {
         // For the house widgets, which have no App to ask.
         crate::widgets::set_reduce_motion(ctx, self.reduce_motion());
+        crate::widgets::note_wheel(ctx);
         let events: Vec<NetEvent> = match &self.link {
             Some(l) => l.events.try_iter().take(512).collect(),
             None => Vec::new(),
@@ -2142,12 +2143,12 @@ impl App {
                 // takes B's violet as the wash does.
                 let r = ui.max_rect().expand2(vec2(EDGE as f32, 8.0));
                 let on_b = self.active_b && self.status.rx2.is_some();
-                let b = ui.ctx().animate_bool_with_time(egui::Id::new("rx-b-wash"), on_b, 0.2);
+                let b = crate::anim::ease_bool(ui.ctx(), egui::Id::new("rx-b-wash"), on_b, crate::anim::WASH_S);
                 ui.painter().rect_filled(Rect::from_min_size(r.left_top(), vec2(16.0, 2.0)), CornerRadius::ZERO, theme::lerp(theme::EMBER, theme::VIOLET, b));
                 // The edge light: amber for A, violet for B. On a switch it
                 // runs out across the bar and back as its color turns.
                 let rm = self.reduce_motion();
-                let sweep = if rm { if on_b { 1.0 } else { 0.0 } } else { ui.ctx().animate_bool_with_time(egui::Id::new("rx-edge-sweep"), on_b, 0.45) };
+                let sweep = if rm { if on_b { 1.0 } else { 0.0 } } else { crate::anim::ease_bool(ui.ctx(), egui::Id::new("rx-edge-sweep"), on_b, crate::anim::SWEEP_S) };
                 let travel = (sweep * std::f32::consts::PI).sin() * 0.6;
                 theme::edge_light(ui.painter(), r.shrink2(vec2(0.0, 0.0)), theme::lerp(theme::AMBER, theme::VIOLET, b), travel);
             })
@@ -2229,7 +2230,7 @@ fn error_chip(ui: &mut Ui, what: &str, e: &str, retry: bool) -> egui::Response {
     let text = format!("▲ {what}: {}{}", crate::widgets::ellipsize(ui.painter(), error_gist(e), theme::mono(10.5), 280.0), if retry { " · RETRY" } else { "" });
     let g = ui.painter().layout_no_wrap(text, theme::mono(10.5), theme::ERR);
     let (rect, resp) = ui.allocate_exact_size(g.size() + vec2(14.0, 6.0), if retry { egui::Sense::click() } else { egui::Sense::hover() });
-    let hover = ui.ctx().animate_bool_with_time(resp.id.with("hv"), retry && resp.hovered(), 0.12);
+    let hover = crate::anim::ease_bool(ui.ctx(), resp.id.with("hv"), retry && resp.hovered(), crate::anim::HOVER_S);
     ui.painter().rect(rect, CornerRadius::same(3), alpha(theme::ERR, 0.08 + 0.10 * hover), Stroke::new(1.0, alpha(theme::ERR, 0.55)), egui::StrokeKind::Inside);
     ui.painter().galley(rect.min + vec2(7.0, 3.0), g, theme::ERR);
     resp.on_hover_text(if retry { format!("{e}\n\nClick to open the audio output again") } else { e.to_string() })

@@ -543,7 +543,7 @@ fn mode_board(app: &App, ui: &mut Ui, id: &str, rows: &[Vec<Vec<Key>>], current:
             Key::Data => "DATA",
         };
         resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::RadioButton, true, on, shown));
-        let hover = ui.ctx().animate_bool_with_time(resp.id.with("hv"), resp.hovered() && !on, 0.12);
+        let hover = crate::anim::ease_bool(ui.ctx(), resp.id.with("hv"), resp.hovered() && !on, crate::anim::HOVER_S);
         let state = theme::KeyState { hover, on: 0.0, press: 0.0, color: want, focus: resp.has_focus() };
         theme::key_body(&p, cell.shrink2(vec2(0.5, 0.0)), *corners, state);
         states.push((resp, state));
@@ -551,7 +551,7 @@ fn mode_board(app: &App, ui: &mut Ui, id: &str, rows: &[Vec<Vec<Key>>], current:
     if let Some((_, c, corners)) = cells.iter().find(|(k, _, _)| *k == lit_key) {
         let reduce = ui.data(|d| d.get_temp::<bool>(egui::Id::new("usdr-reduce-motion")).unwrap_or(false));
         let t = if reduce { 0.0 } else { 0.18 };
-        let anim = |name: &str, v: f32| ui.ctx().animate_value_with_time(id.with(name), v, t);
+        let anim = |name: &str, v: f32| crate::anim::ease_value(ui.ctx(), id.with(name), v, t);
         let rect = egui::Rect::from_min_max(egui::pos2(anim("l", c.left()), anim("t", c.top())), egui::pos2(anim("r", c.right()), anim("b", c.bottom())));
         let col = egui::Color32::from_rgb(anim("cr", want.r() as f32) as u8, anim("cg", want.g() as f32) as u8, anim("cb", want.b() as f32) as u8);
         theme::key_body(&p, rect.shrink2(vec2(0.5, 0.0)), *corners, theme::KeyState { hover: 0.0, on: 1.0, press: 0.0, color: col, focus: false });
@@ -764,7 +764,7 @@ fn shape_key(ui: &mut Ui, shape: FilterShape, height: f32) -> Option<FilterShape
         for s in FilterShape::ALL {
             let (row, r) = ui.allocate_exact_size(vec2(320.0, 40.0), Sense::click());
             r.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::RadioButton, true, s == shape, s.label()));
-            let hv = ui.ctx().animate_bool_with_time(r.id.with("hv"), r.hovered(), 0.1);
+            let hv = crate::anim::ease_bool(ui.ctx(), r.id.with("hv"), r.hovered(), crate::anim::HOVER_S);
             let on = s == shape;
             let p = ui.painter();
             if on || hv > 0.0 {
@@ -1376,7 +1376,7 @@ fn stereo_badge(ui: &mut Ui, st: &usdr_proto::StereoReading, mp: Option<(f32, bo
         ui.ctx().data_mut(|d| d.insert_temp(key, next));
         next
     };
-    let lit = ui.ctx().animate_bool_with_time(id.with("lit"), st.pilot, if reduce_motion { 0.0 } else { 0.2 });
+    let lit = crate::anim::ease_bool(ui.ctx(), id.with("lit"), st.pilot, if reduce_motion { 0.0 } else { crate::anim::WASH_S });
     let col = theme::lerp(alpha(on, 0.45), on, lit);
     let word = if !st.pilot {
         "MONO".to_string()
@@ -1569,7 +1569,7 @@ fn memory_pill(ui: &mut Ui, slot: usize, m: Option<&crate::prefs::Memory>, lit: 
     let (rect, resp) = ui.allocate_exact_size(vec2(w, 22.0), Sense::click());
     let name = m.map_or_else(|| format!("empty slot {slot}"), |m| m.name.clone());
     resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, lit, &name));
-    let hover = ui.ctx().animate_bool_with_time(resp.id.with("hv"), resp.hovered(), 0.12);
+    let hover = crate::anim::ease_bool(ui.ctx(), resp.id.with("hv"), resp.hovered(), crate::anim::HOVER_S);
     let y = rect.center().y;
     match parts {
         Some((f, n)) => {

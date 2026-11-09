@@ -160,7 +160,7 @@ fn rail(app: &mut App, ui: &mut Ui) {
     let top = outer.top() + 6.0;
     let rm = app.reduce_motion();
     let idx = Page::ALL.iter().position(|p| *p == app.settings_page).unwrap_or(0) as f32;
-    let y = if rm { idx } else { ui.ctx().animate_value_with_time(egui::Id::new("settings-rail"), idx, 0.16) };
+    let y = if rm { idx } else { crate::anim::ease_value(ui.ctx(), egui::Id::new("settings-rail"), idx, crate::anim::SLIDE_S) };
     let lit = egui::Rect::from_min_size(pos2(outer.left() + 4.0, top + y * row_h), vec2(RAIL_W - 8.0, row_h - 2.0));
     p.rect_filled(lit, CornerRadius::same(4), alpha(theme::AMBER, 0.12));
     p.rect_filled(egui::Rect::from_min_size(lit.left_top() + vec2(0.0, 6.0), vec2(2.0, row_h - 14.0)), CornerRadius::same(1), theme::AMBER);

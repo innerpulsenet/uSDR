@@ -28,6 +28,73 @@ pub fn eat_scroll(ui: &Ui) {
     ui.ctx().input_mut(|i| i.smooth_scroll_delta = egui::Vec2::ZERO);
 }
 
+/// Whose the wheel is, between a scrolling panel and the controls in it.
+#[derive(Clone, Copy, Default)]
+struct WheelClaim {
+    /// Where the pointer was at the last wheel turn no control took: the
+    /// panel's own scrolling.
+    scrolled_at: Option<egui::Pos2>,
+    /// A turn this frame that no control has taken yet.
+    pending: Option<egui::Pos2>,
+    /// The control turning with the wheel, and when it last did.
+    owner: Option<(egui::Id, f64)>,
+}
+
+/// Once a frame, before any control is laid out: a wheel turn nothing
+/// claimed last frame was the panel scrolling.
+pub fn note_wheel(ctx: &egui::Context) {
+    let id = egui::Id::new("wheel-claim");
+    let turned = ctx.input(|i| i.raw.events.iter().any(|e| matches!(e, egui::Event::MouseWheel { .. })));
+    let at = ctx.input(|i| i.pointer.latest_pos());
+    ctx.data_mut(|d| {
+        let c = d.get_temp_mut_or_default::<WheelClaim>(id);
+        if c.pending.is_some() {
+            c.scrolled_at = c.pending.take();
+        }
+        if turned {
+            c.pending = at;
+        }
+    });
+}
+
+/// The wheel's notches for a control inside a scrolling panel, or none
+/// when the turn belongs to the panel. Scrolling the side column used to
+/// change whatever fader passed under the pointer: RF gain, squelch. A
+/// control takes the wheel only once the pointer has been moved onto it,
+/// and keeps it while the turning goes on; a control that slid under a
+/// pointer that has not moved since the panel scrolled is passed over.
+pub fn wheel_over(ui: &Ui, control: egui::Id) -> f32 {
+    let notches = wheel(ui);
+    if notches == 0.0 {
+        return 0.0;
+    }
+    let id = egui::Id::new("wheel-claim");
+    let now = ui.input(|i| i.time);
+    let at = ui.input(|i| i.pointer.latest_pos());
+    let take = ui.ctx().data_mut(|d| {
+        let c = d.get_temp_mut_or_default::<WheelClaim>(id);
+        let mine = c.owner.is_some_and(|(o, t)| o == control && now - t < 1.5);
+        let moved = match (c.scrolled_at, at) {
+            (Some(a), Some(b)) => a.distance(b) > 3.0,
+            _ => true,
+        };
+        if mine || moved {
+            c.owner = Some((control, now));
+            c.pending = None;
+            c.scrolled_at = None;
+            true
+        } else {
+            false
+        }
+    });
+    if take {
+        eat_scroll(ui);
+        notches
+    } else {
+        0.0
+    }
+}
+
 /// An applet: a mono eyebrow over its controls, collapsible by its header.
 pub fn applet<R>(ui: &mut Ui, id: &str, title: &str, extra: impl FnOnce(&mut Ui), add: impl FnOnce(&mut Ui) -> R) -> Option<R> {
     applet_opened(ui, id, title, true, extra, add)
@@ -64,7 +131,7 @@ fn applet_opened<R>(ui: &mut Ui, id: &str, title: &str, first_open: bool, extra:
             // The body folds and unfolds with the chevron: it is laid out at
             // its full height and shown through a window that grows with
             // the same animation, so what is hidden cannot be hit either.
-            let lin = ui.ctx().animate_bool_with_time(open_id.with("a"), open, FOLD_S);
+            let lin = crate::anim::ease_bool(ui.ctx(), open_id.with("a"), open, if reduced(ui) { 0.0 } else { FOLD_S });
             let t = fold(ui, open_id, open);
             if lin <= 0.001 {
                 return None;
@@ -103,7 +170,7 @@ const FOLD_S: f32 = 0.26;
 /// few percent past open and settles back; folding, it eases shut. Snaps
 /// with reduced motion.
 fn fold(ui: &Ui, id: egui::Id, open: bool) -> f32 {
-    let lin = ui.ctx().animate_bool_with_time(id.with("a"), open, if reduced(ui) { 0.0 } else { FOLD_S });
+    let lin = crate::anim::ease_bool(ui.ctx(), id.with("a"), open, if reduced(ui) { 0.0 } else { FOLD_S });
     if open { spring_out(lin) } else { lin * lin * (3.0 - 2.0 * lin) }
 }
 
@@ -223,7 +290,7 @@ pub fn window<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
 pub fn lcd_selector<R>(ui: &mut Ui, id: &str, caption: &str, value: &str, tint: Color32, width: f32, add: impl FnOnce(&mut Ui) -> R) -> Option<R> {
     let (rect, resp) = ui.allocate_exact_size(vec2(width, 24.0), Sense::click());
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, true, format!("{caption} {value}")));
-    let hover = ui.ctx().animate_bool_with_time(resp.id.with("hv"), resp.hovered(), 0.12);
+    let hover = crate::anim::ease_bool(ui.ctx(), resp.id.with("hv"), resp.hovered(), crate::anim::HOVER_S);
     let p = ui.painter_at(rect.expand(3.0));
     crate::vfo::lcd_back(&p, rect, tint);
     let lit = theme::lerp(theme::text(), tint, 0.28);
@@ -284,8 +351,8 @@ pub fn key_font() -> egui::FontId {
 pub fn paint_key(ui: &Ui, resp: &Response, rect: Rect, radius: CornerRadius, on: bool, lit: Color32) -> (f32, Color32) {
     let enabled = ui.is_enabled();
     let k = theme::KeyState {
-        hover: ui.ctx().animate_bool_with_time(resp.id.with("hv"), enabled && resp.hovered(), 0.12),
-        on: ui.ctx().animate_bool_with_time(resp.id.with("on"), on, 0.15),
+        hover: crate::anim::ease_bool(ui.ctx(), resp.id.with("hv"), enabled && resp.hovered(), crate::anim::HOVER_S),
+        on: crate::anim::ease_bool(ui.ctx(), resp.id.with("on"), on, crate::anim::SLIDE_S),
         press: if enabled { pressed(ui, resp) } else { 0.0 },
         color: theme::on_color(lit),
         focus: resp.has_focus(),
@@ -393,7 +460,7 @@ pub fn primary(ui: &mut Ui, label: &str) -> Response {
     let galley = ui.painter().layout_no_wrap(label.to_uppercase(), theme::mono_bold(11.5), text);
     let (rect, resp) = ui.allocate_exact_size(vec2(galley.size().x + 32.0, 32.0), Sense::click());
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, label));
-    let hover = ui.ctx().animate_bool_with_time(resp.id.with("hv"), resp.hovered(), 0.12);
+    let hover = crate::anim::ease_bool(ui.ctx(), resp.id.with("hv"), resp.hovered(), crate::anim::HOVER_S);
     let p = ui.painter();
     p.rect_filled(rect, CornerRadius::same(theme::RADIUS), theme::lerp(theme::AMBER, theme::AMBER_HOVER, hover));
     let press = pressed(ui, &resp);
@@ -477,7 +544,7 @@ impl<F: Fn(f64) -> String> Fader<'_, F> {
         mesh.add_triangle(0, 1, 2);
         mesh.add_triangle(2, 1, 3);
         p.add(egui::Shape::mesh(mesh));
-        let hover = ui.ctx().animate_bool_with_time(resp.id.with("hv"), resp.hovered() || resp.dragged(), 0.12);
+        let hover = crate::anim::ease_bool(ui.ctx(), resp.id.with("hv"), resp.hovered() || resp.dragged(), crate::anim::HOVER_S);
         theme::fader_cap(p, Rect::from_center_size(pos2(fill.right(), track.center().y), vec2(10.0, 16.0)), hover);
         for (f, label) in &self.ticks {
             let x = track.left() + track.width() * f;
@@ -503,9 +570,8 @@ impl<F: Fn(f64) -> String> Fader<'_, F> {
             }
         }
         if resp.hovered() {
-            let scroll = wheel(ui);
+            let scroll = wheel_over(ui, resp.id);
             if scroll != 0.0 {
-                eat_scroll(ui);
                 let fine = ui.input(|i| i.modifiers.shift);
                 let st = if fine { self.fine } else { self.step };
                 let v = (*self.value + scroll.signum() as f64 * st).clamp(self.min, self.max);
@@ -644,7 +710,7 @@ pub fn swatch_item(ui: &mut Ui, label: &str, palette: crate::colormap::Colormap,
     let w = ui.available_width().max(dot_w + 56.0 + 8.0 + g.size().x + 16.0);
     let (rect, resp) = ui.allocate_exact_size(vec2(w, 24.0), Sense::click());
     resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::RadioButton, true, on, label));
-    let hover = ui.ctx().animate_bool_with_time(resp.id.with("hv"), resp.hovered(), 0.12);
+    let hover = crate::anim::ease_bool(ui.ctx(), resp.id.with("hv"), resp.hovered(), crate::anim::HOVER_S);
     let p = ui.painter();
     if on || hover > 0.0 {
         p.rect_filled(rect, CornerRadius::same(3), if on { alpha(theme::AMBER, 0.14 + 0.06 * hover) } else { alpha(theme::surface_4(), 0.8 * hover) });
@@ -757,7 +823,7 @@ fn pressed(ui: &Ui, resp: &Response) -> f32 {
     if reduced(ui) {
         return if down { 1.0 } else { 0.0 };
     }
-    ui.ctx().animate_bool_with_time(resp.id.with("press"), down, 0.05)
+    crate::anim::ease_bool(ui.ctx(), resp.id.with("press"), down, crate::anim::PRESS_S)
 }
 
 fn reduce_motion_id() -> egui::Id {
@@ -808,7 +874,7 @@ pub fn segmented(ui: &mut Ui, id: &str, labels: &[&str], current: Option<usize>,
         let resp = ui.interact(*cell, id.with(i), if enabled { Sense::click() } else { Sense::hover() });
         let on = current == Some(i);
         resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::RadioButton, enabled, on, *label));
-        let hover = ui.ctx().animate_bool_with_time(resp.id.with("hv"), enabled && resp.hovered() && !on, 0.12);
+        let hover = crate::anim::ease_bool(ui.ctx(), resp.id.with("hv"), enabled && resp.hovered() && !on, crate::anim::HOVER_S);
         let k = theme::KeyState { hover, on: 0.0, press: if enabled { pressed(ui, &resp) } else { 0.0 }, color, focus: resp.has_focus() };
         theme::key_body(&p, cell.shrink2(vec2(0.5, 0.0)), joined_corners(i, cells.len()), k);
         states.push((resp, k));
@@ -816,8 +882,8 @@ pub fn segmented(ui: &mut Ui, id: &str, labels: &[&str], current: Option<usize>,
     if let Some(i) = current.filter(|i| *i < cells.len()) {
         let c = cells[i];
         let t = if reduced(ui) { 0.0 } else { 0.14 };
-        let l = ui.ctx().animate_value_with_time(id.with("l"), c.left(), t);
-        let r = ui.ctx().animate_value_with_time(id.with("r"), c.right(), t);
+        let l = crate::anim::ease_value(ui.ctx(), id.with("l"), c.left(), t);
+        let r = crate::anim::ease_value(ui.ctx(), id.with("r"), c.right(), t);
         let lit = Rect::from_min_max(pos2(l, c.top()), pos2(r, c.bottom())).shrink2(vec2(0.5, 0.0));
         theme::key_body(&p, lit, joined_corners(i, cells.len()), theme::KeyState { hover: 0.0, on: 1.0, press: 0.0, color, focus: false });
     }

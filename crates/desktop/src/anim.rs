@@ -180,6 +180,58 @@ pub fn drift(ctx: &egui::Context) {
     }
 }
 
+/// How long the small motions take, in one place: a hover fade, a key going
+/// down, a backlight sliding to another key, a wash of color coming up, and
+/// the receiver edge's sweep.
+pub const HOVER_S: f32 = 0.12;
+pub const PRESS_S: f32 = 0.05;
+pub const SLIDE_S: f32 = 0.16;
+pub const WASH_S: f32 = 0.2;
+pub const SWEEP_S: f32 = 0.45;
+
+#[derive(Clone, Copy)]
+struct Ease {
+    from: f32,
+    to: f32,
+    t0: f64,
+}
+
+/// `on` as a value that takes `secs` to cross between 0 and 1. See
+/// [`ease_value`].
+#[track_caller]
+pub fn ease_bool(ctx: &egui::Context, id: egui::Id, on: bool, secs: f32) -> f32 {
+    ease_value(ctx, id, if on { 1.0 } else { 0.0 }, secs)
+}
+
+/// `target`, approached in a straight line over `secs` from wherever the
+/// value stood when the target last changed; the target itself the first
+/// time it is asked for, and with no time to take.
+///
+/// egui's own `animate_value_with_time` does the same but asks for its
+/// frames with a plain `request_repaint`, which is two paints a request at
+/// the display's full rate whatever the frame-rate setting says. This one
+/// asks through [`more`], and only while the value is still moving.
+#[track_caller]
+pub fn ease_value(ctx: &egui::Context, id: egui::Id, target: f32, secs: f32) -> f32 {
+    let now = ctx.input(|i| i.time);
+    let at = |e: &Ease| {
+        let k = if secs > 0.0 { ((now - e.t0) as f32 / secs).clamp(0.0, 1.0) } else { 1.0 };
+        e.from + (e.to - e.from) * k
+    };
+    let mut e = ctx.data(|d| d.get_temp::<Ease>(id)).unwrap_or(Ease { from: target, to: target, t0: now });
+    if e.to != target {
+        e = Ease { from: at(&e), to: target, t0: now };
+        ctx.data_mut(|d| d.insert_temp(id, e));
+    } else if e.from == e.to && e.t0 == now {
+        ctx.data_mut(|d| d.insert_temp(id, e));
+    }
+    let v = at(&e);
+    if v != target {
+        more(ctx);
+    }
+    v
+}
+
 /// Who asked for motion, counted while `USDR_QA_FPS` is set: the frame-rate
 /// line it prints names what kept the window painting.
 static ASKED: std::sync::Mutex<Option<std::collections::BTreeMap<(&'static str, u32), u32>>> = std::sync::Mutex::new(None);

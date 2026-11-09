@@ -2008,7 +2008,7 @@ impl Panafall {
         }
         // Its grip: a pill on the seam, so the seam says it moves.
         {
-            let hot = ctx.animate_bool_with_time(resp.id.with("split-hot"), split_resp.hovered() || split_resp.dragged(), 0.12);
+            let hot = crate::anim::ease_bool(&ctx, resp.id.with("split-hot"), split_resp.hovered() || split_resp.dragged(), crate::anim::HOVER_S);
             let grip = Rect::from_center_size(pos2(pan.center().x, axis.top()), vec2(40.0 + 8.0 * hot, 4.0));
             painter.rect(grip, CornerRadius::same(2), theme::lerp(theme::surface_4(), theme::AMBER, hot), Stroke::new(1.0, theme::ink()), egui::StrokeKind::Outside);
         }
@@ -2188,7 +2188,7 @@ impl Panafall {
                     (None, _) => matches!(hot, Some(EdgeDrag::High)),
                 };
                 for (x, e, key) in [(px0, EdgeDrag::Low, "grip-lo"), (px1, EdgeDrag::High, "grip-hi")] {
-                    let t = ctx.animate_bool_with_time(resp.id.with(key), held(e), 0.12);
+                    let t = crate::anim::ease_bool(&ctx, resp.id.with(key), held(e), crate::anim::HOVER_S);
                     let g = Rect::from_center_size(pos2(x, pan.center().y), vec2(4.0, 22.0 + 6.0 * t));
                     if pan.contains_rect(g) && !self.flags[0].is_some_and(|f| f.intersects(g.expand(2.0))) {
                         painter.rect(g, CornerRadius::same(2), alpha(theme::AMBER, 0.55 + 0.45 * t), Stroke::new(1.0, alpha(theme::ink(), 0.8)), egui::StrokeKind::Outside);
