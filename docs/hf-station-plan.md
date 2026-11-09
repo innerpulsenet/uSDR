@@ -1,6 +1,6 @@
 # HF monitoring station: build plan
 
-Drafted 2026-11-08. Phase 1 is built and Phase 2 is built and soaking.
+Drafted 2026-11-08. Phases 1 and 2 are deployed and soaking. Phases 3 to 5 are built and tested but not yet deployed to the daemon, and the site is limited to preview addresses.
 
 ## Goal
 
@@ -198,12 +198,15 @@ Alert when arm2 falls below 8 GB free. Then, in order: shorten full-size picture
 retention, move pictures to R2, and only if rows are still the problem, archive raw
 rows older than a year to Oracle. The hourly rollups stay small either way.
 
-**DNS.** Create `hf.innerpulse.net` → `193.122.136.83` as DNS-only, issue the
-Let's Encrypt certificate with certbot as on the other sites, then turn on the
-proxy. The zone is on SSL strict, so the origin certificate has to
-be valid before proxying. Add a Cache Rule for the JSON slices, which Cloudflare
-does not cache by default; picture files are immutable and can cache for a long
-time.
+**DNS.** `hf.innerpulse.net` → `193.122.136.83`, proxied. arm2 accepts ports 80 and 443
+only from Cloudflare, so a DNS-only stage cannot work: Let's Encrypt reaches the webroot
+through the proxy, and that path answers even before the origin has a certificate. Cloudflare
+does not cache JSON by default. A Cache Rule for the slices is worth adding at launch; picture
+files are immutable and can cache for a long time.
+
+**Access until launch.** `/etc/apache2/hf-access.conf` on arm2 lists the addresses allowed to
+read the pages, and is not in this repo. Launching means replacing its contents with
+`Require all granted`, then `sudo systemctl reload apache2`. Ingest stays open to the token.
 
 **Done when:** a day of data arrives with no gaps or duplicates, a forced outage of
 arm2 catches up by itself, and ingest rejects bad tokens, unlisted modes and

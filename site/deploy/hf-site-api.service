@@ -1,0 +1,30 @@
+[Unit]
+Description=HF log: ingest from the receiver's uplink
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=patrickh
+Group=patrickh
+# Holds only the SHA-256 of the uplink token.
+EnvironmentFile=/etc/hf-site.env
+Environment=HF_DB=/var/lib/hf-site/hf.sqlite
+Environment=HF_PICTURES=/home/patrickh/www/hf/pictures
+ExecStart=/usr/bin/python3 /home/patrickh/hf-site/bin/hf_api.py
+StateDirectory=hf-site
+StateDirectoryMode=0700
+Restart=on-failure
+RestartSec=5
+MemoryMax=192M
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/patrickh/www/hf/pictures
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+
+[Install]
+WantedBy=multi-user.target

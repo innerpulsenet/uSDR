@@ -1,0 +1,25 @@
+[Unit]
+Description=HF log: build the JSON the pages read
+
+[Service]
+Type=oneshot
+User=patrickh
+Group=patrickh
+Environment=HF_DB=/var/lib/hf-site/hf.sqlite
+Environment=HF_DATA=/home/patrickh/www/hf/data
+Environment=HF_PICTURES=/home/patrickh/www/hf/pictures
+ExecStart=/usr/bin/python3 /home/patrickh/hf-site/bin/hf_warm.py
+StateDirectory=hf-site
+StateDirectoryMode=0700
+Nice=19
+IOSchedulingClass=idle
+MemoryMax=256M
+TimeoutStartSec=240
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/patrickh/www/hf/data /home/patrickh/www/hf/pictures
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true

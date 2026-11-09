@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>HF Log · innerpulse</title>
+<meta name="description" content="One receiver's logbook of HF digital traffic: amateur stations, aircraft, ships and weather charts, on a zoomable map, with the hours it was not listening marked as such.">
+<meta name="theme-color" content="#0b0d10">
+<link rel="stylesheet" href="css/hf.css">
+</head>
+<body>
+<a class="skip" href="#view">Skip to content</a>
+<header class="mast">
+  <div class="mast-in">
+    <a class="mark" href="#/now" aria-label="HF Log, home">
+      <span class="lamp" id="lamp" aria-hidden="true"></span>
+      <span class="word">innerpulse</span><span class="sep" aria-hidden="true">/</span><span class="sub">hf log</span>
+    </a>
+    <nav aria-label="Sections">
+      <a href="#/now" data-view="now">Now</a>
+      <a href="#/map" data-view="map">Map</a>
+      <a href="#/activity" data-view="activity">Activity</a>
+      <a href="#/pictures" data-view="pictures">Pictures</a>
+      <a href="#/log" data-view="log">Log</a>
+      <a href="#/station" data-view="station">Station</a>
+    </nav>
+    <p class="fresh" id="fresh" aria-live="polite"></p>
+  </div>
+</header>
+<main id="view" tabindex="-1"></main>
+<footer class="foot">
+  <div class="foot-in">
+    <p>Every figure here comes from the receiver's own log. Coastlines from Natural Earth.</p>
+    <p><a href="https://dx.innerpulse.net/">dx.innerpulse.net</a>, the radio atlas</p>
+  </div>
+</footer>
+<script type="module" src="js/app.js"></script>
+</body>
+</html>
