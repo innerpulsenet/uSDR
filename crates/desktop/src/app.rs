@@ -1280,6 +1280,29 @@ impl App {
         crate::lcd::look(self.prefs.lcd, self.prefs.view.palette, is_b)
     }
 
+    /// Who has the radio. Locked is the schedule switched off, which the server
+    /// remembers, so it outlasts this window and a restart of the server. The
+    /// key keeps one width so nothing beside it moves when it changes.
+    fn radio_lock_key(&mut self, ui: &mut Ui) {
+        let Some(s) = self.schedule.clone() else { return };
+        let locked = !s.enabled;
+        let label = if locked { "RADIO LOCKED" } else { "RADIO AUTO" };
+        let width = ui.painter().layout_no_wrap("RADIO LOCKED".into(), widgets::key_font(), egui::Color32::PLACEHOLDER).size().x + 14.0;
+        let tip = if locked {
+            "Yours until you unlock it, even after this window closes. Click to hand the radio back to HF watch."
+        } else {
+            "HF watch runs the radio. Click to lock it for yourself: the schedule stays off until you unlock it, even after this window closes."
+        };
+        if widgets::chip_key_named(ui, label, "RADIO LOCK", locked, theme::AMBER, width).on_hover_text(tip).clicked() {
+            self.post("/api/station/schedule", serde_json::json!({ "enabled": locked }));
+        }
+        if s.state == "held" && s.hold_until_utc > 0 {
+            let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
+            let minutes = s.hold_until_utc.saturating_sub(now).div_ceil(60);
+            widgets::lamp_label(ui, Tone::Warn, &format!("HELD {minutes} MIN")).on_hover_text("You tuned the radio, so HF watch waits. Each touch restarts the 30 minutes. RESUME NOW is on the HF WATCH card.");
+        }
+    }
+
     fn masthead(&mut self, ui: &mut Ui) {
         let now = ui.input(|i| i.time);
         ui.horizontal_centered(|ui| {
@@ -1343,6 +1366,7 @@ impl App {
                 if icon_button(ui, "⚙", "Settings (Ctrl+,)").clicked() {
                     self.settings_open = !self.settings_open;
                 }
+                self.radio_lock_key(ui);
                 if icon_button(ui, "?", "Shortcuts and gestures (?)").clicked() {
                     self.help_open = !self.help_open;
                 }
@@ -2339,6 +2363,9 @@ mod tests {
                 for with_b in [false, true] {
                     let mut h = harness_wh(w, ht);
                     on_mode(&mut h, mode, with_b, hz);
+                    // The masthead at its fullest, with the lock key and a hold showing.
+                    h.state_mut().app.schedule = Some(proto::ScheduleStatus { enabled: true, state: "held".into(), hold_until_utc: u64::MAX / 2, health: "good".into(), ..Default::default() });
+                    h.run_steps(2);
                     let keys: Vec<(String, egui::Rect)> = h
                         .query_all(egui_kittest::kittest::By::new().predicate(|n| matches!(n.role(), Role::Button | Role::CheckBox | Role::RadioButton | Role::ComboBox | Role::Slider)))
                         .map(|n| (egui_kittest::kittest::NodeT::accesskit_node(&n).label().unwrap_or_default().to_string(), n.rect()))
@@ -2603,16 +2630,57 @@ mod tests {
         h.get_by_label("HF WATCH").click();
         h.run_steps(4);
         h.get_by_label("not checked yet");
-        h.get_by_label("START").click();
+        h.get_by_label("UNLOCK RADIO").click();
         h.run_steps(2);
         assert!(drain(&h).contains(&("/api/station/schedule".into(), json!({ "enabled": true }))));
 
         h.state_mut().app.schedule = Some(proto::ScheduleStatus { enabled: true, state: "held".into(), hold_until_utc: u64::MAX / 2, health: "good".into(), ..Default::default() });
         h.run_steps(4);
-        h.get_by_label("STOP");
+        h.get_by_label("LOCK RADIO");
         h.get_by_label("RESUME NOW").click();
         h.run_steps(2);
         assert!(drain(&h).contains(&("/api/station/schedule".into(), json!({ "resume": true }))));
+    }
+
+    #[test]
+    fn the_lock_key_clears_the_masthead_readouts_in_a_narrow_window() {
+        use egui::accesskit::Role;
+        for w in [1100.0, 1280.0] {
+            let mut h = harness_wh(w, 800.0);
+            on_mode(&mut h, Mode::Wfm, false, 100.5e6);
+            h.state_mut().app.schedule = Some(proto::ScheduleStatus { enabled: true, state: "held".into(), hold_until_utc: u64::MAX / 2, health: "good".into(), ..Default::default() });
+            h.run_steps(4);
+            let top: Vec<(String, egui::Rect)> = h
+                .query_all(egui_kittest::kittest::By::new().predicate(|n| matches!(n.role(), Role::Button | Role::Label)))
+                .map(|n| {
+                    let node = egui_kittest::kittest::NodeT::accesskit_node(&n);
+                    // A plain label carries its words as its value.
+                    (node.label().or(node.value()).unwrap_or_default().to_string(), n.rect())
+                })
+                .filter(|(_, r)| r.bottom() <= 200.0 && r.width() > 0.0)
+                .collect();
+            let held = top.iter().find(|(l, _)| l.starts_with("HELD")).expect("the hold shows").1;
+            for (label, rect) in &top {
+                if !label.starts_with("HELD") && !label.starts_with("RADIO LOCK") {
+                    assert!(!rect.intersects(held), "{label} under the hold lamp at {w}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_masthead_key_locks_and_unlocks_the_radio() {
+        let mut h = harness_wh(1400.0, 800.0);
+        h.state_mut().app.schedule = Some(proto::ScheduleStatus { enabled: true, state: "monitoring".into(), health: "good".into(), ..Default::default() });
+        h.run_steps(4);
+        h.get_by_label("RADIO LOCK").click();
+        h.run_steps(2);
+        assert!(drain(&h).contains(&("/api/station/schedule".into(), json!({ "enabled": false }))));
+        h.state_mut().app.schedule = Some(proto::ScheduleStatus { enabled: false, state: "off".into(), health: "good".into(), ..Default::default() });
+        h.run_steps(4);
+        h.get_by_label("RADIO LOCK").click();
+        h.run_steps(2);
+        assert!(drain(&h).contains(&("/api/station/schedule".into(), json!({ "enabled": true }))));
     }
 
     #[test]

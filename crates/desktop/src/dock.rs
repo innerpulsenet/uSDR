@@ -879,11 +879,11 @@ fn watch(app: &mut App, ui: &mut Ui) {
         "held" => (Tone::Warn, "held for you"),
         "failed" => (Tone::Err, "radio check failed"),
         "idle" => (Tone::Idle, "idle"),
-        _ => (Tone::Idle, "off"),
+        _ => (Tone::Warn, "locked"),
     };
     ui.horizontal(|ui| {
         widgets::chip(ui, tone, word);
-        let label = if s.enabled { "STOP" } else { "START" };
+        let label = if s.enabled { "LOCK RADIO" } else { "UNLOCK RADIO" };
         if widgets::primary(ui, label).clicked() {
             app.post("/api/station/schedule", json!({ "enabled": !s.enabled }));
         }
