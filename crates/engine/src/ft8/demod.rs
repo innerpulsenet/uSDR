@@ -279,7 +279,7 @@ impl Waterfall {
     /// Soft bits, log(P(1)/P(0)), from the tones' powers: for each bit the
     /// strongest tone that would mean a one against the strongest that
     /// would mean a zero. Scaled to the spread the decoder was tuned for.
-    pub fn llrs(&self, c: &Candidate) -> [f32; N] {
+    pub fn llrs(&self, c: &Candidate, spread: f32) -> [f32; N] {
         let mut llr = [0f32; N];
         let p = self.protocol;
         let (nd, bps) = match p {
@@ -319,7 +319,7 @@ impl Waterfall {
         let (sum, sum2) = llr.iter().fold((0.0f32, 0.0f32), |(a, b), v| (a + v, b + v * v));
         let var = (sum2 - sum * sum / N as f32) / N as f32;
         if var > 0.0 {
-            let k = (24.0 / var).sqrt();
+            let k = (spread / var).sqrt();
             llr.iter_mut().for_each(|v| *v *= k);
         }
         llr
@@ -358,8 +358,8 @@ pub(crate) fn loud_symbol_gains(rms: &[f32]) -> Vec<f32> {
 
 /// Decode one candidate to its 77-bit payload, or `None` if the code or
 /// the CRC rejects it.
-pub fn decode_candidate(wf: &Waterfall, c: &Candidate, iters: usize) -> Option<([u8; 10], usize)> {
-    let llr = wf.llrs(c);
+pub fn decode_candidate(wf: &Waterfall, c: &Candidate, iters: usize, spread: f32) -> Option<([u8; 10], usize)> {
+    let llr = wf.llrs(c, spread);
     let (cw, errors) = ldpc::bp_decode(&llr, iters);
     if errors > 0 {
         return None;

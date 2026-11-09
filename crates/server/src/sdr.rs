@@ -4389,6 +4389,8 @@ fn run_sdr(
     // short list of them kept for reuse.
     let mut clean: Arc<Vec<num_complex::Complex32>> = Arc::new(Vec::new());
     let mut clean_pool: Vec<Arc<Vec<num_complex::Complex32>>> = Vec::new();
+    let mut unblanked: Vec<num_complex::Complex32> = Vec::new();
+    let mut wide_unblanked;
     let mut demod = Demod::new(current_mode, inspect_chain.fs_out(), inspect_hz);
     {
         let mut s = status.lock().unwrap();
@@ -5555,12 +5557,16 @@ fn run_sdr(
             let buf = Arc::get_mut(&mut clean_pool[free]).expect("a buffer nobody else holds");
             buf.clear();
             buf.extend_from_slice(&block);
-            front.process(buf);
+            // With the blanker on, the channels beside the receiver take
+            // the block as it was before it.
+            let keep = wide.is_some().then_some(&mut unblanked);
+            wide_unblanked = front.process_keeping(buf, keep);
             Arc::clone(&clean_pool[free])
         };
         if let Some(w) = &wide {
             let main = crate::stationlog::monitored_mode(current_mode).map(|_| (current_mode, inspect_hz.round() as u64));
-            w.feed(&clean, current_rate, current_freq + lo_offset_for(current_rate, lo_offset, current_mode), now_ms(), main);
+            let for_channels = if wide_unblanked { Arc::new(std::mem::take(&mut unblanked)) } else { Arc::clone(&clean) };
+            w.feed(&for_channels, current_rate, current_freq + lo_offset_for(current_rate, lo_offset, current_mode), now_ms(), main);
         }
 
         // Spectrum is displayed at DEFAULT_FPS. Ingest every block so the

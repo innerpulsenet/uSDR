@@ -37,6 +37,8 @@ pub const F_LIMIT_HZ: f32 = 5_000.0;
 const MAX_CANDIDATES: usize = 300;
 const MIN_SCORE: f32 = 6.0;
 const LDPC_ITERATIONS: usize = 50;
+/// The variance soft bits are scaled to (ft8_lib's figure).
+const LLR_SPREAD: f32 = 24.0;
 /// Candidates each search's second, finer pass may try, strongest first.
 const DEEP_CANDIDATES: usize = 120;
 /// The time a decode's finer passes may take when nobody says otherwise:
@@ -44,12 +46,17 @@ const DEEP_CANDIDATES: usize = 120;
 /// that runs them ([`stream`]), from how much of the slot is left.
 const DEEP_BUDGET: std::time::Duration = std::time::Duration::from_millis(2_500);
 /// Searches of one slot, each after the last one's decodes are taken out.
-const SEARCHES: usize = 3;
+/// On 147 slots recorded off 20, 17 and 15 m (`examples/ft8_corpus`): two
+/// searches with propagation alone decoded 3712; with the aided passes,
+/// three searches 4325 and four 4394, and nothing at all with the same
+/// slots played backwards. The soft bits' scale made no difference between
+/// 14 and 40.
+const SEARCHES: usize = 4;
 /// The share of the budget by which each search's finer pass must be done.
 /// One deadline for the lot let the first search spend it all, and the
 /// search after subtraction, where the weak signals have just been
 /// uncovered, got none on exactly the busy slots that needed it.
-const SEARCH_SHARE: [f32; SEARCHES] = [0.4, 0.8, 1.0];
+const SEARCH_SHARE: [f32; SEARCHES] = [0.3, 0.6, 0.85, 1.0];
 
 /// How hard a slot is searched. The default is what the live decoders run;
 /// [`Options::plain`] is the decoder before the aided passes, for comparing.
@@ -61,7 +68,11 @@ pub struct Options {
     pub searches: usize,
     /// Each search has its own share of the budget.
     pub split_budget: bool,
-    /// Leave out sync candidates that repeat a stronger one.
+    /// Leave out sync candidates that repeat a stronger one. Off: on 147
+    /// slots recorded off 20, 17 and 15 m it decoded 1% fewer (4348 against
+    /// 4394). The repeats are the same signal at other alignments of the
+    /// oversampled grid, and one of them often decodes where the
+    /// best-scoring one fails.
     pub distinct: bool,
     /// Try failed candidates as CQs, with a CQ's fixed bits given.
     pub ap_cq: bool,
@@ -69,18 +80,21 @@ pub struct Options {
     pub osd: bool,
     pub osd_max_checks: usize,
     pub osd_max_hard: usize,
+    /// The variance the soft bits are scaled to before decoding: how sure
+    /// of itself the decoder takes the demodulator to be.
+    pub llr_spread: f32,
 }
 
 impl Default for Options {
     fn default() -> Self {
-        Options { budget: DEEP_BUDGET, searches: SEARCHES, split_budget: true, distinct: true, ap_cq: true, osd: true, osd_max_checks: 40, osd_max_hard: 30 }
+        Options { budget: DEEP_BUDGET, searches: SEARCHES, split_budget: true, distinct: false, ap_cq: true, osd: true, osd_max_checks: 40, osd_max_hard: 30, llr_spread: LLR_SPREAD }
     }
 }
 
 impl Options {
     /// Two searches inside one 600 ms deadline, propagation only.
     pub fn plain() -> Self {
-        Options { budget: std::time::Duration::from_millis(600), searches: 2, split_budget: false, distinct: false, ap_cq: false, osd: false, osd_max_checks: 0, osd_max_hard: 0 }
+        Options { budget: std::time::Duration::from_millis(600), searches: 2, split_budget: false, distinct: false, ap_cq: false, osd: false, osd_max_checks: 0, osd_max_hard: 0, llr_spread: LLR_SPREAD }
     }
 
     pub fn with_budget(self, budget: std::time::Duration) -> Self {
@@ -320,7 +334,7 @@ fn search(protocol: Protocol, audio: &[f32], f_min: f32, f_max: f32, search: usi
         if near(found, &c) {
             continue;
         }
-        match demod::decode_candidate(&wf, &c, LDPC_ITERATIONS) {
+        match demod::decode_candidate(&wf, &c, LDPC_ITERATIONS, options.llr_spread) {
             Some((payload, errors)) => {
                 if !found.iter().any(|d| d.payload == payload) {
                     found.push(Found { payload, errors, freq: wf.freq_hz(&c), start: wf.start_s(&c, RATE_HZ), search, measured: None, method: "bp" });
@@ -330,7 +344,7 @@ fn search(protocol: Protocol, audio: &[f32], f_min: f32, f_max: f32, search: usi
         }
     }
     let bb = deep::Baseband::new(protocol, audio, RATE_HZ);
-    let aid = deep::Aid { ap_cq: options.ap_cq, osd: options.osd, osd_max_checks: options.osd_max_checks, osd_max_hard: options.osd_max_hard };
+    let aid = deep::Aid { ap_cq: options.ap_cq, osd: options.osd, osd_max_checks: options.osd_max_checks, osd_max_hard: options.osd_max_hard, llr_spread: options.llr_spread };
     for c in missed.into_iter().take(DEEP_CANDIDATES) {
         if deadline.is_some_and(|d| std::time::Instant::now() > d) {
             break;

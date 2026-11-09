@@ -2186,6 +2186,15 @@ impl FrontEnd {
     }
 
     pub fn process(&mut self, iq: &mut [Complex32]) {
+        self.process_keeping(iq, None);
+    }
+
+    /// [`FrontEnd::process`], also keeping the block as it stood before the
+    /// impulse blanker when the blanker is on: `unblanked` is then filled
+    /// and `true` returned. The blanker is the operator's, set for what is
+    /// being listened to; decoders that run unattended beside the receiver
+    /// should not have a strong burst's leading edge clipped because of it.
+    pub fn process_keeping(&mut self, iq: &mut [Complex32], unblanked: Option<&mut Vec<Complex32>>) -> bool {
         // Start the tracker on the first block's mean instead of at zero, so
         // the offset is removed from the first block after a reset.
         if !self.dc_seeded && !iq.is_empty() {
@@ -2198,7 +2207,20 @@ impl FrontEnd {
 
         self.warm = self.warm.saturating_add(iq.len() as u32);
         self.correct_images(iq);
-        self.blanker.process(iq);
+        match unblanked {
+            // The level-0 pass still runs on the caller's block: it only
+            // measures, and keeps the blanker's floor current.
+            Some(copy) if self.blanker.level != 0 => {
+                copy.clear();
+                copy.extend_from_slice(iq);
+                self.blanker.process(iq);
+                true
+            }
+            _ => {
+                self.blanker.process(iq);
+                false
+            }
+        }
     }
 
     /// DC offset: track the mean with the ~2 Hz one-pole and subtract it.

@@ -231,6 +231,8 @@ pub struct Aid {
     pub osd_max_checks: usize,
     /// The most channel bits an ordered-statistics word may contradict.
     pub osd_max_hard: usize,
+    /// The variance the soft bits are scaled to before decoding.
+    pub llr_spread: f32,
 }
 
 /// The bits a plain CQ fixes, as (codeword bit, value): the 28-bit "CQ"
@@ -276,7 +278,7 @@ pub fn decode(bb: &Baseband, f0: f32, start_s: f32, iters: usize, aid: &Aid) -> 
     for (row, g) in cs.iter_mut().zip(super::demod::loud_symbol_gains(&rms)) {
         row.iter_mut().for_each(|c| *c *= g);
     }
-    let llrs: [[f32; N]; 3] = std::array::from_fn(|i| metrics(p, &cs, i + 1));
+    let llrs: [[f32; N]; 3] = std::array::from_fn(|i| metrics(p, &cs, i + 1, aid.llr_spread));
     // The soft bits propagation came nearest a codeword with.
     let mut nearest = (usize::MAX, 0);
     for (i, llr) in llrs.iter().enumerate() {
@@ -333,7 +335,7 @@ pub fn decode(bb: &Baseband, f0: f32, start_s: f32, iters: usize, aid: &Aid) -> 
 
 /// Soft bits from runs of `nsym` symbols scored coherently: for each bit,
 /// the best-matching run with that bit one against the best with it zero.
-fn metrics(p: Protocol, cs: &[[Complex32; 8]], nsym: usize) -> [f32; N] {
+fn metrics(p: Protocol, cs: &[[Complex32; 8]], nsym: usize, spread: f32) -> [f32; N] {
     let tones = p.tones();
     let bps = tones.trailing_zeros() as usize;
     let gray: &[u8] = match p {
@@ -378,7 +380,7 @@ fn metrics(p: Protocol, cs: &[[Complex32; 8]], nsym: usize) -> [f32; N] {
     let (sum, sum2) = llr.iter().fold((0.0f32, 0.0f32), |(a, b), v| (a + v, b + v * v));
     let var = (sum2 - sum * sum / N as f32) / N as f32;
     if var > 0.0 {
-        let k = (24.0 / var).sqrt();
+        let k = (spread / var).sqrt();
         llr.iter_mut().for_each(|v| *v *= k);
     }
     llr
