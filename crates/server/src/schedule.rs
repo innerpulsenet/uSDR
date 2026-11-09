@@ -58,6 +58,9 @@ const EXPLORE_EVERY: u32 = 5;
 /// Where the span can sit: 160 to 40 m, 80 to 30 m, 20 to 15 m, 15 to 10 m. The
 /// receiver's filters part at 12 MHz, so no slice crosses it.
 const SLICE_CENTERS: [u64; 4] = [5_400_000, 6_855_000, 17_607_000, 24_620_000];
+/// Below the filter split carries the night, above it the day.
+const NIGHT_SLICES: [u64; 2] = [SLICE_CENTERS[0], SLICE_CENTERS[1]];
+const DAY_SLICES: [u64; 2] = [SLICE_CENTERS[2], SLICE_CENTERS[3]];
 /// How far from center a channel still decodes well, with the 8 MHz span.
 const SLICE_REACH_HZ: f64 = 3_680_000.0;
 /// The highest audio a channel listens to, above its dial.
@@ -312,6 +315,35 @@ pub struct Scheduler {
     slice_until: u64,
     slice_picks: u32,
     slice_visited: BTreeMap<u64, u64>,
+    /// The station's latitude and longitude, for where the sun is.
+    home: Option<(f64, f64)>,
+}
+
+/// The middle of a Maidenhead square, latitude then longitude.
+pub fn grid_center(grid: &str) -> Option<(f64, f64)> {
+    let g = grid.trim().to_ascii_uppercase();
+    let b = g.as_bytes();
+    if b.len() < 4 || !(b'A'..=b'R').contains(&b[0]) || !(b'A'..=b'R').contains(&b[1]) || !b[2].is_ascii_digit() || !b[3].is_ascii_digit() {
+        return None;
+    }
+    let lon = f64::from(b[0] - b'A') * 20.0 - 180.0 + f64::from(b[2] - b'0') * 2.0 + 1.0;
+    let lat = f64::from(b[1] - b'A') * 10.0 - 90.0 + f64::from(b[3] - b'0') + 0.5;
+    Some((lat, lon))
+}
+
+/// Whether the sun is up at a place. Accurate to a fraction of a degree, which is
+/// far closer than the ionosphere cares about, and it follows the seasons.
+fn sun_up(utc: u64, lat: f64, lon: f64) -> bool {
+    let d = utc as f64 / 86_400.0 - 10_957.5;
+    let g = (357.529 + 0.985_600_28 * d).to_radians();
+    let q = 280.459 + 0.985_647_36 * d;
+    let ecliptic = (q + 1.915 * g.sin() + 0.02 * (2.0 * g).sin()).to_radians();
+    let tilt = 23.439_f64.to_radians();
+    let declination = (tilt.sin() * ecliptic.sin()).asin();
+    let ascension = (tilt.cos() * ecliptic.sin()).atan2(ecliptic.cos()).to_degrees();
+    let greenwich = (18.697_374_558 + 24.065_709_824_419_08 * d) * 15.0;
+    let hour_angle = (lon + greenwich - ascension).to_radians();
+    lat.to_radians().sin() * declination.sin() + lat.to_radians().cos() * declination.cos() * hour_angle.cos() > 0.0
 }
 
 /// Whether a dial and the audio above it sit in the part of a slice that decodes well.
@@ -352,6 +384,18 @@ impl Scheduler {
     /// End a hold early.
     pub fn resume(&mut self) {
         self.hold_until = 0;
+    }
+
+    /// Where the station is, to tell its day from its night.
+    pub fn set_home(&mut self, home: Option<(f64, f64)>) {
+        self.home = home;
+    }
+
+    fn is_night(&self, now: u64) -> bool {
+        match self.home {
+            Some((lat, lon)) => !sun_up(now, lat, lon),
+            None => matches!(hour_of(now), 0..=10 | 22 | 23),
+        }
     }
 
     /// Tell the schedule what the wideband channels are decoding.
@@ -498,10 +542,11 @@ impl Scheduler {
         }
         self.slice_picks += 1;
         let hour = hour_of(now);
+        let side = if self.is_night(now) { NIGHT_SLICES } else { DAY_SLICES };
         let chosen = if self.slice_picks.is_multiple_of(SLICE_EXPLORE_EVERY) {
-            SLICE_CENTERS.iter().copied().min_by_key(|c| self.slice_visited.get(c).copied().unwrap_or(0))
+            side.iter().copied().min_by_key(|c| self.slice_visited.get(c).copied().unwrap_or(0))
         } else {
-            SLICE_CENTERS.iter().copied().max_by(|a, b| {
+            side.iter().copied().max_by(|a, b| {
                 self.slice_score(*a, hour).total_cmp(&self.slice_score(*b, hour)).then(off_band(*b, hour).cmp(&off_band(*a, hour)))
             })
         };
@@ -861,27 +906,29 @@ mod tests {
 
     #[test]
     fn a_slice_is_held_and_the_decoder_takes_what_channels_do_not_cover() {
-        let targets = vec![Target { mode: SdrMode::Ft8, dial_hz: 7_074_000 }, Target { mode: SdrMode::Selcal, dial_hz: 8_891_000 }, Target { mode: SdrMode::Ft8, dial_hz: 14_074_000 }];
-        let mut s = with_channels(targets, &[(SdrMode::Ft8, 7_074_000)]);
-        s.yields.insert(("FT8".to_string(), 7_074_000, hour_of(NOON)), Yield { monitored_s: 100, observations: 500 });
+        let targets = vec![Target { mode: SdrMode::Ft8, dial_hz: 14_074_000 }, Target { mode: SdrMode::Selcal, dial_hz: 15_000_000 }, Target { mode: SdrMode::Ft8, dial_hz: 7_074_000 }];
+        let mut s = with_channels(targets, &[(SdrMode::Ft8, 14_074_000)]);
+        s.yields.insert(("FT8".to_string(), 14_074_000, hour_of(NOON)), Yield { monitored_s: 100, observations: 500 });
         let first = s.tick(at(NOON));
-        assert_eq!(hops(&first), vec![(SdrMode::Selcal, 8_891_000)], "the channel has FT8 already");
-        assert_eq!(center_of(&first), Some(6_855_000));
+        assert_eq!(hops(&first), vec![(SdrMode::Selcal, 15_000_000)], "the channel has FT8 already");
+        assert_eq!(center_of(&first), Some(17_607_000));
         s.slot = None;
-        assert_eq!(center_of(&s.tick(at(NOON + SLICE_HOLD_S - 1))), Some(6_855_000), "still held");
+        assert_eq!(center_of(&s.tick(at(NOON + SLICE_HOLD_S - 1))), Some(17_607_000), "still held");
     }
 
     #[test]
     fn a_slice_with_nothing_else_to_do_still_gets_a_decoder() {
-        let mut s = with_channels(vec![Target { mode: SdrMode::Ft8, dial_hz: 7_074_000 }], &[(SdrMode::Ft8, 7_074_000)]);
-        assert_eq!(hops(&s.tick(at(NOON))), vec![(SdrMode::Ft8, 7_074_000)]);
+        let mut s = with_channels(vec![Target { mode: SdrMode::Ft8, dial_hz: 14_074_000 }], &[(SdrMode::Ft8, 14_074_000)]);
+        assert_eq!(hops(&s.tick(at(NOON))), vec![(SdrMode::Ft8, 14_074_000)]);
     }
 
     #[test]
     fn every_so_often_the_longest_unvisited_slice_is_tried() {
-        let targets = vec![Target { mode: SdrMode::Ft8, dial_hz: 7_074_000 }, Target { mode: SdrMode::Ft8, dial_hz: 28_074_000 }];
-        let mut s = with_channels(targets, &[(SdrMode::Ft8, 7_074_000), (SdrMode::Ft8, 28_074_000)]);
-        s.yields.insert(("FT8".to_string(), 7_074_000, hour_of(NOON)), Yield { monitored_s: 100, observations: 500 });
+        let targets = vec![Target { mode: SdrMode::Ft8, dial_hz: 14_074_000 }, Target { mode: SdrMode::Ft8, dial_hz: 28_074_000 }];
+        let mut s = with_channels(targets, &[(SdrMode::Ft8, 14_074_000), (SdrMode::Ft8, 28_074_000)]);
+        for h in 0..24 {
+            s.yields.insert(("FT8".to_string(), 14_074_000, h), Yield { monitored_s: 100, observations: 500 });
+        }
         let mut centers = Vec::new();
         let mut now = NOON;
         for _ in 0..SLICE_EXPLORE_EVERY {
@@ -890,20 +937,37 @@ mod tests {
             centers.push(s.slice.unwrap());
             now += SLICE_HOLD_S;
         }
-        assert_eq!(centers[0], 6_855_000);
-        assert_ne!(*centers.last().unwrap(), 6_855_000, "the fifth choice goes looking");
+        assert_eq!(centers[0], 17_607_000);
+        assert_eq!(*centers.last().unwrap(), 24_620_000, "the fifth choice goes looking");
     }
 
     #[test]
     fn a_chart_outside_the_slice_moves_the_span_and_without_channels_nothing_changes() {
-        let mut s = with_channels(vec![Target { mode: SdrMode::Ft8, dial_hz: 7_074_000 }], &[(SdrMode::Ft8, 7_074_000)]);
+        let mut s = with_channels(vec![Target { mode: SdrMode::Ft8, dial_hz: 14_074_000 }], &[(SdrMode::Ft8, 14_074_000)]);
         s.tick(at(NOON));
-        assert_eq!(s.center_for(9_108_100), Some(6_855_000), "in the slice already");
-        assert_eq!(s.center_for(14_074_000), Some(17_607_000));
+        assert_eq!(s.center_for(15_000_000), Some(17_607_000), "in the slice already");
+        assert_eq!(s.center_for(9_108_100), Some(6_855_000), "moves for a chart below the split");
         assert_eq!(s.center_for(12_750_000), Some(12_750_000), "in no slice at all");
         let mut plain = running(catalog(vec![Target { mode: SdrMode::Ft8, dial_hz: 7_074_000 }], vec![]), NOON);
         plain.next_health = u64::MAX;
         assert_eq!(center_of(&plain.tick(at(NOON))), None);
+    }
+
+    #[test]
+    fn the_sun_decides_which_side_of_the_split_it_holds() {
+        let home = grid_center("FN31").unwrap();
+        assert_eq!(home, (41.5, -73.0));
+        assert_eq!(grid_center("xx"), None);
+        // December: dark before 12 UTC on the US East Coast, light at 17 UTC.
+        let december = 1_796_083_200_u64 - (1_796_083_200 % 86_400);
+        let targets = vec![Target { mode: SdrMode::Ft8, dial_hz: 7_074_000 }, Target { mode: SdrMode::Ft8, dial_hz: 14_074_000 }];
+        let mut s = with_channels(targets, &[(SdrMode::Ft8, 7_074_000), (SdrMode::Ft8, 14_074_000)]);
+        s.set_home(Some(home));
+        assert!(s.is_night(december + 5 * 3_600));
+        assert!(!s.is_night(december + 17 * 3_600));
+        assert_eq!(s.choose_slice(december + 5 * 3_600).map(|c| c < 12_000_000), Some(true));
+        s.slice_until = 0;
+        assert_eq!(s.choose_slice(december + 17 * 3_600).map(|c| c > 12_000_000), Some(true));
     }
 
     #[test]

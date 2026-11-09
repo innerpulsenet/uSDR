@@ -1211,6 +1211,8 @@ async fn schedule_loop(st: Arc<AppState>) {
             && let Some(log) = st.station_log.clone()
         {
             refreshed = Some(std::time::Instant::now());
+            let home = schedule::grid_center(&st.reporter.station().grid);
+            st.schedule.lock().expect("schedule").set_home(home);
             match tokio::task::spawn_blocking(move || log.yields()).await {
                 Ok(Ok(y)) => st.schedule.lock().expect("schedule").set_yields(y),
                 Ok(Err(e)) => eprintln!("schedule: reading the log: {e:#}"),
