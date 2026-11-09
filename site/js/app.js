@@ -466,6 +466,7 @@ const TRAFFIC_VIEWS = {
 
 function trafficMap(w) {
   return `<section class="traffic-map" aria-labelledby="hmap"><h2 id="hmap">Aircraft and ships on the map</h2>
+    <p class="note">Point anywhere along a track for that flight's details. Click to keep it selected.</p>
     <div class="tools" style="margin-top:12px">
       <div class="chips"><span class="lbl">Window</span><button type="button" data-w="24h" aria-pressed="${w === "24h"}">24 hours</button><button type="button" data-w="7d" aria-pressed="${w === "7d"}">7 days</button></div>
       <div class="chips"><span class="lbl">Projection</span><button type="button" data-proj="eq">Flat</button><button type="button" data-proj="az">From the station</button></div>
@@ -473,6 +474,7 @@ function trafficMap(w) {
     </div>
     <div class="stage tall">
       <div class="zoomer"><button type="button" id="zin" aria-label="Zoom in">+</button><button type="button" id="zout" aria-label="Zoom out">−</button><button type="button" id="box" aria-pressed="false" aria-label="Drag a box to zoom to an area" title="Drag a box to zoom to an area">▭</button></div>
+      <div class="flight-card" id="flightcard" aria-live="polite" hidden></div>
     </div>
     <div class="strip-wrap">
       <svg id="strip" class="strip" role="img" aria-label="Aircraft positions and ship calls per hour. Hatched hours had no listening to either."></svg>
@@ -480,7 +482,6 @@ function trafficMap(w) {
       <div class="strip-foot"><button type="button" id="play" aria-pressed="false">Play</button><p class="note"><span id="fromv" class="num"></span> to <span id="tov" class="num"></span>. Hatched hours had no listening on HFDL or DSC.</p></div>
     </div>
     <div class="traffic-panels">
-      <div class="card" id="readout"><h3>Under the pointer</h3><p class="note" style="margin-top:8px">Point at a flight or a ship. Click a flight to hold its track.</p></div>
       <div class="card" id="totals"></div>
       <div class="card"><h3>Layers</h3>
         <div class="layers" style="border:0;padding:0;margin-top:10px">
@@ -527,7 +528,10 @@ async function showTraffic(params) {
   view.querySelectorAll("[data-w]").forEach((b) => b.addEventListener("click", () => { location.hash = `#/traffic?w=${b.dataset.w}`; }));
   const cleanup = mountMap(view, { ...m, spots: [], squares: [], idents: [], air: [] }, {
     coast, land, ground, params, traffic: true, presets: TRAFFIC_VIEWS,
-    operator: (flight) => aircraftAirline(flight, names.airlines),
+    flightInfo: (flight) => {
+      const row = t.flights.find((x) => x.i === flight);
+      return { operator: aircraftAirline(flight, names.airlines), reg: row?.reg, gs: gsName[row?.gs], n: row?.n };
+    },
     loadFine: async () => {
       const [fineCoast, fineLand] = await Promise.all([load("coast-50m.json"), load("land-50m.json")]);
       return { coast: fineCoast, land: fineLand };

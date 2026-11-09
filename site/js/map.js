@@ -3,7 +3,7 @@
 // does not scale, so a dot keeps its size at every zoom with no redraw, and one path
 // per size and color keeps the node count small however many squares there are.
 import { calm } from "./motion.js";
-import { el, esc, fmtTime, hours, num } from "./util.js";
+import { ago, el, esc, fmtTime, hours, num } from "./util.js";
 
 const NS = "http://www.w3.org/2000/svg";
 const RAD = Math.PI / 180;
@@ -215,7 +215,7 @@ function terminator(ms, altitude = 0) {
 }
 
 export function mountMap(root, data, opts) {
-  const { coast, land, ground, params, onParams, loadFine, traffic, operator } = opts;
+  const { coast, land, ground, params, onParams, loadFine, traffic, flightInfo } = opts;
   const presets = opts.presets || PRESETS;
   // Traffic mode: the same map, showing only aircraft and ships.
   const AIR_MODES = new Set(["HFDL", "DSC"]);
@@ -230,7 +230,7 @@ export function mountMap(root, data, opts) {
     from: 0, to: data.hours,
     band: new Set(), mode: new Set(),
     layers: { squares: !traffic, tracks: true, ground: true, dsc: true, night: true },
-    selected: null, box: false, pinned: null,
+    selected: null, box: false, pinned: null, hoverFlight: null,
   };
   let proj = new Projection(state.proj, home);
   state.cy = proj.homeY;
@@ -481,8 +481,12 @@ export function mountMap(root, data, opts) {
     return t >= state.from && t < state.to;
   }
 
+  // Each flight's drawn path in map units, for finding the one under the pointer.
+  let trackHits = [];
+
   function drawTracks() {
     g.tracks.replaceChildren();
+    trackHits = [];
     if (!state.layers.tracks) return;
     let lines = "";
     let old = "";
@@ -491,6 +495,7 @@ export function mountMap(root, data, opts) {
       const fresh = !traffic || isRecent(t.s[t.s.length - 1].at(-1)[0]);
       for (const seg of t.s) {
         const shown = seg.filter((f) => trackVisible(f[0]));
+        if (shown.length) trackHits.push({ t, fresh, pts: shown.map((f) => [...proj.forward(f[2], f[1]), f]) });
         if (shown.length >= 2) {
           const d = pathOf(proj, shown.map((f) => [f[2], f[1]]));
           if (fresh) lines += d; else old += d;
@@ -579,13 +584,14 @@ export function mountMap(root, data, opts) {
       ring(state.selected, "ring-sel");
     }
     if (hoverKey && hoverKey !== state.selected) ring(hoverKey, "ring-hover");
-    if (state.pinned) {
-      const flight = data.tracks.find((t) => t.i === state.pinned);
-      if (flight) {
-        const shown = flight.s.map((seg) => seg.filter((f) => trackVisible(f[0]))).filter((seg) => seg.length >= 2);
-        g.sel.append(svg("path", { class: "track-sel", d: shown.map((seg) => pathOf(proj, seg.map((f) => [f[2], f[1]]))).join("") }));
-      }
-    }
+    const showFlight = (ident, cls) => {
+      const flight = ident && data.tracks.find((t) => t.i === ident);
+      if (!flight) return;
+      const shown = flight.s.map((seg) => seg.filter((f) => trackVisible(f[0]))).filter((seg) => seg.length >= 2);
+      g.sel.append(svg("path", { class: cls, d: shown.map((seg) => pathOf(proj, seg.map((f) => [f[2], f[1]]))).join("") }));
+    };
+    if (state.hoverFlight !== state.pinned) showFlight(state.hoverFlight, "track-hover");
+    showFlight(state.pinned, "track-sel");
   }
 
   function setHover(key) {
@@ -659,9 +665,28 @@ export function mountMap(root, data, opts) {
       ${span > hours ? `<p class="note" style="margin-top:8px">The receiver was tuned here for only part of this range. A blank region can mean it was listening elsewhere.</p>` : ""}`;
   }
 
+  // On the traffic map the details sit on the map, where the eye already is.
+  const card = root.querySelector("#flightcard");
   function showReadout(html) {
+    if (card) {
+      card.innerHTML = html;
+      card.hidden = false;
+      return;
+    }
     readout.innerHTML = `<h3>Under the pointer</h3>${html}`;
   }
+  function restCard() {
+    if (!card) return;
+    const held = state.pinned && data.tracks.find((t) => t.i === state.pinned);
+    if (held) showReadout(flightText(held, held.s[held.s.length - 1].at(-1)));
+    else card.hidden = true;
+  }
+  card?.addEventListener("click", (ev) => {
+    if (ev.target.closest("[data-unpin]")) {
+      pinFlight(null);
+      restCard();
+    }
+  });
 
   function describeCell(key) {
     const c = cellsNow.get(key);
@@ -683,7 +708,7 @@ export function mountMap(root, data, opts) {
       const d = Math.hypot(mx - x, my - y) / u;
       if (d < nearD) { nearD = d; near = describe; }
     };
-    if (state.layers.tracks) {
+    if (state.layers.tracks && !traffic) {
       for (const t of data.tracks) for (const seg of t.s) for (const f of seg) {
         if (trackVisible(f[0])) consider(f[2], f[1], () => flightText(t, f));
       }
@@ -698,6 +723,15 @@ export function mountMap(root, data, opts) {
         const h = (c.t - data.start_utc) / 3600;
         if (h >= state.from && h < state.to) consider(c.lon, c.lat, () => `<dl class="kv"><dt>Ship call</dt><dd>${esc(c.i || "")}</dd><dt>Logged</dt><dd>${fmtTime(c.t)}</dd><dt>Position</dt><dd>${c.lat.toFixed(2)}, ${c.lon.toFixed(2)}</dd></dl>`);
       }
+    }
+    if (traffic) {
+      const hit = near ? null : flightNear(x, y, 14);
+      map.classList.toggle("on-target", Boolean(near || hit));
+      setHoverFlight(hit ? hit.t.i : null);
+      if (near) showReadout(near());
+      else if (hit) showReadout(flightText(hit.t, hit.f));
+      else restCard();
+      return;
     }
     const dot = nearestDot(x, y);
     if (near && (!dot || nearD < dot.dist)) {
@@ -721,23 +755,54 @@ export function mountMap(root, data, opts) {
   }
 
   function flightText(t, f) {
-    const name = operator ? operator(t.i) : "";
+    if (!traffic) return `<dl class="kv"><dt>Flight</dt><dd>${esc(t.i)}</dd><dt>Position at</dt><dd>${fmtTime(f[0])}</dd><dt>Reported</dt><dd>${f[1].toFixed(2)}, ${f[2].toFixed(2)}</dd></dl>`;
+    const info = (flightInfo && flightInfo(t.i)) || {};
     const count = t.s.reduce((a, seg) => a + seg.length, 0);
-    return `<dl class="kv"><dt>Flight</dt><dd>${esc(t.i)}</dd>${name ? `<dt>Operator</dt><dd class="wrap">${esc(name)}</dd>` : ""}<dt>Position at</dt><dd>${fmtTime(f[0])}</dd><dt>Reported</dt><dd>${f[1].toFixed(2)}, ${f[2].toFixed(2)}</dd>${traffic ? `<dt>Positions on the track</dt><dd>${num(count)}</dd>` : ""}</dl>`;
+    const last = t.s[t.s.length - 1].at(-1);
+    const row = (label, value) => (value ? `<dt>${label}</dt><dd class="wrap">${esc(value)}</dd>` : "");
+    const held = state.pinned === t.i;
+    return `<div class="fc-head"><b>${esc(t.i)}</b>${held ? `<button type="button" data-unpin aria-label="Clear this selection">Clear</button>` : ""}</div>
+      <dl class="kv">${row("Operator", info.operator)}${row("Registration", info.reg)}${row("Ground station", info.gs)}
+      ${row("Messages, 24 h", info.n ? num(info.n) : "")}<dt>Positions on track</dt><dd>${num(count)}</dd>
+      <dt>${held ? "Latest position" : "This position"}</dt><dd>${f[1].toFixed(2)}, ${f[2].toFixed(2)}</dd>
+      <dt>Reported</dt><dd>${fmtTime(f[0])}</dd><dt>Last heard</dt><dd>${ago(last[0])}</dd></dl>
+      ${held ? `<a class="fc-link" href="#/who?c=${encodeURIComponent(t.i)}">Full history</a>` : `<p class="fc-hint">Click to keep this selected</p>`}`;
   }
 
-  // The flight nearest the pointer, within reach, or none.
-  function flightAt(x, y, reachPx) {
+  // The flight whose drawn path is nearest the pointer, within reach, or none. Older
+  // tracks yield to ones still reporting, when they are about equally close.
+  function flightNear(x, y, reachPx) {
     const u = unitsPerPx();
     let best = null;
-    let bestD = reachPx;
-    for (const t of data.tracks) for (const seg of t.s) for (const f of seg) {
-      if (!trackVisible(f[0])) continue;
-      const [fx, fy] = proj.forward(f[2], f[1]);
-      const d = Math.hypot(fx - x, fy - y) / u;
-      if (d < bestD) { bestD = d; best = t; }
+    let bestScore = Infinity;
+    const offer = (hit, dist, f) => {
+      const d = dist / u;
+      const score = d + (hit.fresh ? 0 : 4);
+      if (d <= reachPx && score < bestScore) {
+        bestScore = score;
+        best = { t: hit.t, f };
+      }
+    };
+    for (const hit of trackHits) {
+      hit.pts.forEach(([ax, ay, , fa], i) => {
+        offer(hit, Math.hypot(ax - x, ay - y), fa);
+        const next = hit.pts[i + 1];
+        if (!next) return;
+        const [bx, by, , fb] = next;
+        const [dx, dy] = [bx - ax, by - ay];
+        const span = dx * dx + dy * dy;
+        if (!span || Math.abs(dx) + Math.abs(dy) > proj.jump()) return;
+        const k = clamp(((x - ax) * dx + (y - ay) * dy) / span, 0, 1);
+        offer(hit, Math.hypot(ax + k * dx - x, ay + k * dy - y), k < 0.5 ? fa : fb);
+      });
     }
     return best;
+  }
+
+  function setHoverFlight(ident) {
+    if (ident === state.hoverFlight) return;
+    state.hoverFlight = ident;
+    drawSelection();
   }
 
   function pinFlight(ident) {
@@ -880,7 +945,8 @@ export function mountMap(root, data, opts) {
     if (drag) {
       const u = unitsPerPx();
       const [dx, dy] = [ev.clientX - drag.x, ev.clientY - drag.y];
-      if (Math.hypot(dx, dy) > 3) drag.moved = true;
+      // A hand holding still is rarely perfectly still; a click shouldn't become a drag.
+      if (Math.hypot(dx, dy) > (traffic ? 6 : 3)) drag.moved = true;
       state.cx = drag.cx - dx * u;
       state.cy = drag.cy - dy * u;
       applyView();
@@ -904,8 +970,9 @@ export function mountMap(root, data, opts) {
       if (!drag.moved) {
         const [x, y] = toWorld(ev);
         if (traffic) {
-          const flight = flightAt(x, y, ev.pointerType === "touch" ? 20 : 10);
-          pinFlight(flight ? flight.i : null);
+          const hit = flightNear(x, y, ev.pointerType === "touch" ? 28 : 16);
+          pinFlight(hit ? hit.t.i : null);
+          restCard();
         }
         const dot = nearestDot(x, y, ev.pointerType === "touch" ? 14 : 5);
         state.selected = dot ? dot.key : null;
@@ -919,7 +986,13 @@ export function mountMap(root, data, opts) {
   }
   map.addEventListener("pointerup", pointerEnd);
   map.addEventListener("pointercancel", pointerEnd);
-  map.addEventListener("pointerleave", () => setHover(null));
+  map.addEventListener("pointerleave", () => {
+    setHover(null);
+    if (traffic) {
+      setHoverFlight(null);
+      restCard();
+    }
+  });
 
   // Glide to a view: fast away, long settle, in equal steps of zoom.
   let flight = 0;

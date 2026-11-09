@@ -161,7 +161,16 @@ button[aria-pressed="true"] small[data-air] { color: var(--innerpulse-gunmetal);
 .rings { fill: none; stroke: rgba(227, 230, 233, .14); stroke-width: 1; stroke-dasharray: 3 5; }
 .night { fill: rgba(2, 3, 5, .17); stroke: none; }
 .stage.tall { aspect-ratio: auto; height: min(76vh, 860px); min-height: 420px; }
-.traffic-panels { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-top: 12px; align-items: start; }
+.flight-card { position: absolute; left: 8px; top: 8px; width: 270px; max-width: calc(100% - 60px); padding: 12px 14px; background: var(--innerpulse-surface-2); border: 1px solid var(--innerpulse-line-2); border-radius: 8px; box-shadow: 0 14px 34px -14px rgba(0, 0, 0, .9); font-size: 13px; }
+.flight-card[hidden] { display: none; }
+.fc-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 4px; }
+.fc-head b { font: 600 18px/1.2 var(--innerpulse-mono); letter-spacing: -.01em; }
+.fc-head button { min-height: 26px; padding: 0 9px; font-size: 12px; }
+.fc-link { display: inline-block; margin-top: 8px; font-size: 13px; }
+.fc-hint { margin-top: 8px; font-size: 12px; color: var(--innerpulse-text-3); }
+.stage > svg.on-target { cursor: pointer; }
+.track-hover { fill: none; stroke: var(--innerpulse-amber); stroke-width: 2.4; }
+.traffic-panels { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-top: 12px; align-items: start; }
 .traffic-map .track { stroke: var(--innerpulse-amber); stroke-width: 1.1; stroke-opacity: .75; }
 .traffic-map .track.old { stroke-width: .7; stroke-opacity: .22; }
 .traffic-map .fix { stroke: var(--innerpulse-amber); stroke-width: 2.4; stroke-opacity: .6; }
@@ -316,6 +325,7 @@ dl { margin: 0; }
   .side { grid-template-columns: minmax(0, 1fr); }
   .traffic-panels { grid-template-columns: minmax(0, 1fr); }
   .stage.tall { height: 110vw; min-height: 340px; }
+  .flight-card { left: 8px; right: 8px; top: auto; bottom: 8px; width: auto; max-width: none; }
   .stage { aspect-ratio: auto; height: 74vw; min-height: 280px; }
   .filters > summary { display: block; cursor: pointer; font: 500 var(--innerpulse-text-xs)/1.2 var(--innerpulse-mono); letter-spacing: .12em; text-transform: uppercase; color: var(--innerpulse-text-2); padding: 10px 0; }
   .strip-foot { align-items: flex-start; }
