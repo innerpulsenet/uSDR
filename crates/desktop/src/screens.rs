@@ -68,7 +68,7 @@ pub fn connect_screen(app: &mut App, ui: &mut Ui) {
                     let s = app.connect_input.clone();
                     app.connect(&ctx, &s);
                 }
-                ui.checkbox(&mut app.prefs.auto_connect, RichText::new("Connect on start").font(theme::sans(crate::theme::ty::BODY)));
+                crate::widgets::menu_check(ui, &mut app.prefs.auto_connect, "Connect on start");
             });
             ui.add_space(8.0);
             match &app.conn {

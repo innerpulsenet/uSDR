@@ -767,6 +767,78 @@ pub fn swatch_item(ui: &mut Ui, label: &str, palette: crate::colormap::Colormap,
     resp
 }
 
+/// A menu row's text and, after three spaces, the key that does the same,
+/// which is set apart at the row's right.
+fn menu_text(text: &str) -> (&str, Option<&str>) {
+    match text.rsplit_once("   ") {
+        Some((label, key)) if !key.is_empty() && key.len() <= 4 => (label.trim_end(), Some(key)),
+        _ => (text, None),
+    }
+}
+
+/// A row of a menu or a settings page: the house's own in place of the
+/// toolkit's button and checkbox, which were the last controls in the
+/// window still in its stock look. `check` is the row's lamp: lit for on,
+/// hollow for off, none for a plain action.
+fn menu_row(ui: &mut Ui, text: &str, check: Option<bool>) -> Response {
+    let (label, shortcut) = menu_text(text);
+    let enabled = ui.is_enabled();
+    let dim = if enabled { 1.0 } else { theme::DISABLED_ALPHA };
+    let lamp_w = if check.is_some() { 20.0 } else { 0.0 };
+    let key = shortcut.map(|k| ui.painter().layout_no_wrap(k.to_owned(), theme::mono(theme::ty::MICRO), Color32::PLACEHOLDER));
+    let key_w = key.as_ref().map_or(0.0, |k| k.size().x + 18.0);
+    // Wrapped to the room there is, so a long setting does not widen its page.
+    let room = (ui.available_width() - lamp_w - key_w - 14.0).max(120.0);
+    let g = ui.painter().layout(label.to_owned(), theme::sans(theme::ty::LEDE), Color32::PLACEHOLDER, room);
+    let w = ui.available_width().max(lamp_w + g.size().x + key_w + 14.0);
+    let (rect, mut resp) = ui.allocate_exact_size(vec2(w, (g.size().y + 8.0).max(24.0)), Sense::click());
+    resp.widget_info(|| match check {
+        Some(on) => egui::WidgetInfo::selected(egui::WidgetType::Checkbox, enabled, on, label),
+        None => egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, label),
+    });
+    let hover = crate::anim::ease_bool(ui.ctx(), resp.id.with("hv"), enabled && resp.hovered(), crate::anim::HOVER_S);
+    let p = ui.painter();
+    if hover > 0.0 {
+        p.rect_filled(rect, CornerRadius::same(theme::R_KEY), alpha(theme::surface_4(), 0.8 * hover));
+    }
+    if let Some(on) = check {
+        let lamp = Rect::from_center_size(pos2(rect.left() + 12.0, rect.top() + 12.0), vec2(10.0, 10.0));
+        if on {
+            p.rect_filled(lamp.expand(2.0), CornerRadius::same(theme::R_KEY), alpha(theme::AMBER, 0.18 * dim));
+            p.rect_filled(lamp, CornerRadius::same(theme::R_CAP), alpha(theme::AMBER, dim));
+        } else {
+            p.rect(lamp, CornerRadius::same(theme::R_CAP), theme::ink(), Stroke::new(1.0, alpha(theme::line_2(), dim)), egui::StrokeKind::Inside);
+        }
+    }
+    let text_c = alpha(theme::lerp(theme::text_2(), theme::text(), hover.max(if check == Some(true) { 1.0 } else { 0.0 })), dim);
+    p.galley(pos2(rect.left() + 6.0 + lamp_w, rect.top() + (rect.height() - g.size().y) / 2.0), g, text_c);
+    if let Some(k) = key {
+        p.galley(pos2(rect.right() - k.size().x - 8.0, rect.center().y - k.size().y / 2.0), k, alpha(theme::text_3(), dim));
+    }
+    if enabled && resp.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    if resp.clicked() && check.is_some() {
+        resp.mark_changed();
+    }
+    resp
+}
+
+/// A menu's action. Three spaces before a short last word set it apart as
+/// the key that does the same: `"Full screen   F11"`.
+pub fn menu_item(ui: &mut Ui, text: impl AsRef<str>) -> Response {
+    menu_row(ui, text.as_ref(), None)
+}
+
+/// A setting that is on or off, in a menu or on a settings page.
+pub fn menu_check(ui: &mut Ui, on: &mut bool, text: impl AsRef<str>) -> Response {
+    let resp = menu_row(ui, text.as_ref(), Some(*on));
+    if resp.clicked() {
+        *on = !*on;
+    }
+    resp
+}
+
 pub fn protocol_color(p: &str) -> Color32 {
     let u = p.to_ascii_uppercase();
     let rgb = |h: u32| Color32::from_rgb((h >> 16) as u8, (h >> 8) as u8, h as u8);

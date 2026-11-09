@@ -376,10 +376,21 @@ fn controls(app: &mut App, ui: &mut Ui, docked: bool) {
     // to the rows it decodes from now on.
     ui.horizontal(|ui| {
         crate::widgets::enabled_or(ui, on, "Switch the receiver to this mode to use these", |ui| {
-            ui.label(RichText::new("SLANT").font(theme::mono(crate::theme::ty::MICRO)).color(theme::text_3()));
-            let mut ppm = c.fax_slant_ppm;
-            let r = ui.add(egui::Slider::new(&mut ppm, -200.0..=200.0).step_by(1.0).suffix(" ppm").show_value(true));
-            if r.drag_stopped() || (r.changed() && !r.dragged()) {
+            // The value in hand is kept here while the fader is dragged,
+            // and sent when it is let go: the server's own figure only
+            // changes then.
+            let id = ui.id().with("fax-slant");
+            let mut ppm: f64 = ui.data(|d| d.get_temp(id)).unwrap_or(c.fax_slant_ppm as f64);
+            let (changed, released) = ui
+                .allocate_ui(vec2(300.0, 22.0), |ui| {
+                    widgets::Fader { value: &mut ppm, min: -200.0, max: 200.0, step: 1.0, fine: 0.5, label: "SLANT", text: |v| format!("{v:+.0} ppm"), color: theme::AMBER, enabled: on, reset: Some(0.0), ticks: vec![] }.show_compact(ui)
+                })
+                .inner;
+            let held = ui.input(|i| i.pointer.primary_down());
+            if changed && held {
+                ui.data_mut(|d| d.insert_temp(id, ppm));
+            } else if changed || released {
+                ui.data_mut(|d| d.remove::<f64>(id));
                 app.post("/api/sdr/digital", json!({ "fax_slant_ppm": ppm }));
             }
             if ppm != 0.0 && widgets::action_small(ui, "0").on_hover_text("No slant trim").clicked() {

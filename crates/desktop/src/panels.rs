@@ -323,15 +323,15 @@ fn memories(app: &mut App, ui: &mut Ui) {
                 }
             }
             r.context_menu(|ui| {
-                if ui.button("Store the current channel here").clicked() {
+                if crate::widgets::menu_item(ui, "Store the current channel here").clicked() {
                     store_at = Some(i);
                     ui.close();
                 }
-                if m.is_some() && ui.button("Rename…").clicked() {
+                if m.is_some() && crate::widgets::menu_item(ui, "Rename…").clicked() {
                     app.renaming = Some((i, m.map(|m| m.name.clone()).unwrap_or_default()));
                     ui.close();
                 }
-                if m.is_some() && ui.button("Clear").clicked() {
+                if m.is_some() && crate::widgets::menu_item(ui, "Clear").clicked() {
                     delete = Some(i);
                     ui.close();
                 }

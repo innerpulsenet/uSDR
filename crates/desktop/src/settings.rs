@@ -432,7 +432,7 @@ fn connection_page(app: &mut App, ui: &mut Ui) {
         }
     }
     ui.add_space(4.0);
-    ui.checkbox(&mut app.prefs.auto_connect, "Connect to the last server on start");
+    crate::widgets::menu_check(ui, &mut app.prefs.auto_connect, "Connect to the last server on start");
 
     section(ui, "Web page on this server");
     ui.add(egui::Label::new(RichText::new("What the browser page may do while this app is connected. Receiver state is shared either way: a change made in one shows in the other.").font(theme::sans(crate::theme::ty::BODY)).color(theme::text_3())).wrap());
@@ -496,7 +496,7 @@ fn recordings_page(app: &mut App, ui: &mut Ui) {
     });
     note(ui, "Audio and I/Q recordings, and radiofax pictures as PNG.", theme::text_3());
     section(ui, "Radiofax");
-    ui.checkbox(&mut app.prefs.fax_autosave, "Save each finished radiofax picture here");
+    crate::widgets::menu_check(ui, &mut app.prefs.fax_autosave, "Save each finished radiofax picture here");
 }
 
 fn interface_page(app: &mut App, ui: &mut Ui, ctx: &egui::Context) {
@@ -529,14 +529,14 @@ fn interface_page(app: &mut App, ui: &mut Ui, ctx: &egui::Context) {
         }
     });
     section(ui, "Window");
-    ui.checkbox(&mut app.prefs.own_titlebar, "Integrated title bar: the masthead moves and sizes the window (on the next start)")
+    crate::widgets::menu_check(ui, &mut app.prefs.own_titlebar, "Integrated title bar: the masthead moves and sizes the window (on the next start)")
         .on_hover_text("Replaces the system's title bar and frame. On Windows 11 this gives up the snap-layout menu on the maximize key.");
     if cfg!(windows) {
-        ui.checkbox(&mut app.prefs.mica, "Mica backdrop behind the chrome, Windows 11 (on the next start)");
+        crate::widgets::menu_check(ui, &mut app.prefs.mica, "Mica backdrop behind the chrome, Windows 11 (on the next start)");
     }
-    ui.checkbox(&mut app.prefs.show_scope, "Show the scope in the dock");
+    crate::widgets::menu_check(ui, &mut app.prefs.show_scope, "Show the scope in the dock");
     section(ui, "Keys");
-    ui.checkbox(&mut app.prefs.shortcuts, "Keyboard tuning shortcuts (arrows, PgUp/PgDn, M, C, R, digits)");
+    crate::widgets::menu_check(ui, &mut app.prefs.shortcuts, "Keyboard tuning shortcuts (arrows, PgUp/PgDn, M, C, R, digits)");
 }
 
 fn about_page(app: &mut App, ui: &mut Ui) {

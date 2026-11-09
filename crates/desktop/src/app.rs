@@ -1434,28 +1434,28 @@ impl App {
     fn view_menu(&mut self, ui: &mut Ui) {
         widgets::menu_chip(ui, "VIEW", theme::text_2(), |ui| {
             ui.set_min_width(220.0);
-            ui.checkbox(&mut self.prefs.show_side, "Radio and tools column   S");
-            ui.checkbox(&mut self.prefs.show_dock, "Dock   D");
-            ui.checkbox(&mut self.prefs.show_scope, "Scope in the dock");
-            ui.checkbox(&mut self.prefs.show_memories, "Memory row");
-            ui.checkbox(&mut self.prefs.view.band_plan, "Band plan");
-            ui.checkbox(&mut self.prefs.span_lock, "Span lock   L");
+            crate::widgets::menu_check(ui, &mut self.prefs.show_side, "Radio and tools column   S");
+            crate::widgets::menu_check(ui, &mut self.prefs.show_dock, "Dock   D");
+            crate::widgets::menu_check(ui, &mut self.prefs.show_scope, "Scope in the dock");
+            crate::widgets::menu_check(ui, &mut self.prefs.show_memories, "Memory row");
+            crate::widgets::menu_check(ui, &mut self.prefs.view.band_plan, "Band plan");
+            crate::widgets::menu_check(ui, &mut self.prefs.span_lock, "Span lock   L");
             ui.separator();
-            if ui.button("Compact: display only").clicked() {
+            if crate::widgets::menu_item(ui, "Compact: display only").clicked() {
                 self.prefs.show_side = false;
                 self.prefs.show_dock = false;
                 ui.close();
             }
-            if ui.button("Full layout").clicked() {
+            if crate::widgets::menu_item(ui, "Full layout").clicked() {
                 self.prefs.show_side = true;
                 self.prefs.show_dock = true;
                 ui.close();
             }
-            if ui.button("Roll up to a strip   F9").clicked() {
+            if crate::widgets::menu_item(ui, "Roll up to a strip   F9").clicked() {
                 self.toggle_shade(ui.ctx());
                 ui.close();
             }
-            if ui.button(if self.fullscreen { "Leave full screen   F11" } else { "Full screen   F11" }).clicked() {
+            if crate::widgets::menu_item(ui, if self.fullscreen { "Leave full screen   F11" } else { "Full screen   F11" }).clicked() {
                 self.fullscreen = !self.fullscreen;
                 ui.ctx().send_viewport_cmd(egui::ViewportCommand::Fullscreen(self.fullscreen));
                 ui.close();
@@ -1464,14 +1464,14 @@ impl App {
             ui.horizontal(|ui| {
                 ui.label("Text size");
                 let z = ui.ctx().zoom_factor();
-                if ui.small_button("−").clicked() {
+                if crate::widgets::action_small(ui, "−").clicked() {
                     ui.ctx().set_zoom_factor((z - 0.1).max(0.6));
                 }
                 ui.label(egui::RichText::new(format!("{:.0}%", z * 100.0)).font(theme::mono(crate::theme::ty::SMALL)));
-                if ui.small_button("+").clicked() {
+                if crate::widgets::action_small(ui, "+").clicked() {
                     ui.ctx().set_zoom_factor((z + 0.1).min(2.0));
                 }
-                if ui.small_button("reset").clicked() {
+                if crate::widgets::action_small(ui, "reset").clicked() {
                     ui.ctx().set_zoom_factor(1.0);
                 }
             });
@@ -1485,7 +1485,7 @@ impl App {
                 }
             });
             ui.separator();
-            if ui.button("Connection diagnostics…").clicked() {
+            if crate::widgets::menu_item(ui, "Connection diagnostics…").clicked() {
                 self.diagnostics_open = true;
                 ui.close();
             }

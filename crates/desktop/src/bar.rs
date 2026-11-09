@@ -1644,12 +1644,12 @@ pub fn memory_chips(app: &mut App, ui: &mut Ui, room: f32) {
         let picked = widgets::menu_chip(ui, &format!("+{hidden}"), theme::AMBER, |ui| {
             let mut out = None;
             for (i, m) in list.iter().enumerate().skip(fits) {
-                if ui.button(format!("{}  {} MHz  {}", i + 1, crate::tuning::fmt_mhz(m.freq_hz, 4), m.name)).clicked() {
+                if crate::widgets::menu_item(ui, format!("{}  {} MHz  {}", i + 1, crate::tuning::fmt_mhz(m.freq_hz, 4), m.name)).clicked() {
                     out = Some(i);
                     ui.close();
                 }
             }
-            if ui.button(format!("Store {} MHz in slot {}", crate::tuning::fmt_mhz(inspect, 4), list.len() + 1)).clicked() {
+            if crate::widgets::menu_item(ui, format!("Store {} MHz in slot {}", crate::tuning::fmt_mhz(inspect, 4), list.len() + 1)).clicked() {
                 out = Some(list.len());
                 ui.close();
             }

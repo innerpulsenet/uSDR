@@ -2479,41 +2479,41 @@ impl Panafall {
         resp.context_menu(|ui| {
             ui.label(egui::RichText::new(format!("{} MHz", crate::tuning::fmt_mhz(menu_hz, 5))).font(theme::mono(crate::theme::ty::BODY)).color(theme::AMBER));
             ui.separator();
-            if ui.button("Tune here").clicked() {
+            if crate::widgets::menu_item(ui, "Tune here").clicked() {
                 acts.push(Act::Tune { hz: menu_hz, lock: false });
                 ui.close();
             }
-            if ui.button("Tune and center").clicked() {
+            if crate::widgets::menu_item(ui, "Tune and center").clicked() {
                 acts.push(Act::Tune { hz: menu_hz, lock: true });
                 ui.close();
             }
-            if ui.button("Put receiver B here").clicked() {
+            if crate::widgets::menu_item(ui, "Put receiver B here").clicked() {
                 acts.push(Act::PlaceB(menu_hz));
                 ui.close();
             }
-            if ui.button("Center the span here").clicked() {
+            if crate::widgets::menu_item(ui, "Center the span here").clicked() {
                 acts.push(Act::Center(menu_hz));
                 ui.close();
             }
-            if ui.button("Store as a memory").clicked() {
+            if crate::widgets::menu_item(ui, "Store as a memory").clicked() {
                 acts.push(Act::StoreMemory(menu_hz));
                 ui.close();
             }
-            if ui.button("Copy frequency").clicked() {
+            if crate::widgets::menu_item(ui, "Copy frequency").clicked() {
                 acts.push(Act::CopyFreq(menu_hz));
                 ui.close();
             }
             ui.separator();
-            ui.checkbox(&mut view.peak_hold, "Peak hold");
-            ui.checkbox(&mut view.fill, "Trace fill");
-            ui.checkbox(&mut view.show_peaks, "Peak markers and spots");
-            ui.checkbox(&mut view.auto_range, "Auto range");
+            crate::widgets::menu_check(ui, &mut view.peak_hold, "Peak hold");
+            crate::widgets::menu_check(ui, &mut view.fill, "Trace fill");
+            crate::widgets::menu_check(ui, &mut view.show_peaks, "Peak markers and spots");
+            crate::widgets::menu_check(ui, &mut view.auto_range, "Auto range");
             let mut mark = view.sql_mark.is_some();
-            if ui.checkbox(&mut mark, "Squelch mark").changed() {
+            if crate::widgets::menu_check(ui, &mut mark, "Squelch mark").changed() {
                 view.sql_mark = mark.then_some(self.floor_est + 10.0);
             }
             let mut ridges = view.spectrum == SpecMode::Ridges;
-            if ui.checkbox(&mut ridges, "Ridges").changed() {
+            if crate::widgets::menu_check(ui, &mut ridges, "Ridges").changed() {
                 view.spectrum = if ridges { SpecMode::Ridges } else { SpecMode::Trace };
             }
             // The whole look: trace, fill, background and waterfall colors

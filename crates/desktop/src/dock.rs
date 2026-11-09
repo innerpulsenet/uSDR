@@ -138,14 +138,14 @@ fn decodes(app: &mut App, ui: &mut Ui) {
                 let n = counts.get(&Some(Family::HfData)).copied().unwrap_or(0);
                 let label = if n > 0 { format!("HF DATA {n}") } else { "HF DATA".to_string() };
                 widgets::menu_chip_lit(ui, &label, &[], family_color(Family::HfData), true, |ui| {
-                    if ui.button(format!("All decodes · {}", app.decodes.len())).clicked() {
+                    if crate::widgets::menu_item(ui, format!("All decodes · {}", app.decodes.len())).clicked() {
                         app.decode_family = None;
                         app.decode_chip = None;
                         ui.close();
                     }
                     for f in Family::ALL.into_iter().filter(|f| *f != Family::HfData) {
                         let n = counts.get(&Some(f)).copied().unwrap_or(0);
-                        if ui.button(format!("{} · {n}", f.label())).clicked() {
+                        if crate::widgets::menu_item(ui, format!("{} · {n}", f.label())).clicked() {
                             app.decode_family = Some(f);
                             app.decode_chip = None;
                             app.selected_decode = None;
@@ -1079,15 +1079,15 @@ fn decode_keys(app: &mut App, ui: &mut Ui, room: f32) {
         if !filter_out {
             ui.add(egui::TextEdit::singleline(&mut app.decode_filter).hint_text("filter decodes").desired_width(180.0));
         }
-        if !clear_out && ui.button("Clear what is shown").clicked() {
+        if !clear_out && crate::widgets::menu_item(ui, "Clear what is shown").clicked() {
             clear_shown(app);
             ui.close();
         }
-        if ui.button("Expand all").clicked() {
+        if crate::widgets::menu_item(ui, "Expand all").clicked() {
             app.decodes.iter_mut().for_each(|d| (d.open, d.height) = (true, 0.0));
             ui.close();
         }
-        if ui.button("Collapse all").clicked() {
+        if crate::widgets::menu_item(ui, "Collapse all").clicked() {
             app.decodes.iter_mut().for_each(|d| (d.open, d.height) = (false, 0.0));
             ui.close();
         }
