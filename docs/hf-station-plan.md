@@ -1,6 +1,6 @@
 # HF monitoring station: build plan
 
-Drafted 2026-11-08. Phases 1 and 2 are deployed and soaking. Phases 3 to 5 are built and tested but not yet deployed to the daemon, and the site is limited to preview addresses.
+Drafted 2026-11-08. Phases 1 to 5 are deployed as of 2026-11-09, with rows uploading to arm2. The site is still limited to preview addresses until launch.
 
 ## Goal
 
@@ -218,8 +218,8 @@ anything above 30 MHz.
 Static HTML, CSS and JS on the innerpulse brand kit in Carbon, copied into `site/brand`,
 linked with `dx.innerpulse.net`.
 
-**Pages:** Now, Map, Activity, Pictures, Log, and Station (how it works and what
-was monitored).
+**Pages:** Now, Map, Activity, Traffic (aircraft and ship calls), Pictures, Log with
+station lookup, and Station (how it works, what was monitored, and noise by band).
 
 **Map.**
 
@@ -259,7 +259,7 @@ spots doesn't prove the band was closed to it. The Station page says so.
 |---|---|
 | HFDL | Flight, position, ground station. Never ACARS free text |
 | DSC | Published as logged, with no delay; the Station page says it is not a 24/7 distress monitor |
-| SSTV | Held for approval by default; anyone can transmit any image |
+| SSTV | Held for approval by default; anyone can transmit any image. Approved or declined at `/station/pictures` on the daemon, which only the LAN can reach |
 | WEFAX | NOAA charts automatically; other services only after checking their terms |
 | Station identity | No callsign in pages, JSON, picture names or site source |
 | Station location | 4-character grid at most; the map and paths center on that square |
