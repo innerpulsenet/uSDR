@@ -15,6 +15,7 @@ mod p25_keys;
 mod pskreporter;
 mod wsprnet;
 mod scan;
+mod schedule;
 mod sdr;
 mod stationlog;
 mod sub_rx;
@@ -160,6 +161,9 @@ struct Settings {
     gains: std::collections::BTreeMap<String, f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     mode: Option<sdr::SdrMode>,
+    /// The monitoring schedule is running. Off until the operator says.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    schedule_enabled: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     lo_offset: Option<bool>,
     /// Off by default: a gain set by hand should stay where it was put.
@@ -255,6 +259,7 @@ struct AppState {
     reporter: Arc<pskreporter::Reporter>,
     /// What was heard on HF and when; `None` if its database would not open.
     station_log: Option<Arc<stationlog::StationLog>>,
+    schedule: Mutex<schedule::Scheduler>,
 }
 
 /// Minimum spacing between settings-file writes.
@@ -263,6 +268,11 @@ const SETTINGS_WRITE_INTERVAL: std::time::Duration = std::time::Duration::from_s
 impl AppState {
     fn web_policy(&self) -> WebPolicy {
         self.settings.lock().expect("settings").web.unwrap_or_default()
+    }
+
+    fn schedule_json(&self) -> String {
+        let status = self.schedule.lock().expect("schedule").status(utc_now());
+        serde_json::json!({ "type": "schedule", "schedule": status }).to_string()
     }
 
     fn presence_json(&self) -> String {
@@ -443,6 +453,11 @@ async fn main() -> Result<()> {
             None
         }
     };
+    let catalog = schedule::Catalog::from_directory(include_str!("../../desktop/data/hf-directory.json")).unwrap_or_else(|e| {
+        eprintln!("monitoring schedule has no frequencies: {e:#}");
+        schedule::Catalog::default()
+    });
+    let scheduler = schedule::Scheduler::new(catalog, settings.schedule_enabled.unwrap_or(false));
     let state = Arc::new(AppState {
         sdr: Mutex::new(Some(runtime)),
         calls,
@@ -458,6 +473,7 @@ async fn main() -> Result<()> {
         meta: tokio::sync::broadcast::channel(16).0,
         reporter,
         station_log,
+        schedule: Mutex::new(scheduler),
     });
     if let Some(log) = state.station_log.clone() {
         let events = state.sdr_events.subscribe();
@@ -465,13 +481,18 @@ async fn main() -> Result<()> {
         tokio::spawn(log.run(
             events,
             move || {
-                let sdr = radio.sdr.lock().expect("sdr");
-                let s = sdr.as_ref()?.status.lock().expect("sdr status");
-                Some(stationlog::RadioNow { dial_hz: s.inspect_hz, mode: s.mode, rfgr_db: s.rfgr_db })
+                let (dial_hz, mode, rfgr_db) = {
+                    let sdr = radio.sdr.lock().expect("sdr");
+                    let s = sdr.as_ref()?.status.lock().expect("sdr status");
+                    (s.inspect_hz, s.mode, s.rfgr_db)
+                };
+                let cause = if radio.schedule.lock().expect("schedule").owns(mode, dial_hz) { "schedule" } else { "operator" };
+                Some(stationlog::RadioNow { dial_hz, mode, rfgr_db, cause })
             },
             move || station.reporter.station().callsign,
         ));
     }
+    tokio::spawn(schedule_loop(Arc::clone(&state)));
     {
         // The reporter hears every decode the receiver broadcasts, whether
         // or not a client is connected, and tells the clients what it did.
@@ -523,9 +544,11 @@ async fn main() -> Result<()> {
         .route("/api/station/summary", get(get_station_summary))
         .route("/api/station/observations", get(get_station_observations))
         .route("/api/station/listening", get(get_station_listening))
+        .route("/api/station/schedule", get(get_station_schedule).post(post_station_schedule))
         .route("/api/sdr/digital", post(post_sdr_digital))
         .route("/api/sdr/fax", get(get_sdr_fax))
         .route("/ws", get(ws_upgrade))
+        .layer(axum::middleware::from_fn_with_state(Arc::clone(&state), note_operator))
         .layer(axum::middleware::from_fn_with_state(Arc::clone(&state), yield_guard))
         .with_state(Arc::clone(&state));
 
@@ -616,7 +639,7 @@ async fn yield_guard(
 /// What this server is and which API revision it speaks, so a client can say
 /// plainly when it needs a newer one rather than failing on a missing route.
 const API_REVISION: u32 = 2;
-const API_FEATURES: &[&str] = &["presence", "web-policy", "memories", "avg-status", "filter", "filter-shape", "rx2", "stereo", "station", "digital", "fax", "station-log"];
+const API_FEATURES: &[&str] = &["presence", "web-policy", "memories", "avg-status", "filter", "filter-shape", "rx2", "stereo", "station", "digital", "fax", "station-log", "schedule"];
 
 fn version_json() -> serde_json::Value {
     serde_json::json!({
@@ -1121,6 +1144,131 @@ async fn post_sdr_mode(
     Ok(Json(
         serde_json::json!({ "ok": true, "mode": req.mode }),
     ))
+}
+
+fn utc_now() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs())
+}
+
+/// The requests that mean someone is using the radio. The schedule's own moves
+/// go straight to the receiver, so they never count.
+const OPERATOR_ROUTES: [&str; 4] = ["/api/sdr/tune", "/api/sdr/inspect", "/api/sdr/mode", "/api/sdr/rate"];
+
+async fn note_operator(
+    State(st): State<Arc<AppState>>,
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Response {
+    if req.method() == axum::http::Method::POST && OPERATOR_ROUTES.contains(&req.uri().path()) {
+        st.schedule.lock().expect("schedule").operator(utc_now());
+    }
+    next.run(req).await
+}
+
+/// How often the schedule rereads what the log has measured.
+const YIELDS_EVERY: std::time::Duration = std::time::Duration::from_secs(600);
+
+/// Run the monitoring schedule: read the radio, advance, act, and tell the
+/// clients when anything changed.
+async fn schedule_loop(st: Arc<AppState>) {
+    let mut tick = tokio::time::interval(std::time::Duration::from_secs(1));
+    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    let mut refreshed: Option<std::time::Instant> = None;
+    let mut sent = None;
+    loop {
+        tick.tick().await;
+        let enabled = st.schedule.lock().expect("schedule").enabled();
+        if enabled
+            && refreshed.is_none_or(|t| t.elapsed() >= YIELDS_EVERY)
+            && let Some(log) = st.station_log.clone()
+        {
+            refreshed = Some(std::time::Instant::now());
+            match tokio::task::spawn_blocking(move || log.yields()).await {
+                Ok(Ok(y)) => st.schedule.lock().expect("schedule").set_yields(y),
+                Ok(Err(e)) => eprintln!("schedule: reading the log: {e:#}"),
+                Err(e) => eprintln!("schedule: reading the log: {e}"),
+            }
+        }
+        let now = utc_now();
+        let inputs = schedule_inputs(&st, now);
+        let actions = st.schedule.lock().expect("schedule").tick(inputs);
+        for action in actions {
+            match action {
+                schedule::Action::Hop { mode, dial_hz } => schedule_hop(&st, mode, dial_hz as f64),
+                schedule::Action::MarkHealth { since, until, healthy } => {
+                    if let Some(log) = &st.station_log {
+                        log.mark_health(since, until, healthy);
+                    }
+                }
+            }
+        }
+        let status = st.schedule.lock().expect("schedule").status(now);
+        if sent.as_ref() != Some(&status) {
+            let _ = st.meta.send(serde_json::json!({ "type": "schedule", "schedule": status }).to_string());
+            sent = Some(status);
+        }
+    }
+}
+
+fn schedule_inputs(st: &AppState, utc: u64) -> schedule::Inputs {
+    let sdr = st.sdr.lock().expect("sdr");
+    let Some(runtime) = sdr.as_ref() else { return schedule::Inputs { utc, ..Default::default() } };
+    let s = runtime.status.lock().expect("sdr status");
+    let reading = s.digital.as_ref();
+    let picture_busy = match s.mode {
+        sdr::SdrMode::Wefax => reading.and_then(|d| d.fax_state.as_deref()).is_some_and(|f| f != "idle"),
+        sdr::SdrMode::Sstv => reading.is_some_and(|d| d.locked),
+        _ => false,
+    };
+    schedule::Inputs { utc, picture_busy, wwv_locked: s.mode == sdr::SdrMode::Wwv && reading.is_some_and(|d| d.locked) }
+}
+
+/// Move the receiver, without touching the operator's saved settings. The tuner
+/// moves only if the frequency is outside the span it already covers.
+fn schedule_hop(st: &AppState, mode: sdr::SdrMode, dial_hz: f64) {
+    let sdr = st.sdr.lock().expect("sdr");
+    let Some(runtime) = sdr.as_ref() else { return };
+    let (center, rate) = {
+        let s = runtime.status.lock().expect("sdr status");
+        (s.freq_hz, s.rate_hz)
+    };
+    let moved = runtime.set_mode(mode).and_then(|()| if (dial_hz - center).abs() > rate * 0.4 { runtime.tune(dial_hz) } else { Ok(()) }).and_then(|()| runtime.inspect(dial_hz));
+    if let Err(e) = moved {
+        eprintln!("schedule: moving to {dial_hz} Hz: {e:#}");
+    }
+}
+
+async fn get_station_schedule(State(st): State<Arc<AppState>>) -> Json<usdr_proto::ScheduleStatus> {
+    let status = st.schedule.lock().expect("schedule").status(utc_now());
+    Json(status)
+}
+
+#[derive(Deserialize)]
+struct ScheduleReq {
+    enabled: Option<bool>,
+    /// End the operator's hold now.
+    #[serde(default)]
+    resume: bool,
+}
+
+async fn post_station_schedule(State(st): State<Arc<AppState>>, Json(req): Json<ScheduleReq>) -> Json<usdr_proto::ScheduleStatus> {
+    let now = utc_now();
+    let status = {
+        let mut s = st.schedule.lock().expect("schedule");
+        if let Some(on) = req.enabled {
+            s.set_enabled(on, now);
+        }
+        if req.resume {
+            s.resume();
+        }
+        s.status(now)
+    };
+    if let Some(on) = req.enabled {
+        st.update_settings(|s| s.schedule_enabled = Some(on));
+        st.save_now();
+    }
+    let _ = st.meta.send(st.schedule_json());
+    Json(status)
 }
 
 /// Run a read of the station log off the async threads.
@@ -1787,7 +1935,7 @@ async fn ws_client(mut socket: WebSocket, st: Arc<AppState>, info: ClientInfo, s
     {
         return;
     }
-    for text in [st.presence_json(), st.memories_json(), st.station_json()] {
+    for text in [st.presence_json(), st.memories_json(), st.station_json(), st.schedule_json()] {
         if socket.send(Message::Text(text.into())).await.is_err() {
             return;
         }

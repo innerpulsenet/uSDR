@@ -194,6 +194,10 @@ pub struct App {
     pub settings_page: crate::settings::Page,
     /// The server's station and its spot reporter (servers with `station`).
     pub station: Option<(proto::Station, proto::ReporterStatus)>,
+    /// The monitoring schedule, from a server that has one.
+    pub schedule: Option<proto::ScheduleStatus>,
+    /// The Scan tab is showing the schedule rather than the voice scanner.
+    pub watch_view: bool,
     pub station_form: crate::settings::StationForm,
     pub help_open: bool,
     pub connect_input: String,
@@ -281,6 +285,7 @@ impl App {
         let qa_tab = match std::env::var("USDR_QA_TAB").as_deref() {
             Ok("calls") => DockTab::Calls,
             Ok("scan") => DockTab::Scan,
+            Ok("watch") => DockTab::Scan,
             Ok("class") => DockTab::Classifier,
             _ => DockTab::Decodes,
         };
@@ -338,6 +343,8 @@ impl App {
             hell: std::collections::VecDeque::new(),
             settings_page: Default::default(),
             station: None,
+            schedule: None,
+            watch_view: std::env::var("USDR_QA_TAB").as_deref() == Ok("watch"),
             station_form: Default::default(),
             help_open: false,
             connect_input,
@@ -781,6 +788,16 @@ impl App {
                 }
             }
             NetEvent::Station(st, rep) => self.station = Some((st, rep)),
+            NetEvent::Schedule(s) => {
+                let was = self.schedule.as_ref().map(|o| o.state.clone());
+                if was.as_deref() == Some("held") && s.enabled && s.state != "held" {
+                    self.toast(ctx, Tone::Idle, "The monitoring schedule has the radio again.");
+                }
+                if was.as_deref() != Some("failed") && s.state == "failed" {
+                    self.toast(ctx, Tone::Warn, "The radio failed its check on WWV. The schedule has stopped hopping until it passes.");
+                }
+                self.schedule = Some(*s);
+            }
             NetEvent::FaxLine(l) => {
                 // The receiver's dial, not the span's center.
                 let hz = self.status.inspect_hz;
@@ -2572,6 +2589,30 @@ mod tests {
         h.get_by_label("2 s").click();
         h.run_steps(2);
         assert!(drain(&h).contains(&("/api/sdr/avg".into(), json!({ "mode": "deep" }))));
+    }
+
+    #[test]
+    fn the_watch_view_shows_the_schedule_and_its_keys_post() {
+        let mut h = harness_wh(1100.0, 700.0);
+        {
+            let app = &mut h.state_mut().app;
+            app.dock_tab = DockTab::Scan;
+            app.schedule = Some(proto::ScheduleStatus { state: "off".into(), health: "unknown".into(), ..Default::default() });
+        }
+        h.run_steps(4);
+        h.get_by_label("HF WATCH").click();
+        h.run_steps(4);
+        h.get_by_label("not checked yet");
+        h.get_by_label("START").click();
+        h.run_steps(2);
+        assert!(drain(&h).contains(&("/api/station/schedule".into(), json!({ "enabled": true }))));
+
+        h.state_mut().app.schedule = Some(proto::ScheduleStatus { enabled: true, state: "held".into(), hold_until_utc: u64::MAX / 2, health: "good".into(), ..Default::default() });
+        h.run_steps(4);
+        h.get_by_label("STOP");
+        h.get_by_label("RESUME NOW").click();
+        h.run_steps(2);
+        assert!(drain(&h).contains(&("/api/station/schedule".into(), json!({ "resume": true }))));
     }
 
     #[test]

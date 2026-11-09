@@ -31,6 +31,7 @@ pub enum NetEvent {
     Decode { inspect_hz: f64, event: proto::DecodeEvent, at: std::time::SystemTime },
     Presence(proto::Presence),
     Station(proto::Station, proto::ReporterStatus),
+    Schedule(Box<proto::ScheduleStatus>),
     FaxLine(proto::FaxLine),
     ImageLine(proto::ImageLine),
     HellColumns(proto::HellColumns),
@@ -388,6 +389,9 @@ fn ws_loop(
                                 }
                                 Ok(proto::Event::Station(s, r)) => {
                                     let _ = ev.send(NetEvent::Station(s, r));
+                                }
+                                Ok(proto::Event::Schedule(s)) => {
+                                    let _ = ev.send(NetEvent::Schedule(Box::new(s)));
                                 }
                                 Ok(proto::Event::Other(_)) => {}
                                 Err(_) => {

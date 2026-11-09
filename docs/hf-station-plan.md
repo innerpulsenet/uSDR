@@ -1,6 +1,6 @@
 # HF monitoring station: build plan
 
-Drafted 2026-11-08. Nothing here is built yet.
+Drafted 2026-11-08. Phase 1 is built and Phase 2 is built and soaking.
 
 ## Goal
 
@@ -97,8 +97,7 @@ schema migration, so nothing sits empty until it has a writer.
 
 `loc_kind` is one of `reported` (HFDL, DSC), `grid4`, `grid6`, `ground_station`
 or `none`, so nothing is drawn more precisely than it was received. `private_json`
-holds ACARS free text and never leaves CT 216. `cause` is `schedule`, `operator`
-or `probe`.
+holds ACARS free text and never leaves CT 216. `cause` is `schedule` or `operator`.
 
 - Anonymity starts here. `ident` is the sending station only, and any observation
   from the station's own callsign is left out. FT8-style message text can name the
@@ -136,16 +135,18 @@ Priority, highest first:
   Time of day and measured yield decide. It also delivers strong signals, so a slot
   where `peak_iq` shows clipping counts as unhealthy, and gain settings are recorded
   per band.
-- **Scoring without AI:** a yield table by mode, dial and hour-of-day over 30 days,
-  with a small exploration share so quiet frequencies get rechecked.
+- **Scoring without AI:** each mode has a share of the air. Within it, the frequency
+  comes from a yield table by mode, dial and hour of day over the 14 days the log
+  keeps, with every fifth pick rechecking the least-heard frequency.
 - **Health:** every slot records noise floor and `peak_iq`. A regular check on a
   known signal (WWV, frequency chosen by hour) catches a stranded tuner. Failed
   slots are marked unhealthy and left out of all statistics, and repeated failure
   is reported in status.
 - **Protocol:** add `schedule: Option<ScheduleStatus>` to status. This is a `proto`
   change, so the desktop is rebuilt with it.
-- **Desktop:** an on/off switch, what is running and what is next, and a clear
-  indication when the radio is on the schedule rather than where you left it.
+- **Desktop:** an HF WATCH view in the Scan tab with the on/off switch, what is
+  running and what is next, and a notice when the schedule takes the radio back. A
+  sixth dock tab would squeeze the scope at the smallest window size.
 
 Check during implementation that opening the desktop does not post a tune or mode
 by itself (`app.rs:542`), or every launch would count as an operator hold.
@@ -228,6 +229,9 @@ was monitored).
   squares when closer. Only positions a decoder actually reported get a point.
 - Layers: amateur squares, HFDL tracks and ground stations, DSC positions, great
   circle paths, day/night line.
+- HFDL tracks are ordered by each fix's own `fixUtc`, never by `at_utc`: aircraft
+  queue reports and send several at once, so the time heard can run backward along
+  a route. Rows from before 2026-11-09 05:56 UTC have no `fixUtc` and get no track.
 - The viewport is the filter: charts and totals recompute in the browser from
   loaded JSON, so area zoom costs the server nothing.
 - Time scrubber over 24 hours and 7 days. Keep to about 2,000 SVG nodes per view.

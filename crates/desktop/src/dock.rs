@@ -66,7 +66,7 @@ pub fn dock(app: &mut App, ui: &mut Ui) {
         DockTab::Decodes => decodes(app, ui),
         DockTab::Classifier => widgets::window(ui, |ui| classifier(app, ui)),
         DockTab::Calls => widgets::window(ui, |ui| calls(app, ui)),
-        DockTab::Scan => widgets::window(ui, |ui| scan(app, ui)),
+        DockTab::Scan => widgets::window(ui, |ui| scan_or_watch(app, ui)),
         DockTab::Map => widgets::window(ui, |ui| crate::map::show(app, ui)),
     }
 }
@@ -842,6 +842,81 @@ fn calls(app: &mut App, ui: &mut Ui) {
             }
         }
     }
+}
+
+/// The tab's two kinds of automatic listening: the voice scanner, and the
+/// schedule that watches HF when nobody is using the radio.
+fn scan_or_watch(app: &mut App, ui: &mut Ui) {
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 4.0;
+        if widgets::chip_key(ui, "VOICE", !app.watch_view, theme::AMBER).clicked() {
+            app.watch_view = false;
+        }
+        if widgets::chip_key(ui, "HF WATCH", app.watch_view, theme::AMBER).clicked() {
+            app.watch_view = true;
+        }
+    });
+    ui.add_space(4.0);
+    if app.watch_view {
+        watch(app, ui);
+    } else {
+        scan(app, ui);
+    }
+}
+
+/// The monitoring schedule: what it is doing, and the switch.
+fn watch(app: &mut App, ui: &mut Ui) {
+    let Some(s) = app.schedule.clone() else {
+        ui.label(mono("This server has no monitoring schedule.", theme::text_3()));
+        return;
+    };
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
+    let minutes = |until: u64| until.saturating_sub(now).div_ceil(60);
+    let (tone, word) = match s.state.as_str() {
+        "monitoring" => (Tone::Ok, "monitoring"),
+        "chart" => (Tone::Ok, "waiting for a chart"),
+        "checking" => (Tone::Warn, "checking the radio"),
+        "held" => (Tone::Warn, "held for you"),
+        "failed" => (Tone::Err, "radio check failed"),
+        "idle" => (Tone::Idle, "idle"),
+        _ => (Tone::Idle, "off"),
+    };
+    ui.horizontal(|ui| {
+        widgets::chip(ui, tone, word);
+        let label = if s.enabled { "STOP" } else { "START" };
+        if widgets::primary(ui, label).clicked() {
+            app.post("/api/station/schedule", json!({ "enabled": !s.enabled }));
+        }
+        if s.state == "held" && widgets::primary(ui, "RESUME NOW").clicked() {
+            app.post("/api/station/schedule", json!({ "resume": true }));
+        }
+    });
+    ui.add_space(6.0);
+    egui::Grid::new("monitor-status").num_columns(2).spacing(vec2(12.0, 4.0)).show(ui, |ui| {
+        let row = |ui: &mut Ui, name: &str, value: String| {
+            ui.label(mono(name, theme::text_3()));
+            ui.label(mono(value, theme::text_2()));
+            ui.end_row();
+        };
+        if !s.label.is_empty() {
+            let left = if s.ends_utc > now { format!(" · {} min left", minutes(s.ends_utc)) } else { String::new() };
+            row(ui, "NOW", format!("{}{left}", s.label));
+        }
+        if s.hold_until_utc > 0 {
+            row(ui, "HOLD", format!("{} min left", minutes(s.hold_until_utc)));
+        }
+        let health = match s.health.as_str() {
+            "good" => format!("good, {} min ago", now.saturating_sub(s.last_good_utc) / 60),
+            "failing" => "failing".to_string(),
+            _ => "not checked yet".to_string(),
+        };
+        row(ui, "RADIO", health);
+        if s.enabled && !s.next_chart.is_empty() {
+            row(ui, "NEXT CHART", s.next_chart.clone());
+        }
+    });
+    ui.add_space(6.0);
+    ui.label(mono("Changing the frequency, mode or span holds the schedule for 30 minutes.", theme::text_3()));
 }
 
 fn scan(app: &mut App, ui: &mut Ui) {

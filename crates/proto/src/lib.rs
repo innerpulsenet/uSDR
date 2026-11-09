@@ -1333,6 +1333,25 @@ impl WebPolicy {
     }
 }
 
+/// What the monitoring schedule is doing.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ScheduleStatus {
+    pub enabled: bool,
+    /// `off`, `held`, `idle`, `monitoring`, `chart`, `checking` or `failed`.
+    pub state: String,
+    /// What it is listening to, in a few words.
+    pub label: String,
+    /// When the current slot is due to end, Unix seconds; 0 if none.
+    pub ends_utc: u64,
+    /// When the operator's hold ends, Unix seconds; 0 if none.
+    pub hold_until_utc: u64,
+    /// The last radio check: `unknown`, `good` or `failing`.
+    pub health: String,
+    pub last_good_utc: u64,
+    pub next_chart: String,
+}
+
 /// A text websocket message.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Event {
@@ -1344,6 +1363,8 @@ pub enum Event {
     Presence(Presence),
     /// The station and the spot reporter's state (servers with `station`).
     Station(Station, ReporterStatus),
+    /// The monitoring schedule's state (servers with `schedule`).
+    Schedule(ScheduleStatus),
     Other(String),
 }
 
@@ -1366,6 +1387,7 @@ pub fn decode_text(text: &str) -> Result<Event, serde_json::Error> {
             serde_json::from_value(v.get("station").cloned().unwrap_or_default())?,
             serde_json::from_value(v.get("reporter").cloned().unwrap_or_default())?,
         ),
+        "schedule" => Event::Schedule(serde_json::from_value(v.get("schedule").cloned().unwrap_or_default())?),
         _ => Event::Other(kind),
     })
 }

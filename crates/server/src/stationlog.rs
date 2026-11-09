@@ -62,6 +62,8 @@ const LIST_DEFAULT: u32 = 200;
 const LIST_MAX: u32 = 1_000;
 /// The longest window a summary may ask for: all this log keeps.
 const SUMMARY_MAX_H: u64 = KEEP_S / 3_600;
+/// `peak_iq` at or above this means the ADC clipped during the stay.
+const CLIPPED: f64 = 0.98;
 
 const SCHEMA: &str = "
 CREATE TABLE observations (
@@ -103,6 +105,10 @@ CREATE TABLE gaps (
     dropped INTEGER NOT NULL
 );
 ";
+
+/// `healthy` is 1 after a radio check passes, 0 after one fails or when the
+/// stay clipped, and empty until something has said either way.
+const MIGRATE_2: &str = "ALTER TABLE listening ADD COLUMN healthy INTEGER;";
 
 fn unix_now() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
@@ -246,6 +252,27 @@ fn amateur(dial_hz: f64, ev: &DecodeEvent, own_call: &str) -> Option<Observation
     })
 }
 
+/// When an HFDL position was true. Aircraft queue these reports and can send
+/// several at once, oldest last, so `at_utc` says when one was heard and only
+/// its own time of day says when the aircraft was there. That time has no
+/// date: it is the latest such time not after `now`, allowing for an aircraft
+/// clock a few minutes ahead of this one.
+fn fix_utc(time_of_day: &str, now: u64) -> Option<u64> {
+    const DAY_S: u64 = 86_400;
+    const CLOCK_AHEAD_S: u64 = 300;
+    let mut parts = time_of_day.split(':').map(|p| p.parse::<u64>().ok());
+    let (h, m, s) = (parts.next()??, parts.next()??, parts.next()??);
+    if parts.next().is_some() || h > 23 || m > 59 || s > 59 {
+        return None;
+    }
+    let fix = now - now % DAY_S + h * 3600 + m * 60 + s;
+    if fix > now + CLOCK_AHEAD_S {
+        fix.checked_sub(DAY_S)
+    } else {
+        Some(fix)
+    }
+}
+
 fn hfdl(dial_hz: f64, ev: &DecodeEvent, now: u64) -> Option<Observation> {
     let mut o = base(dial_hz, "HFDL", ev, now);
     o.snr_db = number(ev, "snr");
@@ -255,6 +282,9 @@ fn hfdl(dial_hz: f64, ev: &DecodeEvent, now: u64) -> Option<Observation> {
             (o.lat, o.lon, o.loc_kind) = (Some(lat), Some(lon), LocKind::Reported);
             o.ident = field(ev, "flight").or(field(ev, "icao")).map(String::from);
             o.public = pick(ev, &["flight", "icao", "gsId", "direction", "source"]);
+            if let Some(fix) = field(ev, "utc").and_then(|t| fix_utc(t, now)) {
+                o.public.insert("fixUtc".into(), Value::from(fix));
+            }
         }
         "acars" => {
             if field(ev, "acarsCrcOk") != Some("true") {
@@ -327,6 +357,8 @@ pub struct Segment {
     pub end_utc: u64,
     pub dial_hz: u64,
     pub mode: &'static str,
+    /// `operator` or `schedule`.
+    pub cause: &'static str,
     pub noise_dbfs: Option<f64>,
     pub peak_iq: Option<f64>,
     pub rfgr_db: Option<f64>,
@@ -340,6 +372,7 @@ pub struct RadioNow {
     pub dial_hz: f64,
     pub mode: SdrMode,
     pub rfgr_db: Option<f64>,
+    pub cause: &'static str,
 }
 
 struct Open {
@@ -394,15 +427,15 @@ impl Listener {
     pub fn tick(&mut self, now: u64, radio: Option<RadioNow>, alive: bool) -> Vec<Segment> {
         let want = radio.filter(|r| alive && HF_HZ.contains(&r.dial_hz)).and_then(|r| {
             let mode = monitored_mode(r.mode)?;
-            Some((r.dial_hz.round() as u64, mode, r.rfgr_db))
+            Some((r.dial_hz.round() as u64, mode, r.rfgr_db, r.cause))
         });
         let mut out = Vec::new();
-        let on_same = matches!((&self.open, &want), (Some(o), Some((hz, mode, _))) if o.seg.dial_hz == *hz && o.seg.mode == *mode);
+        let on_same = matches!((&self.open, &want), (Some(o), Some((hz, mode, _, _))) if o.seg.dial_hz == *hz && o.seg.mode == *mode);
         if let Some(o) = &mut self.open
             && on_same
         {
             o.seg.end_utc = now;
-            if let Some((_, _, gain)) = want {
+            if let Some((_, _, gain, _)) = want {
                 o.seg.rfgr_db = gain.or(o.seg.rfgr_db);
             }
             if o.seg.start_utc / 3_600 == now / 3_600 {
@@ -419,11 +452,11 @@ impl Listener {
         {
             out.push(o.snapshot());
         }
-        if let Some((dial_hz, mode, rfgr_db)) = want {
+        if let Some((dial_hz, mode, rfgr_db, cause)) = want {
             let seq = self.next_seq;
             self.next_seq += 1;
             self.open = Some(Open {
-                seg: Segment { seq, start_utc: now, end_utc: now, dial_hz, mode, noise_dbfs: None, peak_iq: None, rfgr_db, decodes: 0, valid_decodes: 0 },
+                seg: Segment { seq, start_utc: now, end_utc: now, dial_hz, mode, cause, noise_dbfs: None, peak_iq: None, rfgr_db, decodes: 0, valid_decodes: 0 },
                 noise_sum: 0.0,
                 noise_n: 0,
                 flushed_at: None,
@@ -436,6 +469,7 @@ impl Listener {
 enum Cmd {
     Observe(Box<Observation>),
     Segment(Segment),
+    Health { since: u64, until: u64, healthy: bool },
 }
 
 fn json_or_null(m: &Map<String, Value>) -> Option<String> {
@@ -461,6 +495,9 @@ impl Store {
         let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
         if version == 0 {
             conn.execute_batch(&format!("BEGIN; {SCHEMA} PRAGMA user_version = 1; COMMIT;"))?;
+        }
+        if version < 2 {
+            conn.execute_batch(&format!("BEGIN; {MIGRATE_2} PRAGMA user_version = 2; COMMIT;"))?;
         }
         Ok(Store { conn, current: None })
     }
@@ -490,20 +527,26 @@ impl Store {
                         json_or_null(&o.private),
                     ])?;
                 }
+                Cmd::Health { since, until, healthy } => {
+                    // A stay already marked bad for clipping stays bad.
+                    tx.prepare_cached("UPDATE listening SET healthy = ?3 WHERE end_utc >= ?1 AND start_utc <= ?2 AND healthy IS NOT 0")?
+                        .execute(params![*since as i64, *until as i64, i64::from(*healthy)])?;
+                }
                 Cmd::Segment(s) => {
+                    let clipped = s.peak_iq.is_some_and(|p| p >= CLIPPED).then_some(0_i64);
                     let row = self.current.filter(|(seq, _)| *seq == s.seq).map(|(_, row)| row);
                     let row = match row {
                         Some(row) => {
-                            tx.prepare_cached("UPDATE listening SET end_utc = ?1, noise_dbfs = ?2, peak_iq = ?3, rfgr_db = ?4, decodes = ?5, valid_decodes = ?6 WHERE id = ?7")?
-                                .execute(params![s.end_utc as i64, s.noise_dbfs, s.peak_iq, s.rfgr_db, s.decodes as i64, s.valid_decodes as i64, row])?;
+                            tx.prepare_cached("UPDATE listening SET end_utc = ?1, noise_dbfs = ?2, peak_iq = ?3, rfgr_db = ?4, decodes = ?5, valid_decodes = ?6, healthy = COALESCE(?8, healthy) WHERE id = ?7")?
+                                .execute(params![s.end_utc as i64, s.noise_dbfs, s.peak_iq, s.rfgr_db, s.decodes as i64, s.valid_decodes as i64, row, clipped])?;
                             row
                         }
                         None => {
                             tx.prepare_cached(
-                                "INSERT INTO listening (start_utc, end_utc, dial_hz, mode, cause, noise_dbfs, peak_iq, rfgr_db, decodes, valid_decodes)
-                                 VALUES (?1, ?2, ?3, ?4, 'operator', ?5, ?6, ?7, ?8, ?9)",
+                                "INSERT INTO listening (start_utc, end_utc, dial_hz, mode, cause, noise_dbfs, peak_iq, rfgr_db, decodes, valid_decodes, healthy)
+                                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
                             )?
-                            .execute(params![s.start_utc as i64, s.end_utc as i64, s.dial_hz as i64, s.mode, s.noise_dbfs, s.peak_iq, s.rfgr_db, s.decodes as i64, s.valid_decodes as i64])?;
+                            .execute(params![s.start_utc as i64, s.end_utc as i64, s.dial_hz as i64, s.mode, s.cause, s.noise_dbfs, s.peak_iq, s.rfgr_db, s.decodes as i64, s.valid_decodes as i64, clipped])?;
                             tx.last_insert_rowid()
                         }
                     };
@@ -633,6 +676,11 @@ impl StationLog {
         }
     }
 
+    /// Record what a radio check found about the listening between two times.
+    pub fn mark_health(&self, since: u64, until: u64, healthy: bool) {
+        self.submit(Cmd::Health { since, until, healthy });
+    }
+
     /// Follow the broadcast until it closes. `radio` reads the receiver's state
     /// and `own_call` the station's callsign, both as they are now.
     pub async fn run(self: Arc<Self>, mut events: broadcast::Receiver<SdrEvent>, radio: impl Fn() -> Option<RadioNow>, own_call: impl Fn() -> String) {
@@ -742,6 +790,26 @@ impl StationLog {
         Ok(json!({ "listening": rows }))
     }
 
+    /// What has been measured on a working radio, by mode, frequency and hour
+    /// of the day, for choosing where to listen.
+    pub fn yields(&self) -> Result<crate::schedule::Yields> {
+        let conn = self.reader()?;
+        let mut out = crate::schedule::Yields::new();
+        let mut stmt = conn.prepare_cached("SELECT mode, dial_hz, (start_utc / 3600) % 24, SUM(end_utc - start_utc) FROM listening WHERE healthy IS NOT 0 GROUP BY 1, 2, 3")?;
+        let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)?, r.get::<_, i64>(3)?)))?;
+        for row in rows {
+            let (mode, dial, hour, seconds) = row?;
+            out.entry((mode, dial as u64, hour as u8)).or_default().monitored_s = seconds as u64;
+        }
+        let mut stmt = conn.prepare_cached("SELECT mode, dial_hz, (at_utc / 3600) % 24, COUNT(*) FROM observations GROUP BY 1, 2, 3")?;
+        let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)?, r.get::<_, i64>(3)?)))?;
+        for row in rows {
+            let (mode, dial, hour, n) = row?;
+            out.entry((mode, dial as u64, hour as u8)).or_default().observations = n as u64;
+        }
+        Ok(out)
+    }
+
     /// Totals over the last `hours`, by mode and by frequency, each with the
     /// time actually spent listening there.
     pub fn summary(&self, q: &SummaryQuery, now: u64) -> Result<Value> {
@@ -845,7 +913,7 @@ mod tests {
     }
 
     fn radio(dial_hz: f64, mode: SdrMode) -> Option<RadioNow> {
-        Some(RadioNow { dial_hz, mode, rfgr_db: None })
+        Some(RadioNow { dial_hz, mode, rfgr_db: None, cause: "operator" })
     }
 
     fn temp_db(name: &str) -> PathBuf {
@@ -859,7 +927,7 @@ mod tests {
     }
 
     fn segment(seq: u64, start: u64, end: u64) -> Segment {
-        Segment { seq, start_utc: start, end_utc: end, dial_hz: 14_074_000, mode: "FT8", noise_dbfs: Some(-90.0), peak_iq: Some(0.2), rfgr_db: None, decodes: 5, valid_decodes: 5 }
+        Segment { seq, start_utc: start, end_utc: end, dial_hz: 14_074_000, mode: "FT8", cause: "operator", noise_dbfs: Some(-90.0), peak_iq: Some(0.2), rfgr_db: None, decodes: 5, valid_decodes: 5 }
     }
 
     /// A log whose writer has been shut down, so everything has reached disk.
@@ -929,6 +997,27 @@ mod tests {
 
         let corrupt = event("HFDL", "acars", &[("flight", "BA117"), ("text", "x"), ("acarsCrcOk", "false")]);
         assert!(observe(11_387_000.0, &corrupt, OWN, NOW).is_none());
+    }
+
+    #[test]
+    fn an_hfdl_fix_keeps_its_own_time_beside_the_time_it_was_heard() {
+        let noon = NOW - NOW % 86_400 + 12 * 3600;
+        let fix = |utc: &str, now| {
+            let p = event("HFDL", "position", &[("flight", "BA117"), ("lat", "51.5"), ("lon", "-30.25"), ("utc", utc)]);
+            let o = observe(11_387_000.0, &p, OWN, now).unwrap();
+            assert_eq!(o.at_utc, now, "the time heard stays the time heard");
+            o.public.get("fixUtc").and_then(Value::as_u64)
+        };
+        // A queued report sent long after it was true.
+        assert_eq!(fix("10:30:00", noon), Some(noon - 90 * 60));
+        // Heard just after midnight: the 23:59 fix was yesterday's.
+        let midnight = noon + 12 * 3600;
+        assert_eq!(fix("23:59:50", midnight + 20), Some(midnight - 10));
+        // An aircraft clock slightly ahead of ours is not yesterday.
+        assert_eq!(fix("12:02:00", noon), Some(noon + 120));
+        // Nothing usable, nothing claimed; the position still counts.
+        assert_eq!(fix("99:00:00", noon), None);
+        assert_eq!(fix("noon", noon), None);
     }
 
     #[test]
@@ -1087,6 +1176,55 @@ mod tests {
 
         store.prune(NOW, KEEP_S, 0).unwrap();
         assert_eq!(count("SELECT COUNT(*) FROM observations"), 0, "over the cap, rows go until none are left");
+    }
+
+    fn healthy_of(path: &Path) -> Option<i64> {
+        Connection::open(path).unwrap().query_row("SELECT healthy FROM listening", [], |r| r.get(0)).unwrap()
+    }
+
+    #[test]
+    fn a_stay_that_clipped_is_unhealthy_and_a_passed_check_does_not_clear_it() {
+        let path = temp_db("clipped");
+        let mut store = Store::open(&path).unwrap();
+        let mut s = segment(0, NOW, NOW + 60);
+        s.peak_iq = Some(1.0);
+        store.apply(&[Cmd::Segment(s)]).unwrap();
+        assert_eq!(healthy_of(&path), Some(0));
+        store.apply(&[Cmd::Health { since: NOW - 10, until: NOW + 100, healthy: true }]).unwrap();
+        assert_eq!(healthy_of(&path), Some(0));
+    }
+
+    #[test]
+    fn a_check_marks_the_stays_since_the_last_one() {
+        let path = temp_db("marks");
+        let mut store = Store::open(&path).unwrap();
+        store.apply(&[Cmd::Segment(segment(0, NOW, NOW + 60))]).unwrap();
+        assert_eq!(healthy_of(&path), None);
+        store.apply(&[Cmd::Health { since: NOW - 10, until: NOW + 100, healthy: false }]).unwrap();
+        assert_eq!(healthy_of(&path), Some(0));
+    }
+
+    #[test]
+    fn a_version_1_database_is_migrated() {
+        let path = temp_db("migrate");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let conn = Connection::open(&path).unwrap();
+        conn.execute_batch(&format!("BEGIN; {SCHEMA} PRAGMA user_version = 1; COMMIT;")).unwrap();
+        conn.execute("INSERT INTO listening (start_utc, end_utc, dial_hz, mode, cause, decodes, valid_decodes) VALUES (1, 2, 3, 'FT8', 'operator', 0, 0)", []).unwrap();
+        drop(conn);
+        drop(Store::open(&path).unwrap());
+        assert_eq!(healthy_of(&path), None);
+        drop(Store::open(&path).unwrap());
+    }
+
+    #[test]
+    fn yields_leave_out_time_on_a_broken_radio() {
+        let mut bad = segment(1, NOW, NOW + 500);
+        bad.peak_iq = Some(1.0);
+        let hour = (NOW / 3_600 % 24) as u8;
+        let log = flushed(temp_db("yields"), vec![Cmd::Segment(segment(0, NOW, NOW + 100)), Cmd::Segment(bad), Cmd::Observe(Box::new(obs_row("K1ABC")))]);
+        let y = log.yields().unwrap();
+        assert_eq!(y[&("FT8".to_string(), 14_074_000, hour)], crate::schedule::Yield { monitored_s: 100, observations: 1 });
     }
 
     #[tokio::test]
