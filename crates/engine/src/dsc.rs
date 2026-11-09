@@ -60,8 +60,13 @@
 //!   first telecommand to find the EOS; the ECC is the even vertical parity
 //!   of the seven information bits of one format specifier, every content
 //!   character and one EOS (§ 10), and every call is reported with whether
-//!   it checks. Nothing is corrected from the ECC: a call that fails it is
-//!   reported as failed, not repaired into a likely answer. Seven bits of
+//!   it checks. A call that fails the ECC is reported as failed, not
+//!   repaired into a likely answer. One case is recovered from it: a call
+//!   with exactly one unreadable character, where the ECC says what that
+//!   character must have been, and only when that is also the code word its
+//!   own soft bits favor most (which they did not by the margin a reading
+//!   needs). The two agree by chance once in 128, the odds the ECC itself
+//!   gives, and the call says a character was recovered. Seven bits of
 //!   parity pass about one badly corrupted call in 128, so each field is
 //!   also checked for symbols its position does not allow.
 //! - A call whose signal goes before its closing sequence is reported as
@@ -256,6 +261,13 @@ fn combine(copies: &[&Soft]) -> Option<u8> {
             *s += x;
         }
     }
+    let (best, margin) = likeliest(&sum);
+    (margin >= ML_MARGIN).then_some(best)
+}
+
+/// The code word summed soft bits favor most, and by how much over the
+/// next.
+fn likeliest(sum: &Soft) -> (u8, f32) {
     let (mut best, mut best_m, mut second_m) = (0u8, f32::MIN, f32::MIN);
     for (v, &w) in CODEWORDS.iter().enumerate() {
         let m: f32 = sum.iter().enumerate().map(|(j, s)| if w >> j & 1 == 1 { *s } else { -*s }).sum();
@@ -267,7 +279,27 @@ fn combine(copies: &[&Soft]) -> Option<u8> {
             second_m = m;
         }
     }
-    (best_m - second_m >= ML_MARGIN).then_some(best)
+    (best, best_m - second_m)
+}
+
+/// Fill the one unreadable character of a call from its ECC. `s` is the
+/// call from the format specifier (two copies) to the ECC after the EOS at
+/// `e`; `favored` gives the code word a character's soft bits favor most.
+/// Returns the character's place when it was filled: only when it is the
+/// single one missing, the format and the ECC themselves were read, and
+/// the ECC's answer is the one the soft bits favor.
+fn recover_one(s: &mut [Option<u8>], e: usize, favored: impl Fn(usize) -> Option<u8>) -> Option<usize> {
+    let (f, ecc) = (s[0]?, (*s.get(e + 1)?)?);
+    let mut missing = (2..=e).filter(|&d| s[d].is_none());
+    let d = missing.next()?;
+    if missing.next().is_some() {
+        return None;
+    }
+    let v = (2..=e).filter(|&k| k != d).fold(f ^ ecc, |a, k| a ^ s[k].unwrap_or(0));
+    (favored(d) == Some(v)).then(|| {
+        s[d] = Some(v);
+        d
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -1074,6 +1106,9 @@ pub struct DscCall {
     pub rx_used: u32,
     /// Characters neither copy gave.
     pub unreadable: u32,
+    /// Characters neither copy gave that the ECC supplied (at most one). The
+    /// ECC then checks nothing else: `ecc_ok` says only that it was used.
+    pub recovered: u32,
     /// Every character of the call from the format specifier to the ECC.
     pub symbols: Vec<Option<u8>>,
     pub center_hz: f32,
@@ -1323,6 +1358,8 @@ impl DscCall {
         }
         s.push_str(if !self.complete {
             "; INCOMPLETE"
+        } else if self.ecc_ok && self.recovered > 0 {
+            "; one character recovered from the ECC"
         } else if self.ecc_ok {
             "; ECC ok"
         } else {
@@ -1422,6 +1459,9 @@ impl DscCall {
         f.push(("complete", self.complete.to_string()));
         f.push(("rxCopies", self.rx_used.to_string()));
         f.push(("unreadable", self.unreadable.to_string()));
+        if self.recovered > 0 {
+            f.push(("recovered", self.recovered.to_string()));
+        }
         f.push(("symbols", sym_text(&self.symbols)));
         f.push(("centerHz", format!("{:.1}", self.center_hz)));
         if let Some(s) = self.snr_db {
@@ -1597,6 +1637,7 @@ fn parse_fields(s: &[Option<u8>], eos: Option<usize>) -> DscCall {
         complete: eos.is_some(),
         rx_used: 0,
         unreadable: 0,
+        recovered: 0,
         symbols: s.to_vec(),
         center_hz: 0.0,
         snr_db: None,
@@ -1753,6 +1794,22 @@ impl CallRx {
         copies.extend(dx.iter().filter(|&&d| 12 + 2 * d < self.cut).map(|&d| &self.dx[d]));
         copies.extend(rx.iter().filter(|&&d| 17 + 2 * d < self.cut).map(|&d| &self.rx[d]));
         if copies.is_empty() { None } else { combine(&copies) }
+    }
+
+    /// The code word character `d`'s copies favor most together, however
+    /// narrowly; None with no copy heard.
+    fn favored(&self, d: usize) -> Option<u8> {
+        let mut sum = [0.0f32; 10];
+        let mut any = false;
+        for (slot, c) in [(12 + 2 * d, self.dx.get(d)), (17 + 2 * d, self.rx.get(d))] {
+            if let Some(c) = c.filter(|_| slot < self.cut) {
+                any = true;
+                for (s, x) in sum.iter_mut().zip(c.iter()) {
+                    *s += x;
+                }
+            }
+        }
+        any.then(|| likeliest(&sum).0)
     }
 
     /// Whether the last `n` slots say the signal has gone.
@@ -2240,8 +2297,11 @@ impl DscDecoder {
             }
         }
         let n = eos.map_or(c.dec.len(), |e| e + 2);
-        let s = &c.dec[..n];
+        let mut s = c.dec[..n].to_vec();
+        let recovered = eos.and_then(|e| recover_one(&mut s, e, |d| c.favored(d)));
+        let s = &s[..];
         let mut call = parse(s, eos);
+        call.recovered = u32::from(recovered.is_some());
         if let Some(e) = eos {
             let ecc = s[0].and_then(|f| s[2..=e].iter().try_fold(f, |a, v| v.map(|v| a ^ v)));
             call.ecc_ok = ecc.is_some() && ecc == s[e + 1];
@@ -2550,7 +2610,7 @@ mod tests {
 
     /// What a call says, without how it was received.
     fn content_of(c: &DscCall) -> DscCall {
-        DscCall { ecc_ok: false, rx_used: 0, unreadable: 0, center_hz: 0.0, snr_db: None, reverse: false, ..c.clone() }
+        DscCall { ecc_ok: false, rx_used: 0, unreadable: 0, recovered: 0, center_hz: 0.0, snr_db: None, reverse: false, ..c.clone() }
     }
 
     /// Out of `n` seeds of `content`: the calls that passed their checks
@@ -2646,6 +2706,44 @@ mod tests {
         assert_eq!(c.len(), 1, "{c:#?}");
         check_individual(&c[0]);
         assert!(c[0].rx_used >= 1, "rx copies {}", c[0].rx_used);
+    }
+
+    #[test]
+    fn dsc_one_unreadable_character_is_recovered_from_the_ecc() {
+        // Format twice, three characters, an EOS, and their ECC.
+        let (f, body, eos) = (120u8, [12u8, 34, 56], 127u8);
+        let ecc = body.iter().fold(f ^ eos, |a, v| a ^ v);
+        let whole: Vec<Option<u8>> = [f, f, body[0], body[1], body[2], eos, ecc].iter().map(|&v| Some(v)).collect();
+        let e = 5;
+        // The soft bits favor the right word: filled.
+        let mut s = whole.clone();
+        s[3] = None;
+        assert_eq!(recover_one(&mut s, e, |_| Some(34)), Some(3));
+        assert_eq!(s, whole);
+        // They favor another: the ECC's answer is not taken on its own.
+        let mut s = whole.clone();
+        s[3] = None;
+        assert_eq!(recover_one(&mut s, e, |_| Some(35)), None);
+        assert_eq!(s[3], None);
+        // Two missing, or the ECC itself: nothing to go on.
+        let mut s = whole.clone();
+        (s[2], s[3]) = (None, None);
+        assert_eq!(recover_one(&mut s, e, |_| Some(34)), None);
+        let mut s = whole.clone();
+        (s[3], s[6]) = (None, None);
+        assert_eq!(recover_one(&mut s, e, |_| Some(34)), None);
+        // Nothing missing: nothing touched.
+        let mut s = whole.clone();
+        assert_eq!(recover_one(&mut s, e, |_| Some(34)), None);
+        assert_eq!(s, whole);
+    }
+
+    #[test]
+    fn dsc_the_favored_word_needs_no_margin() {
+        // A code word's own bits, weakly: the likeliest, whatever the margin.
+        let w = CODEWORDS[77];
+        let soft: Soft = std::array::from_fn(|j| if w >> j & 1 == 1 { 0.05 } else { -0.05 });
+        assert_eq!(likeliest(&soft).0, 77);
     }
 
     #[test]
