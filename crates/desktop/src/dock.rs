@@ -77,7 +77,7 @@ const TAB_LABELS: [&str; 5] = ["Decodes", "Classifier", "Last heard", "Scan", "M
 /// The width the tab row takes, measured the way [`tab`] lays each one out.
 fn tabs_width(ui: &Ui) -> f32 {
     let p = ui.painter();
-    let count = p.layout_no_wrap("9999".into(), widgets::key_font(), egui::Color32::PLACEHOLDER).size().x + 6.0;
+    let count = p.layout_no_wrap("999".into(), widgets::key_font(), egui::Color32::PLACEHOLDER).size().x + 6.0;
     TAB_LABELS
         .iter()
         .enumerate()
@@ -88,10 +88,12 @@ fn tabs_width(ui: &Ui) -> f32 {
 /// A dock tab: a key with its name and, when it keeps a log, the count.
 fn tab(ui: &mut Ui, label: &str, count: Option<usize>, on: bool) -> egui::Response {
     let g = ui.painter().layout_no_wrap(label.to_uppercase(), widgets::key_font(), egui::Color32::PLACEHOLDER);
-    let badge = count.map(|n| ui.painter().layout_no_wrap(n.to_string(), widgets::key_font(), egui::Color32::PLACEHOLDER));
-    // Room for four digits whatever the count (the log holds 1500), so one growing past 9 or
+    // Three characters at most: the log holds 1500, and a fourth digit would
+    // run into the key's edge.
+    let badge = count.map(|n| ui.painter().layout_no_wrap(if n > 999 { "1k+".to_string() } else { n.to_string() }, widgets::key_font(), egui::Color32::PLACEHOLDER));
+    // Room for three characters whatever the count, so a log growing past 9 or
     // 99 does not move the tabs after it.
-    let count_w = if badge.is_some() { ui.painter().layout_no_wrap("9999".into(), widgets::key_font(), egui::Color32::PLACEHOLDER).size().x + 6.0 } else { 0.0 };
+    let count_w = if badge.is_some() { ui.painter().layout_no_wrap("999".into(), widgets::key_font(), egui::Color32::PLACEHOLDER).size().x + 6.0 } else { 0.0 };
     let (rect, resp) = ui.allocate_exact_size(vec2(g.size().x + count_w + 16.0, 26.0), egui::Sense::click());
     resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, on, label));
     let (press, c) = widgets::paint_key(ui, &resp, rect, egui::CornerRadius::same(theme::RADIUS), on, theme::AMBER);

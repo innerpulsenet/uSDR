@@ -604,9 +604,8 @@ pub fn wwv(app: &mut App, ui: &mut Ui) {
     let last = rows(app, "WWV").find(|(_, d)| d.ev.kind == "minute").map(|(_, d)| (d.at, d.ev.fields.clone(), d.ev.summary.clone()));
     ui.horizontal_top(|ui| {
         // The time now, counted on from the last frame read off the air.
-        // It scrolls when the dock is too short to hold every row.
-        egui::ScrollArea::vertical().id_salt("wwv-reading").auto_shrink([true, false]).show(ui, |ui| {
-            ui.set_width(250.0);
+        ui.vertical(|ui| {
+            ui.set_width(330.0);
             match &last {
                 Some((at, f, _)) => {
                     // "2026-11-06T17:52Z": the time large, the date under it.
@@ -636,20 +635,34 @@ pub fn wwv(app: &mut App, ui: &mut Ui) {
                         ("confidence", "CONFIDENCE", String::new()),
                         ("tickOffsetMs", "TICKS LATE BY", " ms".to_string()),
                     ];
-                    for (k, label, unit) in rows {
-                        if let Some(v) = f.get(k) {
-                            let v = match k {
+                    // Two to a line, so all six fit the dock at its
+                    // default height.
+                    let shown: Vec<(&str, &str, String)> = rows
+                        .iter()
+                        .filter_map(|(k, label, unit)| {
+                            let v = f.get(*k)?;
+                            let v = match *k {
                                 "leapWarning" => if v == "true" { "announced".to_string() } else { "none".to_string() },
                                 _ => format!("{v}{unit}"),
                             };
-                            let r = ui.horizontal(|ui| {
-                                ui.add_sized(vec2(110.0, 14.0), egui::Label::new(mono(label, theme::text_3())));
-                                ui.label(mono(v, theme::text_2()));
-                            });
-                            if k == "tickOffsetMs" {
-                                r.response.on_hover_text("When the ticks arrived after the second on this server's clock: the path from Colorado or Kauai, the receiver's own delay, and the clock's error together");
+                            Some((*k, *label, v))
+                        })
+                        .collect();
+                    for pair in shown.chunks(2) {
+                        ui.horizontal(|ui| {
+                            for (k, label, v) in pair {
+                                let r = ui
+                                    .allocate_ui_with_layout(vec2(160.0, 14.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                                        ui.set_min_width(160.0);
+                                        ui.add_sized(vec2(92.0, 14.0), egui::Label::new(mono(*label, theme::text_3())));
+                                        ui.label(mono(v.clone(), theme::text_2()));
+                                    })
+                                    .response;
+                                if *k == "tickOffsetMs" {
+                                    r.on_hover_text("When the ticks arrived after the second on this server's clock: the path from Colorado or Kauai, the receiver's own delay, and the clock's error together");
+                                }
                             }
-                        }
+                        });
                     }
                 }
                 None => {

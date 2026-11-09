@@ -3425,17 +3425,23 @@ mod tests {
         // The trace: the column whose bright pixels reach highest in the
         // top part, away from the edges where the scales are drawn.
         let (x0, x1) = (60, w - 60);
+        // A carrier wider than a pixel has a flat crest: take its middle.
         let mut best = (u32::MAX, 0u32);
+        let mut crest_end = 0u32;
         for x in x0..x1 {
             // Below the receiver's card, which sits along the top.
             // White, so not the receiver's amber passband lines.
             let white = |x: u32, y: u32| img.get_pixel(x, y).0[..3].iter().all(|&c| c > 160);
-            if let Some(y) = (ht * 3 / 20..ht * 2 / 5).find(|&y| white(x, y))
-                && y < best.0
-            {
-                best = (y, x);
+            if let Some(y) = (ht * 3 / 20..ht * 2 / 5).find(|&y| white(x, y)) {
+                if y < best.0 {
+                    best = (y, x);
+                    crest_end = x;
+                } else if y == best.0 && x == crest_end + 1 {
+                    crest_end = x;
+                }
             }
         }
+        best.1 = (best.1 + crest_end) / 2;
         // The waterfall: 120 frames fill its top 120 rows, newest first, so
         // the second window's rows run from its top and the first's below
         // them. Its top is the first row below the axis that is not the
