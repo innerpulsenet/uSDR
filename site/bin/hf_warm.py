@@ -10,8 +10,10 @@ import math
 import os
 import re
 import shutil
+import struct
 import sys
 import time
+import zlib
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from hf_schema import connect  # noqa: E402
@@ -125,7 +127,15 @@ def build_map(conn, now, hours, station_grid):
            for r in conn.execute("SELECT at_utc, lat, lon, ident, kind FROM observations WHERE mode='DSC' AND at_utc >= ? AND lat IS NOT NULL ORDER BY at_utc DESC LIMIT 400", (since,))]
     monitored = [[r["h"], index(modes, r["mode"]), r["s"]] for r in conn.execute(
         "SELECT (start_utc - ?) / 3600 AS h, mode, SUM(end_utc - start_utc) AS s FROM listening WHERE end_utc >= ? AND healthy IS NOT 0 GROUP BY h, mode", (start, since)) if r["h"] >= 0]
+    # Time spent on the amateur modes per band, since the map cannot be read without it.
+    air = {}
+    for r in conn.execute(f"""SELECT (start_utc - ?) / 3600 AS h, dial_hz, SUM(end_utc - start_utc) AS s FROM listening
+                              WHERE end_utc >= ? AND healthy IS NOT 0 AND mode IN ({AMATEUR_SQL}) GROUP BY h, dial_hz""", (start, since)):
+        if r["h"] >= 0:
+            key = (r["h"], index(bands, band(r["dial_hz"])))
+            air[key] = air.get(key, 0) + r["s"]
     return {"generated_utc": now, "start_utc": start, "hours": hours, "station_grid": station_grid, "modes": modes, "bands": bands,
+            "air": [[h, b, s] for (h, b), s in air.items()],
             "squares": list(squares), "idents": list(idents),
             "spots": [[s, m, b, h, i, n, None if best == -999 else round(best), (t - start) // 60] for (s, m, b, h, i), (n, best, t) in spots.items()],
             "tracks": tracks[:400], "ground": ground, "dsc": dsc, "monitored": monitored}
@@ -245,6 +255,146 @@ def write_lookups(conn, now, shards):
         write(f"who/{shard}.json", {"generated_utc": now, "stations": stations})
 
 
+def build_health(conn, now):
+    """When the receiver listened, and what the noise and peaks looked like."""
+    since = now - 86400
+    timeline = [[r["start_utc"], r["end_utc"], r["mode"], r["dial_hz"], r["healthy"]] for r in conn.execute(
+        "SELECT start_utc, end_utc, mode, dial_hz, healthy FROM listening WHERE end_utc >= ? ORDER BY start_utc", (since,))]
+    cells, lowest = {}, {}
+    for r in conn.execute("SELECT dial_hz, (start_utc / 3600) % 24 AS h, noise_dbfs, peak_iq, end_utc - start_utc AS s FROM listening WHERE end_utc >= ? AND noise_dbfs IS NOT NULL", (now - 14 * 86400,)):
+        label = band(r["dial_hz"])
+        lowest[label] = min(lowest.get(label, r["dial_hz"]), r["dial_hz"])
+        c = cells.setdefault((label, r["h"]), {"sum": 0.0, "s": 0, "peak": 0.0})
+        weight = max(r["s"], 1)
+        c["sum"] += r["noise_dbfs"] * weight
+        c["s"] += weight
+        c["peak"] = max(c["peak"], r["peak_iq"] or 0)
+    labels = sorted(lowest, key=lowest.get)
+    bands = [{"label": label, "cells": [[round(cells[(label, h)]["sum"] / cells[(label, h)]["s"], 1), round(cells[(label, h)]["peak"], 3), cells[(label, h)]["s"]] if (label, h) in cells else None for h in range(24)]} for label in labels]
+    return {"generated_utc": now, "since": since, "timeline": timeline, "bands": bands}
+
+
+def details_of(row):
+    try:
+        return json.loads(row["details"] or "{}")
+    except ValueError:
+        return {}
+
+
+def build_traffic(conn, now):
+    flights = {}
+    for r in conn.execute("SELECT at_utc, ident, lat, lon, details FROM observations WHERE mode = 'HFDL' AND at_utc >= ? AND ident IS NOT NULL ORDER BY at_utc", (now - 86400,)):
+        ident = r["ident"].lstrip(".")
+        # Ground stations announce themselves on the same channels: GS4 is no flight.
+        if not re.search("[A-Z0-9]", ident) or re.fullmatch(r"GS\d+", ident):
+            continue
+        d = details_of(r)
+        f = flights.setdefault(ident, {"i": ident, "n": 0, "t": 0})
+        f["n"] += 1
+        f["t"] = r["at_utc"]
+        if d.get("reg"):
+            f["reg"] = d["reg"].lstrip(".")
+        if d.get("gsId"):
+            f["gs"] = d["gsId"]
+        if r["lat"] is not None:
+            f["la"], f["lo"] = round(r["lat"], 2), round(r["lon"], 2)
+    ships = []
+    for r in conn.execute("SELECT at_utc, ident, kind, dial_hz, lat, lon, details FROM observations WHERE mode = 'DSC' AND at_utc >= ? ORDER BY at_utc DESC LIMIT 500", (now - 30 * 86400,)):
+        d = details_of(r)
+        ships.append({"t": r["at_utc"], "i": r["ident"], "k": r["kind"], "f": r["dial_hz"], "cat": d.get("categoryName"), "what": d.get("natureName") or d.get("tc1Name"), "from": d.get("fromKind"), "mid": d.get("fromMid"), "la": r["lat"], "lo": r["lon"]})
+    return {"generated_utc": now, "flights": sorted(flights.values(), key=lambda x: -x["t"])[:500], "ships": ships}
+
+
+THUMB_WIDTH = 480
+THUMBS_PER_RUN = 5
+
+
+def png_rows(path):
+    """The rows of an 8-bit grayscale PNG, or None for any other kind."""
+    with open(path, "rb") as f:
+        data = f.read()
+    if data[:8] != b"\x89PNG\r\n\x1a\n":
+        return None
+    pos, idat, width, height = 8, [], 0, 0
+    while pos < len(data):
+        size, kind = struct.unpack(">I4s", data[pos:pos + 8])
+        body = data[pos + 8:pos + 8 + size]
+        pos += 12 + size
+        if kind == b"IHDR":
+            width, height, depth, color, _, _, interlace = struct.unpack(">IIBBBBB", body)
+            if depth != 8 or color != 0 or interlace:
+                return None
+        elif kind == b"IDAT":
+            idat.append(body)
+    raw = zlib.decompress(b"".join(idat))
+    stride = width + 1
+    if len(raw) < stride * height:
+        return None
+    rows, prev = [], bytes(width)
+    for y in range(height):
+        kind = raw[y * stride]
+        line = bytearray(raw[y * stride + 1:(y + 1) * stride])
+        if kind == 1:
+            for x in range(1, width):
+                line[x] = (line[x] + line[x - 1]) & 255
+        elif kind == 2:
+            for x in range(width):
+                line[x] = (line[x] + prev[x]) & 255
+        elif kind == 3:
+            for x in range(width):
+                line[x] = (line[x] + ((line[x - 1] if x else 0) + prev[x]) // 2) & 255
+        elif kind == 4:
+            for x in range(width):
+                a, b, c = line[x - 1] if x else 0, prev[x], prev[x - 1] if x else 0
+                p = a + b - c
+                pa, pb, pc = abs(p - a), abs(p - b), abs(p - c)
+                line[x] = (line[x] + (a if pa <= pb and pa <= pc else b if pb <= pc else c)) & 255
+        rows.append(bytes(line))
+        prev = line
+    return width, rows
+
+
+def write_thumbnail(path, target):
+    """A smaller copy starting below the black phasing band. False if it can't be made."""
+    decoded = png_rows(path)
+    if decoded is None:
+        return False
+    width, rows = decoded
+    step = max(1, width // THUMB_WIDTH)
+    first = 0
+    for y, row in enumerate(rows[:300]):
+        if sum(row[::8]) * 8 / width > 128:
+            first = y
+            break
+    out = [b"\0" + bytes(sum(row[x:x + step]) // step for x in range(0, width - step + 1, step)) for row in rows[first::step]]
+    w, h = len(out[0]) - 1, len(out)
+    def chunk(kind, body):
+        return struct.pack(">I", len(body)) + kind + body + struct.pack(">I", zlib.crc32(kind + body))
+    with open(target + ".tmp", "wb") as f:
+        f.write(b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 0, 0, 0, 0)) + chunk(b"IDAT", zlib.compress(b"".join(out), 6)) + chunk(b"IEND", b""))
+    os.chmod(target + ".tmp", 0o644)
+    os.replace(target + ".tmp", target)
+    return True
+
+
+def picture_list(conn, now):
+    pictures, made = [], 0
+    for r in conn.execute("SELECT id, start_utc, end_utc, mode, dial_hz, width, lines, station, scheduled_title, file FROM pictures ORDER BY start_utc DESC LIMIT 300"):
+        p = dict(r)
+        name = f"thumb-{os.path.basename(p['file'])}"
+        target = os.path.join(PICTURES, name)
+        if not os.path.exists(target) and made < THUMBS_PER_RUN:
+            made += 1
+            try:
+                write_thumbnail(os.path.join(PICTURES, os.path.basename(p["file"])), target)
+            except (OSError, ValueError, IndexError, struct.error, zlib.error) as e:
+                print(f"hf-site: thumbnail for {p['file']}: {e}", file=sys.stderr)
+        if os.path.exists(target):
+            p["thumb"] = name
+        pictures.append(p)
+    return {"generated_utc": now, "pictures": pictures}
+
+
 def prune(conn, now):
     cutoff = now - KEEP_RAW_S
     gone = [r[0] for r in conn.execute("SELECT file FROM pictures WHERE start_utc < ?", (cutoff,))]
@@ -253,10 +403,11 @@ def prune(conn, now):
         conn.execute("DELETE FROM listening WHERE end_utc < ?", (cutoff,))
         conn.execute("DELETE FROM pictures WHERE start_utc < ?", (cutoff,))
     for name in gone:
-        try:
-            os.remove(os.path.join(PICTURES, os.path.basename(name)))
-        except OSError:
-            pass
+        for victim in (os.path.basename(name), f"thumb-{os.path.basename(name)}"):
+            try:
+                os.remove(os.path.join(PICTURES, victim))
+            except OSError:
+                pass
 
 
 def main():
@@ -271,7 +422,9 @@ def main():
     write("map-7d.json", build_map(conn, now, 24 * 7, station_grid))
     write("activity.json", build_activity(conn, now, station_grid))
     write("log.json", {"generated_utc": now, "rows": [row_out(r) for r in conn.execute(f"SELECT * FROM observations ORDER BY at_utc DESC, id DESC LIMIT 500")]})
-    write("pictures.json", {"generated_utc": now, "pictures": [dict(r) for r in conn.execute("SELECT id, start_utc, end_utc, mode, dial_hz, width, lines, station, scheduled_title, file FROM pictures ORDER BY start_utc DESC LIMIT 300")]})
+    write("pictures.json", picture_list(conn, now))
+    write("health.json", build_health(conn, now))
+    write("traffic.json", build_traffic(conn, now))
     free = shutil.disk_usage(os.path.dirname(DB)).free
     if free < LOW_DISK_BYTES:
         print(f"hf-site: low disk, {free >> 30} GB free", file=sys.stderr)

@@ -11,6 +11,7 @@ Group=patrickh
 EnvironmentFile=/etc/hf-site.env
 Environment=HF_DB=/var/lib/hf-site/hf.sqlite
 Environment=HF_PICTURES=/home/patrickh/www/hf/pictures
+Environment=HF_DATA=/home/patrickh/www/hf/data
 ExecStart=/usr/bin/python3 /home/patrickh/hf-site/bin/hf_api.py
 StateDirectory=hf-site
 StateDirectoryMode=0700
@@ -21,7 +22,7 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=read-only
-ReadWritePaths=/home/patrickh/www/hf/pictures
+ReadWritePaths=/home/patrickh/www/hf/pictures /home/patrickh/www/hf/data
 ProtectKernelTunables=true
 ProtectControlGroups=true
 RestrictSUIDSGID=true

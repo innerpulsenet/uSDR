@@ -61,6 +61,17 @@ pub fn public_grid(grid: &str) -> Option<String> {
     real.then(|| grid.trim()[..4].to_ascii_uppercase())
 }
 
+/// What the public page may say the receiver is doing. While someone has taken
+/// the radio, or the schedule is off, it says only that: the operator can be
+/// anywhere, including above 30 MHz.
+pub fn public_status(s: &usdr_proto::ScheduleStatus, now: u64) -> Value {
+    match s.state.as_str() {
+        "held" => json!({ "at": now, "state": "manual" }),
+        "off" | "failed" => json!({ "at": now, "state": s.state }),
+        _ => json!({ "at": now, "state": s.state, "label": s.label, "ends_utc": s.ends_utc, "next_chart": s.next_chart }),
+    }
+}
+
 fn gzip(json: &Value) -> Result<Vec<u8>> {
     let mut gz = GzEncoder::new(Vec::new(), Compression::default());
     gz.write_all(json.to_string().as_bytes())?;
@@ -70,14 +81,15 @@ fn gzip(json: &Value) -> Result<Vec<u8>> {
 /// One round: the rows, then one picture. `post` delivers a body to a path
 /// under the ingest address, with its content type and any extra headers, and
 /// returns an error for anything but success. True when there is more to send.
-pub fn send_once(log: &StationLog, grid: Option<&str>, now: u64, post: &mut dyn FnMut(&str, &str, &BTreeMap<&str, String>, Vec<u8>) -> Result<()>) -> Result<bool> {
+pub fn send_once(log: &StationLog, grid: Option<&str>, now: u64, status: Option<&Value>, post: &mut dyn FnMut(&str, &str, &BTreeMap<&str, String>, Vec<u8>) -> Result<()>) -> Result<bool> {
     let batch = log.uplink_batch(now, BATCH_ROWS)?;
     let full = batch.full;
-    if !batch.is_empty() || batch.moved() {
+    if !batch.is_empty() || batch.moved() || status.is_some() {
         let body = json!({
             "station": STATION_ID,
             "grid": grid,
             "sent_utc": now,
+            "now": status,
             "observations": batch.observations,
             "listening": batch.listening,
             "gaps": batch.gaps,
@@ -110,17 +122,18 @@ fn deliver(agent: &ureq::Agent, config: &Config, path: &str, content_type: &str,
 }
 
 /// Send until the daemon stops, slowing down while the backend is unreachable.
-pub async fn run(log: Arc<StationLog>, config: Config, grid: impl Fn() -> String + Send + Sync + 'static) {
+pub async fn run(log: Arc<StationLog>, config: Config, grid: impl Fn() -> String + Send + Sync + 'static, status: impl Fn(u64) -> Value + Send + Sync + 'static) {
     let agent: ureq::Agent = ureq::Agent::config_builder().timeout_global(Some(HTTP_TIMEOUT)).build().into();
     let grid = Arc::new(grid);
+    let status = Arc::new(status);
     let mut wait = EVERY;
     loop {
         tokio::time::sleep(wait).await;
-        let (log, config, agent, grid) = (Arc::clone(&log), config.clone(), agent.clone(), Arc::clone(&grid));
+        let (log, config, agent, grid, status) = (Arc::clone(&log), config.clone(), agent.clone(), Arc::clone(&grid), Arc::clone(&status));
         let round = tokio::task::spawn_blocking(move || {
             let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
             let grid = public_grid(&grid());
-            send_once(&log, grid.as_deref(), now, &mut |path, kind, headers, body| deliver(&agent, &config, path, kind, headers, body))
+            send_once(&log, grid.as_deref(), now, Some(&status(now)), &mut |path, kind, headers, body| deliver(&agent, &config, path, kind, headers, body))
         })
         .await;
         wait = match round {
@@ -163,5 +176,30 @@ mod tests {
         std::fs::write(&path, "url = \"https://example.net\"\ntoken = \"short\"\n").unwrap();
         assert!(load(&path).is_err(), "not with a short token");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod status_tests {
+    use super::*;
+
+    fn status(state: &str) -> usdr_proto::ScheduleStatus {
+        usdr_proto::ScheduleStatus {
+            enabled: true,
+            state: state.into(),
+            label: "HFDL 11387.0 kHz".into(),
+            ends_utc: 9,
+            hold_until_utc: 0,
+            health: "good".into(),
+            last_good_utc: 0,
+            next_chart: "1636 UTC".into(),
+        }
+    }
+
+    #[test]
+    fn a_held_radio_says_nothing_about_where_it_is() {
+        let held = public_status(&status("held"), 5);
+        assert_eq!(held, json!({ "at": 5, "state": "manual" }));
+        assert_eq!(public_status(&status("monitoring"), 5)["label"], "HFDL 11387.0 kHz");
     }
 }

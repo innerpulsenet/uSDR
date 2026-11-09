@@ -4,6 +4,7 @@ Natural Earth 110m coastlines and the HFDL ground stations in the directory.
 Run it when either changes."""
 import json
 import os
+import re
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA = os.path.join(ROOT, "crates/desktop/data")
@@ -29,6 +30,19 @@ def main():
     with open(os.path.join(OUT, "ground-stations.json"), "w") as f:
         json.dump(ground, f, separators=(",", ":"))
     print(len(lines), "coast lines,", len(ground), "ground stations")
+
+    # Flag states by MMSI prefix and airlines by designator, for the Traffic page.
+    with open(os.path.join(DATA, "lookups.json")) as f:
+        lookups = json.load(f)
+    flags = {}
+    for row in lookups["mid"]["table"]:
+        name = re.sub(r"\s*\([^)]*\)", "", row["allocated_to"]).strip()
+        flags.setdefault(str(row["mid"]), name)
+    airlines = {}
+    for row in lookups["airlines"]["table"]:
+        airlines.setdefault(row["icao"], re.sub(r"\s*\([^)]*\)", "", row["name"]).strip().title())
+    with open(os.path.join(OUT, "lookups-site.json"), "w") as f:
+        json.dump({"flags": flags, "airlines": airlines}, f, separators=(",", ":"))
 
 
 if __name__ == "__main__":

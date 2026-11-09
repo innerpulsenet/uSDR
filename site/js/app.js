@@ -1,4 +1,4 @@
-import { BAND_GROUPS, SPOT_SIZES, mountMap, STEPS } from "./map.js";
+import { bandGroup, BAND_GROUPS, bearing, gridCenter, SPOT_SIZES, mountMap, STEPS } from "./map.js";
 import { ago, esc, fmtClock, fmtTime, hours, khz, num } from "./util.js";
 
 const view = document.getElementById("view");
@@ -7,6 +7,9 @@ let unmount = null;
 let coast = null;
 let land = null;
 let ground = null;
+let lookups = null;
+// When the data on screen was built, to tell when something newer exists.
+let shownBuilt = null;
 
 async function load(name) {
   const r = await fetch(`data/${name}?t=${Math.floor(Date.now() / 60000)}`);
@@ -39,6 +42,7 @@ function rowsTable(rows) {
 
 async function showNow() {
   const s = await load("status.json");
+  shownBuilt = s.generated_utc;
   const total = s.by_mode.reduce((a, m) => a + m.n, 0);
   const flights = s.by_mode.find((m) => m.mode === "HFDL");
   const amateurs = s.by_mode.filter((m) => ["FT8", "FT4", "WSPR", "JS8"].includes(m.mode)).reduce((a, m) => a + m.idents, 0);
@@ -48,6 +52,7 @@ async function showNow() {
     <p class="eyebrow">Last 24 hours</p>
     <h1>One receiver, listening below 30 MHz.</h1>
     <p class="lede">It moves between amateur digital modes, aircraft datalink, ship calls and weather charts on its own schedule. ${lastLine}</p>
+    <div id="nowline"></div>
     <dl class="ip-readout">
       <div><dt>Decodes logged</dt><dd>${num(total)}</dd></div>
       <div><dt>Spent listening</dt><dd>${hours(s.monitored_s)}</dd></div>
@@ -65,18 +70,39 @@ async function showNow() {
     <section aria-labelledby="latest"><h2 id="latest">Latest</h2>
       ${s.latest.length ? rowsTable(s.latest) : emptyLog()}
     </section>`;
+  drawNowLine();
+}
+
+const clock = (t) => { const d = new Date(t * 1000); return `${String(d.getUTCHours()).padStart(2, "0")}:${String(d.getUTCMinutes()).padStart(2, "0")}Z`; };
+
+// What the receiver says it is doing, from the file it refreshes once a minute.
+async function drawNowLine() {
+  const line = document.getElementById("nowline");
+  if (!line) return;
+  let n = null;
+  try { n = await load("now.json"); } catch { /* not sent yet */ }
+  if (!document.body.contains(line)) return;
+  if (!n || Date.now() / 1000 - n.at > 300) { line.innerHTML = ""; return; }
+  const said = {
+    manual: `<span class="ip-status ip-status-idle">In use</span> Someone is operating the receiver by hand. The schedule picks up again afterward.`,
+    off: `<span class="ip-status ip-status-idle">Off</span> The schedule is switched off.`,
+    failed: `<span class="ip-status ip-status-warn">Check failing</span> The receiver's radio check is failing.`,
+    idle: `<span class="ip-status ip-status-idle">Between slots</span> The schedule is choosing what to listen to next.`,
+  }[n.state] || `<span class="ip-live">On air</span> ${esc(n.label)}${n.ends_utc ? `, until ${clock(n.ends_utc)}` : ""}.`;
+  line.innerHTML = `<p class="nowline">${said}${n.next_chart ? ` <span class="next">Next chart: ${esc(n.next_chart)}.</span>` : ""}</p>`;
 }
 
 function mapShell(w) {
   return `
-    <p class="eyebrow">The map</p>
-    <h1>Where it heard from.</h1>
-    <div class="tools" style="margin-top:18px">
+    <div class="map-head"><p class="eyebrow">The map</p><h1>Where it heard from.</h1></div>
+    <details class="filters" id="filters" open><summary>Filters</summary>
+    <div class="tools">
       <div class="chips"><span class="lbl">Window</span><button type="button" data-w="24h" aria-pressed="${w === "24h"}">24 hours</button><button type="button" data-w="7d" aria-pressed="${w === "7d"}">7 days</button></div>
       <div class="chips"><span class="lbl">Projection</span><button type="button" data-proj="eq">Flat</button><button type="button" data-proj="az">From the station</button></div>
       <div class="chips" id="presets"><span class="lbl">Go to</span></div>
     </div>
     <div class="tools"><div class="chips" id="bands"><span class="lbl">Band</span></div><div class="chips" id="modes"><span class="lbl">Mode</span></div></div>
+    </details>
     <div class="map-wrap" style="margin-top:6px">
       <div class="map-main">
         <div class="stage">
@@ -85,7 +111,7 @@ function mapShell(w) {
         <div class="strip-wrap">
           <svg id="strip" class="strip" role="img" aria-label="Spots per hour. Hatched hours had no listening."></svg>
           <div class="range"><label for="from">From</label><input id="from" type="range" min="0" step="1"><label for="to">To</label><input id="to" type="range" step="1"></div>
-          <p class="note" style="margin-top:2px"><span id="fromv" class="num"></span> to <span id="tov" class="num"></span>. Hatched hours had no listening at all, which is not the same as a quiet band.</p>
+          <div class="strip-foot"><button type="button" id="play" aria-pressed="false">Play</button><p class="note"><span id="fromv" class="num"></span> to <span id="tov" class="num"></span>. Hatched hours had no listening at all, which is not the same as a quiet band.</p></div>
         </div>
         <div class="card" id="square" aria-live="polite"></div>
       </div>
@@ -103,7 +129,7 @@ function mapShell(w) {
             <label class="ip-check"><input type="checkbox" data-layer="tracks" checked><svg viewBox="0 0 18 12" aria-hidden="true"><path d="M1 10 L9 6" fill="none" stroke="var(--innerpulse-text-2)" stroke-width="1"/><path d="M17 2 L8.5 3.2 L10.6 6.5 L10.2 10.4Z" fill="var(--innerpulse-text)"/></svg><span>Aircraft positions</span></label>
             <label class="ip-check"><input type="checkbox" data-layer="ground" checked><svg viewBox="0 0 18 12" aria-hidden="true"><rect x="4.5" y="1.5" width="9" height="9" fill="none" stroke="var(--innerpulse-text)" stroke-width="1.5"/></svg><span>HFDL ground stations</span></label>
             <label class="ip-check"><input type="checkbox" data-layer="dsc" checked><svg viewBox="0 0 18 12" aria-hidden="true"><rect x="6" y="3" width="6" height="6" transform="rotate(45 9 6)" fill="var(--innerpulse-text)"/></svg><span>Ship calls</span></label>
-            <label class="ip-check"><input type="checkbox" data-layer="night" checked><svg viewBox="0 0 18 12" aria-hidden="true"><rect x=".5" y=".5" width="17" height="11" fill="#020305" stroke="var(--innerpulse-line-2)"/></svg><span>Night side, now</span></label>
+            <label class="ip-check"><input type="checkbox" data-layer="night" checked><svg viewBox="0 0 18 12" aria-hidden="true"><rect x=".5" y=".5" width="17" height="11" fill="#020305" stroke="var(--innerpulse-line-2)"/></svg><span>Night side, at the end of these hours</span></label>
           </div>
         </div>
       </div>
@@ -114,12 +140,18 @@ async function showMap(params) {
   const w = params.w === "7d" ? "7d" : "24h";
   [coast, land, ground] = await Promise.all([coast || load("coast-110m.json"), land || load("land-110m.json"), ground || load("ground-stations.json")]);
   const data = await load(`map-${w}.json`);
+  shownBuilt = data.generated_utc;
   view.innerHTML = mapShell(w);
+  view.querySelector("#filters").open = !matchMedia("(max-width: 760px)").matches;
   view.querySelectorAll("[data-w]").forEach((b) => b.addEventListener("click", () => {
     location.hash = `#/map?w=${b.dataset.w}`;
   }));
   unmount = mountMap(view, data, {
     coast, land, ground, params,
+    loadFine: async () => {
+      const [fineCoast, fineLand] = await Promise.all([load("coast-50m.json"), load("land-50m.json")]);
+      return { coast: fineCoast, land: fineLand };
+    },
     onParams: (p) => history.replaceState(null, "", `#/map?${new URLSearchParams(p)}`),
   });
 }
@@ -141,8 +173,40 @@ function heatTable(rows, unit) {
   </div></div>`;
 }
 
+// Which way the stations were, per band group, in 15-degree wedges. The radius is the
+// square root of the count so that area, not length, reads as stations.
+function antennaSection(m) {
+  if (!m.station_grid || !m.spots.length) return `<p class="empty">This needs a week of spots and the station's grid square.</p>`;
+  const home = gridCenter(m.station_grid);
+  const wedges = BAND_GROUPS.map(() => Array.from({ length: 24 }, () => new Set()));
+  const totals = BAND_GROUPS.map(() => new Set());
+  for (const [sq, , b, , id] of m.spots) {
+    const group = bandGroup(m.bands[b]);
+    if (group >= BAND_GROUPS.length || m.squares[sq] === m.station_grid) continue;
+    wedges[group][Math.round(bearing(home, gridCenter(m.squares[sq])) / 15) % 24].add(id);
+    totals[group].add(id);
+  }
+  const max = Math.max(1, ...wedges.flat().map((w) => w.size));
+  const R = 100;
+  const point = (deg, r) => [Math.sin(deg * Math.PI / 180) * r, -Math.cos(deg * Math.PI / 180) * r].map((v) => v.toFixed(1)).join(" ");
+  const rose = (group) => {
+    const shapes = wedges[group].map((w, i) => {
+      if (!w.size) return "";
+      const r = R * Math.sqrt(w.size / max);
+      return `<path d="M0 0L${point(i * 15 - 6.5, r)}A${r.toFixed(1)} ${r.toFixed(1)} 0 0 1 ${point(i * 15 + 6.5, r)}Z" fill="var(--innerpulse-chart-${group + 1})"><title>${i * 15}°: ${w.size} stations</title></path>`;
+    }).join("");
+    return `<figure class="rose"><svg viewBox="-128 -128 256 256" role="img" aria-label="Stations by compass bearing on ${BAND_GROUPS[group]}">
+      <circle class="ring" r="${R}"/><circle class="ring" r="${R / 2}"/>${shapes}
+      <text x="0" y="-110" text-anchor="middle">N</text><text x="110" y="4" text-anchor="middle">E</text><text x="0" y="118" text-anchor="middle">S</text><text x="-110" y="4" text-anchor="middle">W</text>
+    </svg><figcaption>${BAND_GROUPS[group]} · ${num(totals[group].size)} stations</figcaption></figure>`;
+  };
+  return `<div class="roses">${BAND_GROUPS.map((_, g) => rose(g)).join("")}</div>
+    <p class="note" style="margin-top:6px">The outer ring is ${num(max)} stations in one 15-degree wedge, the same scale on all three. Spots pile up where radio amateurs live, so a big wedge is partly geography; compare the same direction across bands to see the antenna and the propagation.</p>`;
+}
+
 async function showActivity() {
-  const a = await load("activity.json");
+  const [a, week] = await Promise.all([load("activity.json"), load("map-7d.json")]);
+  shownBuilt = a.generated_utc;
   const historyDays = a.first_listening_utc ? (Date.now() / 1000 - a.first_listening_utc) / 86400 : 0;
   const key = `<div class="heat-key"><span><i style="background:${STEPS[4]}"></i>busiest</span><span><i style="background:${STEPS[0]}"></i>few</span><span><i class="q"></i>listened, heard nothing</span><span><i class="out"></i>not monitored</span></div>`;
   const days = historyDays >= 1 ? `${Math.floor(historyDays)} days` : "less than a day";
@@ -152,6 +216,7 @@ async function showActivity() {
     <p class="lede">The log so far covers ${days}, grouped by UTC hour over up to ${a.days} days. Every cell is divided by the time the receiver actually spent there.</p>
     <section aria-labelledby="h1"><h2 id="h1">Amateur decodes by band and hour</h2>${a.bands.length ? heatTable(a.bands, "decodes") + key : emptyLog()}</section>
     <section aria-labelledby="h2"><h2 id="h2">All modes by hour</h2>${a.modes.length ? heatTable(a.modes, "decodes") + key : emptyLog()}</section>
+    <section aria-labelledby="hrose"><h2 id="hrose">Which way it hears</h2><p class="note">Stations with a locator over the last 7 days, by compass bearing from the station.</p>${antennaSection(week)}</section>
     <div class="twocol">
       <section aria-labelledby="h3"><h2 id="h3">Farthest squares</h2><p class="note">Measured between grid-square centers.</p>
         ${a.farthest.length ? `<div class="scroll"><table><thead><tr><th>km</th><th>Square</th><th>Who</th><th class="hide-s">Band</th><th>Heard</th></tr></thead><tbody>${a.farthest.map((f) => `<tr><td>${num(f.km)}</td><td>${esc(f.grid)}</td><td class="id">${callLink(f.mode, f.ident)}</td><td class="hide-s">${esc(f.band)}</td><td>${fmtTime(f.t)}</td></tr>`).join("")}</tbody></table></div>` : `<p class="empty">Distances need the station's grid square, which has not arrived yet.</p>`}
@@ -166,19 +231,21 @@ async function showActivity() {
 }
 
 async function showPictures() {
-  const { pictures } = await load("pictures.json");
+  const { pictures, generated_utc: built } = await load("pictures.json");
+  shownBuilt = built;
   view.innerHTML = `
     <p class="eyebrow">Pictures</p>
     <h1>Weather charts off the air.</h1>
     <p class="lede">Received as radiofax and kept as they arrived, noise included. Titles come from the transmitting station's timetable, because a chart does not state its own.</p>
     ${pictures.length ? `<div class="gallery">${pictures.map((p) => `<article class="pic">
-      <a href="pictures/${encodeURIComponent(p.file)}"><img loading="lazy" src="pictures/${encodeURIComponent(p.file)}" alt="Radiofax chart received ${fmtTime(p.start_utc)}${p.scheduled_title ? `, scheduled as ${esc(p.scheduled_title)}` : ""}"></a>
+      <a href="pictures/${encodeURIComponent(p.file)}"><img loading="lazy" src="pictures/${encodeURIComponent(p.thumb || p.file)}" alt="Radiofax chart received ${fmtTime(p.start_utc)}${p.scheduled_title ? `, scheduled as ${esc(p.scheduled_title)}` : ""}"></a>
       <div><b>${esc(p.scheduled_title || "Untitled picture")}</b><span>${fmtTime(p.start_utc)} · ${esc(p.station || "")} · ${khz(p.dial_hz + 1900)} kHz</span></div>
     </article>`).join("")}</div>` : `<p class="empty">No charts have been published yet. Only charts that pass a quality check and come from a service cleared for republishing appear here.</p>`}`;
 }
 
 async function showLog() {
-  const { rows } = await load("log.json");
+  const { rows, generated_utc: built } = await load("log.json");
+  shownBuilt = built;
   const modes = [...new Set(rows.map((r) => r.m))].sort();
   view.innerHTML = `
     <p class="eyebrow">Log</p>
@@ -277,7 +344,73 @@ async function showWho(params) {
     : `<p class="empty">${esc(q)} is not in this log. The receiver listens to one frequency at a time, so a station missing here may simply have been on the air while it was listening somewhere else.</p>`;
 }
 
-function showStation() {
+function timelineHtml(h) {
+  const span = h.generated_utc - h.since;
+  const modes = [...new Set(h.timeline.map((r) => r[2]))].sort();
+  const pos = (t) => Math.max(0, Math.min(100, ((t - h.since) / span) * 100));
+  const tickFrom = Math.ceil(h.since / 14400) * 14400;
+  const ticks = [];
+  for (let t = tickFrom; t < h.generated_utc; t += 14400) ticks.push(`<span style="left:${pos(t).toFixed(2)}%">${clock(t)}</span>`);
+  return `<div class="tl">${modes.map((mode) => `<div class="tl-label">${esc(mode)}</div><div class="tl-track">${h.timeline.filter((r) => r[2] === mode).map(([a, b, , dial, healthy]) => {
+    const left = pos(a);
+    return `<i class="${healthy === 0 ? "bad" : ""}" style="left:${left.toFixed(2)}%;width:${Math.max(0.12, pos(b) - left).toFixed(2)}%" title="${esc(mode)} ${khz(dial)} kHz, ${clock(a)} to ${clock(b)}${healthy === 0 ? ", failed its radio check" : ""}"></i>`;
+  }).join("")}</div>`).join("")}<div></div><div class="tl-ticks">${ticks.join("")}</div></div>`;
+}
+
+function noiseHtml(bands) {
+  const values = bands.flatMap((b) => b.cells.filter(Boolean).map((c) => c[0]));
+  if (!values.length) return `<p class="empty">No noise measurements yet.</p>`;
+  const [low, high] = [Math.min(...values), Math.max(...values)];
+  const stepOf = (v) => (high === low ? 0 : Math.min(STEPS.length - 1, Math.floor(((v - low) / (high - low)) * STEPS.length)));
+  const clipped = bands.flatMap((b) => b.cells.filter((c) => c && c[1] >= 0.99)).length;
+  return `<div class="scroll"><div class="heat">
+    ${bands.map((b) => `<div class="rowlabel">${esc(b.label)}</div><div class="cells24">${b.cells.map((c, h) => {
+      const at = `${b.label}, ${String(h).padStart(2, "0")}Z`;
+      return c ? `<i style="background:${STEPS[stepOf(c[0])]}" title="${esc(at)}: ${c[0]} dBFS on average, peak ${c[1]} of full scale, ${hours(c[2])} measured"></i>` : `<i class="out" title="${esc(at)}: not monitored"></i>`;
+    }).join("")}</div>`).join("")}
+    <div class="hours">${Array.from({ length: 24 }, (_, h) => `<span>${h % 3 === 0 ? String(h).padStart(2, "0") : ""}</span>`).join("")}</div>
+  </div></div>
+  <div class="heat-key"><span><i style="background:${STEPS[0]}"></i>${low} dBFS, quietest</span><span><i style="background:${STEPS[4]}"></i>${high} dBFS, noisiest</span><span><i class="out"></i>not monitored</span></div>
+  <p class="note" style="margin-top:8px">Average noise floor by UTC hour over the last 14 days, as the receiver measures it, not calibrated to a field strength. ${clipped ? `${num(clipped)} band-hours reached full scale and overloaded the receiver.` : "No band-hour reached full scale."}</p>`;
+}
+
+function aircraftAirline(flight, table) {
+  const m = /^([A-Z]{3})\d/.exec(flight);
+  return m && table[m[1]] ? table[m[1]] : "";
+}
+
+function shipFlag(ship, table) {
+  const id = ship.i || "";
+  const mid = ship.mid || (id.startsWith("00") ? id.slice(2, 5) : id.startsWith("0") ? id.slice(1, 4) : id.slice(0, 3));
+  return table[mid] || "";
+}
+
+async function showTraffic() {
+  const [t, names, stations] = await Promise.all([load("traffic.json"), lookups || load("lookups-site.json"), ground || load("ground-stations.json")]);
+  lookups = names;
+  ground = stations;
+  shownBuilt = t.generated_utc;
+  const gsName = Object.fromEntries(stations.map((s) => [String(s.id), s.name]));
+  view.innerHTML = `
+    <p class="eyebrow">Traffic</p>
+    <h1>Who was on the air.</h1>
+    <p class="lede">Aircraft heard on HFDL in the last 24 hours and DSC ship calls in the last 30 days. Airlines and flag states come from published designator tables, and are blank where a code doesn't match one.</p>
+    <section aria-labelledby="hair"><h2 id="hair">Aircraft</h2>
+      ${t.flights.length ? `<div class="scroll"><table><thead><tr><th>Flight</th><th>Operator</th><th class="hide-s">Registration</th><th class="hide-s">Ground station</th><th>Messages</th><th class="hide-s">Last position</th><th>Last heard</th></tr></thead><tbody>
+      ${t.flights.map((f) => `<tr><td class="id">${callLink("HFDL", f.i)}</td><td>${esc(aircraftAirline(f.i, names.airlines))}</td><td class="hide-s">${esc(f.reg || "")}</td><td class="hide-s">${esc(gsName[f.gs] || "")}</td><td>${num(f.n)}</td><td class="hide-s">${f.la === undefined ? "" : `${f.la}, ${f.lo}`}</td><td>${fmtTime(f.t)}</td></tr>`).join("")}
+      </tbody></table></div>` : emptyLog()}
+    </section>
+    <section aria-labelledby="hship"><h2 id="hship">Ship and coast station calls</h2>
+      ${t.ships.length ? `<div class="scroll"><table><thead><tr><th>Time</th><th>MMSI</th><th>Flag</th><th>From</th><th>Call</th><th class="hide-s">kHz</th><th class="hide-s">Position</th></tr></thead><tbody>
+      ${t.ships.map((s) => `<tr><td>${fmtTime(s.t)}</td><td class="id">${callLink("DSC", s.i)}</td><td>${esc(shipFlag(s, names.flags))}</td><td>${esc(s.from || "")}</td><td>${esc([s.cat, s.what].filter(Boolean).join(", "))}</td><td class="hide-s">${khz(s.f)}</td><td class="hide-s">${s.la == null ? "" : `${s.la.toFixed(2)}, ${s.lo.toFixed(2)}`}</td></tr>`).join("")}
+      </tbody></table></div>` : emptyLog()}
+    </section>`;
+}
+
+async function showStation() {
+  let health = null;
+  try { health = await load("health.json"); } catch { /* the receiver page still reads without it */ }
+  if (health) shownBuilt = health.generated_utc;
   view.innerHTML = `
     <p class="eyebrow">Station</p>
     <h1>How this log is made.</h1>
@@ -298,10 +431,12 @@ function showStation() {
       <p>The station itself stays anonymous, and its position is given only as a four-character grid square. Radio amateurs heard on the air appear by their callsigns and locators, as they do on any public spotting network.</p>
       <h2>Aircraft positions</h2>
       <p>Aircraft queue position reports and sometimes send several together. Tracks are drawn in the order of each fix's own timestamp, and split where two fixes could not belong to one flight.</p>
-    </div>`;
+    </div>
+    ${health ? `<section aria-labelledby="htl"><h2 id="htl">What it listened to, last 24 hours</h2><p class="note">Each bar is one stretch on one frequency. Hover for details. Red-outlined bars failed the radio check.</p>${health.timeline.length ? timelineHtml(health) : emptyLog()}</section>
+    <section aria-labelledby="hnoise"><h2 id="hnoise">Noise on each band</h2>${noiseHtml(health.bands)}</section>` : ""}`;
 }
 
-const VIEWS = { now: showNow, map: showMap, activity: showActivity, pictures: showPictures, log: showLog, station: showStation, who: showWho };
+const VIEWS = { now: showNow, map: showMap, activity: showActivity, pictures: showPictures, log: showLog, station: showStation, who: showWho, traffic: showTraffic };
 
 async function render() {
   if (unmount) { unmount(); unmount = null; }
@@ -320,6 +455,7 @@ async function render() {
 
 async function freshness() {
   const out = document.getElementById("fresh");
+  drawNowLine();
   const glyph = (name) => `<svg aria-hidden="true"><use href="brand/sprite.svg#ip-s-${name}"/></svg>`;
   try {
     const s = await load("status.json");
@@ -331,6 +467,21 @@ async function freshness() {
     const age = Date.now() / 1000 - seen;
     const state = age < STALE_S ? `<span class="ip-live">Receiving</span>` : `<span class="ip-status ip-status-warn">${glyph("warn")}Stale</span>`;
     out.innerHTML = `${state}<span class="age">last batch ${fmtClock(seen)}Z, ${ago(seen)}</span>`;
+    // Newer figures exist. Now has nothing to lose by redrawing; elsewhere that is the visitor's call.
+    if (shownBuilt && s.generated_utc > shownBuilt && !document.hidden) {
+      if (route().name === "now") {
+        const y = scrollY;
+        await render();
+        scrollTo(0, y);
+      } else {
+        const refresh = document.createElement("button");
+        refresh.type = "button";
+        refresh.textContent = "New data";
+        refresh.title = `This page was built ${ago(shownBuilt)}. Load the newer figures.`;
+        refresh.addEventListener("click", render);
+        out.prepend(refresh);
+      }
+    }
   } catch {
     out.innerHTML = `<span class="ip-status ip-status-warn">${glyph("warn")}Status unavailable</span>`;
   }

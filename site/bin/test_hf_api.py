@@ -50,6 +50,8 @@ class Ingest(unittest.TestCase):
             for t in ("observations", "listening", "gaps", "pictures", "meta", "heard"):
                 c.execute(f"DELETE FROM {t}")
         shutil.rmtree(hf_warm.OUT, ignore_errors=True)
+        shutil.rmtree(hf_api.PICTURES, ignore_errors=True)
+        os.makedirs(hf_api.DATA, exist_ok=True)
 
     def post(self, body, token=TOKEN, path="/ingest", headers=None):
         hdrs = {"content-encoding": "gzip"} if headers is None else headers
@@ -142,6 +144,41 @@ class Ingest(unittest.TestCase):
         row = self.data("who/K1.json")["stations"]["K1ABC"]
         self.assertEqual((row[0][4], row[0][5], row[0][6]), (3, -3, "FN31"))
 
+    def test_the_receivers_status_reaches_the_now_file_and_bad_status_costs_nothing(self):
+        self.assertEqual(self.send(batch(now={"at": 1800000000, "state": "monitoring", "label": "HFDL 11387.0 kHz", "ends_utc": 1800000100, "next_chart": ""}))[0], 200)
+        with open(os.path.join(hf_api.DATA, "now.json")) as f:
+            self.assertEqual(json.load(f)["label"], "HFDL 11387.0 kHz")
+        self.assertEqual(self.send(batch(now={"state": "<script>"}, observations=[OBS]))[0], 200)
+        self.assertEqual(self.count("observations"), 1)
+
+    def test_airtime_health_and_traffic_are_built(self):
+        t = int(time.time())
+        stay = {**STAY, "start_utc": t - 300, "end_utc": t - 60}
+        flight = self.recent(2, 90, mode="HFDL", kind="position", ident="UAL971", grid=None, lat=40.0, lon=-40.0, loc_kind="reported", snr_db=None, details={"flight": "UAL971", "gsId": "4", "fixUtc": t - 100})
+        self.assertEqual(self.send(batch(listening=[stay], observations=[self.recent(1, 90), flight]))[0], 200)
+        hf_warm.main()
+        m = self.data("map-24h.json")
+        self.assertEqual(m["bands"][m["air"][0][1]], "20 m")
+        self.assertEqual(m["air"][0][2], 240)
+        h = self.data("health.json")
+        self.assertEqual(h["timeline"][0][2], "FT8")
+        self.assertEqual(h["bands"][0]["label"], "20 m")
+        self.assertEqual(self.data("traffic.json")["flights"][0]["i"], "UAL971")
+
+    def test_a_chart_gets_a_thumbnail_without_its_phasing_band(self):
+        import zlib
+        w, h = 1809, 400
+        rows = b"".join(b"\0" + bytes([0 if y < 60 else 255]) * w for y in range(h))
+        def chunk(k, b):
+            return struct.pack(">I", len(b)) + k + b + struct.pack(">I", zlib.crc32(k + b))
+        png = hf_api.PNG_MAGIC + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 0, 0, 0, 0)) + chunk(b"IDAT", zlib.compress(rows)) + chunk(b"IEND", b"")
+        self.assertEqual(self.picture(png, width=w, lines=h)[0], 200)
+        hf_warm.main()
+        name = self.data("pictures.json")["pictures"][0]["thumb"]
+        tw, trows = hf_warm.png_rows(os.path.join(hf_api.PICTURES, name))
+        self.assertEqual(tw, 603)
+        self.assertGreater(min(trows[0]), 200)
+
     def test_a_ship_call_is_shown_at_once_and_can_be_looked_up(self):
         self.warm_with([self.recent(1, 90, mode="DSC", kind="call", ident="477665200", grid=None, loc_kind="none", snr_db=None)])
         self.assertEqual(self.data("who/47.json")["stations"]["477665200"][0][0], "DSC")
@@ -161,7 +198,7 @@ class Ingest(unittest.TestCase):
     def test_a_picture_that_is_not_what_it_claims_is_refused(self):
         self.assertEqual(self.picture(b"<html>")[0], 422)
         self.assertEqual(self.picture(self.png(10, 10))[0], 422)
-        self.assertEqual(self.picture(self.png(1809, 1338), mode="SSTV")[0], 422)
+        self.assertEqual(self.picture(self.png(1809, 1338), mode="NAVTEX")[0], 422)
 
 
 if __name__ == "__main__":

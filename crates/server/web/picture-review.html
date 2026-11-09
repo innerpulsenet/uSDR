@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Held pictures</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin: 0 auto; padding: 24px 16px 64px; max-width: 1200px; background: #0b0d10; color: #e3e6e9; font: 15px/1.5 system-ui, sans-serif; }
+  h1 { font-size: 28px; margin: 0; letter-spacing: -.02em; }
+  p { color: #b9bdc3; margin: 6px 0 0; }
+  #list { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 14px; margin-top: 20px; }
+  article { background: #111317; border: 1px solid rgba(227,230,233,.16); border-radius: 8px; overflow: hidden; }
+  a { display: block; background: #fff; }
+  img { display: block; width: 100%; height: 240px; object-fit: contain; }
+  div { padding: 10px 12px 12px; }
+  b { display: block; font-weight: 600; }
+  span { display: block; color: #8f949b; font: 12px ui-monospace, monospace; margin-top: 4px; }
+  button { font: 500 13px system-ui, sans-serif; color: #e3e6e9; background: transparent; border: 1px solid rgba(227,230,233,.3); border-radius: 4px; padding: 7px 12px; margin: 10px 6px 0 0; cursor: pointer; }
+  button:hover { border-color: #f43a2a; }
+</style>
+</head>
+<body>
+<h1>Held pictures</h1>
+<p>These stay on this receiver unless approved. Approving sends one to the public site. Check SSTV pictures for the station's own callsign first.</p>
+<div id="list"></div>
+<script>
+const list = document.getElementById("list");
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => "&#" + c.charCodeAt(0) + ";");
+async function draw() {
+  const { pictures } = await (await fetch("/api/station/pictures?limit=200")).json();
+  const held = pictures.filter((p) => p.decision === "hold" && p.has_file);
+  list.innerHTML = held.length ? "" : "<p>Nothing is waiting.</p>";
+  for (const p of held) {
+    const a = document.createElement("article");
+    a.innerHTML = `<a href="/api/station/pictures/${p.id}"><img loading="lazy" alt="" src="/api/station/pictures/${p.id}"></a>
+      <div><b>${esc(p.scheduled_title || p.mode)}</b><span>${new Date(p.start_utc * 1000).toISOString().slice(0, 16)}Z · ${esc(p.station || "")} · ${(p.dial_hz / 1000).toFixed(1)} kHz</span><span>${esc(p.why)}</span>
+      <button data-p="true">Approve</button><button data-p="false">Decline</button></div>`;
+    a.querySelectorAll("button").forEach((b) => b.addEventListener("click", async () => {
+      await fetch(`/api/station/pictures/${p.id}/decision`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ publish: b.dataset.p === "true" }) });
+      setTimeout(draw, 300);
+    }));
+    list.append(a);
+  }
+}
+draw();
+</script>
+</body>
+</html>

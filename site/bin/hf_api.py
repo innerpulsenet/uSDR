@@ -21,6 +21,7 @@ from hf_schema import DETAILS, HF_LIMIT_HZ, LOC_KINDS, MODES, connect  # noqa: E
 
 DB = os.environ.get("HF_DB", "/var/lib/hf-site/hf.sqlite")
 PICTURES = os.environ.get("HF_PICTURES", "/home/patrickh/www/hf/pictures")
+DATA = os.environ.get("HF_DATA", "/home/patrickh/www/hf/data")
 TOKEN_SHA256 = os.environ.get("HF_TOKEN_SHA256", "").strip().lower()
 PORT = int(os.environ.get("HF_API_PORT", "8767"))
 
@@ -121,6 +122,39 @@ def clean_gap(g):
     return (integer(g.get("id"), "id", 1), integer(g.get("at_utc"), "at_utc", 1), text(g.get("kind"), KIND, "kind"), integer(g.get("dropped"), "dropped"))
 
 
+NOW_STATES = {"monitoring", "chart", "checking", "idle", "manual", "off", "failed"}
+
+
+def clean_now(now):
+    """What the receiver says it is doing, for the Now page. Not worth losing a batch over."""
+    try:
+        if not isinstance(now, dict) or now.get("state") not in NOW_STATES:
+            return None
+        out = {"at": integer(now.get("at"), "at", 1), "state": now["state"]}
+        for key, limit in (("label", 120), ("next_chart", 200)):
+            value = now.get(key)
+            if isinstance(value, str) and len(value) <= limit and value.isprintable():
+                out[key] = value
+        if now.get("ends_utc") is not None:
+            out["ends_utc"] = integer(now.get("ends_utc"), "ends_utc")
+        return out
+    except Reject:
+        return None
+
+
+def write_now(now):
+    if now is None:
+        return
+    path = os.path.join(DATA, "now.json")
+    try:
+        with open(path + ".tmp", "w") as f:
+            json.dump(now, f, separators=(",", ":"))
+        os.chmod(path + ".tmp", 0o644)
+        os.replace(path + ".tmp", path)
+    except OSError:
+        pass
+
+
 def store_batch(conn, batch):
     """Validate everything first, so a bad row leaves nothing behind."""
     if not isinstance(batch, dict) or batch.get("station") != "hf1":
@@ -132,6 +166,7 @@ def store_batch(conn, batch):
     observations = [clean_observation(o) for o in rows["observations"]]
     listening = [clean_listening(s) for s in rows["listening"]]
     gaps = [clean_gap(g) for g in rows["gaps"]]
+    now = clean_now(batch.get("now"))
     with conn:
         conn.executemany("INSERT OR IGNORE INTO observations (id,at_utc,dial_hz,freq_hz,mode,kind,ident,grid,lat,lon,loc_kind,snr_db,details) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)", observations)
         conn.executemany("INSERT OR REPLACE INTO listening (id,start_utc,end_utc,dial_hz,mode,cause,noise_dbfs,peak_iq,decodes,valid_decodes,healthy) VALUES (?,?,?,?,?,?,?,?,?,?,?)", listening)
@@ -139,6 +174,7 @@ def store_batch(conn, batch):
         conn.execute("INSERT OR REPLACE INTO meta (name,value) VALUES ('last_ingest_utc',?)", (str(int(time.time())),))
         if grid:
             conn.execute("INSERT OR REPLACE INTO meta (name,value) VALUES ('grid',?)", (grid,))
+    write_now(now)
     return {"observations": len(observations), "listening": len(listening), "gaps": len(gaps)}
 
 
@@ -149,7 +185,7 @@ def png_size(body):
 
 
 def store_picture(conn, meta, body, directory):
-    if not isinstance(meta, dict) or meta.get("mode") != "WEFAX":
+    if not isinstance(meta, dict) or meta.get("mode") not in ("WEFAX", "SSTV"):
         raise Reject("unlisted mode")
     pid = integer(meta.get("id"), "id", 1)
     if integer(meta.get("dial_hz"), "dial_hz") >= HF_LIMIT_HZ:
@@ -162,7 +198,7 @@ def store_picture(conn, meta, body, directory):
     if title is not None and (not isinstance(title, str) or len(title) > 200):
         raise Reject("bad title")
     start = integer(meta.get("start_utc"), "start_utc", 1)
-    name = f"wefax-{start}-{meta['dial_hz']}.png"
+    name = f"{meta['mode'].lower()}-{start}-{meta['dial_hz']}.png"
     os.makedirs(directory, exist_ok=True)
     temporary = os.path.join(directory, f".{name}.tmp")
     with open(temporary, "wb") as f:
@@ -171,7 +207,7 @@ def store_picture(conn, meta, body, directory):
     os.replace(temporary, os.path.join(directory, name))
     with conn:
         conn.execute("INSERT OR REPLACE INTO pictures (id,start_utc,end_utc,mode,dial_hz,width,lines,station,scheduled_title,file,bytes) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-                     (pid, start, integer(meta.get("end_utc"), "end_utc", 1), "WEFAX", meta["dial_hz"], width, height, station, title, name, len(body)))
+                     (pid, start, integer(meta.get("end_utc"), "end_utc", 1), meta["mode"], meta["dial_hz"], width, height, station, title, name, len(body)))
     return {"picture": pid}
 
 

@@ -513,6 +513,7 @@ enum Cmd {
     Segment(Segment),
     Health { since: u64, until: u64, healthy: bool },
     Picture(Box<PictureRow>),
+    PictureDecide { id: i64, publish: bool },
     Uplinked(UplinkCursors),
     PictureUploaded { id: i64, at: u64 },
 }
@@ -645,6 +646,10 @@ impl Store {
                     for (name, value) in [("observations", c.observations), ("listening", c.listening), ("gaps", c.gaps)] {
                         tx.prepare_cached("INSERT INTO uplink (name, value) VALUES (?1, ?2) ON CONFLICT (name) DO UPDATE SET value = MAX(value, excluded.value)")?.execute(params![name, value])?;
                     }
+                }
+                Cmd::PictureDecide { id, publish } => {
+                    let (decision, why) = if *publish { ("publish", "approved") } else { ("reject", "declined") };
+                    tx.prepare_cached("UPDATE pictures SET decision = ?2, why = ?3 WHERE id = ?1 AND decision = 'hold'")?.execute(params![id, decision, why])?;
                 }
                 Cmd::PictureUploaded { id, at } => {
                     tx.prepare_cached("UPDATE pictures SET uploaded_utc = ?2 WHERE id = ?1")?.execute(params![id, *at as i64])?;
@@ -998,7 +1003,7 @@ impl StationLog {
         let found = conn
             .query_row(
                 "SELECT id, start_utc, end_utc, mode, dial_hz, width, lines, station, scheduled_title, file FROM pictures
-                 WHERE decision = 'publish' AND file IS NOT NULL AND uploaded_utc IS NULL AND mode = 'WEFAX' AND dial_hz < ?1 ORDER BY id LIMIT 1",
+                 WHERE decision = 'publish' AND file IS NOT NULL AND uploaded_utc IS NULL AND dial_hz < ?1 ORDER BY id LIMIT 1",
                 [UPLINK_LIMIT_HZ],
                 |r| {
                     Ok((
@@ -1014,6 +1019,11 @@ impl StationLog {
             )
             .optional()?;
         Ok(found.map(|(id, file, meta)| UplinkPicture { id, path: self.pictures_dir().join(file), meta }))
+    }
+
+    /// Publish or decline a picture held for review. Only a held one changes.
+    pub fn decide_picture(&self, id: i64, publish: bool) {
+        self.submit(Cmd::PictureDecide { id, publish });
     }
 
     pub fn picture_uploaded(&self, id: i64, at: u64) {
@@ -1564,6 +1574,23 @@ mod tests {
         assert_eq!(next.meta["station"], "NMG");
         store.apply(&[Cmd::PictureUploaded { id: next.id, at: NOW }]).unwrap();
         assert!(log.next_picture().unwrap().is_none());
+    }
+
+    #[test]
+    fn a_held_picture_goes_only_when_approved() {
+        let (mut store, log) = uplink_fixture("uplink-approve");
+        let mut declined = picture_row(NOW - 200, Some("d.png"), 10);
+        declined.decision = "hold";
+        store.apply(&[Cmd::Picture(Box::new(declined))]).unwrap();
+        assert!(log.next_picture().unwrap().is_none());
+        store.apply(&[Cmd::PictureDecide { id: 1, publish: false }]).unwrap();
+        store.apply(&[Cmd::PictureDecide { id: 1, publish: true }]).unwrap();
+        assert!(log.next_picture().unwrap().is_none(), "a decision is not reversed");
+
+        let mut second = picture_row(NOW - 100, Some("s.png"), 10);
+        second.decision = "hold";
+        store.apply(&[Cmd::Picture(Box::new(second)), Cmd::PictureDecide { id: 2, publish: true }]).unwrap();
+        assert!(log.next_picture().unwrap().expect("approved").path.ends_with("s.png"));
     }
 
     #[test]

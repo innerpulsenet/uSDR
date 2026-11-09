@@ -503,7 +503,10 @@ async fn main() -> Result<()> {
         match uplink::load(&state.config_path.with_file_name("uplink.toml")) {
             Ok(Some(config)) => {
                 let station = Arc::clone(&state);
-                tokio::spawn(uplink::run(log, config, move || station.reporter.station().grid));
+                let schedule = Arc::clone(&state);
+                tokio::spawn(uplink::run(log, config, move || station.reporter.station().grid, move |now| {
+                    uplink::public_status(&schedule.schedule.lock().expect("schedule").status(now), now)
+                }));
             }
             Ok(None) => {}
             Err(e) => eprintln!("the uplink is off: {e:#}"),
@@ -564,6 +567,8 @@ async fn main() -> Result<()> {
         .route("/api/station/schedule", get(get_station_schedule).post(post_station_schedule))
         .route("/api/station/pictures", get(get_station_pictures))
         .route("/api/station/pictures/{id}", get(get_station_picture))
+        .route("/api/station/pictures/{id}/decision", post(post_station_picture_decision))
+        .route("/station/pictures", get(picture_review_page))
         .route("/api/sdr/digital", post(post_sdr_digital))
         .route("/api/sdr/fax", get(get_sdr_fax))
         .route("/ws", get(ws_upgrade))
@@ -1329,6 +1334,25 @@ async fn get_station_picture(State(st): State<Arc<AppState>>, axum::extract::Pat
         Some(body) => ([(header::CONTENT_TYPE, "image/png")], body).into_response(),
         None => StatusCode::NOT_FOUND.into_response(),
     })
+}
+
+#[derive(Deserialize)]
+struct PictureDecisionReq {
+    publish: bool,
+}
+
+async fn post_station_picture_decision(
+    State(st): State<Arc<AppState>>,
+    axum::extract::Path(id): axum::extract::Path<i64>,
+    Json(req): Json<PictureDecisionReq>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let log = st.station_log.clone().ok_or_else(|| anyhow::anyhow!("the station log is not open"))?;
+    log.decide_picture(id, req.publish);
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+async fn picture_review_page() -> Html<&'static str> {
+    Html(include_str!("../web/picture-review.html"))
 }
 
 async fn get_station_listening(

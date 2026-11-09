@@ -72,6 +72,15 @@ input[type="search"], select { font: 400 13px var(--innerpulse-sans); background
 /* The map */
 .map-wrap { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 14px; margin-top: 16px; align-items: start; }
 .map-main { min-width: 0; }
+.map-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 16px; margin-bottom: 12px; }
+.map-head h1 { font-size: clamp(22px, 2.4vw, 30px); margin: 0; max-width: none; }
+.filters > summary { display: none; }
+.strip-foot { display: flex; align-items: center; gap: 12px; margin-top: 6px; }
+.strip-foot button { flex: none; min-width: 72px; }
+.nowline { margin-top: 14px; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; font-size: 15px; color: var(--innerpulse-text); }
+.nowline .next { color: var(--innerpulse-text-2); }
+small[data-air] { font: 400 11px var(--innerpulse-mono); color: var(--innerpulse-text-3); margin-left: 3px; }
+button[aria-pressed="true"] small[data-air] { color: var(--innerpulse-gunmetal); }
 .tools { display: flex; flex-wrap: wrap; gap: 8px 22px; align-items: center; margin-bottom: 8px; }
 .stage { position: relative; aspect-ratio: 1.9; max-height: 78vh; min-height: 300px; background: var(--ocean); border: 1px solid var(--innerpulse-line-2); border-radius: var(--radius); overflow: hidden; }
 .stage > svg { display: block; width: 100%; height: 100%; touch-action: none; cursor: grab; user-select: none; }
@@ -144,6 +153,21 @@ dl { margin: 0; }
 .layers .ip-check { font-size: 13px; color: var(--innerpulse-text-2); gap: 8px; }
 .layers svg { width: 18px; height: 12px; flex: none; overflow: visible; }
 
+/* Receiver timeline and bearing roses */
+.tl { display: grid; grid-template-columns: 64px minmax(0, 1fr); gap: 3px 8px; margin-top: 14px; }
+.tl-label { font: 400 12px/20px var(--innerpulse-mono); color: var(--innerpulse-text-2); text-align: right; }
+.tl-track { position: relative; height: 20px; background: var(--innerpulse-surface-1); border-radius: 1px; }
+.tl-track i { position: absolute; top: 2px; bottom: 2px; background: var(--series); }
+.tl-track i.bad { background: transparent; outline: 1px solid var(--innerpulse-err); outline-offset: -1px; }
+.tl-ticks { position: relative; height: 18px; font: 400 11px var(--innerpulse-mono); color: var(--innerpulse-text-3); }
+.tl-ticks span { position: absolute; transform: translateX(-50%); white-space: nowrap; }
+.roses { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin-top: 12px; max-width: 900px; }
+.rose { margin: 0; }
+.rose svg { display: block; width: 100%; max-width: 280px; margin: 0 auto; overflow: visible; }
+.rose text { font: 400 11px var(--innerpulse-mono); fill: var(--innerpulse-text-3); }
+.rose .ring { fill: none; stroke: var(--innerpulse-line-2); }
+.rose figcaption { text-align: center; font: 400 12px var(--innerpulse-mono); color: var(--innerpulse-text-2); margin-top: 4px; }
+
 /* Station lookup */
 .lookup { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 18px; }
 .lookup .lbl { font: 500 var(--innerpulse-text-xs)/1.2 var(--innerpulse-mono); letter-spacing: .12em; text-transform: uppercase; color: var(--innerpulse-text-3); }
@@ -198,7 +222,13 @@ dl { margin: 0; }
   .bar em { grid-column: 2; text-align: left; }
   .side { grid-template-columns: minmax(0, 1fr); }
   .stage { aspect-ratio: auto; height: 74vw; min-height: 280px; }
+  .filters > summary { display: block; cursor: pointer; font: 500 var(--innerpulse-text-xs)/1.2 var(--innerpulse-mono); letter-spacing: .12em; text-transform: uppercase; color: var(--innerpulse-text-2); padding: 10px 0; }
+  .strip-foot { align-items: flex-start; }
   .hide-s { display: none; }
+}
+/* Nothing points on a touch screen, so the tap's list under the map does this job. */
+@media (hover: none) {
+  #readout { display: none; }
 }
 @media (max-width: 720px) {
   .fresh { margin-left: auto; margin-right: 12px; }
