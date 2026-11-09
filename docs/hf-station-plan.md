@@ -326,8 +326,8 @@ yields are in.
 4. **The schedule picks slices**, the log and site show overlapping channels, then the middle
    and high slices.
 
-Measurements can run as manual interruptions during the 72-hour soak. The first wideband
-deploy waits until that soak passes, because any daemon deploy restarts its clock.
+The 72-hour soak is not a gate for this or anything else (decided 2026-11-09). It runs
+over the following days, and whatever it finds gets adjusted then.
 
 **Done when:** a slice holds every planned channel for 72 hours with no clipped or
 unhealthy stretches beyond what hopping shows, no channel misses its decode budget, FT8
