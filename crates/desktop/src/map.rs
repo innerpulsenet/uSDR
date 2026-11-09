@@ -17,6 +17,24 @@ use egui::{Color32, Pos2, Rect, RichText, Sense, Stroke, Ui, pos2, vec2};
 use std::sync::OnceLock;
 use std::time::SystemTime;
 
+/// Where the sun is overhead at a UNIX time: latitude and longitude in
+/// degrees. The low-precision formulas of the Astronomical Almanac, good to
+/// a few hundredths of a degree this century.
+pub fn subsolar(unix_s: f64) -> (f32, f32) {
+    // Days from noon on 1 January 2000.
+    let n = unix_s / 86_400.0 - 10_957.5;
+    let mean_lon = (280.460 + 0.985_647_4 * n).to_radians();
+    let anomaly = (357.528 + 0.985_600_3 * n).to_radians();
+    let lambda = mean_lon + (1.915 * anomaly.sin() + 0.020 * (2.0 * anomaly).sin()).to_radians();
+    let tilt = (23.439 - 0.000_000_4 * n).to_radians();
+    let dec = (tilt.sin() * lambda.sin()).asin();
+    let ra = (tilt.cos() * lambda.sin()).atan2(lambda.cos());
+    // Greenwich mean sidereal time, in degrees.
+    let gmst = (18.697_374_558 + 24.065_709_824_419_08 * n) * 15.0;
+    let lon = (ra.to_degrees() - gmst + 540.0).rem_euclid(360.0) - 180.0;
+    (dec.to_degrees() as f32, lon as f32)
+}
+
 /// The coastline, as lines of (latitude, longitude) in degrees.
 fn coastline() -> &'static [Vec<(f32, f32)>] {
     static LINES: OnceLock<Vec<Vec<(f32, f32)>>> = OnceLock::new();
@@ -234,12 +252,15 @@ pub fn show(app: &mut App, ui: &mut Ui) {
         if widgets::action_small(ui, "ATLANTIC").clicked() {
             v = MapView { layers: v.layers, ..MapView::default() };
         }
-        ui.label(RichText::new("drag to pan · scroll to zoom · click a mark to open its decode").font(theme::mono(crate::theme::ty::MICRO)).color(theme::text_3()));
+        // Cut to the room there is: a hint must not widen the dock's column.
+        ui.add(egui::Label::new(RichText::new("drag to pan · scroll to zoom · click a mark · the day side is lighter").font(theme::mono(crate::theme::ty::MICRO)).color(theme::text_3())).truncate());
     });
     ui.add_space(4.0);
     let (marks, tracks) = gather(app, v.layers);
     let rect = ui.available_rect_before_wrap();
     let resp = ui.allocate_rect(rect, Sense::click_and_drag());
+    // Inside the bezel the glass is set in, as the vessel plot is.
+    let rect = rect.shrink(2.0);
     // Pixels a degree: the whole world across the view at zoom 0, twice
     // as much each step in.
     let scale = rect.width() / 360.0 * 2f32.powf(v.zoom) * 1.6;
@@ -251,7 +272,13 @@ pub fn show(app: &mut App, ui: &mut Ui) {
     if resp.hovered() {
         let wheel = ui.input(|i| i.smooth_scroll_delta.y);
         if wheel != 0.0 {
+            // About the pointer: the place under it stays under it.
+            let off = ui.input(|i| i.pointer.latest_pos()).map_or(egui::Vec2::ZERO, |q| q - rect.center());
+            let (lon, lat) = (v.lon + off.x / scale, v.lat - off.y / scale);
             v.zoom = (v.zoom + wheel / 240.0).clamp(-1.0, 5.0);
+            let scale = rect.width() / 360.0 * 2f32.powf(v.zoom) * 1.6;
+            v.lon = lon - off.x / scale;
+            v.lat = (lat + off.y / scale).clamp(-80.0, 80.0);
         }
     }
     let scale = rect.width() / 360.0 * 2f32.powf(v.zoom) * 1.6;
@@ -261,8 +288,42 @@ pub fn show(app: &mut App, ui: &mut Ui) {
         dl = (dl + 540.0).rem_euclid(360.0) - 180.0;
         pos2(rect.center().x + dl * scale, rect.center().y - (lat - v.lat) * scale)
     };
+    let p = ui.painter_at(rect.expand(2.0));
+    crate::vfo::lcd_back(&p, rect, theme::text_3());
     let p = ui.painter_at(rect);
-    p.rect_filled(rect, egui::CornerRadius::same(crate::theme::RADIUS), theme::ink());
+    // Daylight, from the clock: the lit side of the world a shade lighter,
+    // fading out over six degrees past the terminator, where the sun is
+    // just under the horizon. It is where the high bands are open and the
+    // low ones are not. Redrawn once a minute.
+    {
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0.0, |d| d.as_secs_f64());
+        let (sun_lat, sun_lon) = subsolar(now);
+        let north = sun_lat >= 0.0;
+        let tan_dec = sun_lat.abs().max(0.1).to_radians().tan() * if north { 1.0 } else { -1.0 };
+        let y_of = |lat: f32| (rect.center().y - (lat - v.lat) * scale).clamp(rect.top(), rect.bottom());
+        let lit = Color32::from_white_alpha(11);
+        let mut mesh = egui::Mesh::default();
+        let cols = (rect.width() / 6.0).ceil() as usize;
+        for k in 0..=cols {
+            let x = rect.left() + rect.width() * k as f32 / cols as f32;
+            let lon = v.lon + (x - rect.center().x) / scale;
+            let edge = (-(lon - sun_lon).to_radians().cos() / tan_dec).atan().to_degrees();
+            // From the lit pole to the terminator, then the twilight.
+            let (pole, dusk) = if north { (90.0, edge - 6.0) } else { (-90.0, edge + 6.0) };
+            let i = mesh.vertices.len() as u32;
+            mesh.colored_vertex(pos2(x, y_of(pole)), lit);
+            mesh.colored_vertex(pos2(x, y_of(edge)), lit);
+            mesh.colored_vertex(pos2(x, y_of(dusk)), Color32::TRANSPARENT);
+            if k > 0 {
+                for r in 0..2 {
+                    mesh.add_triangle(i - 3 + r, i + r, i - 2 + r);
+                    mesh.add_triangle(i - 2 + r, i + r, i + 1 + r);
+                }
+            }
+        }
+        p.add(egui::Shape::mesh(mesh));
+        crate::anim::after(ui.ctx(), std::time::Duration::from_secs(60));
+    }
     // The grid: every 30 degrees, the equator a little brighter.
     for k in -6..=6 {
         let lon = k as f32 * 30.0;
@@ -278,6 +339,12 @@ pub fn show(app: &mut App, ui: &mut Ui) {
     let coast = Stroke::new(1.0, alpha(theme::text_3(), 0.8));
     for line in coastline() {
         let mut seg: Vec<Pos2> = Vec::new();
+        // A line with no point near the view is not tessellated at all:
+        // zoomed in, that is most of the world.
+        let near = rect.expand(40.0);
+        if !line.iter().any(|&(lat, lon)| near.contains(at(lat, lon))) {
+            continue;
+        }
         for &(lat, lon) in line {
             let q = at(lat, lon);
             if let Some(last) = seg.last()
@@ -294,10 +361,16 @@ pub fn show(app: &mut App, ui: &mut Ui) {
             p.add(egui::Shape::line(seg, coast));
         }
     }
-    // Aircraft tracks.
+    // Aircraft tracks, fading toward where each was first heard.
     for (c, pts) in &tracks {
-        let line: Vec<Pos2> = pts.iter().map(|&(lat, lon)| at(lat, lon)).collect();
-        p.add(egui::Shape::line(line, Stroke::new(1.0, alpha(*c, 0.45))));
+        let n = pts.len().saturating_sub(1).max(1) as f32;
+        for (k, w) in pts.windows(2).enumerate() {
+            let (a, b) = (at(w[0].0, w[0].1), at(w[1].0, w[1].1));
+            // Not across the map when a track crosses its edge.
+            if (a.x - b.x).abs() < 180.0 * scale {
+                p.line_segment([a, b], Stroke::new(1.0, alpha(*c, 0.12 + 0.5 * (k as f32 + 1.0) / n)));
+            }
+        }
     }
     // Labels take their places in turn: home first, then the ground
     // stations; one that would cover another tries the other side, and is
@@ -424,13 +497,29 @@ pub fn show(app: &mut App, ui: &mut Ui) {
     p.galley(tag.min + vec2(5.0, 3.0), summary_g, theme::text_2());
     p.rect_filled(credit, egui::CornerRadius::same(crate::theme::R_KEY), alpha(theme::ink(), 0.8));
     p.galley(credit.min + vec2(5.0, 3.0), credit_g, theme::text_3());
-    p.rect_stroke(rect, egui::CornerRadius::same(crate::theme::RADIUS), Stroke::new(1.0, theme::line()), egui::StrokeKind::Inside);
+    crate::vfo::lcd_glass(&p, rect);
     app.map = v;
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_sun_is_overhead_where_the_almanac_puts_it() {
+        // The June solstice at noon UTC: over the Tropic of Cancer, just
+        // east of Greenwich (the sun runs two minutes late that day).
+        let (lat, lon) = subsolar(1782043200.0);
+        assert!((lat - 23.44).abs() < 0.05, "latitude {lat}");
+        assert!((lon - 0.45).abs() < 0.5, "longitude {lon}");
+        // The March equinox, 14:46 UTC on the 20th: on the equator.
+        let (lat, _) = subsolar(1774017960.0);
+        assert!(lat.abs() < 0.05, "latitude {lat}");
+        // The December solstice at midnight UTC: the far side of the world.
+        let (lat, lon) = subsolar(1797811200.0);
+        assert!((lat + 23.44).abs() < 0.05, "latitude {lat}");
+        assert!(lon.abs() > 178.0, "longitude {lon}");
+    }
 
     #[test]
     fn the_coastline_loads_and_sits_on_the_globe() {

@@ -3064,6 +3064,17 @@ mod tests {
     }
 
     #[test]
+    fn the_map_draws_in_the_dock() {
+        let mut h = harness_with(Prefs { auto_connect: false, dock_height: 420.0, ..Default::default() }, 1600.0, 1100.0);
+        h.state_mut().app.dock_tab = DockTab::Map;
+        h.run_steps(3);
+        h.get_by_label("WORLD");
+        if let Some(dir) = std::env::var_os("USDR_QA_DIR") {
+            h.render().expect("render").save(std::path::Path::new(&dir).join("map.png")).expect("save");
+        }
+    }
+
+    #[test]
     fn the_wwv_readout_runs_on_from_the_last_frame() {
         let mut h = harness_with(Prefs { auto_connect: false, dock_height: 420.0, ..Default::default() }, 1600.0, 1100.0);
         {
