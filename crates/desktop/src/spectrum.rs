@@ -1295,7 +1295,7 @@ impl Panafall {
         let db_step = nice_step((self.max_db - self.min_db) as f64, 6.0) as f32;
         let mut db = (self.min_db / db_step).ceil() * db_step;
         while db <= self.max_db {
-            let y = self.y_for(db, pan);
+            let y = theme::px(&ctx, self.y_for(db, pan));
             painter.line_segment([pos2(pan.left(), y), pos2(pan.right(), y)], Stroke::new(1.0, theme::line()));
             // Clear of the unit caption at the top of the scale, and whole
             // above its foot, where the band plan's strip begins.
@@ -1337,8 +1337,20 @@ impl Panafall {
         painter.line_segment([axis.left_bottom(), axis.right_bottom()], Stroke::new(1.0, theme::line()));
         // The labels sit in the lower 22 px; the strip, when on, above them.
         let labels_top = axis.bottom() - 22.0;
+        // Minor ticks between the labeled ones, a fifth of a step apart:
+        // enough to count along without a number each.
+        let minor = f_step / 5.0;
+        let mut fm = (lo / minor).ceil() * minor;
+        while fm <= hi {
+            let on_major = ((fm / f_step).round() * f_step - fm).abs() < minor * 0.01;
+            let x = theme::px(&ctx, self.x_for(fm, pan));
+            if !on_major && x >= pan.left() && x <= pan.right() {
+                painter.line_segment([pos2(x, labels_top), pos2(x, labels_top + 2.0)], Stroke::new(1.0, alpha(theme::text_3(), 0.6)));
+            }
+            fm += minor;
+        }
         while f <= hi {
-            let x = self.x_for(f, pan);
+            let x = theme::px(&ctx, self.x_for(f, pan));
             painter.line_segment([pos2(x, pan.top()), pos2(x, pan.bottom())], Stroke::new(1.0, theme::line()));
             painter.line_segment([pos2(x, labels_top), pos2(x, labels_top + 4.0)], Stroke::new(1.0, theme::text_3()));
             if x > axis.left() + 30.0 && x < pan.right() - 30.0 {
@@ -1902,6 +1914,12 @@ impl Panafall {
                         r = r.translate(vec2(0.0, -19.0));
                         guard += 1;
                     }
+                    // No clear place within reach: the tick on the trace
+                    // stays, and the name is left out rather than printed
+                    // over another.
+                    if placed.iter().any(|o| o.intersects(r)) || r.top() < pan.top() {
+                        continue;
+                    }
                     placed.push(r);
                     frost.plate(&painter, r, 3, alpha(c, 0.6));
                     painter.galley(pos2(r.left() + 5.0, r.center().y - g.size().y / 2.0), g, theme::text());
@@ -2249,10 +2267,16 @@ impl Panafall {
                     if (nlo - lo).abs() > 1.0 || (nhi - hi).abs() > 1.0 {
                         acts.push(Act::Filter(nlo.round(), nhi.round()));
                     }
+                    // On a plate, so the figures read over whatever trace
+                    // is behind them.
+                    let edges = format!("{:+.2}k … {:+.2}k", nlo / 1000.0, nhi / 1000.0);
+                    let eg = painter.layout_no_wrap(edges.clone(), theme::mono(11.0), theme::AMBER);
+                    let plate = Rect::from_center_size(pos2(p.x.clamp(pan.left() + eg.size().x / 2.0 + 8.0, pan.right() - eg.size().x / 2.0 - 8.0), pan.top() + 72.0 - eg.size().y / 2.0), eg.size() + vec2(10.0, 6.0));
+                    frost.plate(&painter, plate, 3, alpha(theme::AMBER, 0.5));
                     painter.text(
-                        pos2(p.x, pan.top() + 72.0),
+                        plate.center_bottom() - vec2(0.0, 3.0),
                         Align2::CENTER_BOTTOM,
-                        format!("{:+.2}k … {:+.2}k", nlo / 1000.0, nhi / 1000.0),
+                        edges,
                         theme::mono(11.0),
                         theme::AMBER,
                     );

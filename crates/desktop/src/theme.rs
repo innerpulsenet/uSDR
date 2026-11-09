@@ -566,6 +566,15 @@ pub fn paint_plate(painter: &egui::Painter, r: egui::Rect, fill: Color32) {
     vgrad(painter, foot, Color32::TRANSPARENT, Color32::from_black_alpha(56));
 }
 
+/// `v` moved to the middle of the physical pixel it falls in, where a
+/// one-pixel line is drawn whole. Anywhere else it is spread over two
+/// pixels at half strength, differently from line to line, and a grid
+/// shimmers as it moves.
+pub fn px(ctx: &egui::Context, v: f32) -> f32 {
+    let ppp = ctx.pixels_per_point();
+    ((v * ppp).floor() + 0.5) / ppp
+}
+
 /// A groove cut across the plate at `y`: a dark line and the lit lip under it.
 pub fn groove_h(painter: &egui::Painter, x0: f32, x1: f32, y: f32) {
     let y = y.round();
