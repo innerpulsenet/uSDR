@@ -11,10 +11,12 @@
   --ocean: #0c0e11;
   --land: #20242b;
   --radius: var(--innerpulse-radius);
+  --readout-h: 256px; /* four rows and all ten HF bands */
+  --totals-h: 348px;  /* five rows, ten bands and the note */
 }
 
 * { box-sizing: border-box; }
-html { background: var(--innerpulse-ground); -webkit-text-size-adjust: 100%; }
+html { background: var(--innerpulse-ground); -webkit-text-size-adjust: 100%; scrollbar-gutter: stable; }
 body { margin: 0; min-height: 100vh; display: flex; flex-direction: column; background: var(--innerpulse-ground); color: var(--innerpulse-text); font: 400 15px/1.55 var(--innerpulse-sans); }
 a { color: var(--innerpulse-text); text-decoration-color: var(--innerpulse-pulse); text-underline-offset: 3px; }
 h1, h2, h3, p { margin: 0; }
@@ -118,6 +120,15 @@ input[type="search"], select { font: 400 13px var(--innerpulse-sans); background
 .kv dt { color: var(--innerpulse-text-2); margin: 0; }
 .kv dd { margin: 0; font-family: var(--innerpulse-mono); font-variant-numeric: tabular-nums; text-align: right; }
 dl { margin: 0; }
+.bandlist { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 2px 18px; margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--innerpulse-line); font: 400 12px/1.5 var(--innerpulse-mono); font-variant-numeric: tabular-nums; }
+.bandlist div { display: flex; justify-content: space-between; gap: 8px; min-width: 0; }
+.bandlist dt { color: var(--innerpulse-text-3); white-space: nowrap; }
+.bandlist dd { margin: 0; color: var(--innerpulse-text-2); }
+/* These two change with what is under the pointer and in view. A fixed height keeps
+   the page, and so the map, from moving when they do. */
+#readout, #totals { overflow-y: auto; }
+#readout { height: var(--readout-h); }
+#totals { height: var(--totals-h); }
 
 .key { display: grid; gap: 10px; margin-top: 10px; }
 .key .row { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 14px; font: 400 12px/1.3 var(--innerpulse-mono); color: var(--innerpulse-text-2); }

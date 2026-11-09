@@ -39,6 +39,12 @@ function bandGroup(label) {
   return meters >= 40 ? 0 : meters >= 17 ? 1 : 2;
 }
 
+// Spots per band, busiest first, two to a row so the side panels stay a fixed height.
+function bandList(bands) {
+  const rows = Object.entries(bands).sort((a, b) => b[1] - a[1]);
+  return rows.length ? `<dl class="bandlist">${rows.map(([b, n]) => `<div><dt>${esc(b)}</dt><dd>${num(n)}</dd></div>`).join("")}</dl>` : "";
+}
+
 function sizeOf(n) {
   let size = 0;
   SPOT_SIZES.forEach((s, i) => { if (n >= s.from) size = i; });
@@ -470,7 +476,7 @@ export function mountMap(root, data, opts) {
         <dt>Hours with listening</dt><dd>${hours} of ${span}</dd>
         <dt>Time on air, all modes</dt><dd>${(secs / 3600).toFixed(1)} h</dd>
       </dl>
-      ${Object.keys(seen.bands).length ? `<dl class="kv">${Object.entries(seen.bands).sort((a, b) => b[1] - a[1]).map(([b, n]) => `<dt>${esc(b)}</dt><dd>${num(n)}</dd>`).join("")}</dl>` : ""}
+      ${bandList(seen.bands)}
       ${span > hours ? `<p class="note" style="margin-top:8px">The receiver was tuned here for only part of this range, one mode at a time. A blank region can mean it was listening elsewhere.</p>` : ""}`;
   }
 
@@ -483,8 +489,7 @@ export function mountMap(root, data, opts) {
     if (!c) return false;
     const distance = home ? `<dt>From the station's square</dt><dd>${num(Math.round(kmBetween(home, gridCenter(key))))} km</dd>` : "";
     showReadout(`<dl class="kv"><dt>Grid square</dt><dd>${esc(key)}</dd><dt>Spots</dt><dd>${num(c.n)}</dd>
-      ${c.best === null ? "" : `<dt>Best report</dt><dd>${c.best} dB</dd>`}${distance}
-      ${Object.entries(c.bands).sort((a, b) => b[1] - a[1]).map(([b, n]) => `<dt>${esc(b)}</dt><dd>${num(n)}</dd>`).join("")}</dl>`);
+      ${c.best === null ? "" : `<dt>Best report</dt><dd>${c.best} dB</dd>`}${distance}</dl>${bandList(c.bands)}`);
     return true;
   }
 
