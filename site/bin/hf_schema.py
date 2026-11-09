@@ -43,6 +43,11 @@ CREATE TABLE IF NOT EXISTS pictures (
 );
 CREATE INDEX IF NOT EXISTS pictures_start ON pictures (start_utc);
 CREATE TABLE IF NOT EXISTS meta (name TEXT PRIMARY KEY, value TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS heard (
+    ident TEXT NOT NULL, mode TEXT NOT NULL, band TEXT NOT NULL, shard TEXT NOT NULL, first_utc INTEGER NOT NULL,
+    last_utc INTEGER NOT NULL, n INTEGER NOT NULL, best REAL, grid TEXT, PRIMARY KEY (ident, mode, band)
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS heard_shard ON heard (shard);
 """
 
 

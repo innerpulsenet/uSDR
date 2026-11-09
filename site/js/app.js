@@ -23,9 +23,17 @@ function emptyLog() {
   return `<p class="empty">The log is empty. Nothing has arrived from the receiver yet, so there is nothing to show.</p>`;
 }
 
+// Only these modes are in the lookup files: amateur stations and HFDL flights.
+const LOOKUP_MODES = new Set(["FT8", "FT4", "WSPR", "JS8", "HFDL"]);
+
+function callLink(mode, ident) {
+  const clean = (ident || "").replace(/^\.+/, "");
+  return LOOKUP_MODES.has(mode) && /[A-Z0-9]/.test(clean) ? `<a href="#/who?c=${encodeURIComponent(clean)}">${esc(clean)}</a>` : esc(ident || "");
+}
+
 function rowsTable(rows) {
   return `<div class="scroll"><table><thead><tr><th>Time</th><th>Mode</th><th>kHz</th><th>Who</th><th class="hide-s">Where</th><th class="hide-s">SNR</th></tr></thead><tbody>
-    ${rows.map((r) => `<tr><td>${fmtTime(r.t)}</td><td>${esc(r.m)}</td><td>${khz(r.f)}</td><td class="id">${esc(r.i || "")}</td><td class="hide-s">${esc(r.g || (r.la !== undefined ? `${r.la}, ${r.lo}` : ""))}</td><td class="hide-s">${r.s == null ? "" : `${Math.round(r.s)} dB`}</td></tr>`).join("")}
+    ${rows.map((r) => `<tr><td>${fmtTime(r.t)}</td><td>${esc(r.m)}</td><td>${khz(r.f)}</td><td class="id">${callLink(r.m, r.i)}</td><td class="hide-s">${esc(r.g || (r.la !== undefined ? `${r.la}, ${r.lo}` : ""))}</td><td class="hide-s">${r.s == null ? "" : `${Math.round(r.s)} dB`}</td></tr>`).join("")}
   </tbody></table></div>`;
 }
 
@@ -79,16 +87,17 @@ function mapShell(w) {
           <div class="range"><label for="from">From</label><input id="from" type="range" min="0" step="1"><label for="to">To</label><input id="to" type="range" step="1"></div>
           <p class="note" style="margin-top:2px"><span id="fromv" class="num"></span> to <span id="tov" class="num"></span>. Hatched hours had no listening at all, which is not the same as a quiet band.</p>
         </div>
+        <div class="card" id="square" aria-live="polite"></div>
       </div>
       <div class="side">
         <div class="card" id="readout"><h3>Under the pointer</h3><p class="note" style="margin-top:8px">Point at a dot or a flight. Scroll to zoom, drag to pan, or use ▭ to drag out an area (shift-drag does the same).</p></div>
         <div class="card" id="totals"></div>
         <div class="card"><h3>Reading the dots</h3>
           <div class="key">
-            <div class="row" aria-label="Dot size is spots in that square">${SPOT_SIZES.map((s) => `<span><svg class="swatch" viewBox="0 0 15 15" aria-hidden="true"><circle cx="7.5" cy="7.5" r="${s.px / 2}" fill="var(--innerpulse-text-2)"/></svg>${s.label}</span>`).join("")}</div>
+            <div class="row" aria-label="Dot size is the number of different stations heard in that square">${SPOT_SIZES.map((s) => `<span><svg class="swatch" viewBox="0 0 15 15" aria-hidden="true"><circle cx="7.5" cy="7.5" r="${s.px / 2}" fill="var(--innerpulse-text-2)"/></svg>${s.label}</span>`).join("")}</div>
             <div class="row" aria-label="Dot color is the band group heard most in that square">${BAND_GROUPS.map((b, i) => `<span><svg class="swatch" viewBox="0 0 15 15" aria-hidden="true"><circle cx="7.5" cy="7.5" r="5" fill="var(--innerpulse-chart-${i + 1})"/></svg>${b}</span>`).join("")}</div>
           </div>
-          <p class="note" style="margin-top:8px">One dot per grid square, at the square's center. Size is spots; color is the bands heard most there.</p>
+          <p class="note" style="margin-top:8px">One dot per grid square, at the square's center. Size is different stations heard; color is the bands with the most decodes there.</p>
           <div class="layers">
             <label class="ip-check"><input type="checkbox" data-layer="squares" checked><span>Amateur stations</span></label>
             <label class="ip-check"><input type="checkbox" data-layer="tracks" checked><svg viewBox="0 0 18 12" aria-hidden="true"><path d="M1 10 L9 6" fill="none" stroke="var(--innerpulse-text-2)" stroke-width="1"/><path d="M17 2 L8.5 3.2 L10.6 6.5 L10.2 10.4Z" fill="var(--innerpulse-text)"/></svg><span>Aircraft positions</span></label>
@@ -145,7 +154,7 @@ async function showActivity() {
     <section aria-labelledby="h2"><h2 id="h2">All modes by hour</h2>${a.modes.length ? heatTable(a.modes, "decodes") + key : emptyLog()}</section>
     <div class="twocol">
       <section aria-labelledby="h3"><h2 id="h3">Farthest squares</h2><p class="note">Measured between grid-square centers.</p>
-        ${a.farthest.length ? `<div class="scroll"><table><thead><tr><th>km</th><th>Square</th><th>Who</th><th class="hide-s">Band</th><th>Heard</th></tr></thead><tbody>${a.farthest.map((f) => `<tr><td>${num(f.km)}</td><td>${esc(f.grid)}</td><td class="id">${esc(f.ident)}</td><td class="hide-s">${esc(f.band)}</td><td>${fmtTime(f.t)}</td></tr>`).join("")}</tbody></table></div>` : `<p class="empty">Distances need the station's grid square, which has not arrived yet.</p>`}
+        ${a.farthest.length ? `<div class="scroll"><table><thead><tr><th>km</th><th>Square</th><th>Who</th><th class="hide-s">Band</th><th>Heard</th></tr></thead><tbody>${a.farthest.map((f) => `<tr><td>${num(f.km)}</td><td>${esc(f.grid)}</td><td class="id">${callLink(f.mode, f.ident)}</td><td class="hide-s">${esc(f.band)}</td><td>${fmtTime(f.t)}</td></tr>`).join("")}</tbody></table></div>` : `<p class="empty">Distances need the station's grid square, which has not arrived yet.</p>`}
       </section>
       <section aria-labelledby="h4"><h2 id="h4">New squares today</h2>
         ${historyDays < 7 ? `<p class="empty">With ${days} of history almost every square is new, so this list waits for a week of data.</p>` : a.new_squares.length ? `<div class="scroll"><table><thead><tr><th>Square</th><th>First heard</th></tr></thead><tbody>${a.new_squares.map((n) => `<tr><td class="id">${esc(n.grid)}</td><td>${fmtTime(n.t)}</td></tr>`).join("")}</tbody></table></div>` : `<p class="empty">No new squares in the last 24 hours.</p>`}
@@ -174,9 +183,11 @@ async function showLog() {
   view.innerHTML = `
     <p class="eyebrow">Log</p>
     <h1>The latest 500 entries.</h1>
-    <div class="tools" style="margin-top:18px">
+    <p class="lede">${rows.length ? `These reach back to ${fmtTime(rows[rows.length - 1].t)}. Look up a station to search everything the log has kept.` : "Nothing has arrived from the receiver yet."}</p>
+    ${lookupForm("")}
+    <div class="tools" style="margin-top:22px">
       <div class="chips"><label class="lbl" for="logmode">Mode</label><select id="logmode"><option value="">All</option>${modes.map((m) => `<option>${esc(m)}</option>`).join("")}</select></div>
-      <div class="chips"><label class="lbl" for="logq">Search</label><input id="logq" type="search" placeholder="Callsign, flight, square"></div>
+      <div class="chips"><label class="lbl" for="logq">Filter</label><input id="logq" type="search" placeholder="Within these rows"></div>
       <p class="note" id="logn" aria-live="polite"></p>
     </div>
     <div id="logrows"></div>`;
@@ -187,9 +198,83 @@ async function showLog() {
     view.querySelector("#logn").textContent = `${num(shown.length)} of ${num(rows.length)}`;
     view.querySelector("#logrows").innerHTML = shown.length ? rowsTable(shown.slice(0, 500)) : rows.length ? `<p class="empty">No entries match.</p>` : emptyLog();
   };
+  wireLookup();
   view.querySelector("#logmode").addEventListener("change", draw);
   view.querySelector("#logq").addEventListener("input", draw);
   draw();
+}
+
+function lookupForm(value) {
+  return `<form id="lookup" class="lookup" role="search"><label class="lbl" for="lookupq">Look up</label><input id="lookupq" type="search" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="Callsign, flight or grid square" value="${esc(value)}"><button type="submit">Search</button></form>`;
+}
+
+function wireLookup() {
+  view.querySelector("#lookup").addEventListener("submit", (ev) => {
+    ev.preventDefault();
+    const q = view.querySelector("#lookupq").value.trim().toUpperCase();
+    if (q) location.hash = `#/who?c=${encodeURIComponent(q)}`;
+  });
+}
+
+// The same rule the backend uses to name the lookup files.
+const shardOf = (id) => id.slice(0, 2).toUpperCase().replace(/[^A-Z0-9]/g, "_").padEnd(2, "_");
+
+async function loadShard(shard) {
+  const r = await fetch(`data/who/${shard}.json?t=${Math.floor(Date.now() / 60000)}`);
+  if (r.status === 404) return { stations: {} };
+  if (!r.ok) throw new Error(`lookup: ${r.status}`);
+  return r.json();
+}
+
+function stationPage(id, rows) {
+  const sum = (i) => rows.reduce((a, r) => a + r[i], 0);
+  const first = Math.min(...rows.map((r) => r[2]));
+  const last = Math.max(...rows.map((r) => r[3]));
+  const bests = rows.map((r) => r[5]).filter((b) => b !== null);
+  const latest = [...rows].sort((a, b) => b[3] - a[3]);
+  const squares = [...new Set(latest.map((r) => r[6]).filter(Boolean))];
+  return `<h2 class="who-id">${esc(id)}</h2>
+    <dl class="ip-readout">
+      <div><dt>Decodes</dt><dd>${num(sum(4))}</dd></div>
+      <div><dt>First heard</dt><dd class="when">${fmtTime(first)}</dd></div>
+      <div><dt>Last heard</dt><dd class="when">${fmtTime(last)}</dd><span class="q">${ago(last)}</span></div>
+      <div><dt>Best report</dt><dd>${bests.length ? `${Math.max(...bests)} dB` : "None"}</dd></div>
+    </dl>
+    <div class="scroll"><table><thead><tr><th>Mode</th><th>Band</th><th>Decodes</th><th>Best</th><th>First heard</th><th>Last heard</th><th>Square</th></tr></thead><tbody>
+    ${latest.map((r) => `<tr><td>${esc(r[0])}</td><td>${esc(r[1])}</td><td>${num(r[4])}</td><td>${r[5] === null ? "" : `${r[5]} dB`}</td><td>${fmtTime(r[2])}</td><td>${fmtTime(r[3])}</td><td class="id">${r[6] ? `<a href="#/map?w=7d&s=${esc(r[6])}">${esc(r[6])}</a>` : ""}</td></tr>`).join("")}
+    </tbody></table></div>
+    ${squares.length ? `<p class="note" style="margin-top:12px">The square is the one most recently reported on that band and mode. The map link shows the last 7 days.</p>` : ""}`;
+}
+
+async function showWho(params) {
+  const q = (params.c || "").trim().toUpperCase();
+  if (/^[A-R]{2}\d{2}$/.test(q)) {
+    location.replace(`#/map?w=7d&s=${q}`);
+    return;
+  }
+  view.innerHTML = `
+    <p class="eyebrow">Station lookup</p>
+    <h1>Was it heard here?</h1>
+    <p class="lede">Every amateur station and HFDL flight in the log, by callsign or flight. Ship calls are left out of the search.</p>
+    ${lookupForm(q)}
+    <div id="result"></div>`;
+  wireLookup();
+  const out = view.querySelector("#result");
+  if (q.length < 2) {
+    out.innerHTML = q ? `<p class="empty">Enter at least two characters.</p>` : "";
+    return;
+  }
+  const { stations } = await loadShard(shardOf(q));
+  if (stations[q]) {
+    out.innerHTML = stationPage(q, stations[q]);
+    return;
+  }
+  const near = Object.entries(stations).filter(([id]) => id.startsWith(q)).sort((a, b) => a[0].localeCompare(b[0]));
+  out.innerHTML = near.length
+    ? `<h2 class="who-id">${num(near.length)} beginning with ${esc(q)}</h2><div class="scroll"><table><thead><tr><th>Station</th><th>Decodes</th><th>Last heard</th></tr></thead><tbody>
+       ${near.slice(0, 200).map(([id, rows]) => `<tr><td class="id"><a href="#/who?c=${encodeURIComponent(id)}">${esc(id)}</a></td><td>${num(rows.reduce((a, r) => a + r[4], 0))}</td><td>${fmtTime(Math.max(...rows.map((r) => r[3])))}</td></tr>`).join("")}
+       </tbody></table></div>`
+    : `<p class="empty">${esc(q)} is not in this log. The receiver listens to one frequency at a time, so a station missing here may simply have been on the air while it was listening somewhere else.</p>`;
 }
 
 function showStation() {
@@ -214,14 +299,14 @@ function showStation() {
     </div>`;
 }
 
-const VIEWS = { now: showNow, map: showMap, activity: showActivity, pictures: showPictures, log: showLog, station: showStation };
+const VIEWS = { now: showNow, map: showMap, activity: showActivity, pictures: showPictures, log: showLog, station: showStation, who: showWho };
 
 async function render() {
   if (unmount) { unmount(); unmount = null; }
   const { name, params } = route();
   const show = VIEWS[name] || showNow;
   document.querySelectorAll("nav a").forEach((a) => {
-    if (a.dataset.view === (VIEWS[name] ? name : "now")) a.setAttribute("aria-current", "page");
+    if (a.dataset.view === (name === "who" ? "log" : VIEWS[name] ? name : "now")) a.setAttribute("aria-current", "page");
     else a.removeAttribute("aria-current");
   });
   try {
@@ -261,7 +346,7 @@ bar.querySelector("nav").addEventListener("click", () => {
 let lastRoute = "";
 function hashChanged() {
   const { name, params } = route();
-  const key = `${name}|${name === "map" ? params.w || "24h" : ""}`;
+  const key = `${name}|${name === "map" ? params.w || "24h" : name === "who" ? params.c || "" : ""}`;
   if (key !== lastRoute) { lastRoute = key; render(); }
 }
 addEventListener("hashchange", hashChanged);

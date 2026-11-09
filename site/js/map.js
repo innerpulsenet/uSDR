@@ -15,12 +15,12 @@ const WORLD_NORTH = 84;
 const WORLD_SOUTH = -62;
 // Single-series scales in the radio family's amber, low to high.
 const STEPS = ["#72460f", "#9a6018", "#c47c21", "#ed9a37", "#fcc58f"];
-// Spots per square, in decades, and the dot's diameter in screen pixels.
+// Different stations heard in a square, and the dot's diameter in screen pixels.
 const SPOT_SIZES = [
   { from: 1, label: "1", px: 3 },
-  { from: 2, label: "2–9", px: 5 },
-  { from: 10, label: "10–99", px: 7.5 },
-  { from: 100, label: "100+", px: 11 },
+  { from: 2, label: "2–4", px: 5 },
+  { from: 5, label: "5–19", px: 7.5 },
+  { from: 20, label: "20+", px: 11 },
 ];
 // Marks on a map can touch, so the brand's chart rules allow three colors here. HF
 // splits naturally into low, middle and high bands; the band chips separate the rest.
@@ -39,10 +39,10 @@ function bandGroup(label) {
   return meters >= 40 ? 0 : meters >= 17 ? 1 : 2;
 }
 
-// Spots per band, busiest first, two to a row so the side panels stay a fixed height.
+// Stations per band, busiest first, two to a row so the side panels stay a fixed height.
 function bandList(bands) {
-  const rows = Object.entries(bands).sort((a, b) => b[1] - a[1]);
-  return rows.length ? `<dl class="bandlist">${rows.map(([b, n]) => `<div><dt>${esc(b)}</dt><dd>${num(n)}</dd></div>`).join("")}</dl>` : "";
+  const rows = Object.entries(bands).sort((a, b) => b[1].size - a[1].size);
+  return rows.length ? `<dl class="bandlist">${rows.map(([b, ids]) => `<div><dt>${esc(b)}</dt><dd>${num(ids.size)}</dd></div>`).join("")}</dl>` : "";
 }
 
 function sizeOf(n) {
@@ -260,22 +260,55 @@ export function mountMap(root, data, opts) {
     g.night.append(svg("path", { class: "dusk", d: pathOf(proj, line) }));
   }
 
-  // The spots inside the chosen hours, bands and modes, added up by square.
+  function chosen(m, b, h) {
+    return h >= state.from && h < state.to
+      && (!state.band.size || state.band.has(data.bands[b]))
+      && (!state.mode.size || state.mode.has(data.modes[m]));
+  }
+
+  // The stations inside the chosen hours, bands and modes, added up by square.
   function aggregate() {
     const cells = new Map();
-    for (const [grid, m, b, h, n, best] of data.spots) {
-      if (h < state.from || h >= state.to) continue;
-      if (state.band.size && !state.band.has(data.bands[b])) continue;
-      if (state.mode.size && !state.mode.has(data.modes[m])) continue;
-      const c = cells.get(grid) || { n: 0, best: null, bands: {}, modes: {}, groups: new Array(BAND_GROUPS.length + 1).fill(0) };
+    for (const [sq, m, b, h, id, n, best] of data.spots) {
+      if (!chosen(m, b, h)) continue;
+      const grid = data.squares[sq];
+      const c = cells.get(grid) || { n: 0, best: null, stations: new Set(), bands: {}, groups: new Array(BAND_GROUPS.length + 1).fill(0) };
       c.n += n;
+      c.stations.add(id);
       if (best !== null && (c.best === null || best > c.best)) c.best = best;
-      c.bands[data.bands[b]] = (c.bands[data.bands[b]] || 0) + n;
-      c.modes[data.modes[m]] = (c.modes[data.modes[m]] || 0) + n;
+      (c.bands[data.bands[b]] ||= new Set()).add(id);
       c.groups[bandGroup(data.bands[b])] += n;
       cells.set(grid, c);
     }
     return cells;
+  }
+
+  // Who was heard in the chosen square, under the same filters as the dots.
+  function drawSquareList() {
+    const key = state.selected;
+    const panel = root.querySelector("#square");
+    if (!key) {
+      panel.innerHTML = `<h3>In this square</h3><p class="note" style="margin-top:8px">Click a dot to list the stations heard there.</p>`;
+      return;
+    }
+    const sq = data.squares.indexOf(key);
+    const who = new Map();
+    for (const [s, m, b, h, id, n, best, t] of data.spots) {
+      if (s !== sq || !chosen(m, b, h)) continue;
+      const w = who.get(id) || { n: 0, best: null, t: 0, bands: new Set() };
+      w.n += n;
+      w.t = Math.max(w.t, t);
+      w.bands.add(data.bands[b]);
+      if (best !== null && (w.best === null || best > w.best)) w.best = best;
+      who.set(id, w);
+    }
+    const rows = [...who].sort((a, b) => b[1].n - a[1].n);
+    panel.innerHTML = `<h3>In ${esc(key)}: ${num(rows.length)} station${rows.length === 1 ? "" : "s"}</h3>
+      <table><thead><tr><th>Station</th><th>Decodes</th><th>Best</th><th>Bands</th><th>Last heard</th></tr></thead><tbody>
+      ${rows.map(([id, w]) => {
+        const call = data.idents[id];
+        return `<tr><td class="id"><a href="#/who?c=${encodeURIComponent(call)}">${esc(call)}</a></td><td>${num(w.n)}</td><td>${w.best === null ? "" : `${w.best} dB`}</td><td>${[...w.bands].map(esc).join(", ")}</td><td>${fmtTime(data.start_utc + w.t * 60)}</td></tr>`;
+      }).join("")}</tbody></table>`;
   }
 
   function cellPath(key) {
@@ -313,7 +346,7 @@ export function mountMap(root, data, opts) {
       for (const [key, c] of cellsNow) {
         const [lon, lat] = gridCenter(key);
         const [x, y] = proj.forward(lon, lat);
-        const size = sizeOf(c.n);
+        const size = sizeOf(c.stations.size);
         bySize[size][c.groups.indexOf(Math.max(...c.groups))] += `M${x.toFixed(2)} ${y.toFixed(2)}h0`;
         dots.push({ key, x, y, px: SPOT_SIZES[size].px });
       }
@@ -451,13 +484,17 @@ export function mountMap(root, data, opts) {
   }
 
   function summarize() {
-    const seen = { n: 0, cells: 0, bands: {} };
+    const seen = { n: 0, cells: 0, stations: new Set(), bands: {} };
     for (const [key, c] of cellsNow) {
       const [lon, lat] = gridCenter(key);
       if (!inView(lon, lat)) continue;
       seen.n += c.n;
       seen.cells += 1;
-      for (const b in c.bands) seen.bands[b] = (seen.bands[b] || 0) + c.bands[b];
+      for (const id of c.stations) seen.stations.add(id);
+      for (const b in c.bands) {
+        const ids = (seen.bands[b] ||= new Set());
+        for (const id of c.bands[b]) ids.add(id);
+      }
     }
     let flights = 0;
     for (const t of data.tracks) {
@@ -470,7 +507,8 @@ export function mountMap(root, data, opts) {
     totals.innerHTML = `
       <h3>In this view</h3>
       <dl class="kv">
-        <dt>Spots with a locator</dt><dd>${num(seen.n)}</dd>
+        <dt>Stations with a locator</dt><dd>${num(seen.stations.size)}</dd>
+        <dt>Decodes from them</dt><dd>${num(seen.n)}</dd>
         <dt>Grid squares</dt><dd>${num(seen.cells)}</dd>
         <dt>Aircraft with a track</dt><dd>${num(flights)}</dd>
         <dt>Hours with listening</dt><dd>${hours} of ${span}</dd>
@@ -488,7 +526,7 @@ export function mountMap(root, data, opts) {
     const c = cellsNow.get(key);
     if (!c) return false;
     const distance = home ? `<dt>From the station's square</dt><dd>${num(Math.round(kmBetween(home, gridCenter(key))))} km</dd>` : "";
-    showReadout(`<dl class="kv"><dt>Grid square</dt><dd>${esc(key)}</dd><dt>Spots</dt><dd>${num(c.n)}</dd>
+    showReadout(`<dl class="kv"><dt>Grid square</dt><dd>${esc(key)}</dd><dt>Stations</dt><dd>${num(c.stations.size)}</dd><dt>Decodes</dt><dd>${num(c.n)}</dd>
       ${c.best === null ? "" : `<dt>Best report</dt><dd>${c.best} dB</dd>`}${distance}</dl>${bandList(c.bands)}`);
     return true;
   }
@@ -558,6 +596,7 @@ export function mountMap(root, data, opts) {
     if (state.z > 1.01) p.v = `${state.cx.toFixed(2)},${state.cy.toFixed(2)},${state.z.toFixed(2)}`;
     if (state.band.size) p.b = [...state.band].join(",");
     if (state.mode.size) p.m = [...state.mode].join(",");
+    if (state.selected) p.s = state.selected;
     if (state.from !== 0 || state.to !== data.hours) p.t = `${state.from},${state.to}`;
     onParams(p);
   }
@@ -567,6 +606,7 @@ export function mountMap(root, data, opts) {
     drawTracks();
     drawPoints();
     drawSelection();
+    drawSquareList();
     summarize();
     pushParams();
   }
@@ -669,6 +709,7 @@ export function mountMap(root, data, opts) {
         const dot = nearestDot(x, y, ev.pointerType === "touch" ? 14 : 5);
         state.selected = dot ? dot.key : null;
         drawSelection();
+        drawSquareList();
         if (state.selected) describeCell(state.selected);
       }
       drag = null;
@@ -772,7 +813,7 @@ export function mountMap(root, data, opts) {
 
   function drawStrip() {
     const per = new Array(data.hours).fill(0);
-    for (const [, , , h, n] of data.spots) if (h >= 0 && h < data.hours) per[h] += n;
+    for (const [, , , h, , n] of data.spots) if (h >= 0 && h < data.hours) per[h] += n;
     const listened = new Set(data.monitored.map(([h]) => h));
     const max = Math.max(1, ...per);
     strip.setAttribute("viewBox", `0 0 ${data.hours} 40`);
@@ -810,6 +851,14 @@ export function mountMap(root, data, opts) {
     const [cx, cy, z] = params.v.split(",").map(Number);
     if ([cx, cy, z].every(Number.isFinite)) Object.assign(state, { cx, cy, z });
   }
+  // A link to a square opens on it.
+  if (/^[A-Ra-r]{2}\d{2}$/.test(params.s || "")) {
+    state.selected = params.s.toUpperCase();
+    if (!params.v) {
+      const [x, y] = proj.forward(...gridCenter(state.selected));
+      Object.assign(state, { cx: x, cy: y, z: 8 });
+    }
+  }
 
   drawBase();
   drawNight();
@@ -818,6 +867,8 @@ export function mountMap(root, data, opts) {
   drawSpots();
   drawTracks();
   drawPoints();
+  drawSelection();
+  drawSquareList();
   summarize();
 
   const ro = new ResizeObserver(() => { applyView(); settled(); });

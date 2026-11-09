@@ -8,6 +8,7 @@ and a window with no data stays empty rather than being filled in.
 import json
 import math
 import os
+import re
 import shutil
 import sys
 import time
@@ -64,8 +65,8 @@ def km(lat1, lon1, lat2, lon2):
 
 
 def write(name, value):
-    os.makedirs(OUT, exist_ok=True)
     path = os.path.join(OUT, name)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
     temporary = path + ".tmp"
     with open(temporary, "w") as f:
         json.dump(value, f, separators=(",", ":"))
@@ -97,18 +98,22 @@ def track_segments(points):
 def build_map(conn, now, hours, station_grid):
     since = now - hours * 3600
     start = since - since % 3600
-    modes, bands, spots = [], [], {}
+    modes, bands, spots, squares, idents = [], [], {}, {}, {}
     def index(table, value):
         if value not in table:
             table.append(value)
         return table.index(value)
 
-    for r in conn.execute(f"""SELECT substr(grid,1,4) AS g, mode, dial_hz, (at_utc - ?) / 3600 AS h, COUNT(*) AS n, MAX(snr_db) AS best
-                              FROM observations WHERE at_utc >= ? AND mode IN ({AMATEUR_SQL}) AND grid IS NOT NULL
-                              GROUP BY g, mode, dial_hz, h""", (start, since)):
-        key = (r["g"].upper(), index(modes, r["mode"]), index(bands, band(r["dial_hz"])), r["h"])
-        n, best = spots.get(key, (0, None))
-        spots[key] = (n + r["n"], max(x for x in (best, r["best"], -999) if x is not None))
+    # One row per station, so the page can count stations exactly under any filter
+    # and say who was heard in a square. The check is skipped when nothing failed.
+    failed = conn.execute("SELECT 1 FROM listening WHERE healthy = 0 AND end_utc >= ? LIMIT 1", (since,)).fetchone()
+    healthy_only = f"AND {unhealthy()}" if failed else ""
+    for r in conn.execute(f"""SELECT substr(grid,1,4) AS g, mode, dial_hz, (at_utc - ?) / 3600 AS h, ident, COUNT(*) AS n, MAX(snr_db) AS best, MAX(at_utc) AS t
+                              FROM observations WHERE at_utc >= ? AND mode IN ({AMATEUR_SQL}) AND grid IS NOT NULL AND ident IS NOT NULL {healthy_only}
+                              GROUP BY g, mode, dial_hz, h, ident""", (start, since)):
+        key = (squares.setdefault(r["g"].upper(), len(squares)), index(modes, r["mode"]), index(bands, band(r["dial_hz"])), r["h"], idents.setdefault(r["ident"], len(idents)))
+        n, best, t = spots.get(key, (0, None, 0))
+        spots[key] = (n + r["n"], max(x for x in (best, r["best"], -999) if x is not None), max(t, r["t"]))
 
     flights = {}
     # Each fix's own time, never the time heard: aircraft send queued reports.
@@ -128,7 +133,8 @@ def build_map(conn, now, hours, station_grid):
     monitored = [[r["h"], index(modes, r["mode"]), r["s"]] for r in conn.execute(
         "SELECT (start_utc - ?) / 3600 AS h, mode, SUM(end_utc - start_utc) AS s FROM listening WHERE end_utc >= ? AND healthy IS NOT 0 GROUP BY h, mode", (start, since)) if r["h"] >= 0]
     return {"generated_utc": now, "start_utc": start, "hours": hours, "station_grid": station_grid, "modes": modes, "bands": bands,
-            "spots": [[g, m, b, h, n, None if best == -999 else round(best)] for (g, m, b, h), (n, best) in spots.items()],
+            "squares": list(squares), "idents": list(idents),
+            "spots": [[s, m, b, h, i, n, None if best == -999 else round(best), (t - start) // 60] for (s, m, b, h, i), (n, best, t) in spots.items()],
             "tracks": tracks[:400], "ground": ground, "dsc": dsc, "monitored": monitored, "dsc_delay_s": DSC_DELAY_S}
 
 
@@ -201,6 +207,52 @@ def rollup(conn, now):
         conn.execute("INSERT OR REPLACE INTO hourly SELECT at_utc / 3600 * 3600, mode, COUNT(*), COUNT(DISTINCT ident) FROM observations WHERE at_utc >= ? GROUP BY 1, 2", (now - 48 * 3600,))
 
 
+def shard_of(ident):
+    """Which lookup file a callsign or flight lives in. The page works this out the same way."""
+    return re.sub("[^A-Z0-9]", "_", ident[:2].upper()).ljust(2, "_")
+
+
+def roll_heard(conn):
+    """Adds rows that arrived since the last run to the running per-station totals,
+    and returns the lookup files they changed. Ship calls stay out of it: they are
+    held back six hours, and a name search is not what that log is for."""
+    done = int(meta(conn, "heard_id") or 0)
+    top = conn.execute("SELECT COALESCE(MAX(id), 0) FROM observations").fetchone()[0]
+    totals = {}
+    for r in conn.execute(f"""SELECT ident, mode, dial_hz, at_utc, grid, snr_db FROM observations
+                              WHERE id > ? AND id <= ? AND ident IS NOT NULL AND mode IN ({AMATEUR_SQL},'HFDL') ORDER BY id""", (done, top)):
+        # ACARS pads registrations with dots and sends dashes when it has none.
+        ident = r["ident"].lstrip(".")
+        if not re.search("[A-Z0-9]", ident):
+            continue
+        key = (ident, r["mode"], band(r["dial_hz"]))
+        t = totals.setdefault(key, {"first": r["at_utc"], "last": 0, "n": 0, "best": None, "grid": None})
+        t["first"] = min(t["first"], r["at_utc"])
+        t["n"] += 1
+        if r["snr_db"] is not None and (t["best"] is None or r["snr_db"] > t["best"]):
+            t["best"] = r["snr_db"]
+        if r["at_utc"] >= t["last"]:
+            t["last"] = r["at_utc"]
+            t["grid"] = r["grid"][:4].upper() if r["grid"] else t["grid"]
+    with conn:
+        conn.executemany("""INSERT INTO heard (ident, mode, band, shard, first_utc, last_utc, n, best, grid) VALUES (?,?,?,?,?,?,?,?,?)
+                            ON CONFLICT (ident, mode, band) DO UPDATE SET
+                                first_utc = min(first_utc, excluded.first_utc), last_utc = max(last_utc, excluded.last_utc), n = n + excluded.n,
+                                best = NULLIF(max(COALESCE(best, -999), COALESCE(excluded.best, -999)), -999),
+                                grid = CASE WHEN excluded.grid IS NOT NULL AND excluded.last_utc >= last_utc THEN excluded.grid ELSE grid END""",
+                         [(i, m, b, shard_of(i), t["first"], t["last"], t["n"], t["best"], t["grid"]) for (i, m, b), t in totals.items()])
+        conn.execute("INSERT OR REPLACE INTO meta (name, value) VALUES ('heard_id', ?)", (str(top),))
+    return {shard_of(i) for i, _, _ in totals}
+
+
+def write_lookups(conn, now, shards):
+    for shard in shards:
+        stations = {}
+        for r in conn.execute("SELECT ident, mode, band, first_utc, last_utc, n, best, grid FROM heard WHERE shard = ?", (shard,)):
+            stations.setdefault(r["ident"], []).append([r["mode"], r["band"], r["first_utc"], r["last_utc"], r["n"], None if r["best"] is None else round(r["best"]), r["grid"]])
+        write(f"who/{shard}.json", {"generated_utc": now, "stations": stations})
+
+
 def prune(conn, now):
     cutoff = now - KEEP_RAW_S
     gone = [r[0] for r in conn.execute("SELECT file FROM pictures WHERE start_utc < ?", (cutoff,))]
@@ -219,6 +271,7 @@ def main():
     now = int(time.time())
     conn = connect(DB)
     rollup(conn, now)
+    write_lookups(conn, now, roll_heard(conn))
     prune(conn, now)
     station_grid = meta(conn, "grid")
     write("status.json", build_status(conn, now, station_grid))

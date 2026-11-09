@@ -11,8 +11,8 @@
   --ocean: #0c0e11;
   --land: #20242b;
   --radius: var(--innerpulse-radius);
-  --readout-h: 256px; /* four rows and all ten HF bands */
-  --totals-h: 348px;  /* five rows, ten bands and the note */
+  --readout-h: 279px; /* five rows and all ten HF bands */
+  --totals-h: 371px;  /* six rows, ten bands and the note */
 }
 
 * { box-sizing: border-box; }
@@ -56,6 +56,8 @@ th { text-align: left; font: 500 var(--innerpulse-text-xs)/1.2 var(--innerpulse-
 td { padding: 8px 16px 8px 0; border-bottom: 1px solid var(--innerpulse-line); white-space: nowrap; color: var(--innerpulse-text-2); }
 td:first-child { color: var(--innerpulse-text-3); }
 td.id { color: var(--innerpulse-text); }
+td.id a { text-decoration-color: var(--innerpulse-line-2); }
+td.id a:hover { text-decoration-color: var(--innerpulse-pulse); }
 tbody tr:hover { background: var(--innerpulse-surface-1); }
 
 .chips { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
@@ -128,6 +130,9 @@ dl { margin: 0; }
    the page, and so the map, from moving when they do. */
 #readout, #totals { overflow-y: auto; }
 #readout { height: var(--readout-h); }
+#square { height: 272px; overflow-y: auto; margin-top: 12px; }
+#square table { margin-top: 6px; }
+#square th { position: sticky; top: -14px; background: var(--innerpulse-surface-1); }
 #totals { height: var(--totals-h); }
 
 .key { display: grid; gap: 10px; margin-top: 10px; }
@@ -138,6 +143,14 @@ dl { margin: 0; }
 .layers { display: grid; gap: 7px; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--innerpulse-line); }
 .layers .ip-check { font-size: 13px; color: var(--innerpulse-text-2); gap: 8px; }
 .layers svg { width: 18px; height: 12px; flex: none; overflow: visible; }
+
+/* Station lookup */
+.lookup { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 18px; }
+.lookup .lbl { font: 500 var(--innerpulse-text-xs)/1.2 var(--innerpulse-mono); letter-spacing: .12em; text-transform: uppercase; color: var(--innerpulse-text-3); }
+.lookup input { flex: 0 1 300px; min-width: 0; font-family: var(--innerpulse-mono); }
+.who-id { margin-top: 28px; }
+.who-id + .ip-readout { margin-top: 12px; }
+.ip-readout dd.when { font-size: 17px; line-height: 26px; letter-spacing: 0; }
 
 /* Heat maps */
 .heat { display: grid; grid-template-columns: 64px minmax(0, 1fr); gap: 0 8px; margin-top: 14px; }
