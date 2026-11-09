@@ -1700,7 +1700,14 @@ impl App {
             t.height = r.response.rect.height();
             stack += t.height + 6.0;
         }
-        crate::anim::more(ctx);
+        // Motion only while one rises or fades; between the two a toast
+        // holds still, and the next frame wanted is the start of its fade.
+        let moving = self.toasts.iter().any(|t| (!rm && now - t.born < 0.18) || t.until - now < 0.4);
+        if moving {
+            crate::anim::more(ctx);
+        } else if let Some(wait) = self.toasts.iter().map(|t| t.until - 0.4 - now).min_by(f64::total_cmp) {
+            crate::anim::after(ctx, std::time::Duration::from_secs_f64(wait.max(0.0)));
+        }
     }
 
     /// The receiver flag's line: what the HF data decoder hears; else what

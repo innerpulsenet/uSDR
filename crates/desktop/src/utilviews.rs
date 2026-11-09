@@ -604,7 +604,8 @@ pub fn wwv(app: &mut App, ui: &mut Ui) {
     let last = rows(app, "WWV").find(|(_, d)| d.ev.kind == "minute").map(|(_, d)| (d.at, d.ev.fields.clone(), d.ev.summary.clone()));
     ui.horizontal_top(|ui| {
         // The time now, counted on from the last frame read off the air.
-        ui.vertical(|ui| {
+        // It scrolls when the dock is too short to hold every row.
+        egui::ScrollArea::vertical().id_salt("wwv-reading").auto_shrink([true, false]).show(ui, |ui| {
             ui.set_width(250.0);
             match &last {
                 Some((at, f, _)) => {
@@ -668,13 +669,16 @@ pub fn wwv(app: &mut App, ui: &mut Ui) {
 /// Sixty cells, a second each, ten to a row: the width tells a 0 (short)
 /// from a 1 (half) and a marker (long), as the pulses do on air.
 fn bit_strip(ui: &mut Ui, bits: &[u8], w: f32) {
-    let cell = (w / 10.0).floor().max(18.0);
+    // Each row's first second, in a gutter to its left: under the cells
+    // there is no room for a figure that can be read.
+    let gutter = 22.0;
+    let cell = ((w - gutter) / 10.0).floor().max(18.0);
     let h = 16.0;
-    let (r, _) = ui.allocate_exact_size(vec2(cell * 10.0, 6.0 * (h + 4.0)), Sense::hover());
+    let (r, _) = ui.allocate_exact_size(vec2(gutter + cell * 10.0, 6.0 * (h + 4.0)), Sense::hover());
     let p = ui.painter_at(r);
     for s in 0..60usize {
         let (row, col) = (s / 10, s % 10);
-        let x = r.left() + col as f32 * cell;
+        let x = r.left() + gutter + col as f32 * cell;
         let y = r.top() + row as f32 * (h + 4.0);
         let slot = egui::Rect::from_min_size(pos2(x + 1.0, y), vec2(cell - 2.0, h));
         p.rect_filled(slot, egui::CornerRadius::same(2), theme::ink());
@@ -689,7 +693,7 @@ fn bit_strip(ui: &mut Ui, bits: &[u8], w: f32) {
             p.rect_filled(pulse, egui::CornerRadius::same(1), alpha(c, 0.9));
         }
         if col == 0 {
-            p.text(pos2(slot.left() + 2.0, slot.bottom() + 0.5), egui::Align2::LEFT_TOP, format!("{s}"), theme::mono(7.5), theme::text_3());
+            p.text(pos2(r.left() + gutter - 6.0, slot.center().y), egui::Align2::RIGHT_CENTER, format!("{s}"), theme::mono(10.0), theme::text_3());
         }
     }
 }

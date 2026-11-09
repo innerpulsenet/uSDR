@@ -1281,7 +1281,7 @@ impl Panafall {
             painter.line_segment([pos2(pan.left(), y), pos2(pan.right(), y)], Stroke::new(1.0, theme::line()));
             // Clear of the unit caption at the top of the scale, and whole
             // above its foot, where the band plan's strip begins.
-            if y < db_axis.top() + 20.0 || y > db_axis.bottom() - 7.0 {
+            if y < db_axis.top() + 26.0 || y > db_axis.bottom() - 7.0 {
                 db += db_step;
                 continue;
             }
@@ -1559,14 +1559,9 @@ impl Panafall {
         };
         let mut line: Vec<Pos2> = Vec::with_capacity(cols);
         if n >= 2 {
-            let mut raw: Vec<f32> = (0..cols).map(|c| column(&self.smooth, c)).collect();
-            // A light three-tap smooth for the drawn line only.
-            if cols > 3 {
-                let src = raw.clone();
-                for i in 1..cols - 1 {
-                    raw[i] = 0.18 * src[i - 1] + 0.64 * src[i] + 0.18 * src[i + 1];
-                }
-            }
+            // Drawn as measured: the holds and the hover reading use the same
+            // column maxima, so a carrier's crest is one height everywhere.
+            let raw: Vec<f32> = (0..cols).map(|c| column(&self.smooth, c)).collect();
             for (&x, v) in xs.iter().zip(&raw) {
                 line.push(pos2(x, self.y_for(*v, pan)));
             }
@@ -2066,10 +2061,11 @@ impl Panafall {
             let lx = self.x_for(landing, pan);
             painter.line_segment([pos2(lx, pan.top()), pos2(lx, wf.bottom())], Stroke::new(1.0, Color32::from_white_alpha(70)));
             let level = if n >= 2 {
-                let bin = (((landing - (self.center_hz - self.span_hz / 2.0)) / self.span_hz) * (n - 1) as f64)
+                // The drawn column's level, so the dot sits on the line.
+                let c = (((landing - (self.center_hz - self.span_hz / 2.0)) / self.span_hz) * (cols - 1) as f64)
                     .round()
-                    .clamp(0.0, (n - 1) as f64) as usize;
-                Some(self.smooth[bin])
+                    .clamp(0.0, (cols - 1) as f64) as usize;
+                Some(column(&self.smooth, c))
             } else {
                 None
             };

@@ -405,12 +405,14 @@ impl Scope {
             Some((f, t)) => (f + (floor - f) * 0.25, t + (top - t) * 0.25),
             None => (floor, top),
         });
+        // The strongest bin under each column, as the main waterfall does,
+        // so a narrow tone is never interpolated away.
+        let n = db.len();
         let row = (0..MINI_W)
             .map(|i| {
-                let x = i as f32 / (MINI_W - 1) as f32 * (db.len() - 1) as f32;
-                let a = x as usize;
-                let b = (a + 1).min(db.len() - 1);
-                db[a] + (db[b] - db[a]) * (x - a as f32)
+                let a = (i * n / MINI_W).min(n - 1);
+                let b = ((i + 1) * n / MINI_W).max(a + 1).min(n);
+                db[a..b].iter().copied().fold(f32::MIN, f32::max)
             })
             .collect();
         self.mini_wf.push_front(row);
@@ -649,14 +651,15 @@ impl Scope {
             let mut px = Vec::with_capacity(MINI_W * MINI_H);
             for r in 0..MINI_H {
                 match self.mini_wf.get(r) {
-                    Some(row) => px.extend(row.iter().map(|v| lut[(((v - floor) / (top - floor)).clamp(0.0, 1.0) * 255.0) as usize])),
+                    // The main waterfall's tone curve, so the two read alike.
+                    Some(row) => px.extend(row.iter().map(|v| lut[(((v - floor) / (top - floor)).clamp(0.0, 1.0).powf(0.86) * 255.0) as usize])),
                     None => px.extend(std::iter::repeat_n(theme::ink(), MINI_W)),
                 }
             }
             let img = egui::ColorImage::new([MINI_W, MINI_H], px);
             match &mut self.mini_tex {
-                Some(t) => t.set(img, egui::TextureOptions::LINEAR),
-                None => self.mini_tex = Some(ui.ctx().load_texture("scope-wf", img, egui::TextureOptions::LINEAR)),
+                Some(t) => t.set(img, egui::TextureOptions::NEAREST),
+                None => self.mini_tex = Some(ui.ctx().load_texture("scope-wf", img, egui::TextureOptions::NEAREST)),
             }
             self.mini_dirty = false;
             self.mini_palette = Some(palette);
