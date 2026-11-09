@@ -1,6 +1,6 @@
 # HF monitoring station: build plan
 
-Drafted 2026-11-08. Phases 1 to 5 are deployed as of 2026-11-09, with rows uploading to arm2. The site is still limited to preview addresses until launch.
+Drafted 2026-11-08. Phases 1 to 5 are deployed as of 2026-11-09, with rows uploading to arm2. The site went public the same day.
 
 ## Goal
 
@@ -204,10 +204,9 @@ through the proxy, and that path answers even before the origin has a certificat
 does not cache JSON by default. A Cache Rule for the slices is worth adding at launch; picture
 files are immutable and can cache for a long time.
 
-**Access until launch.** `/etc/apache2/hf-access.conf` on arm2 lists the addresses allowed to
-read the pages, and is not in this repo. Launching means replacing its contents with
-`Require all granted`, then `sudo systemctl reload apache2`. Until then IPv6 access is by
-/64, because a home computer's temporary IPv6 address rotates. Ingest stays open to the token.
+**Access.** `/etc/apache2/hf-access.conf` on arm2 holds `Require all granted` since launch
+on 2026-11-09. To close the site again, list addresses there and reload Apache; use a /64 for
+IPv6, because a home computer's temporary address rotates. Ingest stays open to the token.
 
 **Done when:** a day of data arrives with no gaps or duplicates, a forced outage of
 arm2 catches up by itself, and ingest rejects bad tokens, unlisted modes and
@@ -292,6 +291,19 @@ An 8 MHz capture reaches about 4 MHz either side of center, less the filter's ro
 DSC 12 MHz, HFDL 11.3, 13.3 and 21.9 MHz, and FT8 on 17 m together with 10 m do not fit
 in these slices, so they stay on hops or wait for a turn. The slices may move once real
 yields are in.
+
+**Stage 1 measured, 2026-11-09.**
+
+- **Filters:** the RSP1A datasheet lists separate 2 to 12 and 12 to 30 MHz filters, so no slice
+  may cross 12 MHz. Usable width at an 8 MHz span is 7.16 MHz, 3.58 either side of center.
+- **Overload:** the receiver has been at an 8 MHz span throughout, so the soak already measured
+  this. 13 hours, 03 to 16 UTC, on every band: no stay clipped and the API reported no overload.
+  The worst peak was 0.93 of full scale on 14.08 MHz, typically 0.15. Evening hours, when
+  broadcasters are loudest, have not been seen yet.
+- **CPU:** decoding about 36 FT8 messages from one 14 MHz slot costs 0.3 to 0.5 core-seconds, in
+  a burst under a second long, against a 0.145-core baseline on CT 216's two cores. Nine channels
+  are about 4 core-seconds per 15 s slot. CPU is not the limit, though channel filters at 8 MS/s
+  are still to be measured.
 
 **What has to change.**
 
