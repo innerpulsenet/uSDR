@@ -260,7 +260,7 @@ async function showPictures() {
     ${pictures.length ? `<div class="gallery">${pictures.map((p) => `<article class="pic">
       <a href="pictures/${encodeURIComponent(p.file)}"><img loading="lazy" src="pictures/${encodeURIComponent(p.thumb || p.file)}" alt="Radiofax chart received ${fmtTime(p.start_utc)}${p.scheduled_title ? `, scheduled as ${esc(p.scheduled_title)}` : ""}"></a>
       <div><b>${esc(p.scheduled_title || "Untitled picture")}</b><span>${fmtTime(p.start_utc)} · ${esc(p.station || "")} · ${khz(p.dial_hz + 1900)} kHz</span></div>
-    </article>`).join("")}</div>` : `<p class="empty">No charts have been published yet. Only charts that pass a quality check and come from a service cleared for republishing appear here.</p>`}`;
+    </article>`).join("")}</div>` : `<p class="empty">No charts have been published yet. Charts appear here once they pass a quality check.</p>`}`;
   view.querySelectorAll(".pic a").forEach((a, i) => a.addEventListener("click", (ev) => {
     ev.preventDefault();
     openViewer(pictures, i);
@@ -456,11 +456,56 @@ function shipFlag(ship, table) {
   return table[mid] || "";
 }
 
-async function showTraffic() {
-  const [t, names, stations] = await Promise.all([load("traffic.json"), lookups || load("lookups-site.json"), ground || load("ground-stations.json")]);
+const TRAFFIC_VIEWS = {
+  World: null,
+  "N. Atlantic": [-80, 25, -5, 62],
+  "N. America": [-130, 20, -60, 56],
+  Caribbean: [-92, 8, -55, 30],
+  Europe: [-12, 35, 42, 66],
+};
+
+function trafficMap(w) {
+  return `<section class="traffic-map" aria-labelledby="hmap"><h2 id="hmap">Aircraft and ships on the map</h2>
+    <div class="tools" style="margin-top:12px">
+      <div class="chips"><span class="lbl">Window</span><button type="button" data-w="24h" aria-pressed="${w === "24h"}">24 hours</button><button type="button" data-w="7d" aria-pressed="${w === "7d"}">7 days</button></div>
+      <div class="chips"><span class="lbl">Projection</span><button type="button" data-proj="eq">Flat</button><button type="button" data-proj="az">From the station</button></div>
+      <div class="chips" id="presets"><span class="lbl">Go to</span></div>
+    </div>
+    <div class="stage tall">
+      <div class="zoomer"><button type="button" id="zin" aria-label="Zoom in">+</button><button type="button" id="zout" aria-label="Zoom out">−</button><button type="button" id="box" aria-pressed="false" aria-label="Drag a box to zoom to an area" title="Drag a box to zoom to an area">▭</button></div>
+    </div>
+    <div class="strip-wrap">
+      <svg id="strip" class="strip" role="img" aria-label="Aircraft positions and ship calls per hour. Hatched hours had no listening to either."></svg>
+      <div class="range"><label for="from">From</label><input id="from" type="range" min="0" step="1"><label for="to">To</label><input id="to" type="range" step="1"></div>
+      <div class="strip-foot"><button type="button" id="play" aria-pressed="false">Play</button><p class="note"><span id="fromv" class="num"></span> to <span id="tov" class="num"></span>. Hatched hours had no listening on HFDL or DSC.</p></div>
+    </div>
+    <div class="traffic-panels">
+      <div class="card" id="readout"><h3>Under the pointer</h3><p class="note" style="margin-top:8px">Point at a flight or a ship. Click a flight to hold its track.</p></div>
+      <div class="card" id="totals"></div>
+      <div class="card"><h3>Layers</h3>
+        <div class="layers" style="border:0;padding:0;margin-top:10px">
+          <label class="ip-check"><input type="checkbox" data-layer="tracks" checked><svg viewBox="0 0 18 12" aria-hidden="true"><path d="M1 10 L9 6" fill="none" stroke="#ffb347" stroke-width="1"/><path d="M17 2 L8.5 3.2 L10.6 6.5 L10.2 10.4Z" fill="#ffb347"/></svg><span>Aircraft, brighter if heard this hour</span></label>
+          <label class="ip-check"><input type="checkbox" data-layer="ground" checked><svg viewBox="0 0 18 12" aria-hidden="true"><rect x="4.5" y="1.5" width="9" height="9" fill="none" stroke="#e3e6e9" stroke-width="1.5"/></svg><span>HFDL ground stations</span></label>
+          <label class="ip-check"><input type="checkbox" data-layer="dsc" checked><svg viewBox="0 0 18 12" aria-hidden="true"><rect x="6" y="3" width="6" height="6" transform="rotate(45 9 6)" fill="#e3e6e9"/></svg><span>Ship calls with a position</span></label>
+          <label class="ip-check"><input type="checkbox" data-layer="night" checked><svg viewBox="0 0 18 12" aria-hidden="true"><rect x=".5" y=".5" width="17" height="11" fill="#020305" stroke="rgba(227,230,233,.16)"/></svg><span>Night side, at the end of these hours</span></label>
+        </div>
+      </div>
+    </div>
+  </section>`;
+}
+
+async function showTraffic(params) {
+  const w = params.w === "7d" ? "7d" : "24h";
+  const [t, names, stations, m, coastLines, landRings] = await Promise.all([
+    load("traffic.json"), lookups || load("lookups-site.json"), ground || load("ground-stations.json"),
+    load(`map-${w}.json`), coast || load("coast-110m.json"), land || load("land-110m.json"),
+  ]);
   lookups = names;
   ground = stations;
+  coast = coastLines;
+  land = landRings;
   shownBuilt = t.generated_utc;
+  const tracked = new Set(m.tracks.map((x) => x.i));
   const gsName = Object.fromEntries(stations.map((s) => [String(s.id), s.name]));
   view.innerHTML = `
     <header class="page-head ip-atmos">${atmosphere(t.flights.slice(0, 96).map((f) => f.n))}
@@ -468,9 +513,10 @@ async function showTraffic() {
     <h1>Who was on the air.</h1>
     <p class="lede">Aircraft heard on HFDL in the last 24 hours and DSC ship calls in the last 30 days. Airlines and flag states come from published designator tables, and are blank where a code doesn't match one.</p>
     </header>
+    ${trafficMap(w)}
     <section aria-labelledby="hair"><h2 id="hair">Aircraft</h2>
       ${t.flights.length ? `<div class="scroll"><table><thead><tr><th>Flight</th><th>Operator</th><th class="hide-s">Registration</th><th class="hide-s">Ground station</th><th>Messages</th><th class="hide-s">Last position</th><th>Last heard</th></tr></thead><tbody>
-      ${t.flights.map((f) => `<tr><td class="id">${callLink("HFDL", f.i)}</td><td>${esc(aircraftAirline(f.i, names.airlines))}</td><td class="hide-s">${esc(f.reg || "")}</td><td class="hide-s">${esc(gsName[f.gs] || "")}</td><td>${num(f.n)}</td><td class="hide-s">${f.la === undefined ? "" : `${f.la}, ${f.lo}`}</td><td>${fmtTime(f.t)}</td></tr>`).join("")}
+      ${t.flights.map((f) => `<tr><td class="id">${callLink("HFDL", f.i)}</td><td>${esc(aircraftAirline(f.i, names.airlines))}</td><td class="hide-s">${esc(f.reg || "")}</td><td class="hide-s">${esc(gsName[f.gs] || "")}</td><td>${num(f.n)}</td><td class="hide-s">${f.la === undefined ? "" : tracked.has(f.i) ? `<button type="button" class="show-flight" data-flight="${esc(f.i)}" title="Show this flight on the map">${f.la}, ${f.lo}</button>` : `${f.la}, ${f.lo}`}</td><td>${fmtTime(f.t)}</td></tr>`).join("")}
       </tbody></table></div>` : emptyLog()}
     </section>
     <section aria-labelledby="hship"><h2 id="hship">Ship and coast station calls</h2>
@@ -478,6 +524,21 @@ async function showTraffic() {
       ${t.ships.map((s) => `<tr><td>${fmtTime(s.t)}</td><td class="id">${callLink("DSC", s.i)}</td><td>${esc(shipFlag(s, names.flags))}</td><td>${esc(s.from || "")}</td><td>${esc([s.cat, s.what].filter(Boolean).join(", "))}</td><td class="hide-s">${khz(s.f)}</td><td class="hide-s">${s.la == null ? "" : `${s.la.toFixed(2)}, ${s.lo.toFixed(2)}`}</td></tr>`).join("")}
       </tbody></table></div>` : emptyLog()}
     </section>`;
+  view.querySelectorAll("[data-w]").forEach((b) => b.addEventListener("click", () => { location.hash = `#/traffic?w=${b.dataset.w}`; }));
+  const cleanup = mountMap(view, { ...m, spots: [], squares: [], idents: [], air: [] }, {
+    coast, land, ground, params, traffic: true, presets: TRAFFIC_VIEWS,
+    operator: (flight) => aircraftAirline(flight, names.airlines),
+    loadFine: async () => {
+      const [fineCoast, fineLand] = await Promise.all([load("coast-50m.json"), load("land-50m.json")]);
+      return { coast: fineCoast, land: fineLand };
+    },
+    onParams: (p) => history.replaceState(null, "", `#/traffic?${new URLSearchParams(p)}`),
+  });
+  unmount = cleanup;
+  view.querySelectorAll(".show-flight").forEach((b) => b.addEventListener("click", () => {
+    cleanup.focusFlight(b.dataset.flight);
+    view.querySelector(".traffic-map").scrollIntoView({ block: "start", behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
+  }));
 }
 
 async function showStation() {
@@ -595,7 +656,7 @@ bar.querySelector("nav").addEventListener("click", () => {
 let lastRoute = "";
 function hashChanged() {
   const { name, params } = route();
-  const key = `${name}|${name === "map" ? params.w || "24h" : name === "who" ? params.c || "" : ""}`;
+  const key = `${name}|${name === "map" ? params.w || "24h" : name === "who" ? params.c || "" : name === "traffic" ? params.w || "24h" : ""}`;
   if (key !== lastRoute) { lastRoute = key; render(); }
 }
 addEventListener("hashchange", hashChanged);

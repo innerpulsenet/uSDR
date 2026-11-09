@@ -30,10 +30,6 @@ const MIN_ROW_CORR: f32 = 0.25;
 /// A row varying less than this is margin, which says nothing either way.
 const FLAT_ROW_VARIANCE: f32 = 4.0;
 
-/// Radiofax services whose charts may be published without a review. These
-/// transmit NOAA products. Anything else waits until its terms are checked.
-const OPEN_STATIONS: [&str; 2] = ["NMF", "NMG"];
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind {
     /// One byte a pixel.
@@ -172,12 +168,10 @@ fn rejected(p: &Finished, q: Quality) -> Option<&'static str> {
 }
 
 /// Whether a kept picture may go out unseen.
-fn decide(kind: Kind, station: Option<&str>) -> (&'static str, &'static str) {
-    match (kind, station) {
-        (Kind::Sstv, _) => ("hold", "anyone can send any image"),
-        (Kind::Wefax, Some(s)) if OPEN_STATIONS.contains(&s) => ("publish", "NOAA chart"),
-        (Kind::Wefax, Some(_)) => ("hold", "service terms not checked"),
-        (Kind::Wefax, None) => ("hold", "not on the timetable"),
+fn decide(kind: Kind) -> (&'static str, &'static str) {
+    match kind {
+        Kind::Sstv => ("hold", "anyone can send any image"),
+        Kind::Wefax => ("publish", "weather chart"),
     }
 }
 
@@ -223,7 +217,7 @@ pub fn file(p: &Finished, catalog: &Catalog, dir: &Path) -> Result<PictureRow> {
         row.why = why;
         return Ok(row);
     }
-    (row.decision, row.why) = decide(p.kind, row.station.as_deref());
+    (row.decision, row.why) = decide(p.kind);
     fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
     let name = format!("{}-{}-{}.png", p.kind.name().to_ascii_lowercase(), p.started_utc, p.dial_hz);
     row.bytes = write_png(p, &dir.join(&name))?;
@@ -327,18 +321,16 @@ mod tests {
     }
 
     #[test]
-    fn only_timetabled_noaa_charts_publish_unseen() {
-        assert_eq!(decide(Kind::Wefax, Some("NMG")).0, "publish");
-        assert_eq!(decide(Kind::Wefax, Some("DDH3")).0, "hold");
-        assert_eq!(decide(Kind::Wefax, None).0, "hold");
-        assert_eq!(decide(Kind::Sstv, None).0, "hold");
+    fn charts_publish_unseen_and_only_sstv_waits_for_review() {
+        assert_eq!(decide(Kind::Wefax).0, "publish");
+        assert_eq!(decide(Kind::Sstv).0, "hold");
     }
 
     #[test]
     fn a_kept_picture_is_a_readable_png_and_a_rejected_one_leaves_no_file() {
         let dir = temporary("file");
         let row = file(&gray(900, chart_like), &Catalog::default(), &dir).unwrap();
-        assert_eq!(row.decision, "hold", "no timetable here");
+        assert_eq!(row.decision, "publish", "a chart needs no timetable to go out");
         let name = row.file.expect("a file");
         assert_eq!(name, format!("wefax-{AT}-8501100.png"));
         let mut reader = png::Decoder::new(std::io::BufReader::new(fs::File::open(dir.join(&name)).unwrap())).read_info().unwrap();

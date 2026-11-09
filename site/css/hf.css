@@ -160,6 +160,17 @@ button[aria-pressed="true"] small[data-air] { color: var(--innerpulse-gunmetal);
 .graticule { fill: none; stroke: rgba(227, 230, 233, .05); stroke-width: 1; }
 .rings { fill: none; stroke: rgba(227, 230, 233, .14); stroke-width: 1; stroke-dasharray: 3 5; }
 .night { fill: rgba(2, 3, 5, .17); stroke: none; }
+.stage.tall { aspect-ratio: auto; height: min(76vh, 860px); min-height: 420px; }
+.traffic-panels { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-top: 12px; align-items: start; }
+.traffic-map .track { stroke: var(--innerpulse-amber); stroke-width: 1.1; stroke-opacity: .75; }
+.traffic-map .track.old { stroke-width: .7; stroke-opacity: .22; }
+.traffic-map .fix { stroke: var(--innerpulse-amber); stroke-width: 2.4; stroke-opacity: .6; }
+.traffic-map .plane { fill: var(--innerpulse-amber); }
+.traffic-map .plane.old { fill: rgba(255, 179, 71, .34); }
+.pulse.air { stroke: var(--innerpulse-amber); }
+.track-sel { fill: none; stroke: var(--innerpulse-text); stroke-width: 2.2; }
+.kv dd.wrap { text-align: right; white-space: normal; max-width: 180px; font-size: 12px; }
+.show-flight { min-height: 0; padding: 2px 6px; font: 400 13px/1.2 var(--innerpulse-mono); color: var(--innerpulse-text-2); border-color: var(--innerpulse-line); }
 .bloom { fill: none; stroke: #8cdffb; stroke-opacity: .09; stroke-linecap: round; }
 .stage > svg.over { position: absolute; inset: 0; pointer-events: none; cursor: inherit; }
 .pulse { fill: none; stroke-linecap: round; animation: pulse 2.8s var(--innerpulse-ease) infinite; }
@@ -296,12 +307,15 @@ dl { margin: 0; }
 @media (max-width: 1040px) {
   .map-wrap { grid-template-columns: minmax(0, 1fr); }
   .side { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .traffic-panels { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 @media (max-width: 760px) {
   .twocol { grid-template-columns: minmax(0, 1fr); }
   .bar { grid-template-columns: 58px minmax(0, 1fr); }
   .bar em { grid-column: 2; text-align: left; }
   .side { grid-template-columns: minmax(0, 1fr); }
+  .traffic-panels { grid-template-columns: minmax(0, 1fr); }
+  .stage.tall { height: 110vw; min-height: 340px; }
   .stage { aspect-ratio: auto; height: 74vw; min-height: 280px; }
   .filters > summary { display: block; cursor: pointer; font: 500 var(--innerpulse-text-xs)/1.2 var(--innerpulse-mono); letter-spacing: .12em; text-transform: uppercase; color: var(--innerpulse-text-2); padding: 10px 0; }
   .strip-foot { align-items: flex-start; }
