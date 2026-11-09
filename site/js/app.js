@@ -1,10 +1,11 @@
-import { mountMap, STEPS } from "./map.js";
+import { BAND_GROUPS, SPOT_SIZES, mountMap, STEPS } from "./map.js";
 import { ago, esc, fmtClock, fmtTime, hours, khz, num } from "./util.js";
 
 const view = document.getElementById("view");
 const STALE_S = 20 * 60;
 let unmount = null;
 let coast = null;
+let land = null;
 let ground = null;
 
 async function load(name) {
@@ -39,13 +40,13 @@ async function showNow() {
     <p class="eyebrow">Last 24 hours</p>
     <h1>One receiver, listening below 30 MHz.</h1>
     <p class="lede">It moves between amateur digital modes, aircraft datalink, ship calls and weather charts on its own schedule. ${lastLine}</p>
-    <div class="stats">
-      <div class="stat"><b>${num(total)}</b><span>Decodes logged</span></div>
-      <div class="stat"><b>${hours(s.monitored_s)}</b><span>Spent listening</span></div>
-      <div class="stat"><b>${num(amateurs)}</b><span>Amateur stations heard</span></div>
-      <div class="stat"><b>${flights ? num(flights.idents) : "0"}</b><span>Aircraft on HFDL</span></div>
-    </div>
-    ${s.unhealthy_s || s.lost_decodes ? `<p class="note warn" style="margin-top:10px">${s.unhealthy_s ? `${hours(s.unhealthy_s)} of listening failed its radio check and is left out of the figures. ` : ""}${s.lost_decodes ? `${num(s.lost_decodes)} decodes were lost to a full queue.` : ""}</p>` : ""}
+    <dl class="ip-readout">
+      <div><dt>Decodes logged</dt><dd>${num(total)}</dd></div>
+      <div><dt>Spent listening</dt><dd>${hours(s.monitored_s)}</dd></div>
+      <div><dt>Amateur stations</dt><dd>${num(amateurs)}</dd></div>
+      <div><dt>Aircraft on HFDL</dt><dd>${flights ? num(flights.idents) : "0"}</dd></div>
+    </dl>
+    ${s.unhealthy_s || s.lost_decodes ? `<p class="ip-notice ip-notice-warn" role="status"><svg class="ip-i sm" aria-hidden="true"><use href="brand/sprite.svg#ip-s-warn"/></svg><span>${s.unhealthy_s ? `${hours(s.unhealthy_s)} of listening failed its radio check and is left out of the figures. ` : ""}${s.lost_decodes ? `${num(s.lost_decodes)} decodes were lost to a full queue.` : ""}</span></p>` : ""}
     <section aria-labelledby="yield"><h2 id="yield">Decodes per hour on air</h2>
       <p class="note">Divided by the time actually spent on each mode, since the receiver can only do one at a time.</p>
       ${s.by_mode.length ? `<div class="bars">${s.by_mode.map((m) => {
@@ -80,17 +81,20 @@ function mapShell(w) {
         </div>
       </div>
       <div class="side">
-        <div class="card" id="readout"><h3>Under the pointer</h3><p class="note" style="margin-top:8px">Point at a square or a flight. Scroll to zoom, drag to pan, or use ▭ to drag out an area (shift-drag does the same).</p></div>
+        <div class="card" id="readout"><h3>Under the pointer</h3><p class="note" style="margin-top:8px">Point at a dot or a flight. Scroll to zoom, drag to pan, or use ▭ to drag out an area (shift-drag does the same).</p></div>
         <div class="card" id="totals"></div>
-        <div class="card"><h3>Layers</h3>
-          <div class="legend">
-            <div><div class="ramp" style="flex:1">${STEPS.map((c) => `<i style="background:${c}"></i>`).join("")}</div></div>
-            <div class="ramp-l" style="display:flex;justify-content:space-between"><span>fewer spots</span><span>more</span></div>
-            <label><input type="checkbox" data-layer="squares" checked>Amateur stations, by grid square</label>
-            <label><input type="checkbox" data-layer="tracks" checked><svg viewBox="0 0 18 12" aria-hidden="true"><path d="M1 10 L8 5 L17 3" fill="none" stroke="#e8b45a" stroke-width="1.4"/></svg>Aircraft, reported positions</label>
-            <label><input type="checkbox" data-layer="ground" checked><svg viewBox="0 0 18 12" aria-hidden="true"><path d="M9 1 L14 6 L9 11 L4 6Z" fill="#0b0d10" stroke="#e8b45a" stroke-width="1.3"/></svg>HFDL ground stations heard</label>
-            <label><input type="checkbox" data-layer="dsc" checked><svg viewBox="0 0 18 12" aria-hidden="true"><rect x="6" y="3" width="6" height="6" transform="rotate(45 9 6)" fill="#f3f5f7"/></svg>Ship calls with a position</label>
-            <label><input type="checkbox" data-layer="night" checked><svg viewBox="0 0 18 12" aria-hidden="true"><rect width="18" height="12" fill="#000" stroke="#e8b45a" stroke-opacity=".4"/></svg>Night side, now</label>
+        <div class="card"><h3>Reading the dots</h3>
+          <div class="key">
+            <div class="row" aria-label="Dot size is spots in that square">${SPOT_SIZES.map((s) => `<span><svg class="swatch" viewBox="0 0 15 15" aria-hidden="true"><circle cx="7.5" cy="7.5" r="${s.px / 2}" fill="var(--innerpulse-text-2)"/></svg>${s.label}</span>`).join("")}</div>
+            <div class="row" aria-label="Dot color is the band group heard most in that square">${BAND_GROUPS.map((b, i) => `<span><svg class="swatch" viewBox="0 0 15 15" aria-hidden="true"><circle cx="7.5" cy="7.5" r="5" fill="var(--innerpulse-chart-${i + 1})"/></svg>${b}</span>`).join("")}</div>
+          </div>
+          <p class="note" style="margin-top:8px">One dot per grid square, at the square's center. Size is spots; color is the bands heard most there.</p>
+          <div class="layers">
+            <label class="ip-check"><input type="checkbox" data-layer="squares" checked><span>Amateur stations</span></label>
+            <label class="ip-check"><input type="checkbox" data-layer="tracks" checked><svg viewBox="0 0 18 12" aria-hidden="true"><path d="M1 10 L9 6" fill="none" stroke="var(--innerpulse-text-2)" stroke-width="1"/><path d="M17 2 L8.5 3.2 L10.6 6.5 L10.2 10.4Z" fill="var(--innerpulse-text)"/></svg><span>Aircraft positions</span></label>
+            <label class="ip-check"><input type="checkbox" data-layer="ground" checked><svg viewBox="0 0 18 12" aria-hidden="true"><rect x="4.5" y="1.5" width="9" height="9" fill="none" stroke="var(--innerpulse-text)" stroke-width="1.5"/></svg><span>HFDL ground stations</span></label>
+            <label class="ip-check"><input type="checkbox" data-layer="dsc" checked><svg viewBox="0 0 18 12" aria-hidden="true"><rect x="6" y="3" width="6" height="6" transform="rotate(45 9 6)" fill="var(--innerpulse-text)"/></svg><span>Ship calls</span></label>
+            <label class="ip-check"><input type="checkbox" data-layer="night" checked><svg viewBox="0 0 18 12" aria-hidden="true"><rect x=".5" y=".5" width="17" height="11" fill="#020305" stroke="var(--innerpulse-line-2)"/></svg><span>Night side, now</span></label>
           </div>
         </div>
       </div>
@@ -99,14 +103,14 @@ function mapShell(w) {
 
 async function showMap(params) {
   const w = params.w === "7d" ? "7d" : "24h";
-  [coast, ground] = await Promise.all([coast || load("coast-110m.json"), ground || load("ground-stations.json")]);
+  [coast, land, ground] = await Promise.all([coast || load("coast-110m.json"), land || load("land-110m.json"), ground || load("ground-stations.json")]);
   const data = await load(`map-${w}.json`);
   view.innerHTML = mapShell(w);
   view.querySelectorAll("[data-w]").forEach((b) => b.addEventListener("click", () => {
     location.hash = `#/map?w=${b.dataset.w}`;
   }));
   unmount = mountMap(view, data, {
-    coast, ground, params,
+    coast, land, ground, params,
     onParams: (p) => history.replaceState(null, "", `#/map?${new URLSearchParams(p)}`),
   });
 }
@@ -131,7 +135,7 @@ function heatTable(rows, unit) {
 async function showActivity() {
   const a = await load("activity.json");
   const historyDays = a.first_listening_utc ? (Date.now() / 1000 - a.first_listening_utc) / 86400 : 0;
-  const key = `<div class="heat-key"><span><i style="background:${STEPS[4]}"></i>busiest</span><span><i style="background:${STEPS[0]}"></i>few</span><span><i class="q" style="background:#171a1f"></i>listened, heard nothing</span><span><i style="background:repeating-linear-gradient(135deg,#15181c 0 3px,#0b0d10 3px 6px)"></i>not monitored</span></div>`;
+  const key = `<div class="heat-key"><span><i style="background:${STEPS[4]}"></i>busiest</span><span><i style="background:${STEPS[0]}"></i>few</span><span><i class="q"></i>listened, heard nothing</span><span><i class="out"></i>not monitored</span></div>`;
   const days = historyDays >= 1 ? `${Math.floor(historyDays)} days` : "less than a day";
   view.innerHTML = `
     <p class="eyebrow">Activity</p>
@@ -228,19 +232,31 @@ async function render() {
 }
 
 async function freshness() {
-  const lamp = document.getElementById("lamp");
   const out = document.getElementById("fresh");
+  const glyph = (name) => `<svg aria-hidden="true"><use href="brand/sprite.svg#ip-s-${name}"/></svg>`;
   try {
     const s = await load("status.json");
     const seen = s.last_ingest_utc;
-    const age = seen ? Date.now() / 1000 - seen : Infinity;
-    lamp.className = `lamp ${age < STALE_S ? "live" : "stale"}`;
-    out.textContent = seen ? `${age < STALE_S ? "receiving" : "stale"} · last batch ${fmtClock(seen)}Z, ${ago(seen)}` : "no data received yet";
+    if (!seen) {
+      out.innerHTML = `<span class="ip-status ip-status-idle">${glyph("idle")}No data yet</span>`;
+      return;
+    }
+    const age = Date.now() / 1000 - seen;
+    const state = age < STALE_S ? `<span class="ip-live">Receiving</span>` : `<span class="ip-status ip-status-warn">${glyph("warn")}Stale</span>`;
+    out.innerHTML = `${state}<span class="age">last batch ${fmtClock(seen)}Z, ${ago(seen)}</span>`;
   } catch {
-    lamp.className = "lamp stale";
-    out.textContent = "status unavailable";
+    out.innerHTML = `<span class="ip-status ip-status-warn">${glyph("warn")}Status unavailable</span>`;
   }
 }
+
+// The phone menu closes once a link has been followed.
+const bar = document.querySelector(".ip-masthead-bar");
+const menu = bar.querySelector(".ip-masthead-menu");
+menu.addEventListener("click", () => menu.setAttribute("aria-expanded", bar.classList.toggle("is-open")));
+bar.querySelector("nav").addEventListener("click", () => {
+  bar.classList.remove("is-open");
+  menu.setAttribute("aria-expanded", "false");
+});
 
 let lastRoute = "";
 function hashChanged() {

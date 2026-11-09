@@ -7,8 +7,8 @@ cd "$(dirname "$0")/.."
 python3 tools/gen-site-map.py
 python3 site/bin/test_hf_api.py 2>/dev/null
 ssh arm2 'mkdir -p ~/www/hf/data ~/www/hf/pictures ~/hf-site/bin'
-rsync -a site/index.html site/css site/js arm2:www/hf/
-rsync -a site/data/coast-110m.json site/data/ground-stations.json arm2:www/hf/data/
+rsync -a site/index.html site/favicon.ico site/favicon.svg site/apple-touch-icon.png site/css site/js site/brand arm2:www/hf/
+rsync -a site/data/coast-110m.json site/data/land-110m.json site/data/ground-stations.json arm2:www/hf/data/
 rsync -a --exclude test_hf_api.py --exclude __pycache__ site/bin/ arm2:hf-site/bin/
 ssh arm2 'python3 -m py_compile ~/hf-site/bin/*.py && rm -rf ~/hf-site/bin/__pycache__ && sudo -n systemctl restart hf-site-api && sudo -n systemctl start hf-site-warm'
 echo deployed

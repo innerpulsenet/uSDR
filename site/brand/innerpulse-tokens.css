@@ -1,0 +1,206 @@
+/* innerpulse brand tokens — drop in, then build on the variables.
+
+   Themes. Every colour below is declared twice: first as the plain ink value (what old browsers keep), then, inside
+   @supports, as a light-dark(paper, ink) pair. The pair resolves from color-scheme, so:
+     · the page follows the system setting with no JavaScript;
+     · <html data-theme="light"> or "dark" pins it (set it before first paint from localStorage — see
+       references/themes.md for the ~20-line script and the three-state button);
+     · any subtree can pin itself: color-scheme: dark on a call-to-action panel, a device frame or anything that
+       depicts a screen keeps it ink, bright ember and phosphors included, on a paper page.
+   A product that is dark-only simply sets  :root { color-scheme: dark }  after this file.
+   Greys clear WCAG AA (4.5:1) at 12 px on every surface of their theme. */
+:root {
+  color-scheme: dark;
+
+  /* pulse: the mark is one solid ember, #f43a2a on ink and the deep #cf2a1c on light grounds (since 2026-10-25;
+     before that a diagonal crimson → red-orange gradient). <innerpulse-mark> and the working line read --innerpulse-mark. */
+  --innerpulse-mark: #f43a2a;
+  --innerpulse-pulse: #f43a2a;             /* ember as text, dots, focus rings; the paper step is #b42418 */
+  --innerpulse-pulse-glow: rgba(244, 58, 42, .7);
+  /* the ember pair: the ribbon, and anything that still wants a gradient. A narrower span than before, so it reads
+     as one colour that shifts rather than as two. */
+  --innerpulse-pulse-from: #e81f2b;
+  --innerpulse-pulse-to: #ff5a2e;
+  --innerpulse-ember: linear-gradient(135deg, var(--innerpulse-pulse-from), var(--innerpulse-pulse-to));
+  /* the fixed values, for when the ground is known and does not follow the theme */
+  --innerpulse-mark-bright: #f43a2a;
+  --innerpulse-mark-deep: #cf2a1c;
+  --innerpulse-pulse-bright-from: #e81f2b;
+  --innerpulse-pulse-bright-to: #ff5a2e;
+  --innerpulse-pulse-deep-from: #c4121f;   /* the pair on light grounds */
+  --innerpulse-pulse-deep-to: #dd4318;
+  --innerpulse-pulse-deep: #cf2a1c;
+
+  /* the one filled button: white on this is 5.1:1 in both themes (white on the bright #f43a2a is only 3.8:1) */
+  --innerpulse-action: #d12c1e;
+  --innerpulse-action-hover: #bd2417;
+  --innerpulse-action-text: #fff;
+
+  /* grounds and text. Ink is carbon since 2026-11-05: the KDE theme's neutral cool-grey ground, the same material
+     the studio's pages wear, with steel text and hairlines drawn from it, so the steel wordmark, the gunmetal and
+     the ember all sit on one ground. The warm ink of 2026-10-25 (#0a0908) is the optional warm set in
+     innerpulse-warm.css; the blue-black #05070b before it is gone. */
+  --innerpulse-ink: #0b0d10;               /* the ink ground itself, in either theme */
+  --innerpulse-paper: #f4f1ec;             /* the paper ground itself, in either theme */
+  --innerpulse-ground: #0b0d10;            /* the page: paper or ink by theme */
+  --innerpulse-surface-1: #111317;
+  --innerpulse-surface-2: #171a1f;
+  --innerpulse-surface-3: #1f2329;
+  --innerpulse-gunmetal: #2b3037;          /* the raised metal: the steel wordmark's dark stop, the loud line of a headline on paper */
+  --innerpulse-ink-1: var(--innerpulse-surface-1); /* earlier names */
+  --innerpulse-ink-2: var(--innerpulse-surface-2);
+  --innerpulse-ink-3: var(--innerpulse-surface-3);
+  --innerpulse-text: #e3e6e9;
+  --innerpulse-text-2: #b9bdc3;
+  --innerpulse-text-3: #8f949b;            /* 5.2:1 on surface 3: the floor for 12 px labels */
+  --innerpulse-line: rgba(227, 230, 233, .09);
+  --innerpulse-line-2: rgba(227, 230, 233, .16);
+
+  /* phosphor accents: one per product family, never more than two on a screen. On paper each deepens until it
+     passes as 12 px label text on every paper surface (4.6:1 on surface 3 and up); inside a color-scheme: dark subtree it is the phosphor again. */
+  --innerpulse-cyan: #52e3ff;              /* web platforms */
+  --innerpulse-coral: #ff7a59;             /* AI & agents */
+  --innerpulse-violet: #b38cff;            /* desktop & native */
+  --innerpulse-amber: #ffb347;             /* firmware & RF */
+  --innerpulse-mint: #7dffb0;              /* lab, success */
+
+  /* status: ok, warning, error. Always drawn as an outlined chip with its glyph and words (references/components.md),
+     never as a bare dot: a small red dot is ember's, and ember means live, never failed. Text-safe on every surface. */
+  --innerpulse-ok: #7dffb0;
+  --innerpulse-warn: #ffb347;
+  --innerpulse-err: #ff9a8f;
+
+  /* charts: references/charts.md. Seven categorical slots in order (never cycled; the rest fold into -other), a
+     five-step sequential ramp (cyan) and a seven-step diverging scale. Checked by scripts/chart-palette.mjs. */
+  --innerpulse-chart-1: #00a3b8; /* cyan */
+  --innerpulse-chart-2: #e1664a; /* coral */
+  --innerpulse-chart-3: #865ce7; /* violet */
+  --innerpulse-chart-4: #c97d00; /* amber */
+  --innerpulse-chart-5: #628dea; /* blue */
+  --innerpulse-chart-6: #00ad5f; /* mint */
+  --innerpulse-chart-7: #d85cad; /* magenta */
+  --innerpulse-chart-other: #8f949b;
+  --innerpulse-chart-seq-1: #105569;
+  --innerpulse-chart-seq-2: #1b7791;
+  --innerpulse-chart-seq-3: #269abb;
+  --innerpulse-chart-seq-4: #31bfe7;
+  --innerpulse-chart-seq-5: #8cdffb;
+  --innerpulse-chart-div-cool-3: #77dafb;
+  --innerpulse-chart-div-cool-2: #2eb5db;
+  --innerpulse-chart-div-cool-1: #228dac;
+  --innerpulse-chart-div-mid: #4b4d50;
+  --innerpulse-chart-div-warm-1: #c45d42;
+  --innerpulse-chart-div-warm-2: #ed8366;
+  --innerpulse-chart-div-warm-3: #fbb8a5;
+
+  /* type */
+  --innerpulse-display: "Syne", "Arial Black", system-ui, sans-serif;          /* 800, tight tracking: the wordmark and product names only */
+  --innerpulse-headline: "Instrument Sans", ui-sans-serif, system-ui, sans-serif; /* product headlines: 700, sentence case, −.03em (the studio's pages set theirs in innerpulse-concrete.css) */
+  --innerpulse-serif: "Instrument Serif", "Iowan Old Style", "Palatino Linotype", Georgia, serif; /* print and decks; the studio's pages set headlines in the grotesk (innerpulse-concrete.css) */
+  --innerpulse-sans: "Instrument Sans", ui-sans-serif, system-ui, sans-serif;  /* body 400–600 */
+  --innerpulse-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace; /* readouts, indices, code, IDs */
+  --innerpulse-meta: var(--innerpulse-mono);   /* dates, counts, bylines in lists; the reading profile points it at the sans */
+  --innerpulse-heading: var(--innerpulse-text); /* the reading profile sets headings a step above body text */
+  /* Type floor: nothing a reader needs below 11 px. Small caps: mono .12–.16em, sans .05–.07em. */
+
+  /* mark */
+  --innerpulse-mark-span: 92;              /* bars run x = −92 … 92 in the 220-unit box */
+  --innerpulse-mark-stroke: 22;            /* six bars, one beat, at every size; 4u corners */
+
+  /* motion */
+  --innerpulse-ease: cubic-bezier(.16, 1, .3, 1);
+  --innerpulse-dur-1: .18s;                /* a hover, a focus ring, a border: anything the pointer caused */
+  --innerpulse-dur-2: .4s;                 /* a panel opening, a figure gliding to its new value */
+  --innerpulse-beat: 4.5s;                 /* seconds between beats of an ambient live mark; the working line 2.4 s calm, 1.2 s busy */
+  --innerpulse-ribbon-speed: .12;          /* rad/s for the ribbon's drift */
+
+  /* scales: the rhythm the components and the print layer are built on (references/themes.md, section 10).
+     Space is a 4 px grid; type starts at the 11 px floor; the one radius goes square on the studio's pages. */
+  --innerpulse-space-1: 4px;
+  --innerpulse-space-2: 8px;
+  --innerpulse-space-3: 12px;
+  --innerpulse-space-4: 16px;
+  --innerpulse-space-5: 24px;
+  --innerpulse-space-6: 32px;
+  --innerpulse-space-7: 48px;
+  --innerpulse-space-8: 64px;
+  --innerpulse-text-xs: 11px;              /* mono eyebrows, captions, table heads: the floor */
+  --innerpulse-text-sm: 12.5px;            /* buttons, tabs, hints, status words, metadata */
+  --innerpulse-text-md: 14px;              /* body in the interface and in print */
+  --innerpulse-text-lg: 17px;              /* ledes, card titles */
+  --innerpulse-text-xl: 24px;              /* the readout figure */
+  --innerpulse-text-2xl: 32px;             /* the smallest Syne 800 size; 700 only below this */
+  --innerpulse-radius: 4px;                /* innerpulse-concrete.css sets 0 */
+}
+
+@supports (color: light-dark(#000, #fff)) {
+  :root {
+    color-scheme: light dark;
+    /* on paper the mark takes the deep ember and loses its glow; <innerpulse-mark> reads --innerpulse-mark */
+    --innerpulse-mark: light-dark(#cf2a1c, #f43a2a);
+    --innerpulse-pulse-from: light-dark(#c4121f, #e81f2b);
+    --innerpulse-pulse-to: light-dark(#dd4318, #ff5a2e);
+    --innerpulse-pulse: light-dark(#b42418, #f43a2a);        /* #b42418 is 5.8:1 as text on paper, 4.7:1 on surface 3 */
+    --innerpulse-pulse-glow: light-dark(transparent, rgba(244, 58, 42, .7));
+    /* <innerpulse-working>: verb, its shimmer, and the status colours (paper steps pass as 12 px text). */
+    --innerpulse-working-fg: light-dark(#b8241a, #ff8a6b);
+    --innerpulse-working-shine: light-dark(#f08a6a, #ffd2c2);
+    --innerpulse-working-dim: light-dark(#575e6b, #8f949b);
+    --innerpulse-working-warn: light-dark(#8b5109, #ffb347);
+    --innerpulse-working-ok: light-dark(#0d6d3d, #7dffb0);
+    --innerpulse-working-err: light-dark(#b3261e, #ff6b5e);
+    --innerpulse-ground: light-dark(#f4f1ec, #0b0d10);
+    --innerpulse-surface-1: light-dark(#efebe4, #111317);
+    --innerpulse-surface-2: light-dark(#e9e4db, #171a1f);
+    --innerpulse-surface-3: light-dark(#e0dad0, #1f2329);
+    --innerpulse-text: light-dark(#14171c, #e3e6e9);
+    --innerpulse-text-2: light-dark(#454b56, #b9bdc3);
+    --innerpulse-text-3: light-dark(#575e6b, #8f949b);
+    --innerpulse-line: light-dark(rgba(20, 23, 28, .11), rgba(227, 230, 233, .09));
+    --innerpulse-line-2: light-dark(rgba(20, 23, 28, .2), rgba(227, 230, 233, .16));
+    --innerpulse-cyan: light-dark(#09677e, #52e3ff);
+    --innerpulse-coral: light-dark(#a83a18, #ff7a59);
+    --innerpulse-violet: light-dark(#6a3fd0, #b38cff);
+    --innerpulse-amber: light-dark(#8b5109, #ffb347);
+    --innerpulse-mint: light-dark(#0d6d3d, #7dffb0);
+    --innerpulse-ok: light-dark(#0d6d3d, #7dffb0);
+    --innerpulse-warn: light-dark(#8b5109, #ffb347);
+    --innerpulse-err: light-dark(#a3221a, #ff9a8f);
+    /* charts: references/charts.md, generated by scripts/chart-palette.mjs --css */
+    --innerpulse-chart-1: light-dark(#007597, #00a3b8); /* cyan */
+    --innerpulse-chart-2: light-dark(#c0421c, #e1664a); /* coral */
+    --innerpulse-chart-3: light-dark(#6a3fd0, #865ce7); /* violet */
+    --innerpulse-chart-4: light-dark(#93560a, #c97d00); /* amber */
+    --innerpulse-chart-5: light-dark(#285fcd, #628dea); /* blue */
+    --innerpulse-chart-6: light-dark(#0e7843, #00ad5f); /* mint */
+    --innerpulse-chart-7: light-dark(#a62f85, #d85cad); /* magenta */
+    --innerpulse-chart-other: light-dark(#575e6b, #8f949b);
+    --innerpulse-chart-seq-1: light-dark(#279fc1, #105569);
+    --innerpulse-chart-seq-2: light-dark(#1e829e, #1b7791);
+    --innerpulse-chart-seq-3: light-dark(#15657c, #269abb);
+    --innerpulse-chart-seq-4: light-dark(#0d4a5b, #31bfe7);
+    --innerpulse-chart-seq-5: light-dark(#06313d, #8cdffb);
+    --innerpulse-chart-div-cool-3: light-dark(#105569, #77dafb);
+    --innerpulse-chart-div-cool-2: light-dark(#1c7a95, #2eb5db);
+    --innerpulse-chart-div-cool-1: light-dark(#28a1c3, #228dac);
+    --innerpulse-chart-div-mid: light-dark(#bfbdb9, #4b4d50);
+    --innerpulse-chart-div-warm-1: light-dark(#d97054, #c45d42);
+    --innerpulse-chart-div-warm-2: light-dark(#b04b30, #ed8366);
+    --innerpulse-chart-div-warm-3: light-dark(#86290d, #fbb8a5);
+  }
+  :root[data-theme="light"] { color-scheme: light; }
+  :root[data-theme="dark"] { color-scheme: dark; }
+}
+
+/* Google Fonts import for the four faces:
+   https://fonts.googleapis.com/css2?family=Syne:wght@600;700;800&family=Instrument+Serif:ital@0;1&family=Instrument+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap
+   With the reading profile (innerpulse-reading.css) add  &family=Inter:wght@400;500;600;700  */
+
+.innerpulse-wordmark {
+  font: 800 1em/1 var(--innerpulse-display);
+  letter-spacing: -.03em;
+  color: var(--innerpulse-text);
+}
+
+/* Opt-in only. The mark is meant to read as measured data; the bloom is for hero moments. */
+.innerpulse-glow { filter: drop-shadow(0 0 6px var(--innerpulse-pulse-glow)); }

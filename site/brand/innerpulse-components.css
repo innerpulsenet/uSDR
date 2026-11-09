@@ -1,0 +1,292 @@
+/* innerpulse · components — the layer between the tokens and a finished screen.
+
+   Load after innerpulse-tokens.css (and after innerpulse-concrete.css on the studio's pages). Every colour comes from
+   a token, so each component holds on ink, paper, concrete and charcoal, and inside a color-scheme: dark subtree.
+   Class names are prefixed ip- so they sit beside a product's own CSS. Spec and markup: references/components.md.
+
+   Type: nothing anyone reads is under 11 px. Mono is for measured values and eyebrows (captions, table heads, field
+   labels, readout figures' qualifiers); wide tracking stays on those mono eyebrows. Sans caps (buttons, tabs) take
+   .06em. Hints, errors and status words are sans.
+
+   What is here: the button (one filled per view, quiet outlines for the rest), the field (label, input, hint, error),
+   the readout row (figures with true mono captions, instead of big-number tiles), tabs, the data table, the status
+   chip (an outlined chip with a glyph: status never borrows ember), the live signal (ember's one status meaning),
+   the card, the icon wrapper for assets/icons/sprite.svg, and the second batch (2026-10-09): checkbox, radio and
+   switch, the select chevron, the notice line, the dialog, the empty state, the skeleton, the menu, and a row that
+   scrolls sideways. Every control has a pressed state. */
+
+/* the parts size their own borders and padding, so they hold in a product that has no global border-box reset */
+.ip-btn, .ip-input, .ip-field input, .ip-field select, .ip-field textarea, .ip-readout, .ip-readout > div, .ip-card,
+.ip-status { box-sizing: border-box; }
+
+:root {
+  --ip-radius: var(--innerpulse-radius, 4px); /* 4 px; the concrete pages square it (--innerpulse-radius: 0) */
+  --ip-focus: 0 0 0 2px var(--innerpulse-ground), 0 0 0 4px var(--innerpulse-pulse);
+  --ip-dur: var(--innerpulse-dur-1, .18s);
+}
+
+/* ── button ──────────────────────────────────────────────────────────────────────────────────────────────────────
+   .ip-btn is the quiet outline; .ip-btn-primary the one filled call to action per view (white on #d12c1e, 5.1:1 in
+   both themes); .ip-btn-text a bare link-like action. Sizes: default 40 px tall, .ip-btn-sm 32 px. */
+.ip-btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  min-height: 40px; padding: 0 var(--innerpulse-space-4, 16px); border-radius: var(--ip-radius);
+  font: 600 var(--innerpulse-text-sm, 12.5px)/1 var(--innerpulse-sans); letter-spacing: .06em; text-transform: uppercase; text-decoration: none;
+  color: var(--innerpulse-text); background: transparent; border: 1px solid var(--innerpulse-line-2);
+  cursor: pointer; transition: background var(--ip-dur), border-color var(--ip-dur), color var(--ip-dur);
+}
+.ip-btn:hover { border-color: var(--innerpulse-pulse); }
+.ip-btn:active { background: var(--innerpulse-surface-2); transition-duration: 0s; }
+.ip-btn:focus-visible { outline: none; box-shadow: var(--ip-focus); }
+.ip-btn:disabled, .ip-btn[aria-disabled="true"] { opacity: .45; cursor: not-allowed; border-color: var(--innerpulse-line-2); }
+.ip-btn-primary { background: var(--innerpulse-action); border-color: var(--innerpulse-action); color: var(--innerpulse-action-text); }
+.ip-btn-primary:hover { background: var(--innerpulse-action-hover); border-color: var(--innerpulse-action-hover); }
+.ip-btn-primary:active { background: #a81f14; border-color: #a81f14; }
+.ip-btn-text { border-color: transparent; padding: 0 4px; color: var(--innerpulse-text-2); }
+.ip-btn-text:active { background: transparent; }
+.ip-btn-text:hover { color: var(--innerpulse-text); border-color: transparent; text-decoration: underline; text-decoration-color: var(--innerpulse-pulse); text-underline-offset: 4px; }
+.ip-btn-sm { min-height: 32px; padding: 0 var(--innerpulse-space-3, 12px); font-size: 12px; }
+.ip-btn .ip-i { width: 16px; height: 16px; color: currentColor; }
+
+/* ── field ───────────────────────────────────────────────────────────────────────────────────────────────────────
+   <div class="ip-field"><label>, <input|select|textarea>, <small> hint; add .is-invalid and a .ip-field-error line. */
+.ip-field { display: grid; gap: 6px; align-content: start; } /* start: in a grid row the input keeps its height */
+.ip-field > label { font: 500 var(--innerpulse-text-xs, 11px)/1.2 var(--innerpulse-mono); letter-spacing: .12em; text-transform: uppercase; color: var(--innerpulse-text-3); }
+.ip-input, .ip-field input, .ip-field select, .ip-field textarea {
+  width: 100%; min-height: 40px; padding: 9px 11px; border-radius: var(--ip-radius);
+  font: 400 var(--innerpulse-text-md, 14px)/1.4 var(--innerpulse-sans); color: var(--innerpulse-text);
+  background: var(--innerpulse-surface-1); border: 1px solid var(--innerpulse-line-2);
+  transition: border-color var(--ip-dur), box-shadow var(--ip-dur);
+}
+.ip-field textarea { min-height: 96px; resize: vertical; }
+.ip-input::placeholder, .ip-field ::placeholder { color: var(--innerpulse-text-3); }
+.ip-input:focus, .ip-field input:focus, .ip-field select:focus, .ip-field textarea:focus {
+  outline: none; border-color: var(--innerpulse-pulse); box-shadow: 0 0 0 3px color-mix(in srgb, var(--innerpulse-pulse) 18%, transparent);
+}
+.ip-field > small { font: 400 var(--innerpulse-text-sm, 12.5px)/1.45 var(--innerpulse-sans); color: var(--innerpulse-text-3); }
+.ip-field.is-invalid input, .ip-field.is-invalid select, .ip-field.is-invalid textarea { border-color: var(--innerpulse-err); }
+/* a focused invalid field keeps the error colour: an ember ring would read as "fine, just focused" */
+.ip-field.is-invalid input:focus, .ip-field.is-invalid select:focus, .ip-field.is-invalid textarea:focus {
+  border-color: var(--innerpulse-err); box-shadow: 0 0 0 3px color-mix(in srgb, var(--innerpulse-err) 18%, transparent);
+}
+.ip-field-error { display: flex; gap: 6px; align-items: baseline; font: 500 var(--innerpulse-text-sm, 12.5px)/1.45 var(--innerpulse-sans); color: var(--innerpulse-err); }
+
+/* ── readout ─────────────────────────────────────────────────────────────────────────────────────────────────────
+   A row of figures read off the thing on screen: mono caption (what it is), the figure in mono like every measured value (the templates match), a mono qualifier (the
+   comparison, the unit, the target). One row per view; it replaces big-number tiles. Cells divide with hairlines. */
+.ip-readout { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 140px), 1fr)); border: 1px solid var(--innerpulse-line-2); border-radius: var(--ip-radius); }
+.ip-readout > div { padding: var(--innerpulse-space-3, 12px) 14px; min-width: 0; border-left: 1px solid var(--innerpulse-line); }
+.ip-readout > div:first-child { border-left: 0; }
+.ip-readout dt, .ip-readout .cap { font: 500 var(--innerpulse-text-xs, 11px)/1.2 var(--innerpulse-mono); letter-spacing: .12em; text-transform: uppercase; color: var(--innerpulse-text-3); }
+.ip-readout dd, .ip-readout .fig { margin: 6px 0 2px; font: 500 var(--innerpulse-text-xl, 24px)/1.1 var(--innerpulse-mono); letter-spacing: -.02em; font-variant-numeric: tabular-nums; color: var(--innerpulse-text); }
+.ip-readout .q { font: 400 11.5px/1.3 var(--innerpulse-mono); color: var(--innerpulse-text-2); }
+
+/* ── tabs ────────────────────────────────────────────────────────────────────────────────────────────────────────
+   <nav class="ip-tabs"><a aria-current="page">. The current tab takes a 2 px ember underline: a small signal. */
+.ip-tabs { display: flex; gap: 20px; border-bottom: 1px solid var(--innerpulse-line-2); }
+.ip-tabs a, .ip-tabs button {
+  padding: 11px 0; margin-bottom: -1px; border: 0; border-bottom: 2px solid transparent; background: none; cursor: pointer;
+  font: 600 12px/1 var(--innerpulse-sans); letter-spacing: .06em; text-transform: uppercase; white-space: nowrap;
+  color: var(--innerpulse-text-2); text-decoration: none;
+}
+.ip-tabs a:hover, .ip-tabs button:hover { color: var(--innerpulse-text); }
+.ip-tabs a:active, .ip-tabs button:active { border-bottom-color: var(--innerpulse-line-2); }
+.ip-tabs [aria-current="page"], .ip-tabs [aria-selected="true"] { color: var(--innerpulse-text); border-bottom-color: var(--innerpulse-pulse); }
+.ip-tabs :focus-visible { outline: none; box-shadow: inset 0 -2px 0 var(--innerpulse-pulse), var(--ip-focus); }
+
+/* ── table ───────────────────────────────────────────────────────────────────────────────────────────────────────
+   Wrap in .ip-table-wrap (scrolls on its own on phones). Mono uppercase heads, hairline rows, figures right-aligned
+   in mono with tabular numbers (td.num). On the studio's pages the rule over the head is the heavy one. */
+.ip-table-wrap { overflow-x: auto; }
+.ip-table { width: 100%; border-collapse: collapse; font: 400 var(--innerpulse-text-md, 14px)/1.4 var(--innerpulse-sans); color: var(--innerpulse-text); }
+.ip-table th { padding: 9px var(--innerpulse-space-2, 8px); text-align: left; font: 500 var(--innerpulse-text-xs, 11px)/1.2 var(--innerpulse-mono); letter-spacing: .12em; text-transform: uppercase; color: var(--innerpulse-text-3); border-bottom: 1px solid var(--innerpulse-line-2); border-top: 2px solid var(--innerpulse-rule, transparent); }
+.ip-table td { padding: 10px var(--innerpulse-space-2, 8px); border-bottom: 1px solid var(--innerpulse-line); font-variant-numeric: tabular-nums; }
+.ip-table .num { white-space: nowrap; text-align: right; font-family: var(--innerpulse-mono); font-size: 13px; }
+.ip-table tbody tr:hover { background: var(--innerpulse-surface-1); }
+
+/* ── status ──────────────────────────────────────────────────────────────────────────────────────────────────────
+   An outlined chip: glyph + words, in the status colour. Glyphs are the 12-unit set in assets/icons/sprite.svg
+   (ip-s-ok, ip-s-warn, ip-s-err, ip-s-idle). Never a bare dot, never a fill, never ember: a small red mark is the
+   brand's own signal and means live. Words say what happened ("build failed · exit 2"), not just the state. */
+.ip-status {
+  display: inline-flex; align-items: center; gap: 7px; padding: 5px 9px 5px 8px; border-radius: 3px;
+  font: 500 var(--innerpulse-text-sm, 12.5px)/1 var(--innerpulse-sans); white-space: nowrap;
+  color: var(--innerpulse-text-2); border: 1px solid currentColor;
+}
+.ip-status svg { width: 12px; height: 12px; flex: none; }
+.ip-status-ok { color: var(--innerpulse-ok); }
+.ip-status-warn { color: var(--innerpulse-warn); }
+.ip-status-err { color: var(--innerpulse-err); }
+.ip-status-idle { color: var(--innerpulse-text-3); }
+
+/* the live signal: ember's one status meaning — something is on air, running, published. A filled dot and a word. */
+.ip-live { display: inline-flex; align-items: center; gap: 7px; font: 500 var(--innerpulse-text-sm, 12.5px)/1 var(--innerpulse-sans); color: var(--innerpulse-text-2); }
+.ip-live::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--innerpulse-pulse); }
+
+/* ── card ────────────────────────────────────────────────────────────────────────────────────────────────────────
+   A raised surface for one object (a report, a project, a run). Hairline, surface-1, no shadow; a card that links
+   lifts its border on hover. Text colours are AA on every surface, so anything above can sit inside one. */
+.ip-card { padding: 18px; border-radius: calc(var(--ip-radius) * 2); background: var(--innerpulse-surface-1); border: 1px solid var(--innerpulse-line); color: var(--innerpulse-text); }
+a.ip-card { display: block; text-decoration: none; transition: border-color var(--ip-dur); }
+a.ip-card:hover { border-color: var(--innerpulse-line-2); }
+a.ip-card:active { background: var(--innerpulse-surface-2); }
+a.ip-card:focus-visible { outline: none; box-shadow: var(--ip-focus); }
+.ip-card > .cap { display: block; margin-bottom: var(--innerpulse-space-2, 8px); font: 500 var(--innerpulse-text-xs, 11px)/1.2 var(--innerpulse-mono); letter-spacing: .12em; text-transform: uppercase; color: var(--innerpulse-text-3); }
+
+/* ── choices: checkbox, radio, switch ────────────────────────────────────────────────────────────────────────────
+   <label class="ip-check"><input type="checkbox"><span>Include archived</span></label>; .ip-radio and .ip-switch the
+   same with type="radio" / type="checkbox" role="switch". A chosen control fills with the text colour and the ground
+   shows through as the tick or the knob, so a choice never borrows ember (ember stays for the current tab and focus).
+   Disabled dims the whole label. */
+.ip-check, .ip-radio, .ip-switch { display: inline-flex; align-items: center; gap: 9px; font: 400 var(--innerpulse-text-md, 14px)/1.3 var(--innerpulse-sans); color: var(--innerpulse-text); cursor: pointer; }
+.ip-check input, .ip-radio input, .ip-switch input {
+  appearance: none; margin: 0; flex: none; cursor: pointer; box-sizing: border-box;
+  background: var(--innerpulse-surface-1); border: 1px solid var(--innerpulse-line-2);
+  transition: background var(--ip-dur), border-color var(--ip-dur);
+}
+.ip-check input { width: 16px; height: 16px; border-radius: 3px; display: grid; place-content: center; }
+.ip-check input::before { content: ""; width: 9px; height: 5px; border: 0 solid var(--innerpulse-ground); border-width: 0 0 2px 2px; transform: translateY(-1px) rotate(-45deg); opacity: 0; }
+.ip-check input:checked, .ip-radio input:checked, .ip-switch input:checked { background: var(--innerpulse-text); border-color: var(--innerpulse-text); }
+.ip-check input:checked::before { opacity: 1; }
+.ip-check input:indeterminate { background: var(--innerpulse-text); border-color: var(--innerpulse-text); }
+.ip-check input:indeterminate::before { opacity: 1; width: 8px; height: 0; border-width: 0 0 2px; transform: none; }
+.ip-radio input { width: 16px; height: 16px; border-radius: 50%; display: grid; place-content: center; }
+.ip-radio input::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--innerpulse-ground); opacity: 0; }
+.ip-radio input:checked::before { opacity: 1; }
+.ip-switch input { width: 32px; height: 18px; border-radius: 9px; position: relative; }
+.ip-switch input::before { content: ""; position: absolute; top: 3px; left: 3px; width: 10px; height: 10px; border-radius: 50%; background: var(--innerpulse-text-2); transition: transform var(--ip-dur), background var(--ip-dur); }
+.ip-switch input:checked::before { background: var(--innerpulse-ground); transform: translateX(14px); }
+:is(.ip-check, .ip-radio, .ip-switch) input:hover { border-color: var(--innerpulse-text-3); }
+:is(.ip-check, .ip-radio, .ip-switch) input:focus-visible { outline: none; box-shadow: var(--ip-focus); }
+:is(.ip-check, .ip-radio, .ip-switch):has(input:disabled) { opacity: .45; cursor: not-allowed; }
+.ip-choices { display: flex; flex-wrap: wrap; gap: 10px 24px; }                     /* a row of them */
+.ip-choices.stack { flex-direction: column; gap: 10px; }
+
+/* ── select: the native control with the kit's chevron ────────────────────────────────────────────────────────────
+   <div class="ip-field"><label for="s">Family</label><div class="ip-select"><select id="s">…</select></div></div> */
+.ip-select { position: relative; }
+.ip-select select { appearance: none; padding-right: 36px; cursor: pointer; }
+.ip-select::after {
+  content: ""; position: absolute; right: 14px; top: 50%; width: 7px; height: 7px; pointer-events: none;
+  border: 0 solid var(--innerpulse-text-2); border-width: 0 1.5px 1.5px 0; transform: translateY(-70%) rotate(45deg);
+}
+
+/* ── notice: a line that says what happened, with its glyph ───────────────────────────────────────────────────────
+   <p class="ip-notice ip-notice-warn" role="status"><svg class="ip-i sm">…</svg><span>…</span></p>
+   The status chip's colours at paragraph size: a hairline box with a 2 px rule in the status colour on the left, the
+   glyph in that colour, the words in the text colour. -ok, -warn, -err, or none for plain information. Never ember. */
+.ip-notice {
+  display: flex; align-items: flex-start; gap: 10px; margin: 0; padding: 11px 14px 11px 12px;
+  font: 400 var(--innerpulse-text-sm, 12.5px)/1.5 var(--innerpulse-sans); color: var(--innerpulse-text);
+  background: var(--innerpulse-surface-1); border: 1px solid var(--innerpulse-line); border-left: 2px solid var(--innerpulse-text-3);
+  border-radius: 0 var(--ip-radius) var(--ip-radius) 0;
+}
+.ip-notice > .ip-i { margin-top: 1px; color: var(--innerpulse-text-3); }
+.ip-notice > span { min-width: 0; }
+.ip-notice b { font-weight: 600; }
+.ip-notice-ok { border-left-color: var(--innerpulse-ok); } .ip-notice-ok > .ip-i { color: var(--innerpulse-ok); }
+.ip-notice-warn { border-left-color: var(--innerpulse-warn); } .ip-notice-warn > .ip-i { color: var(--innerpulse-warn); }
+.ip-notice-err { border-left-color: var(--innerpulse-err); } .ip-notice-err > .ip-i { color: var(--innerpulse-err); }
+.ip-notice .ip-btn-text { min-height: 0; padding: 0; margin-left: auto; font-size: var(--innerpulse-text-sm, 12.5px); }
+
+/* ── dialog ───────────────────────────────────────────────────────────────────────────────────────────────────────
+   <dialog class="ip-dialog"><form method="dialog" class="ip-dialog-panel"><span class="cap">…</span><h2>…</h2><p>…</p>
+   <div class="ip-dialog-actions">…</div></form></dialog>, opened with showModal(). The panel is surface-1 with a
+   hairline, no shadow; the backdrop is the ink at 60 %. One filled button, at the right end; the title is Syne 700 at
+   20 px (under 32, so 700). .ip-dialog-panel on its own renders the panel inline, for sheets and previews. */
+.ip-dialog { padding: 0; border: 0; background: transparent; max-width: min(480px, calc(100vw - 32px)); color: var(--innerpulse-text); }
+.ip-dialog::backdrop { background: rgba(5, 7, 11, .6); }
+.ip-dialog-panel {
+  display: grid; gap: 10px; margin: 0; padding: var(--innerpulse-space-5, 24px); box-sizing: border-box; width: 100%;
+  background: var(--innerpulse-surface-1); border: 1px solid var(--innerpulse-line-2); border-radius: calc(var(--ip-radius) * 2);
+  color: var(--innerpulse-text); font: 400 var(--innerpulse-text-md, 14px)/1.55 var(--innerpulse-sans);
+}
+.ip-dialog-panel > .cap { font: 500 var(--innerpulse-text-xs, 11px)/1.2 var(--innerpulse-mono); letter-spacing: .12em; text-transform: uppercase; color: var(--innerpulse-text-3); }
+.ip-dialog-panel h2 { margin: 0; padding: 0; border: 0; font: 700 20px/1.2 var(--innerpulse-headline, var(--innerpulse-sans)); letter-spacing: -.03em; text-transform: none; color: var(--innerpulse-text); }
+.ip-dialog-panel p { margin: 0; color: var(--innerpulse-text-2); }
+.ip-dialog-actions { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; margin-top: var(--innerpulse-space-3, 12px); }
+
+/* ── empty state: what will appear here, and the one way to start ─────────────────────────────────────────────────
+   <div class="ip-empty"><svg class="ip-i lg">…</svg><h3>No reports yet</h3><p>…</p><button class="ip-btn ip-btn-primary">…</button></div>
+   A hairline box, the icon in text-3, a short sans title, one line, one action. No illustration, no animated mark. */
+.ip-empty {
+  display: grid; justify-items: center; gap: 6px; padding: var(--innerpulse-space-7, 48px) var(--innerpulse-space-5, 24px);
+  text-align: center; border: 1px solid var(--innerpulse-line); border-radius: calc(var(--ip-radius) * 2); color: var(--innerpulse-text);
+}
+.ip-empty > .ip-i { color: var(--innerpulse-text-3); margin-bottom: 6px; }
+.ip-empty h3 { margin: 0; font: 600 15px/1.3 var(--innerpulse-sans); letter-spacing: -.01em; }
+.ip-empty p { margin: 0; max-width: 40ch; font: 400 var(--innerpulse-text-sm, 12.5px)/1.5 var(--innerpulse-sans); color: var(--innerpulse-text-2); }
+.ip-empty .ip-btn { margin-top: var(--innerpulse-space-3, 12px); }
+
+/* ── skeleton: the shape of what is loading ───────────────────────────────────────────────────────────────────────
+   <span class="ip-skeleton" style="width:12ch"></span> inline, or on a readout's <dd>; .ip-skeleton-block for a
+   card or chart. Surface-2 with a slow band of surface-3 passing over it; still under reduced motion. */
+.ip-skeleton, .ip-skeleton-block {
+  display: inline-block; vertical-align: middle; min-width: 3ch; height: .8em; border-radius: 3px;
+  background: linear-gradient(90deg, var(--innerpulse-surface-2) 0 35%, var(--innerpulse-surface-3) 50%, var(--innerpulse-surface-2) 65% 100%) 0 0 / 300% 100%;
+  animation: ip-skeleton 1.6s linear infinite; color: transparent;
+}
+.ip-skeleton-block { display: block; width: 100%; height: 96px; border-radius: var(--ip-radius); }
+.ip-readout dd.ip-skeleton { display: block; height: 24px; width: 5ch; }
+@keyframes ip-skeleton { from { background-position: 100% 0; } to { background-position: 0 0; } }
+
+/* ── menu: a short list of actions under a button ─────────────────────────────────────────────────────────────────
+   <div class="ip-menu" role="menu"><button role="menuitem">Rename</button><hr><button role="menuitem" class="is-danger">Delete report</button></div>
+   Surface-1, a hairline, a soft drop; 36 px rows, hover surface-2; .is-danger in the error colour. With the native
+   popover (popover on the menu, popovertarget on the button) it needs no script; otherwise the product positions it
+   absolutely under its button (.ip-menu-anchor on a wrapper). */
+.ip-menu-anchor { position: relative; display: inline-block; }
+.ip-menu {
+  display: none; min-width: 180px; max-width: 280px; margin: 0; padding: 6px; box-sizing: border-box; z-index: 40;
+  background: var(--innerpulse-surface-1); border: 1px solid var(--innerpulse-line-2); border-radius: calc(var(--ip-radius) * 2);
+  box-shadow: 0 12px 32px -12px rgba(5, 7, 11, .55); color: var(--innerpulse-text);
+}
+.ip-menu-anchor > .ip-menu { position: absolute; top: calc(100% + 6px); left: 0; }
+.ip-menu.is-open, .ip-menu:popover-open { display: grid; gap: 2px; }
+.ip-menu [role="menuitem"], .ip-menu a {
+  display: flex; align-items: center; gap: 10px; width: 100%; min-height: 36px; padding: 0 10px; box-sizing: border-box;
+  font: 400 13.5px/1.2 var(--innerpulse-sans); color: var(--innerpulse-text); text-align: left; text-decoration: none;
+  background: none; border: 0; border-radius: 3px; cursor: pointer;
+}
+.ip-menu [role="menuitem"]:hover, .ip-menu a:hover, .ip-menu [role="menuitem"]:focus-visible { background: var(--innerpulse-surface-2); outline: none; }
+.ip-menu [role="menuitem"]:active { background: var(--innerpulse-surface-3); }
+.ip-menu .ip-i { width: 16px; height: 16px; }
+.ip-menu .is-danger { color: var(--innerpulse-err); }
+.ip-menu .cap, .ip-menu-cap { padding: 8px 10px 4px; font: 500 var(--innerpulse-text-xs, 11px)/1.2 var(--innerpulse-mono); letter-spacing: .12em; text-transform: uppercase; color: var(--innerpulse-text-3); }
+.ip-menu hr { margin: 4px 0; border: 0; border-top: 1px solid var(--innerpulse-line); }
+
+/* ── a row that scrolls sideways ────────────────────────────────────────────────────────────────────────────────
+   Tabs, a section index, a masthead's phone nav: the row scrolls inside its box instead of widening the page, the
+   scrollbar is hidden, and the edge that has more behind it fades out, so the reader can see there is more. The
+   fade follows the scroll position (a scroll-driven animation; where unsupported the row simply scrolls). */
+.ip-scroll-x, .ip-tabs { overflow-x: auto; scrollbar-width: none; min-width: 0; }
+.ip-scroll-x::-webkit-scrollbar, .ip-tabs::-webkit-scrollbar { display: none; }
+@supports (animation-timeline: scroll()) {
+  @property --ip-fade-l { syntax: "<length>"; inherits: false; initial-value: 0px; }
+  @property --ip-fade-r { syntax: "<length>"; inherits: false; initial-value: 0px; }
+  .ip-scroll-x, .ip-tabs {
+    -webkit-mask: linear-gradient(90deg, transparent, #000 var(--ip-fade-l), #000 calc(100% - var(--ip-fade-r)), transparent);
+    mask: linear-gradient(90deg, transparent, #000 var(--ip-fade-l), #000 calc(100% - var(--ip-fade-r)), transparent);
+    animation: ip-scroll-fade linear both; animation-timeline: scroll(self inline);
+  }
+  /* the timeline is inactive when nothing overflows, so a row that fits shows no fade at all */
+  @keyframes ip-scroll-fade {
+    0% { --ip-fade-l: 0px; --ip-fade-r: 32px; }
+    12%, 88% { --ip-fade-l: 32px; --ip-fade-r: 32px; }
+    100% { --ip-fade-l: 32px; --ip-fade-r: 0px; }
+  }
+}
+
+/* ── icon ────────────────────────────────────────────────────────────────────────────────────────────────────────
+   <svg class="ip-i"><use href="/icons/sprite.svg#ip-i-search"/></svg>. Secondary text colour by default, the text
+   colour on hover inside a control; never ember. Rules: references/icons.md. */
+.ip-i { width: 20px; height: 20px; flex: none; color: var(--innerpulse-text-2); vertical-align: -0.2em; }
+.ip-i.sm { width: 16px; height: 16px; }
+.ip-i.lg { width: 24px; height: 24px; }
+:is(a, button):hover > .ip-i { color: var(--innerpulse-text); }
+
+@media (prefers-reduced-motion: reduce) {
+  .ip-btn, .ip-input, .ip-field input, .ip-field select, .ip-field textarea, a.ip-card,
+  .ip-check input, .ip-radio input, .ip-switch input, .ip-switch input::before { transition: none; }
+  .ip-skeleton, .ip-skeleton-block { animation: none; background: var(--innerpulse-surface-2); }
+}

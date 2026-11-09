@@ -1,0 +1,174 @@
+/* innerpulse chrome lockup: the product masthead variant (references/chrome.md).
+   Load after innerpulse-tokens.css, and inline assets/web/innerpulse-chrome-defs.svg once per page.
+
+   The masthead is sticky at the top, full width and opaque.
+   The 6-bar mark keeps its geometry and its flat ember (the deep ember on light grounds, as every light-ground mark);
+   the product wordmark (Syne 800 outline from scripts/product-kit.mjs) is painted brushed steel on dark grounds and
+   gunmetal on light ones. (The glossy ember ramps on the mark were retired on 2026-10-25: the steel is the part of the
+   chrome that reads as craft, the gloss read as skeuomorphism.) The mark draws in once on load and beats while the
+   product is working (six separate rects, so each bar moves on its own); the wordmark gets one sheen pass on hover
+   or focus; all of it stops under prefers-reduced-motion.
+
+   Dark grounds are picked up from <html data-theme="dark">, from the system setting when no data-theme is set,
+   or from .ip-chrome-dark on any ancestor (use it for dark-only products and for product themes with their own
+   names: <html class="ip-chrome-dark" data-theme="ember">). Each product sets --ip-chrome-mask to its own
+   <product>-wordmark-mask.svg. */
+
+/* ── masthead bar: sticky, full width and opaque, flush to the top edge with a hairline foot. Never an inset or
+   floating card: it would sit over the content beneath it (Pat dropped the floating bar on 2026-10-08 because it
+   got in the way of viewing hello's gallery). Keep the product's own header where it is; the lockup is the chrome. ── */
+.ip-masthead {
+  position: sticky; top: 0; z-index: 50;
+  border-bottom: 1px solid var(--innerpulse-line-2);
+  background: var(--innerpulse-ground);
+}
+.ip-masthead-bar {
+  display: flex; align-items: center; gap: 8px 24px;
+  max-width: var(--ip-page, 1240px); min-height: 62px; margin: 0 auto;
+  padding: 0 16px;
+  font-family: var(--innerpulse-sans);
+}
+.ip-masthead-bar nav { display: flex; align-items: center; gap: 0 20px; margin-left: auto; min-width: 0; }
+/* 12 px above and below: a 44 px tap target on a 20 px line */
+.ip-masthead-bar nav a { padding: 12px 0; white-space: nowrap; color: var(--innerpulse-text-2); text-decoration: none; }
+.ip-masthead-bar nav a[aria-current="page"] { color: var(--innerpulse-text); }
+.ip-masthead-bar nav a:focus-visible { outline: 2px solid var(--innerpulse-pulse); outline-offset: 2px; border-radius: 2px; }
+.ip-masthead-bar nav a:hover { color: var(--innerpulse-text); }
+
+/* ── the lockup ── */
+.ip-chrome { display: inline-flex; align-items: center; gap: 10px; color: var(--innerpulse-text); text-decoration: none; }
+.ip-chrome-mark { display: block; width: 30px; height: 30px; flex: none; }
+.ip-chrome-mark svg { display: block; width: 100%; height: 100%; overflow: visible; filter: drop-shadow(0 1px 1.5px rgba(80, 0, 8, .35)); }
+/* the bars are rects (22u wide, 4u corners) since 2026-10-25; a page still carrying the earlier six round-capped
+   paths paints the same colours, as strokes */
+.ip-chrome-mark rect { fill: var(--innerpulse-mark, #cf2a1c); }
+.ip-chrome-mark path { fill: none; stroke: var(--innerpulse-mark, #cf2a1c); }
+.ip-chrome-dark .ip-chrome-mark rect,
+:root[data-theme="dark"] .ip-chrome-mark rect { fill: #f43a2a; }
+.ip-chrome-dark .ip-chrome-mark path,
+:root[data-theme="dark"] .ip-chrome-mark path { stroke: #f43a2a; }
+
+/* ── the motion: the same grammar as every live mark (pulse.mjs). On load the reading is taken once: each bar grows
+   from its stub to its rest, bar by bar from the left, in about a second (under 5 s in all, so WCAG 2.2.2 needs no
+   pause control for it). Then it rests, and beats only while the product is working: add .ip-busy to the masthead (or
+   <html>) during a load, a run or a sync, and remove it when the work ends; one pulse then passes through the bars,
+   left to right, every 2.4 s, each bar rising 16u and settling. A mark that moves means work is happening, as in the
+   working line. Both are scaleY about each bar's own centre, so positions and paint never change; the per-bar scales
+   come from the six resting heights (12 · 76.74 · 56.21 · 42 · 82.16 · 12), so the markup needs no values beyond --i.
+   (Removing .ip-busy stops the beat where it is; to let the current pulse finish first, remove the class on the last
+   bar's next `animationiteration` event, see chrome.md.) Pages add html.ip-paused while hidden (visibilitychange). ── */
+.ip-chrome-mark rect, .ip-chrome-mark path {
+  transform-box: fill-box; transform-origin: center;
+  animation: ip-draw-in .55s cubic-bezier(.22, 1, .36, 1) 1 both;
+  animation-delay: calc(var(--i, 0) * 0.09s);
+}
+.ip-busy .ip-chrome-mark rect, .ip-busy .ip-chrome-mark path {
+  animation: ip-beat 2.4s cubic-bezier(.45, 0, .55, 1) infinite;
+  animation-delay: calc(var(--i, 0) * 0.06s);
+}
+/* bar 1 and 6 are the stubs (h 12); the others 76.74, 56.21, 42, 82.16: start scale = 12 / h, beat scale = (h + 16) / h */
+.ip-chrome-mark :nth-child(1), .ip-chrome-mark :nth-child(6) { --ip-from: 1; --ip-to: 2.333; }
+.ip-chrome-mark :nth-child(2) { --ip-from: .156; --ip-to: 1.208; }
+.ip-chrome-mark :nth-child(3) { --ip-from: .213; --ip-to: 1.285; }
+.ip-chrome-mark :nth-child(4) { --ip-from: .286; --ip-to: 1.381; }
+.ip-chrome-mark :nth-child(5) { --ip-from: .146; --ip-to: 1.195; }
+@keyframes ip-draw-in { from { transform: scaleY(var(--ip-from, 1)); } to { transform: scaleY(1); } }
+/* the pulse is in a bar for 19 % of the period (0.46 s of 2.4), a sin² rise and fall; the rest of the period it rests */
+@keyframes ip-beat { 0%, 19%, 100% { transform: scaleY(1); } 9.5% { transform: scaleY(var(--ip-to, 1.2)); } }
+.ip-paused .ip-chrome-mark rect, .ip-paused .ip-chrome-mark path { animation-play-state: paused; }
+@media (prefers-reduced-motion: reduce) { .ip-chrome-mark rect, .ip-chrome-mark path { animation: none; } }
+.ip-chrome-word { position: relative; display: block; line-height: 0; }
+.ip-chrome-word svg { display: block; height: 22px; width: auto; overflow: visible; }
+.ip-chrome-word path { fill: url(#ip-steel-ink) var(--innerpulse-text); }
+
+.ip-chrome-dark .ip-chrome-word path,
+:root[data-theme="dark"] .ip-chrome-word path {
+  fill: url(#ip-steel) var(--innerpulse-text);
+  stroke: rgba(255, 255, 255, .22); stroke-width: .8; paint-order: stroke;
+}
+.ip-chrome-dark .ip-chrome-word svg,
+:root[data-theme="dark"] .ip-chrome-word svg { filter: drop-shadow(0 1px 0 rgba(0, 0, 0, .6)); }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) .ip-chrome-mark rect { fill: #f43a2a; }
+  :root:not([data-theme]) .ip-chrome-mark path { stroke: #f43a2a; }
+  :root:not([data-theme]) .ip-chrome-word path {
+    fill: url(#ip-steel) var(--innerpulse-text);
+    stroke: rgba(255, 255, 255, .22); stroke-width: .8; paint-order: stroke;
+  }
+  :root:not([data-theme]) .ip-chrome-word svg { filter: drop-shadow(0 1px 0 rgba(0, 0, 0, .6)); }
+}
+
+/* ── the sheen: a soft band of light masked to the letters, crossing once per hover or focus ── */
+.ip-chrome-word::after {
+  content: ""; position: absolute; inset: 0; pointer-events: none;
+  -webkit-mask: var(--ip-chrome-mask) center / 100% 100% no-repeat;
+  mask: var(--ip-chrome-mask) center / 100% 100% no-repeat;
+  background: linear-gradient(105deg, transparent 38%, rgba(255, 255, 255, .85) 50%, transparent 62%) no-repeat;
+  background-size: 260% 100%; background-position: 130% 0;
+  mix-blend-mode: overlay; /* on gunmetal a plain white band reads as a smear; overlay keeps it a glint */
+  opacity: 0;
+}
+.ip-chrome-dark .ip-chrome-word::after,
+:root[data-theme="dark"] .ip-chrome-word::after { mix-blend-mode: normal; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme]) .ip-chrome-word::after { mix-blend-mode: normal; } }
+
+.ip-chrome:hover .ip-chrome-word::after,
+.ip-chrome:focus-visible .ip-chrome-word::after { animation: ip-chrome-sheen 1100ms cubic-bezier(.4, 0, .2, 1) 1; }
+@keyframes ip-chrome-sheen {
+  from { background-position: 130% 0; opacity: 1; }
+  to { background-position: -30% 0; opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ip-chrome:hover .ip-chrome-word::after,
+  .ip-chrome:focus-visible .ip-chrome-word::after { animation: none; }
+}
+
+/* ── phones: links and tools on one row ── */
+@media (max-width: 720px) {
+  .ip-masthead-bar { padding: 6px 16px 4px; gap: 2px 12px; }
+  /* the links scroll sideways inside the bar rather than widening the page; past three links, put them behind a
+     menu button (assets/icons/menu.svg) */
+  .ip-masthead-bar nav { flex: 0 1 auto; gap: 0 14px; overflow-x: auto; scrollbar-width: none; }
+  .ip-masthead-bar nav::-webkit-scrollbar { display: none; }
+  .ip-chrome-word svg { height: 19px; }
+  /* the edge with more links behind it fades, so the reader can see there is more (same rule as the kit's tabs) */
+  @supports (animation-timeline: scroll()) {
+    @property --ip-mfade-l { syntax: "<length>"; inherits: false; initial-value: 0px; }
+    @property --ip-mfade-r { syntax: "<length>"; inherits: false; initial-value: 0px; }
+    .ip-masthead-bar nav {
+      -webkit-mask: linear-gradient(90deg, transparent, #000 var(--ip-mfade-l), #000 calc(100% - var(--ip-mfade-r)), transparent);
+      mask: linear-gradient(90deg, transparent, #000 var(--ip-mfade-l), #000 calc(100% - var(--ip-mfade-r)), transparent);
+      animation: ip-mfade linear both; animation-timeline: scroll(self inline);
+    }
+    @keyframes ip-mfade {
+      0% { --ip-mfade-l: 0px; --ip-mfade-r: 28px; }
+      12%, 88% { --ip-mfade-l: 28px; --ip-mfade-r: 28px; }
+      100% { --ip-mfade-l: 28px; --ip-mfade-r: 0px; }
+    }
+  }
+}
+
+/* ── the menu: for more than three links on a phone. Add .has-menu to the bar and a <button class="ip-masthead-menu">
+   (the menu icon from assets/icons/sprite.svg, aria-expanded, aria-controls on the nav) after the lockup; a click
+   toggles .is-open on the bar. On wider screens the button is hidden and the links sit in the bar as usual. ── */
+.ip-masthead-bar { position: relative; }
+.ip-masthead-menu { display: none; }
+@media (max-width: 720px) {
+  .ip-masthead-bar.has-menu .ip-masthead-menu {
+    display: inline-flex; align-items: center; justify-content: center; margin-left: auto; width: 44px; height: 44px;
+    padding: 0; background: none; border: 0; border-radius: 2px; color: var(--innerpulse-text-2); cursor: pointer;
+  }
+  .ip-masthead-bar.has-menu .ip-masthead-menu svg { width: 20px; height: 20px; }
+  .ip-masthead-bar.has-menu .ip-masthead-menu:hover,
+  .ip-masthead-bar.has-menu.is-open .ip-masthead-menu { color: var(--innerpulse-text); }
+  .ip-masthead-bar.has-menu .ip-masthead-menu:focus-visible { outline: 2px solid var(--innerpulse-pulse); outline-offset: 2px; }
+  .ip-masthead-bar.has-menu nav {
+    display: none; position: absolute; left: 0; right: 0; top: 100%; z-index: 50;
+    flex-direction: column; align-items: stretch; gap: 0; margin: 0; padding: 4px 16px 12px; overflow: visible;
+    background: var(--innerpulse-ground); border-bottom: 1px solid var(--innerpulse-line-2);
+    -webkit-mask: none; mask: none; animation: none;
+  }
+  .ip-masthead-bar.has-menu.is-open nav { display: flex; }
+  .ip-masthead-bar.has-menu nav a { padding: 12px 0; border-top: 1px solid var(--innerpulse-line); white-space: normal; }
+  .ip-masthead-bar.has-menu nav a:first-child { border-top: 0; }
+}

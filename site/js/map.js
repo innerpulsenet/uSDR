@@ -1,20 +1,52 @@
-// The zoomable world map. Pan and zoom only change the viewBox. Squares are drawn
-// as one path per brightness step and found under the pointer by arithmetic, so
-// the node count stays small however many squares there are.
+// The zoomable world map. Pan and zoom only change the viewBox. Each grid square is
+// a dot at its real position, drawn as a zero-length round-capped stroke: the stroke
+// does not scale, so a dot keeps its size at every zoom with no redraw, and one path
+// per size and color keeps the node count small however many squares there are.
 import { el, esc, fmtTime, num } from "./util.js";
 
 const NS = "http://www.w3.org/2000/svg";
 const RAD = Math.PI / 180;
-const FIELD_ZOOM = 2.6;
 const MAX_ZOOM = 40;
-const STEPS = ["#17405f", "#1c5e8f", "#2a81c2", "#6db4ea", "#cfe8fb"];
+// From here a square is wide enough on screen for its true extent to be worth showing.
+const OUTLINE_ZOOM = 6;
+const HEADS_ZOOM = 2.5;
+// What the flat map shows at first; the poles are still there to pan to.
+const WORLD_NORTH = 84;
+const WORLD_SOUTH = -62;
+// Single-series scales in the radio family's amber, low to high.
+const STEPS = ["#72460f", "#9a6018", "#c47c21", "#ed9a37", "#fcc58f"];
+// Spots per square, in decades, and the dot's diameter in screen pixels.
+const SPOT_SIZES = [
+  { from: 1, label: "1", px: 3 },
+  { from: 2, label: "2–9", px: 5 },
+  { from: 10, label: "10–99", px: 7.5 },
+  { from: 100, label: "100+", px: 11 },
+];
+// Marks on a map can touch, so the brand's chart rules allow three colors here. HF
+// splits naturally into low, middle and high bands; the band chips separate the rest.
+const BAND_GROUPS = ["160–40 m", "30–17 m", "15–10 m"];
 const PRESETS = {
   World: null,
-  "N. Atlantic": [-75, 25, -5, 65],
+  "N. America": [-130, 20, -60, 56],
   Caribbean: [-92, 8, -55, 30],
-  Europe: [-14, 34, 42, 66],
-  Pacific: [140, -30, 245, 62],
+  "S. America": [-85, -56, -33, 14],
+  Europe: [-12, 35, 42, 66],
 };
+
+function bandGroup(label) {
+  const meters = parseInt(label, 10);
+  if (!Number.isFinite(meters)) return BAND_GROUPS.length;
+  return meters >= 40 ? 0 : meters >= 17 ? 1 : 2;
+}
+
+function sizeOf(n) {
+  let size = 0;
+  SPOT_SIZES.forEach((s, i) => { if (n >= s.from) size = i; });
+  return size;
+}
+
+const millerY = (lat) => (1.25 * Math.log(Math.tan(Math.PI / 4 + 0.4 * lat * RAD))) / RAD;
+const millerLat = (y) => (2.5 * Math.atan(Math.exp(0.8 * y * RAD)) - (5 * Math.PI) / 8) / RAD;
 
 const svg = (name, attrs = {}) => {
   const n = document.createElementNS(NS, name);
@@ -48,12 +80,17 @@ class Projection {
       this.height = 360;
     } else {
       this.width = 360;
-      this.height = 180;
+      this.height = 2 * millerY(90);
     }
   }
 
+  // The vertical center of the first view.
+  get homeY() {
+    return this.kind === "az" ? 0 : -(millerY(WORLD_NORTH) + millerY(WORLD_SOUTH)) / 2;
+  }
+
   forward(lon, lat) {
-    if (this.kind !== "az") return [lon, -lat];
+    if (this.kind !== "az") return [lon, -millerY(clamp(lat, -89.9, 89.9))];
     const phi = lat * RAD;
     const dl = (lon - this.lon0) * RAD;
     const cosc = clamp(this.sin0 * Math.sin(phi) + this.cos0 * Math.cos(phi) * Math.cos(dl), -1, 1);
@@ -64,7 +101,7 @@ class Projection {
   }
 
   inverse(x, y) {
-    if (this.kind !== "az") return [wrapLon(x), -y];
+    if (this.kind !== "az") return [wrapLon(x), millerLat(-y)];
     const rho = Math.hypot(x, y);
     if (rho > 180) return null;
     if (rho < 1e-9) return [this.lon0, this.phi0 / RAD];
@@ -92,6 +129,11 @@ function pathOf(proj, line) {
     prev = [x, y];
   }
   return d;
+}
+
+// A fill has to stay one closed outline, so unlike pathOf it never breaks.
+function ringOf(proj, ring) {
+  return `M${ring.map(([lon, lat]) => proj.forward(lon, lat).map((v) => v.toFixed(2)).join(" ")).join("L")}Z`;
 }
 
 function greatCircle(a, b, n = 64) {
@@ -139,7 +181,7 @@ function terminator(ms) {
 }
 
 export function mountMap(root, data, opts) {
-  const { coast, ground, params, onParams } = opts;
+  const { coast, land, ground, params, onParams } = opts;
   const home = data.station_grid ? gridCenter(data.station_grid) : null;
   const state = {
     proj: params.p === "az" && home ? "az" : "eq",
@@ -150,12 +192,13 @@ export function mountMap(root, data, opts) {
     selected: null, box: false,
   };
   let proj = new Projection(state.proj, home);
+  state.cy = proj.homeY;
 
   const stage = root.querySelector(".stage");
   const map = svg("svg", { role: "img", "aria-label": "World map of what the receiver logged. Use the panel beside it for the same figures as text." });
   stage.prepend(map);
   const g = {};
-  for (const name of ["base", "night", "cells", "tracks", "points", "sel", "ui"]) map.append((g[name] = svg("g")));
+  for (const name of ["base", "night", "squares", "tracks", "spots", "points", "sel", "ui"]) map.append((g[name] = svg("g")));
 
   const readout = root.querySelector("#readout");
   const totals = root.querySelector("#totals");
@@ -183,18 +226,20 @@ export function mountMap(root, data, opts) {
   function drawBase() {
     g.base.replaceChildren();
     if (state.proj === "az") {
+      g.base.append(svg("circle", { class: "disc", cx: 0, cy: 0, r: 180 }));
+    }
+    g.base.append(svg("path", { class: "land", d: land.map((r) => ringOf(proj, r)).join("") }));
+    if (state.proj === "az") {
       for (const r of [45, 90, 135, 180]) g.base.append(svg("circle", { class: "rings", cx: 0, cy: 0, r }));
     } else {
+      // Every twentieth meridian and tenth parallel: the edges of the grid fields.
       let d = "";
-      for (let lon = -160; lon <= 160; lon += 20) d += `M${lon} -90L${lon} 90`;
-      for (let lat = -80; lat <= 80; lat += 10) d += `M-180 ${lat}L180 ${lat}`;
+      const top = -millerY(85);
+      for (let lon = -160; lon <= 160; lon += 20) d += `M${lon} ${top.toFixed(2)}V${(-top).toFixed(2)}`;
+      for (let lat = -80; lat <= 80; lat += 10) d += `M-180 ${(-millerY(lat)).toFixed(2)}H180`;
       g.base.append(svg("path", { class: "graticule", d }));
     }
     g.base.append(svg("path", { class: "coast", d: coast.map((l) => pathOf(proj, l)).join("") }));
-    if (home) {
-      const [x, y] = proj.forward(home[0], home[1]);
-      g.base.dataset.home = `${x},${y}`;
-    }
   }
 
   function drawNight() {
@@ -202,34 +247,38 @@ export function mountMap(root, data, opts) {
     if (!state.layers.night) return;
     const { line, sunnyNorth } = terminator(Date.now());
     if (state.proj === "eq") {
-      const edge = sunnyNorth ? 90 : -90;
-      const pts = line.map(([lon, lat]) => `${lon} ${-lat}`).join("L");
+      const edge = (sunnyNorth ? 1 : -1) * (proj.height / 2 + 40);
+      const pts = line.map(([lon, lat]) => proj.forward(lon, lat).map((v) => v.toFixed(2)).join(" ")).join("L");
       g.night.append(svg("path", { class: "night", d: `M-180 ${edge}L${pts}L180 ${edge}Z` }));
     }
     g.night.append(svg("path", { class: "dusk", d: pathOf(proj, line) }));
   }
 
   // The spots inside the chosen hours, bands and modes, added up by square.
-  function aggregate(level) {
+  function aggregate() {
     const cells = new Map();
     for (const [grid, m, b, h, n, best] of data.spots) {
       if (h < state.from || h >= state.to) continue;
       if (state.band.size && !state.band.has(data.bands[b])) continue;
       if (state.mode.size && !state.mode.has(data.modes[m])) continue;
-      const key = level === 2 ? grid.slice(0, 2) : grid;
-      const c = cells.get(key) || { n: 0, best: null, bands: {}, modes: {} };
+      const c = cells.get(grid) || { n: 0, best: null, bands: {}, modes: {}, groups: new Array(BAND_GROUPS.length + 1).fill(0) };
       c.n += n;
       if (best !== null && (c.best === null || best > c.best)) c.best = best;
       c.bands[data.bands[b]] = (c.bands[data.bands[b]] || 0) + n;
       c.modes[data.modes[m]] = (c.modes[data.modes[m]] || 0) + n;
-      cells.set(key, c);
+      c.groups[bandGroup(data.bands[b])] += n;
+      cells.set(grid, c);
     }
     return cells;
   }
 
   function cellPath(key) {
     const [w, s, e, n] = gridBounds(key);
-    if (state.proj === "eq") return `M${w} ${-n}H${e}V${-s}H${w}Z`;
+    if (state.proj === "eq") {
+      const [x0, y0] = proj.forward(w, n);
+      const [x1, y1] = proj.forward(e, s);
+      return `M${x0.toFixed(2)} ${y0.toFixed(2)}H${x1.toFixed(2)}V${y1.toFixed(2)}H${x0.toFixed(2)}Z`;
+    }
     const ring = [];
     const step = key.length === 2 ? 5 : 1;
     for (let x = w; x <= e; x += step) ring.push([x, n]);
@@ -240,25 +289,58 @@ export function mountMap(root, data, opts) {
   }
 
   let cellsNow = new Map();
-  let level = 2;
+  let dots = [];
+  let hoverKey = null;
   function inView(lon, lat, pad = 0) {
     const [vx, vy, vw, vh] = viewBox();
     const [x, y] = proj.forward(lon, lat);
     return x >= vx - pad && x <= vx + vw + pad && y >= vy - pad && y <= vy + vh + pad;
   }
 
-  function drawCells() {
-    level = state.z < FIELD_ZOOM ? 2 : 4;
-    cellsNow = aggregate(level);
-    const groups = STEPS.map(() => "");
-    const max = Math.max(1, ...[...cellsNow.values()].map((c) => c.n));
+  // Largest first, so a small square beside a busy one is never buried, and every
+  // dot sits on a thin ring of the ocean color to keep neighbors apart.
+  function drawSpots() {
+    cellsNow = aggregate();
+    dots = [];
+    const bySize = SPOT_SIZES.map(() => new Array(BAND_GROUPS.length + 1).fill(""));
     if (state.layers.squares) {
       for (const [key, c] of cellsNow) {
-        const step = clamp(Math.floor((Math.log(c.n + 1) / Math.log(max + 1)) * STEPS.length), 0, STEPS.length - 1);
-        groups[step] += cellPath(key);
+        const [lon, lat] = gridCenter(key);
+        const [x, y] = proj.forward(lon, lat);
+        const size = sizeOf(c.n);
+        bySize[size][c.groups.indexOf(Math.max(...c.groups))] += `M${x.toFixed(2)} ${y.toFixed(2)}h0`;
+        dots.push({ key, x, y, px: SPOT_SIZES[size].px });
       }
     }
-    g.cells.replaceChildren(...groups.map((d, i) => svg("path", { class: "cells", d, fill: STEPS[i], "fill-opacity": 0.86 })));
+    const paths = [];
+    for (let s = SPOT_SIZES.length - 1; s >= 0; s--) {
+      const px = SPOT_SIZES[s].px;
+      const all = bySize[s].join("");
+      if (all) paths.push(svg("path", { class: "halo", d: all, "stroke-width": px + 2 }));
+      bySize[s].forEach((d, group) => {
+        if (d) paths.push(svg("path", { class: `spot b${group}`, d, "stroke-width": px }));
+      });
+    }
+    g.spots.replaceChildren(...paths);
+    drawSquares();
+  }
+
+  // A dot is only the center of a square about 200 km wide. Close in, show the square.
+  function drawSquares() {
+    const show = state.layers.squares && state.z >= OUTLINE_ZOOM;
+    g.squares.replaceChildren(...(show ? [svg("path", { class: "sq", d: dots.map((d) => cellPath(d.key)).join("") })] : []));
+  }
+
+  function nearestDot(x, y, extraPx = 5) {
+    const u = unitsPerPx();
+    let best = null;
+    let bestGap = Infinity;
+    for (const d of dots) {
+      const dist = Math.hypot(d.x - x, d.y - y) / u;
+      const gap = dist - d.px / 2;
+      if (gap <= extraPx && gap < bestGap) { bestGap = gap; best = { ...d, dist }; }
+    }
+    return best;
   }
 
   function trackVisible(fixTime) {
@@ -269,32 +351,57 @@ export function mountMap(root, data, opts) {
   function drawTracks() {
     g.tracks.replaceChildren();
     if (!state.layers.tracks) return;
+    let lines = "";
+    let fixes = "";
     for (const t of data.tracks) {
       for (const seg of t.s) {
-        const fixes = seg.filter((f) => trackVisible(f[0]));
-        if (fixes.length < 2) continue;
-        const dup = svg("path", { class: "track", d: pathOf(proj, fixes.map((f) => [f[2], f[1]])) });
-        g.tracks.append(dup);
+        const shown = seg.filter((f) => trackVisible(f[0]));
+        if (shown.length >= 2) lines += pathOf(proj, shown.map((f) => [f[2], f[1]]));
+        for (const f of shown) {
+          const [x, y] = proj.forward(f[2], f[1]);
+          fixes += `M${x.toFixed(2)} ${y.toFixed(2)}h0`;
+        }
       }
     }
+    g.tracks.append(svg("path", { class: "track", d: lines }), svg("path", { class: "fix", d: fixes }));
+  }
+
+  // An arrowhead on each flight's latest leg, pointing the way it was going.
+  function headsPath(u) {
+    let d = "";
+    for (const t of data.tracks) {
+      let last = null;
+      for (const seg of t.s) {
+        const shown = seg.filter((f) => trackVisible(f[0]));
+        if (shown.length >= 2) last = shown;
+      }
+      if (!last) continue;
+      const [a, b] = last.slice(-2);
+      if (!inView(b[2], b[1], 2)) continue;
+      const [ax, ay] = proj.forward(a[2], a[1]);
+      const [bx, by] = proj.forward(b[2], b[1]);
+      if (Math.abs(bx - ax) + Math.abs(by - ay) > proj.jump() || (ax === bx && ay === by)) continue;
+      const angle = Math.atan2(by - ay, bx - ax);
+      const at = (forward, side) => [
+        bx + (forward * Math.cos(angle) - side * Math.sin(angle)) * u,
+        by + (forward * Math.sin(angle) + side * Math.cos(angle)) * u,
+      ].map((v) => v.toFixed(3)).join(" ");
+      d += `M${at(5, 0)}L${at(-3.5, 3)}L${at(-1.5, 0)}L${at(-3.5, -3)}Z`;
+    }
+    return d;
   }
 
   function drawPoints() {
     g.points.replaceChildren();
     const u = unitsPerPx();
-    if (state.layers.tracks) {
-      for (const t of data.tracks) for (const seg of t.s) for (const f of seg) {
-        if (!trackVisible(f[0]) || !inView(f[2], f[1], 2)) continue;
-        const [x, y] = proj.forward(f[2], f[1]);
-        g.points.append(svg("circle", { class: "fix", cx: x, cy: y, r: 2 * u }));
-      }
-    }
+    // At world scale two hundred arrowheads would bury the spots; the tracks alone will do.
+    if (state.layers.tracks && state.z >= HEADS_ZOOM) g.points.append(svg("path", { class: "plane", d: headsPath(u) }));
     if (state.layers.ground) {
       for (const s of ground) {
         if (!(String(s.id) in data.ground) || !inView(s.lon, s.lat, 2)) continue;
         const [x, y] = proj.forward(s.lon, s.lat);
-        const r = 5 * u;
-        g.points.append(svg("path", { class: "gs", d: `M${x} ${y - r}L${x + r} ${y}L${x} ${y + r}L${x - r} ${y}Z` }));
+        const r = 4.5 * u;
+        g.points.append(svg("rect", { class: "gs", x: x - r, y: y - r, width: 2 * r, height: 2 * r }));
       }
     }
     if (state.layers.dsc) {
@@ -307,20 +414,34 @@ export function mountMap(root, data, opts) {
     }
     if (home) {
       const [x, y] = proj.forward(home[0], home[1]);
-      const [w, s, e, n] = gridBounds(data.station_grid);
-      if (state.proj === "eq" && state.z >= FIELD_ZOOM) g.points.append(svg("path", { class: "home", d: `M${w} ${-n}H${e}V${-s}H${w}Z` }));
-      else {
-        const r = 6 * u;
-        g.points.append(svg("rect", { class: "home", x: x - r, y: y - r, width: 2 * r, height: 2 * r }));
-      }
+      g.points.append(
+        svg("circle", { class: "home-ring", cx: x, cy: y, r: 8 * u }),
+        svg("circle", { class: "home-dot", cx: x, cy: y, r: 2.5 * u }),
+      );
     }
   }
 
+  function ring(key, cls) {
+    const d = dots.find((o) => o.key === key);
+    if (d) g.sel.append(svg("circle", { class: cls, cx: d.x, cy: d.y, r: (d.px / 2 + 3.5) * unitsPerPx() }));
+  }
+
+  // The steel ring is the square chosen; the one ember ring is the one being pointed at.
   function drawSelection() {
     g.sel.replaceChildren();
-    if (!state.selected) return;
-    g.sel.append(svg("path", { class: "cell-sel", d: cellPath(state.selected) }));
-    if (home) g.sel.append(svg("path", { class: "path-sel", d: pathOf(proj, greatCircle(home, gridCenter(state.selected))) }));
+    if (state.selected && !cellsNow.has(state.selected)) state.selected = null;
+    if (state.selected) {
+      g.sel.append(svg("path", { class: "cell-sel", d: cellPath(state.selected) }));
+      if (home) g.sel.append(svg("path", { class: "path-sel", d: pathOf(proj, greatCircle(home, gridCenter(state.selected))) }));
+      ring(state.selected, "ring-sel");
+    }
+    if (hoverKey && hoverKey !== state.selected) ring(hoverKey, "ring-hover");
+  }
+
+  function setHover(key) {
+    if (key === hoverKey) return;
+    hoverKey = key;
+    drawSelection();
   }
 
   function summarize() {
@@ -344,7 +465,7 @@ export function mountMap(root, data, opts) {
       <h3>In this view</h3>
       <dl class="kv">
         <dt>Spots with a locator</dt><dd>${num(seen.n)}</dd>
-        <dt>${level === 2 ? "Grid fields" : "Grid squares"}</dt><dd>${num(seen.cells)}</dd>
+        <dt>Grid squares</dt><dd>${num(seen.cells)}</dd>
         <dt>Aircraft with a track</dt><dd>${num(flights)}</dd>
         <dt>Hours with listening</dt><dd>${hours} of ${span}</dd>
         <dt>Time on air, all modes</dt><dd>${(secs / 3600).toFixed(1)} h</dd>
@@ -361,7 +482,7 @@ export function mountMap(root, data, opts) {
     const c = cellsNow.get(key);
     if (!c) return false;
     const distance = home ? `<dt>From the station's square</dt><dd>${num(Math.round(kmBetween(home, gridCenter(key))))} km</dd>` : "";
-    showReadout(`<dl class="kv"><dt>${level === 2 ? "Grid field" : "Grid square"}</dt><dd>${esc(key)}</dd><dt>Spots</dt><dd>${num(c.n)}</dd>
+    showReadout(`<dl class="kv"><dt>Grid square</dt><dd>${esc(key)}</dd><dt>Spots</dt><dd>${num(c.n)}</dd>
       ${c.best === null ? "" : `<dt>Best report</dt><dd>${c.best} dB</dd>`}${distance}
       ${Object.entries(c.bands).sort((a, b) => b[1] - a[1]).map(([b, n]) => `<dt>${esc(b)}</dt><dd>${num(n)}</dd>`).join("")}</dl>`);
     return true;
@@ -369,34 +490,44 @@ export function mountMap(root, data, opts) {
 
   function hover(ev) {
     const [x, y] = toWorld(ev);
-    const px = unitsPerPx();
-    let best = null;
-    let bestD = 8 * px;
+    const u = unitsPerPx();
+    // Whatever is closest to the pointer, within a few pixels, of the things on the map.
+    let near = null;
+    let nearD = 8;
+    const consider = (lon, lat, describe) => {
+      const [mx, my] = proj.forward(lon, lat);
+      const d = Math.hypot(mx - x, my - y) / u;
+      if (d < nearD) { nearD = d; near = describe; }
+    };
     if (state.layers.tracks) {
       for (const t of data.tracks) for (const seg of t.s) for (const f of seg) {
-        if (!trackVisible(f[0])) continue;
-        const [fx, fy] = proj.forward(f[2], f[1]);
-        const d = Math.hypot(fx - x, fy - y);
-        if (d < bestD) { bestD = d; best = { t, f }; }
+        if (trackVisible(f[0])) consider(f[2], f[1], () => `<dl class="kv"><dt>Flight</dt><dd>${esc(t.i)}</dd><dt>Position at</dt><dd>${fmtTime(f[0])}</dd><dt>Reported</dt><dd>${f[1].toFixed(2)}, ${f[2].toFixed(2)}</dd></dl>`);
       }
     }
-    if (best) {
-      showReadout(`<dl class="kv"><dt>Flight</dt><dd>${esc(best.t.i)}</dd><dt>Position at</dt><dd>${fmtTime(best.f[0])}</dd><dt>Reported</dt><dd>${best.f[1].toFixed(2)}, ${best.f[2].toFixed(2)}</dd></dl>`);
+    if (state.layers.ground) {
+      for (const s of ground) {
+        if (String(s.id) in data.ground) consider(s.lon, s.lat, () => `<dl class="kv"><dt>HFDL ground station</dt><dd>${esc(s.name)}</dd><dt>Messages heard</dt><dd>${num(data.ground[String(s.id)])}</dd></dl>`);
+      }
+    }
+    if (state.layers.dsc) {
+      for (const c of data.dsc) {
+        const h = (c.t - data.start_utc) / 3600;
+        if (h >= state.from && h < state.to) consider(c.lon, c.lat, () => `<dl class="kv"><dt>Ship call</dt><dd>${esc(c.i || "")}</dd><dt>Logged</dt><dd>${fmtTime(c.t)}</dd><dt>Position</dt><dd>${c.lat.toFixed(2)}, ${c.lon.toFixed(2)}</dd></dl>`);
+      }
+    }
+    const dot = nearestDot(x, y);
+    if (near && (!dot || nearD < dot.dist)) {
+      setHover(null);
+      showReadout(near());
       return;
     }
-    const at = proj.inverse(x, y);
-    if (!at) return;
-    const key = cellKey(at[0], at[1]);
-    if (state.layers.squares && describeCell(key)) return;
-    showReadout(`<p class="note" style="margin-top:8px">Nothing logged in this square for the chosen hours.</p>`);
-  }
-
-  function cellKey(lon, lat) {
-    const a = Math.floor((lon + 180) / 20);
-    const b = Math.floor((lat + 90) / 10);
-    const f = String.fromCharCode(65 + clamp(a, 0, 17)) + String.fromCharCode(65 + clamp(b, 0, 17));
-    if (level === 2) return f;
-    return f + Math.floor((lon + 180 - a * 20) / 2) + Math.floor(lat + 90 - b * 10);
+    if (dot) {
+      setHover(dot.key);
+      describeCell(dot.key);
+      return;
+    }
+    setHover(null);
+    showReadout(`<p class="note" style="margin-top:8px">Nothing logged here for the chosen hours.</p>`);
   }
 
   function applyView() {
@@ -408,9 +539,9 @@ export function mountMap(root, data, opts) {
   function settled() {
     clearTimeout(settle);
     settle = setTimeout(() => {
-      const before = level;
-      if ((state.z < FIELD_ZOOM ? 2 : 4) !== before) { drawCells(); drawSelection(); }
+      drawSquares();
       drawPoints();
+      drawSelection();
       summarize();
       pushParams();
     }, 90);
@@ -427,7 +558,7 @@ export function mountMap(root, data, opts) {
   }
 
   function redraw() {
-    drawCells();
+    drawSpots();
     drawTracks();
     drawPoints();
     drawSelection();
@@ -530,9 +661,8 @@ export function mountMap(root, data, opts) {
     if (drag) {
       if (!drag.moved) {
         const [x, y] = toWorld(ev);
-        const at = proj.inverse(x, y);
-        const key = at && cellKey(at[0], at[1]);
-        state.selected = key && cellsNow.has(key) ? key : null;
+        const dot = nearestDot(x, y, ev.pointerType === "touch" ? 14 : 5);
+        state.selected = dot ? dot.key : null;
         drawSelection();
         if (state.selected) describeCell(state.selected);
       }
@@ -542,6 +672,7 @@ export function mountMap(root, data, opts) {
   }
   map.addEventListener("pointerup", pointerEnd);
   map.addEventListener("pointercancel", pointerEnd);
+  map.addEventListener("pointerleave", () => setHover(null));
 
   function fitWorld(x0, y0, x1, y1) {
     const [w, h] = size();
@@ -554,7 +685,7 @@ export function mountMap(root, data, opts) {
 
   function fitPreset(box) {
     if (!box) {
-      state.cx = 0; state.cy = 0; state.z = 1;
+      state.cx = 0; state.cy = proj.homeY; state.z = 1;
       applyView();
       settled();
       return;
@@ -589,7 +720,7 @@ export function mountMap(root, data, opts) {
   function setProj(kind) {
     state.proj = kind;
     proj = new Projection(kind, home);
-    state.cx = 0; state.cy = 0; state.z = 1;
+    state.cx = 0; state.cy = proj.homeY; state.z = 1;
     projButtons.forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.proj === kind)));
     drawBase();
     drawNight();
@@ -641,7 +772,7 @@ export function mountMap(root, data, opts) {
     const max = Math.max(1, ...per);
     strip.setAttribute("viewBox", `0 0 ${data.hours} 40`);
     strip.setAttribute("preserveAspectRatio", "none");
-    strip.innerHTML = `<defs><pattern id="hatch" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45) scale(${data.hours / 900} 1)"><rect width="3" height="6" fill="#20242a"/></pattern></defs>`;
+    strip.innerHTML = `<defs><pattern id="hatch" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45) scale(${data.hours / 900} 1)"><rect class="hatch-bar" width="3" height="6"/></pattern></defs>`;
     per.forEach((n, h) => {
       if (!listened.has(h)) strip.append(svg("rect", { class: "out", x: h, y: 0, width: 1, height: 40 }));
       else if (n) strip.append(svg("rect", { class: "sp", x: h + 0.08, y: 40 - (n / max) * 38, width: 0.84, height: (n / max) * 38 }));
@@ -679,7 +810,7 @@ export function mountMap(root, data, opts) {
   drawNight();
   drawStrip();
   applyView();
-  drawCells();
+  drawSpots();
   drawTracks();
   drawPoints();
   summarize();
@@ -690,4 +821,4 @@ export function mountMap(root, data, opts) {
   return () => { ro.disconnect(); clearInterval(nightTimer); clearTimeout(settle); };
 }
 
-export { STEPS };
+export { BAND_GROUPS, SPOT_SIZES, STEPS };
