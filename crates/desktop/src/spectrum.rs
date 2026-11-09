@@ -1573,7 +1573,10 @@ impl Panafall {
         // ---- the trace, decimated to one point per pixel column (the
         // strongest bin under it, so a narrow carrier never vanishes).
         let n = self.smooth.len();
-        let cols = (pan.width().round() as usize).clamp(2, 8192);
+        // One point per physical pixel column, as the waterfall under it
+        // has: on a scaled display a carrier is as fine above the axis as
+        // below it.
+        let cols = ((pan.width() * ctx.pixels_per_point()).round() as usize).clamp(2, 8192);
         // The bins under each column and where it is drawn, worked out once
         // for every trace.
         let bins: Vec<(usize, usize)> = (0..cols)

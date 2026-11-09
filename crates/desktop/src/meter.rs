@@ -7,7 +7,7 @@
 //! marker that holds a second and then falls at 30% of the scale per second.
 
 use crate::theme;
-use egui::{CornerRadius, Rect, Sense, Stroke, Ui, pos2, vec2};
+use egui::{Rect, Sense, Stroke, Ui, pos2, vec2};
 
 pub const S9_DBFS: f32 = -60.0;
 
@@ -156,8 +156,15 @@ impl Meter {
         // segments are lit at full the frame it reaches them.
         let decay = if reduce_motion { 0.0 } else { (-dt / 0.25).exp() };
         let mut fading = false;
+        // One mesh for the whole bar, in three layers (halos, cells, bright
+        // cores): a wide meter was some six hundred separate rectangles a
+        // frame. The cells start on the pixel grid, so each is as wide as
+        // the next.
+        let ppp = ui.ctx().pixels_per_point();
+        let left = (bar.left() * ppp).round() / ppp;
+        let (mut halos, mut cells, mut cores) = (egui::Mesh::default(), egui::Mesh::default(), egui::Mesh::default());
         for (i, g) in self.glow.iter_mut().enumerate() {
-            let x = bar.left() + i as f32 * 3.0;
+            let x = left + i as f32 * 3.0;
             let lit = if x < lit_to { 1.0 } else { 0.0 };
             *g = (*g * decay).max(lit);
             if *g < 1.0 && *g > 0.02 {
@@ -173,16 +180,19 @@ impl Meter {
             };
             if *g > 0.02 {
                 // The halo a lit cell throws into the glass.
-                p.rect_filled(r.expand2(vec2(1.0, 2.0)), CornerRadius::same(1), theme::alpha(c, 0.18 * *g));
+                halos.add_colored_rect(r.expand2(vec2(1.0, 2.0)), theme::alpha(c, 0.18 * *g));
             }
             // Unlit cells stay faintly there, as on an LCD.
             let lamp = if lit > 0.0 { 1.0 } else { 0.12 + 0.55 * *g };
-            p.rect_filled(r, CornerRadius::ZERO, theme::alpha(c, lamp));
+            cells.add_colored_rect(r, theme::alpha(c, lamp));
             if lit > 0.0 {
                 // A brighter core along the top of a lit cell.
-                p.rect_filled(Rect::from_min_size(r.min, vec2(r.width(), 2.0)), CornerRadius::ZERO, theme::alpha(theme::lerp(c, egui::Color32::WHITE, 0.45), 0.9));
+                cores.add_colored_rect(Rect::from_min_size(r.min, vec2(r.width(), 2.0)), theme::alpha(theme::lerp(c, egui::Color32::WHITE, 0.45), 0.9));
             }
         }
+        halos.append(cells);
+        halos.append(cores);
+        p.add(egui::Shape::mesh(halos));
         if fading {
             // A quarter-second fade: the frames the spectrum brings carry it.
             crate::anim::drift(ui.ctx());
