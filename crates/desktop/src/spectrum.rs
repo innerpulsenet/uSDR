@@ -1349,20 +1349,45 @@ impl Panafall {
             }
             fm += minor;
         }
+        // Zoomed inside 100 kHz the figures are kilohertz: in megahertz
+        // the labels of a narrow span differ only in their last digits, or
+        // not at all. The unit is said once, at the left.
+        let khz = self.span_hz < 100e3;
+        let axis_label = |hz: f64, finer: usize| {
+            if khz {
+                let d = if f_step >= 1e3 { 0 } else if f_step >= 100.0 { 1 } else if f_step >= 10.0 { 2 } else { 3 };
+                format!("{:.*}", (d + finer).min(3), hz / 1e3)
+            } else {
+                crate::tuning::fmt_mhz(hz, decimals + finer)
+            }
+        };
+        let unit = painter.text(pos2(axis.left() + 4.0, labels_top + 12.0), Align2::LEFT_CENTER, if khz { "kHz" } else { "MHz" }, theme::mono(crate::theme::ty::MICRO), theme::text_3());
+        // The tuned frequency has its own label on the axis, a step finer
+        // than the grid's, and the grid's labels give way to it.
+        let tuned = status.inspect_hz;
+        let tuned_x = self.x_for(tuned, pan);
+        let tuned_tag = (tuned_x > axis.left() + 34.0 && tuned_x < pan.right() - 34.0).then(|| {
+            let g = painter.layout_no_wrap(axis_label(tuned, 1), theme::mono_bold(crate::theme::ty::LABEL), theme::AMBER);
+            let r = Rect::from_center_size(pos2(tuned_x, labels_top + 12.0), g.size() + vec2(10.0, 4.0));
+            let shift = (unit.right() + 6.0 - r.left()).max(0.0) - (r.right() - (pan.right() - 4.0)).max(0.0);
+            (r.translate(vec2(shift, 0.0)), g)
+        });
         while f <= hi {
             let x = theme::px(&ctx, self.x_for(f, pan));
             painter.line_segment([pos2(x, pan.top()), pos2(x, pan.bottom())], Stroke::new(1.0, theme::line()));
             painter.line_segment([pos2(x, labels_top), pos2(x, labels_top + 4.0)], Stroke::new(1.0, theme::text_3()));
             if x > axis.left() + 30.0 && x < pan.right() - 30.0 {
-                painter.text(
-                    pos2(x, labels_top + 12.0),
-                    Align2::CENTER_CENTER,
-                    crate::tuning::fmt_mhz(f, decimals),
-                    theme::mono(crate::theme::ty::LABEL),
-                    theme::text_2(),
-                );
+                let g = painter.layout_no_wrap(axis_label(f, 0), theme::mono(crate::theme::ty::LABEL), theme::text_2());
+                let r = Rect::from_center_size(pos2(x, labels_top + 12.0), g.size());
+                if r.left() > unit.right() + 6.0 && !tuned_tag.as_ref().is_some_and(|(t, _)| t.expand(4.0).intersects(r)) {
+                    painter.galley(r.min, g, theme::text_2());
+                }
             }
             f += f_step;
+        }
+        if let Some((r, g)) = tuned_tag {
+            painter.rect(r, CornerRadius::same(theme::R_KEY), theme::ink(), Stroke::new(1.0, alpha(theme::AMBER, 0.6)), egui::StrokeKind::Inside);
+            painter.galley(r.center() - g.size() / 2.0, g, theme::AMBER);
         }
 
         // ---- the band plan: a tinted strip over the labels, each band
