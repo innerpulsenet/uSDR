@@ -348,9 +348,15 @@ records the wideband channels too):
   copying it. With AVX2 (`-C target-cpu=x86-64-v3`, set in `tools/deploy-server.sh`) the two
   workers went from 43% to 28% of a core on the night slice, back to back on CT 216. Fat LTO
   doubled their cost and is not used.
+- Dials within 60 kHz of each other (each band's FT8 and WSPR pair) share one mixer and the
+  first halvings, then a short chain each. The two workers went from 28% to 21% of a core,
+  back to back on the night slice; they were at 43% before this pass.
+- DSC: a call with exactly one unreadable character has it filled from the ECC, when that
+  is also the code word the character's own soft bits favor most. The call says so
+  (`recovered` in its fields, and in its summary in place of "ECC ok").
 - Not done: WSPR ordered-statistics decoding and a third WSPR pass (the spots go to
-  wsprnet, and there is no reference decoder here to check new ones against), JS8
-  subtraction (off the channel list), one shared front-end stage per band's group of channels.
+  wsprnet, and there is no reference decoder here to check new ones against), and JS8
+  subtraction (off the channel list).
 
 **What has to change.**
 
