@@ -1818,6 +1818,7 @@ impl App {
             note: b.note.clone(),
         });
         self.display_bins(&ui.ctx().clone(), width, now);
+        self.pan.stale = matches!(self.conn, Conn::Connecting { .. });
         self.pan.ui(ui, &self.status, self.frame.as_deref(), &mut self.prefs.view, &flag, step, rm, &mut acts);
         for a in acts {
             match a {

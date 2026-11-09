@@ -438,7 +438,7 @@ fn connection_page(app: &mut App, ui: &mut Ui) {
     ui.add(egui::Label::new(RichText::new("What the browser page may do while this app is connected. Receiver state is shared either way: a change made in one shows in the other.").font(theme::sans(12.0)).color(theme::text_3())).wrap());
     ui.add_space(4.0);
     let cur = app.presence.web;
-    ui.add_enabled_ui(app.link.is_some(), |ui| {
+    crate::widgets::enabled_or(ui, app.link.is_some(), "Connect to a server to change this", |ui| {
         for p in [WebPolicy::Shared, WebPolicy::Yield, WebPolicy::Off] {
             let desc = match p {
                 WebPolicy::Shared => "Shared — the page and this app both drive the receiver",

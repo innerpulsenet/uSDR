@@ -14,6 +14,9 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, Ordering};
 
+/// How far a disabled control dims. Half fell near 2:1 against the plate.
+pub const DISABLED_ALPHA: f32 = 0.65;
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Ground {
     #[default]
@@ -287,7 +290,7 @@ pub fn set_ground(ctx: &egui::Context, g: Ground) {
         v.slider_trailing_fill = true;
         // Unavailable keys stay legible (about 3:1 on the panel) while still
         // reading as off; egui's 0.5 left their labels near 2:1.
-        v.disabled_alpha = 0.65;
+        v.disabled_alpha = DISABLED_ALPHA;
         v.handle_shape = egui::style::HandleShape::Rect { aspect_ratio: 0.55 };
         v.text_cursor.stroke = Stroke::new(1.5, EMBER);
 

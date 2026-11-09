@@ -160,7 +160,7 @@ pub fn view(app: &mut App, ui: &mut Ui) {
         for f in &r.facts {
             ui.label(RichText::new(format!("{} {}", f.label, f.value)).font(theme::mono(10.5)).color(theme::text_2()));
         }
-        ui.add_enabled_ui(on, |ui| {
+        crate::widgets::enabled_or(ui, on, "Switch the receiver to this mode to use these", |ui| {
             let receiving = r.fax_state.as_deref() == Some("receiving");
             if receiving {
                 if widgets::action_small(ui, "STOP").clicked() {

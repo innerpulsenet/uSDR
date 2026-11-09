@@ -271,7 +271,7 @@ pub fn sitor(app: &mut App, ui: &mut Ui) {
     ui.horizontal_wrapped(|ui| {
         reading_strip(app, ui, Mode::Sitor, "LISTENING FOR 100 BAUD");
         ui.add_space(8.0);
-        ui.add_enabled_ui(on, |ui| {
+        crate::widgets::enabled_or(ui, on, "Switch the receiver to this mode to use these", |ui| {
             let modes = ["auto", "a", "b"];
             let cur = modes.iter().position(|m| *m == c.sitor_mode);
             if let Some(i) = widgets::segmented(ui, "sitor-mode", &["AUTO", "A · ARQ", "B · FEC"], cur, widgets::protocol_color("SITOR")) {
@@ -749,7 +749,7 @@ pub fn drm(app: &mut App, ui: &mut Ui) {
                 ui.label(mono(format!("text at {}", local_hms(*at)), theme::text_3()));
             }
             ui.add_space(6.0);
-            ui.add_enabled_ui(on, |ui| {
+            crate::widgets::enabled_or(ui, on, "Switch the receiver to this mode to use these", |ui| {
                 ui.horizontal(|ui| {
                     ui.label(mono("SERVICE", theme::text_3()));
                     if let Some(i) = widgets::segmented(ui, "drm-service", &["1", "2", "3", "4"], Some(c.drm_service as usize), tally) {

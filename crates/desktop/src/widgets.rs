@@ -95,6 +95,16 @@ pub fn wheel_over(ui: &Ui, control: egui::Id) -> f32 {
     }
 }
 
+/// Controls that are dimmed while `on` is false, saying why when pointed
+/// at: a dimmed control with no reason reads as broken.
+pub fn enabled_or<R>(ui: &mut Ui, on: bool, why: &str, add: impl FnOnce(&mut Ui) -> R) -> egui::InnerResponse<R> {
+    let r = ui.add_enabled_ui(on, add);
+    if !on {
+        r.response.clone().on_disabled_hover_text(why);
+    }
+    r
+}
+
 /// An applet: a mono eyebrow over its controls, collapsible by its header.
 pub fn applet<R>(ui: &mut Ui, id: &str, title: &str, extra: impl FnOnce(&mut Ui), add: impl FnOnce(&mut Ui) -> R) -> Option<R> {
     applet_opened(ui, id, title, true, extra, add)
@@ -510,7 +520,7 @@ impl<F: Fn(f64) -> String> Fader<'_, F> {
         let (enabled, value, label) = (self.enabled, *self.value, self.label);
         resp.widget_info(|| egui::WidgetInfo::slider(enabled, value, label));
         let p = ui.painter();
-        let a = if self.enabled { 1.0 } else { 0.5 };
+        let a = if self.enabled { 1.0 } else { theme::DISABLED_ALPHA };
         let value_text = (self.text)(*self.value);
         let track = if bare {
             Rect::from_min_max(pos2(rect.left() + 6.0, rect.center().y - 3.0), pos2(rect.right() - 6.0, rect.center().y + 3.0))

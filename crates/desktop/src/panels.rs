@@ -649,7 +649,7 @@ fn processing(app: &mut App, ui: &mut Ui) {
     // not hidden: the setting holds for when a voice mode comes back.
     let agc = matches!(mode, Mode::Am | Mode::Usb | Mode::Lsb);
     row(ui, "NOISE RED.", "Spectral noise reduction on voice: NFM, AM, USB and LSB. Higher cuts more hiss and adds about 16 ms of delay.", &mut |ui| {
-        ui.add_enabled_ui(voice, |ui| {
+        crate::widgets::enabled_or(ui, voice, "Noise reduction works on voice: NFM, AM, USB and LSB", |ui| {
             let vals = ["off", "low", "medium", "high"];
             if let Some(i) = widgets::segmented(ui, "nr", &["OFF", "LOW", "MED", "HIGH"], vals.iter().position(|v| *v == p.nr), theme::CYAN) {
                 post = Some(json!({ "nr": vals[i] }));
@@ -662,7 +662,7 @@ fn processing(app: &mut App, ui: &mut Ui) {
         }
     });
     row(ui, "VOICE AGC", "AM and sideband AGC speed: fast follows flutter, slow rides through pauses and fades.", &mut |ui| {
-        ui.add_enabled_ui(agc, |ui| {
+        crate::widgets::enabled_or(ui, agc, "Voice AGC applies to AM, USB and LSB", |ui| {
             let vals = ["fast", "medium", "slow"];
             if let Some(i) = widgets::segmented(ui, "agc", &["FAST", "MED", "SLOW"], vals.iter().position(|v| *v == p.agc), theme::AMBER) {
                 post = Some(json!({ "agc": vals[i] }));
@@ -673,6 +673,7 @@ fn processing(app: &mut App, ui: &mut Ui) {
         .add_enabled_ui(voice, |ui| widgets::key(ui, "AUTO NOTCH", p.auto_notch, theme::CYAN))
         .inner
         .on_hover_text("Find and null steady tones (heterodynes, carriers) in voice audio")
+        .on_disabled_hover_text("Auto notch works on voice: NFM, AM, USB and LSB")
         .clicked()
     {
         post = Some(json!({ "auto_notch": !p.auto_notch }));
@@ -726,7 +727,7 @@ fn recorder(app: &mut App, ui: &mut Ui) {
     ui.horizontal_wrapped(|ui| {
         crate::bar::rec_key(app, ui);
         for (kind, label, tip) in [("iq", "SAVE I/Q", "CS16LE + JSON sidecar"), ("voice", "SAVE AUDIO", "voice WAV"), ("discriminator", "SAVE DISC", "discriminator WAV")] {
-            ui.add_enabled_ui(has(kind) && busy.is_none(), |ui| {
+            crate::widgets::enabled_or(ui, has(kind) && busy.is_none(), "Nothing is buffered for this in the current mode, or a save is still running", |ui| {
                 if widgets::action(ui, label).on_hover_text(tip).clicked()
                     && let Some(l) = &app.link
                 {
@@ -746,7 +747,7 @@ fn recorder(app: &mut App, ui: &mut Ui) {
             }
             crate::dock::progress_bar(ui, p, 60.0);
         } else {
-            ui.add_enabled_ui(has("voice") && busy.is_none(), |ui| {
+            crate::widgets::enabled_or(ui, has("voice") && busy.is_none(), "No voice audio is buffered in this mode, or a save is still running", |ui| {
                 if widgets::action(ui, "PLAY 20 S").on_hover_text("Hear the last 20 s again, in place of the live audio").clicked()
                     && let Some(l) = &app.link
                 {
@@ -755,7 +756,7 @@ fn recorder(app: &mut App, ui: &mut Ui) {
                 }
             });
         }
-        ui.add_enabled_ui(has("iq") && busy.is_none(), |ui| {
+        crate::widgets::enabled_or(ui, has("iq") && busy.is_none(), "No I/Q is buffered yet, or a save is still running", |ui| {
             if widgets::action(ui, "REPLAY I/Q").on_hover_text("Run the last 20 s of I/Q through the decoders again").clicked()
                 && let Some(l) = &app.link
             {

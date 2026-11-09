@@ -333,7 +333,7 @@ fn controls(app: &mut App, ui: &mut Ui, docked: bool) {
             ui.label(RichText::new(format!("{snr:.0} dB")).font(theme::mono(11.0)).color(theme::text_3()));
         }
         ui.add_space(6.0);
-        ui.add_enabled_ui(on, |ui| {
+        crate::widgets::enabled_or(ui, on, "Switch the receiver to this mode to use these", |ui| {
             let lpms = [60u16, 90, 120, 240];
             if let Some(i) = widgets::segmented(ui, "fax-lpm", &["60", "90", "120", "240"], lpms.iter().position(|l| *l == c.fax_lpm), theme::CYAN) {
                 app.post("/api/sdr/digital", json!({ "fax_lpm": lpms[i] }));
@@ -375,7 +375,7 @@ fn controls(app: &mut App, ui: &mut Ui, docked: bool) {
     // Slant: the operator trims a picture that leans; the server applies it
     // to the rows it decodes from now on.
     ui.horizontal(|ui| {
-        ui.add_enabled_ui(on, |ui| {
+        crate::widgets::enabled_or(ui, on, "Switch the receiver to this mode to use these", |ui| {
             ui.label(RichText::new("SLANT").font(theme::mono(10.0)).color(theme::text_3()));
             let mut ppm = c.fax_slant_ppm;
             let r = ui.add(egui::Slider::new(&mut ppm, -200.0..=200.0).step_by(1.0).suffix(" ppm").show_value(true));

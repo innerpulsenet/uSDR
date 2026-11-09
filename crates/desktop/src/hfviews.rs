@@ -172,7 +172,7 @@ fn rtty(app: &mut App, ui: &mut Ui) {
             ui.label(mono(if rev { "reversed" } else { "normal" }, theme::text_3()));
         }
         ui.add_space(8.0);
-        ui.add_enabled_ui(on, |ui| {
+        crate::widgets::enabled_or(ui, on, "Switch the receiver to this mode to use these", |ui| {
             let presets = [(45.45f32, 170.0f32, "45.45 / 170"), (50.0, 450.0, "50 / 450"), (75.0, 850.0, "75 / 850")];
             let cur = presets.iter().position(|(b, s, _)| (b - c.rtty_baud).abs() < 0.01 && (s - c.rtty_shift_hz).abs() < 0.5);
             let labels: Vec<&str> = presets.iter().map(|p| p.2).collect();
@@ -275,7 +275,7 @@ fn psk(app: &mut App, ui: &mut Ui) {
         } else {
             widgets::chip(ui, Tone::Idle, "NOT IN PSK31");
         }
-        ui.add_enabled_ui(on, |ui| {
+        crate::widgets::enabled_or(ui, on, "Switch the receiver to this mode to use these", |ui| {
             let bauds = [31.25f32, 62.5];
             if let Some(i) = widgets::segmented(ui, "psk-baud", &["BPSK31", "BPSK63"], bauds.iter().position(|b| *b == c.psk_baud), widgets::protocol_color("PSK")) {
                 app.post("/api/sdr/digital", json!({ "psk_baud": bauds[i] }));

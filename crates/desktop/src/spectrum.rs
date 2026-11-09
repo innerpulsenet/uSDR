@@ -352,6 +352,9 @@ struct Fade {
 }
 
 pub struct Panafall {
+    /// The link is down and what is drawn is the last frame received: it is
+    /// marked so, since a frozen trace and waterfall otherwise look live.
+    pub stale: bool,
     smooth: Vec<f32>,
     peak: Vec<f32>,
     max_hold: Vec<f32>,
@@ -527,6 +530,7 @@ impl Default for Panafall {
             scroll_accum: 0.0,
             menu_hz: 0.0,
             hover_hz: None,
+            stale: false,
             last_frame: None,
             regions: None,
             filter: None,
@@ -2068,6 +2072,23 @@ impl Panafall {
             self.db_drag = None;
         }
 
+        if self.stale {
+            // Dimmed and hatched, the way a drawing marks what is not there,
+            // and said in words. Static: it asks for no frames of its own.
+            let area = pan.union(wf);
+            painter.rect_filled(area, CornerRadius::ZERO, alpha(theme::ink(), 0.45));
+            let hp = painter.with_clip_rect(area);
+            let mut x = area.left() - area.height();
+            while x < area.right() {
+                hp.line_segment([pos2(x, area.bottom()), pos2(x + area.height(), area.top())], Stroke::new(1.0, alpha(theme::WARN, 0.10)));
+                x += 14.0;
+            }
+            let g = painter.layout_no_wrap("LAST FRAME RECEIVED · NOT LIVE".into(), theme::mono_bold(10.5), theme::WARN);
+            let plate = Rect::from_min_size(pos2(pan.left() + 10.0, pan.bottom() - g.size().y - 16.0), g.size() + vec2(14.0, 8.0));
+            painter.rect_filled(plate, CornerRadius::same(3), alpha(theme::ink(), 0.9));
+            painter.rect_stroke(plate, CornerRadius::same(3), Stroke::new(1.0, alpha(theme::WARN, 0.5)), egui::StrokeKind::Inside);
+            painter.galley(plate.min + vec2(7.0, 4.0), g, theme::WARN);
+        }
         if let Some(p) = pointer.filter(|p| in_area(*p)) {
             let hz = self.hz_for(p.x, pan);
             let landing = if alt { hz.round() } else { crate::tuning::snap(hz, step_hz) };
