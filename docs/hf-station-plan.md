@@ -305,6 +305,13 @@ yields are in.
   are about 4 core-seconds per 15 s slot. CPU is not the limit, though channel filters at 8 MS/s
   are still to be measured.
 
+**Stage 2 done, 2026-11-09.** FT8 channels on 80, 40 and 30 m run from the span
+(`crates/server/src/wideband.rs`), set by `USDR_WIDE_FT8` and `USDR_WIDE_LOG` in a systemd
+drop-in on CT 216. On 15 shared daytime slots they matched the main decoder on all 70
+stations it heard, plus 3 more. Three channels cost 0.12 of a core with no dropped blocks.
+A channel runs whenever the tuner happens to cover its dial, and its rows are marked
+`wideband`. Busy evening slots have not been compared yet.
+
 **What has to change.**
 
 - **Channels from the span.** A narrow channel filter per decoder, one `HfDecoder` per
