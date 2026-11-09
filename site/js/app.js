@@ -1,4 +1,6 @@
 import { bandGroup, BAND_GROUPS, bearing, gridCenter, SPOT_SIZES, mountMap, STEPS } from "./map.js";
+import { mountGlobe } from "./globe.js";
+import { atmosphere, dress, moveTick } from "./motion.js";
 import { ago, esc, fmtClock, fmtTime, hours, khz, num } from "./util.js";
 
 const view = document.getElementById("view");
@@ -41,7 +43,8 @@ function rowsTable(rows) {
 }
 
 async function showNow() {
-  const s = await load("status.json");
+  const [s, m] = await Promise.all([load("status.json"), load("map-24h.json")]);
+  land ||= await load("land-110m.json");
   shownBuilt = s.generated_utc;
   const total = s.by_mode.reduce((a, m) => a + m.n, 0);
   const flights = s.by_mode.find((m) => m.mode === "HFDL");
@@ -49,10 +52,20 @@ async function showNow() {
   const max = Math.max(1, ...s.by_mode.map((m) => m.n / Math.max(m.monitored_s / 3600, 0.1)));
   const lastLine = s.last ? `Last on ${esc(s.last.mode)} at ${khz(s.last.dial_hz)} kHz, ${ago(s.last.end_utc)}.` : "It has not reported a stretch of listening yet.";
   view.innerHTML = `
-    <p class="eyebrow">Last 24 hours</p>
-    <h1>One receiver, listening below 30 MHz.</h1>
-    <p class="lede">It moves between amateur digital modes, aircraft datalink, ship calls and weather charts on its own schedule. ${lastLine}</p>
-    <div id="nowline"></div>
+    <header class="hero ip-atmos">
+      <div class="ip-atmos-bg" aria-hidden="true"><i class="ip-fog f1"></i><i class="ip-fog f2"></i><i class="ip-fog f3"></i></div>
+      <div class="hero-text">
+        <p class="eyebrow">Last 24 hours</p>
+        <h1>One receiver, listening below 30 MHz.</h1>
+        <p class="lede">It moves between amateur digital modes, aircraft datalink, ship calls and weather charts on its own schedule. ${lastLine}</p>
+        <div id="nowline"></div>
+      </div>
+      ${m.spots.length ? `<figure class="hero-globe">
+        <div class="globe-wrap"><div class="ip-atmos-dial" aria-hidden="true"></div>
+        <canvas id="globe" role="img" aria-label="A turning globe marking the ${num(m.squares.length)} grid squares heard in the last 24 hours."></canvas></div>
+        <figcaption>${num(m.idents.length)} stations in 24 h · paths replay the last hour</figcaption>
+      </figure>` : ""}
+    </header>
     <dl class="ip-readout">
       <div><dt>Decodes logged</dt><dd>${num(total)}</dd></div>
       <div><dt>Spent listening</dt><dd>${hours(s.monitored_s)}</dd></div>
@@ -71,6 +84,8 @@ async function showNow() {
       ${s.latest.length ? rowsTable(s.latest) : emptyLog()}
     </section>`;
   drawNowLine();
+  const canvas = view.querySelector("#globe");
+  if (canvas) unmount = mountGlobe(canvas, m, land);
 }
 
 const clock = (t) => { const d = new Date(t * 1000); return `${String(d.getUTCHours()).padStart(2, "0")}:${String(d.getUTCMinutes()).padStart(2, "0")}Z`; };
@@ -123,7 +138,7 @@ function mapShell(w) {
             <div class="row" aria-label="Dot size is the number of different stations heard in that square">${SPOT_SIZES.map((s) => `<span><svg class="swatch" viewBox="0 0 15 15" aria-hidden="true"><circle cx="7.5" cy="7.5" r="${s.px / 2}" fill="var(--innerpulse-text-2)"/></svg>${s.label}</span>`).join("")}</div>
             <div class="row" aria-label="Dot color is the band group heard most in that square">${BAND_GROUPS.map((b, i) => `<span><svg class="swatch" viewBox="0 0 15 15" aria-hidden="true"><circle cx="7.5" cy="7.5" r="5" fill="var(--innerpulse-chart-${i + 1})"/></svg>${b}</span>`).join("")}</div>
           </div>
-          <p class="note" style="margin-top:8px">One dot per grid square, at the square's center. Size is different stations heard; color is the bands with the most decodes there.</p>
+          <p class="note" style="margin-top:8px">One dot per grid square, at the square's center. Size is different stations heard; color is the bands with the most decodes there. A pulsing dot was heard in the last hour of the log.</p>
           <div class="layers">
             <label class="ip-check"><input type="checkbox" data-layer="squares" checked><span>Amateur stations</span></label>
             <label class="ip-check"><input type="checkbox" data-layer="tracks" checked><svg viewBox="0 0 18 12" aria-hidden="true"><path d="M1 10 L9 6" fill="none" stroke="var(--innerpulse-text-2)" stroke-width="1"/><path d="M17 2 L8.5 3.2 L10.6 6.5 L10.2 10.4Z" fill="var(--innerpulse-text)"/></svg><span>Aircraft positions</span></label>
@@ -210,10 +225,13 @@ async function showActivity() {
   const historyDays = a.first_listening_utc ? (Date.now() / 1000 - a.first_listening_utc) / 86400 : 0;
   const key = `<div class="heat-key"><span><i style="background:${STEPS[4]}"></i>busiest</span><span><i style="background:${STEPS[0]}"></i>few</span><span><i class="q"></i>listened, heard nothing</span><span><i class="out"></i>not monitored</span></div>`;
   const days = historyDays >= 1 ? `${Math.floor(historyDays)} days` : "less than a day";
+  const hourly = Array.from({ length: 24 }, (_, h) => a.modes.reduce((sum, row) => sum + row.cells[h][0], 0));
   view.innerHTML = `
+    <header class="page-head ip-atmos">${atmosphere(hourly)}
     <p class="eyebrow">Activity</p>
     <h1>When each band came alive.</h1>
     <p class="lede">The log so far covers ${days}, grouped by UTC hour over up to ${a.days} days. Every cell is divided by the time the receiver actually spent there.</p>
+    </header>
     <section aria-labelledby="h1"><h2 id="h1">Amateur decodes by band and hour</h2>${a.bands.length ? heatTable(a.bands, "decodes") + key : emptyLog()}</section>
     <section aria-labelledby="h2"><h2 id="h2">All modes by hour</h2>${a.modes.length ? heatTable(a.modes, "decodes") + key : emptyLog()}</section>
     <section aria-labelledby="hrose"><h2 id="hrose">Which way it hears</h2><p class="note">Stations with a locator over the last 7 days, by compass bearing from the station.</p>${antennaSection(week)}</section>
@@ -234,13 +252,62 @@ async function showPictures() {
   const { pictures, generated_utc: built } = await load("pictures.json");
   shownBuilt = built;
   view.innerHTML = `
+    <header class="page-head ip-atmos">${atmosphere(pictures.map((p) => p.lines))}
     <p class="eyebrow">Pictures</p>
     <h1>Weather charts off the air.</h1>
     <p class="lede">Received as radiofax and kept as they arrived, noise included. Titles come from the transmitting station's timetable, because a chart does not state its own.</p>
+    </header>
     ${pictures.length ? `<div class="gallery">${pictures.map((p) => `<article class="pic">
       <a href="pictures/${encodeURIComponent(p.file)}"><img loading="lazy" src="pictures/${encodeURIComponent(p.thumb || p.file)}" alt="Radiofax chart received ${fmtTime(p.start_utc)}${p.scheduled_title ? `, scheduled as ${esc(p.scheduled_title)}` : ""}"></a>
       <div><b>${esc(p.scheduled_title || "Untitled picture")}</b><span>${fmtTime(p.start_utc)} · ${esc(p.station || "")} · ${khz(p.dial_hz + 1900)} kHz</span></div>
     </article>`).join("")}</div>` : `<p class="empty">No charts have been published yet. Only charts that pass a quality check and come from a service cleared for republishing appear here.</p>`}`;
+  view.querySelectorAll(".pic a").forEach((a, i) => a.addEventListener("click", (ev) => {
+    ev.preventDefault();
+    openViewer(pictures, i);
+  }));
+}
+
+// A chart at full size in a dialog, stepping through the others with the arrow keys.
+function openViewer(pictures, start) {
+  let box = document.getElementById("viewer");
+  if (!box) {
+    box = document.createElement("dialog");
+    box.id = "viewer";
+    box.className = "viewer";
+    box.innerHTML = `<div class="viewer-bar"><p id="viewer-title"></p><div class="viewer-nav"><button type="button" data-step="-1" aria-label="Newer picture">Newer</button><button type="button" data-step="1" aria-label="Older picture">Older</button><button type="button" data-close>Close</button></div></div><div class="viewer-pic"><img alt=""></div>`;
+    document.body.append(box);
+    box.addEventListener("click", (ev) => { if (ev.target === box) box.close(); });
+    box.querySelector("[data-close]").addEventListener("click", () => box.close());
+  }
+  let at = start;
+  const show = () => {
+    const p = pictures[at];
+    const img = box.querySelector("img");
+    img.src = `pictures/${encodeURIComponent(p.file)}`;
+    img.alt = `Radiofax chart received ${fmtTime(p.start_utc)}${p.scheduled_title ? `, scheduled as ${p.scheduled_title}` : ""}`;
+    box.querySelector("#viewer-title").textContent = `${p.scheduled_title || "Untitled picture"} · ${fmtTime(p.start_utc)}`;
+    box.querySelector('[data-step="-1"]').disabled = at === 0;
+    box.querySelector('[data-step="1"]').disabled = at === pictures.length - 1;
+  };
+  const step = (n) => { if (pictures[at + n]) { at += n; show(); } };
+  box.querySelectorAll("[data-step]").forEach((b) => { b.onclick = () => step(Number(b.dataset.step)); });
+  box.onkeydown = (ev) => {
+    if (ev.key === "ArrowLeft") step(-1);
+    if (ev.key === "ArrowRight") step(1);
+  };
+  show();
+  box.showModal();
+}
+
+function minuteCounts(rows) {
+  if (!rows.length) return [];
+  const newest = rows[0].t;
+  const buckets = new Array(Math.min(96, Math.floor((newest - rows[rows.length - 1].t) / 60) + 1)).fill(0);
+  for (const r of rows) {
+    const i = buckets.length - 1 - Math.floor((newest - r.t) / 60);
+    if (i >= 0) buckets[i] += 1;
+  }
+  return buckets;
 }
 
 async function showLog() {
@@ -248,10 +315,12 @@ async function showLog() {
   shownBuilt = built;
   const modes = [...new Set(rows.map((r) => r.m))].sort();
   view.innerHTML = `
+    <header class="page-head ip-atmos">${atmosphere(minuteCounts(rows))}
     <p class="eyebrow">Log</p>
     <h1>The latest 500 entries.</h1>
     <p class="lede">${rows.length ? `These reach back to ${fmtTime(rows[rows.length - 1].t)}. Look up a station to search everything the log has kept.` : "Nothing has arrived from the receiver yet."}</p>
     ${lookupForm("")}
+    </header>
     <div class="tools" style="margin-top:22px">
       <div class="chips"><label class="lbl" for="logmode">Mode</label><select id="logmode"><option value="">All</option>${modes.map((m) => `<option>${esc(m)}</option>`).join("")}</select></div>
       <div class="chips"><label class="lbl" for="logq">Filter</label><input id="logq" type="search" placeholder="Within these rows"></div>
@@ -320,10 +389,12 @@ async function showWho(params) {
     return;
   }
   view.innerHTML = `
+    <header class="page-head ip-atmos">${atmosphere([])}
     <p class="eyebrow">Station lookup</p>
     <h1>Was it heard here?</h1>
     <p class="lede">Every amateur station, HFDL flight and DSC ship call in the log, by callsign, flight or MMSI.</p>
     ${lookupForm(q)}
+    </header>
     <div id="result"></div>`;
   wireLookup();
   const out = view.querySelector("#result");
@@ -392,9 +463,11 @@ async function showTraffic() {
   shownBuilt = t.generated_utc;
   const gsName = Object.fromEntries(stations.map((s) => [String(s.id), s.name]));
   view.innerHTML = `
+    <header class="page-head ip-atmos">${atmosphere(t.flights.slice(0, 96).map((f) => f.n))}
     <p class="eyebrow">Traffic</p>
     <h1>Who was on the air.</h1>
     <p class="lede">Aircraft heard on HFDL in the last 24 hours and DSC ship calls in the last 30 days. Airlines and flag states come from published designator tables, and are blank where a code doesn't match one.</p>
+    </header>
     <section aria-labelledby="hair"><h2 id="hair">Aircraft</h2>
       ${t.flights.length ? `<div class="scroll"><table><thead><tr><th>Flight</th><th>Operator</th><th class="hide-s">Registration</th><th class="hide-s">Ground station</th><th>Messages</th><th class="hide-s">Last position</th><th>Last heard</th></tr></thead><tbody>
       ${t.flights.map((f) => `<tr><td class="id">${callLink("HFDL", f.i)}</td><td>${esc(aircraftAirline(f.i, names.airlines))}</td><td class="hide-s">${esc(f.reg || "")}</td><td class="hide-s">${esc(gsName[f.gs] || "")}</td><td>${num(f.n)}</td><td class="hide-s">${f.la === undefined ? "" : `${f.la}, ${f.lo}`}</td><td>${fmtTime(f.t)}</td></tr>`).join("")}
@@ -411,9 +484,18 @@ async function showStation() {
   let health = null;
   try { health = await load("health.json"); } catch { /* the receiver page still reads without it */ }
   if (health) shownBuilt = health.generated_utc;
+  const listening = new Array(96).fill(0);
+  if (health) {
+    for (const [a, b] of health.timeline) {
+      const i = Math.floor(((a - health.since) / (health.generated_utc - health.since)) * 96);
+      if (i >= 0 && i < 96) listening[i] += b - a;
+    }
+  }
   view.innerHTML = `
+    <header class="page-head ip-atmos">${atmosphere(listening)}
     <p class="eyebrow">Station</p>
     <h1>How this log is made.</h1>
+    </header>
     <div class="prose">
       <p class="lede">A single software-defined receiver on a large wire loop, running unattended. It decodes one mode on one frequency at a time, and a schedule decides which.</p>
       <h2>What it listens to</h2>
@@ -438,7 +520,9 @@ async function showStation() {
 
 const VIEWS = { now: showNow, map: showMap, activity: showActivity, pictures: showPictures, log: showLog, station: showStation, who: showWho, traffic: showTraffic };
 
-async function render() {
+const LOADING = `<div class="ip-skeleton-block" style="height:64px;max-width:520px"></div><div class="ip-skeleton-block" style="height:320px;margin-top:20px"></div>`;
+
+async function render(entering = true) {
   if (unmount) { unmount(); unmount = null; }
   const { name, params } = route();
   const show = VIEWS[name] || showNow;
@@ -446,12 +530,24 @@ async function render() {
     if (a.dataset.view === (name === "who" ? "log" : VIEWS[name] ? name : "now")) a.setAttribute("aria-current", "page");
     else a.removeAttribute("aria-current");
   });
+  moveTick();
+  const root = document.documentElement;
+  root.classList.add("ip-busy");
+  const loading = entering ? setTimeout(() => { view.innerHTML = LOADING; }, 180) : 0;
   try {
     await show(params);
+    clearTimeout(loading);
+    dress(view, entering);
   } catch (e) {
+    clearTimeout(loading);
     view.innerHTML = `<p class="empty">The data for this page could not be loaded (${esc(e.message)}).</p>`;
   }
+  root.classList.remove("ip-busy");
 }
+
+addEventListener("resize", moveTick);
+document.fonts?.ready.then(moveTick);
+document.addEventListener("visibilitychange", () => document.documentElement.classList.toggle("ip-paused", document.hidden));
 
 async function freshness() {
   const out = document.getElementById("fresh");
@@ -471,14 +567,14 @@ async function freshness() {
     if (shownBuilt && s.generated_utc > shownBuilt && !document.hidden) {
       if (route().name === "now") {
         const y = scrollY;
-        await render();
+        await render(false);
         scrollTo(0, y);
       } else {
         const refresh = document.createElement("button");
         refresh.type = "button";
         refresh.textContent = "New data";
         refresh.title = `This page was built ${ago(shownBuilt)}. Load the newer figures.`;
-        refresh.addEventListener("click", render);
+        refresh.addEventListener("click", () => render(false));
         out.prepend(refresh);
       }
     }

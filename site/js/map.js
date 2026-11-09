@@ -2,6 +2,7 @@
 // a dot at its real position, drawn as a zero-length round-capped stroke: the stroke
 // does not scale, so a dot keeps its size at every zoom with no redraw, and one path
 // per size and color keeps the node count small however many squares there are.
+import { calm } from "./motion.js";
 import { el, esc, fmtTime, hours, num } from "./util.js";
 
 const NS = "http://www.w3.org/2000/svg";
@@ -15,6 +16,12 @@ const FINE_ZOOM = 3;
 // Playback shows this many hours at a time, a step every so many milliseconds.
 const PLAY_HOURS = 3;
 const PLAY_MS = 700;
+const FLY_MS = 620;
+// A dot pulses when its square was heard within this many minutes of the newest report.
+const PULSE_MINUTES = 60;
+const MAX_PULSES = 70;
+// Sun below the horizon by these degrees: sunset, then civil, nautical and astronomical dusk.
+const TWILIGHT = [0, -6, -12, -18];
 // What the flat map shows at first; the poles are still there to pan to.
 const WORLD_NORTH = 84;
 const WORLD_SOUTH = -62;
@@ -190,11 +197,19 @@ function subsolar(ms) {
   return [wrapLon(ra - gmst), dec / RAD];
 }
 
-function terminator(ms) {
+// Where the sun stands `altitude` degrees above the horizon, one latitude per longitude.
+function terminator(ms, altitude = 0) {
   const [sunLon, dec] = subsolar(ms);
+  const sinAlt = Math.sin(altitude * RAD);
   const line = [];
   for (let lon = -180; lon <= 180; lon += 2) {
-    line.push([lon, Math.atan(-Math.cos((lon - sunLon) * RAD) / Math.tan(dec * RAD)) / RAD]);
+    const a = Math.cos(dec * RAD) * Math.cos((lon - sunLon) * RAD);
+    const b = Math.sin(dec * RAD);
+    const offset = Math.acos(clamp(sinAlt / Math.hypot(a, b), -1, 1));
+    const centre = Math.atan2(b, a);
+    const options = [centre + offset, centre - offset].map((r) => r / RAD);
+    const lat = options.find((v) => v >= -90 && v <= 90) ?? clamp(options[0], -90, 90);
+    line.push([lon, lat]);
   }
   return { line, sunnyNorth: dec > 0 };
 }
@@ -219,8 +234,12 @@ export function mountMap(root, data, opts) {
   const stage = root.querySelector(".stage");
   const map = svg("svg", { role: "img", "aria-label": "World map of what the receiver logged. Use the panel beside it for the same figures as text." });
   stage.prepend(map);
+  // Selection and pulses move on their own layer, so that they never repaint the map.
+  const over = svg("svg", { class: "over", "aria-hidden": "true" });
+  map.after(over);
   const g = {};
-  for (const name of ["base", "night", "squares", "tracks", "spots", "points", "sel", "ui"]) map.append((g[name] = svg("g")));
+  for (const name of ["base", "night", "squares", "tracks", "spots", "points", "ui"]) map.append((g[name] = svg("g")));
+  for (const name of ["pulses", "sel"]) over.append((g[name] = svg("g")));
 
   const readout = root.querySelector("#readout");
   const totals = root.querySelector("#totals");
@@ -282,11 +301,15 @@ export function mountMap(root, data, opts) {
     if (!state.layers.night) return;
     // The night side belongs to the moment the chosen hours end.
     const at = state.to >= data.hours ? Date.now() : (data.start_utc + state.to * 3600) * 1000;
-    const { line, sunnyNorth } = terminator(at);
+    const { line } = terminator(at);
     if (state.proj === "eq") {
-      const edge = (sunnyNorth ? 1 : -1) * (proj.height / 2 + 40);
-      const pts = line.map(([lon, lat]) => proj.forward(lon, lat).map((v) => v.toFixed(2)).join(" ")).join("L");
-      g.night.append(svg("path", { class: "night", d: `M-180 ${edge}L${pts}L180 ${edge}Z` }));
+      // Four bands deepening from sunset to full night, as the sky actually does.
+      for (const altitude of TWILIGHT) {
+        const band = terminator(at, altitude);
+        const edge = (band.sunnyNorth ? 1 : -1) * (proj.height / 2 + 40);
+        const pts = band.line.map(([lon, lat]) => proj.forward(lon, lat).map((v) => v.toFixed(2)).join(" ")).join("L");
+        g.night.append(svg("path", { class: "night", d: `M-180 ${edge}L${pts}L180 ${edge}Z` }));
+      }
     }
     g.night.append(svg("path", { class: "dusk", d: pathOf(proj, line) }));
   }
@@ -386,6 +409,7 @@ export function mountMap(root, data, opts) {
     for (let s = SPOT_SIZES.length - 1; s >= 0; s--) {
       const px = SPOT_SIZES[s].px;
       const all = bySize[s].join("");
+      if (all && s >= 2) paths.push(svg("path", { class: "bloom", d: all, "stroke-width": px + 9 }));
       if (all) paths.push(svg("path", { class: "halo", d: all, "stroke-width": px + 2 }));
       bySize[s].forEach((d, group) => {
         if (d) paths.push(svg("path", { class: `spot b${group}`, d, "stroke-width": px }));
@@ -393,6 +417,25 @@ export function mountMap(root, data, opts) {
     }
     g.spots.replaceChildren(...paths);
     drawSquares();
+    drawPulses();
+  }
+
+  // Squares heard in the last hour of the log. Only when the hours end at the present.
+  function drawPulses() {
+    const groups = new Array(BAND_GROUPS.length + 1).fill("");
+    if (!calm && state.layers.squares && state.to >= data.hours) {
+      const newest = data.spots.reduce((a, r) => Math.max(a, r[7]), 0);
+      const latest = new Map();
+      for (const [sq, m, b, h, , , , t] of data.spots) {
+        if (t >= newest - PULSE_MINUTES && chosen(m, b, h) && t >= (latest.get(sq)?.t ?? -1)) latest.set(sq, { t, group: bandGroup(data.bands[b]) });
+      }
+      for (const [sq, l] of [...latest].sort((a, b) => b[1].t - a[1].t).slice(0, MAX_PULSES)) {
+        const [lon, lat] = gridCenter(data.squares[sq]);
+        const [x, y] = proj.forward(lon, lat);
+        groups[l.group] += `M${x.toFixed(2)} ${y.toFixed(2)}h0`;
+      }
+    }
+    g.pulses.replaceChildren(...groups.flatMap((d, i) => (d ? [svg("path", { class: `pulse b${i}`, d, style: `animation-delay:${i * 0.5}s` })] : [])));
   }
 
   // A dot is only the center of a square about 200 km wide. Close in, show the square.
@@ -606,7 +649,9 @@ export function mountMap(root, data, opts) {
 
   function applyView() {
     clampView();
-    map.setAttribute("viewBox", viewBox().join(" "));
+    const box = viewBox().join(" ");
+    map.setAttribute("viewBox", box);
+    over.setAttribute("viewBox", box);
   }
 
   let settle = 0;
@@ -661,13 +706,16 @@ export function mountMap(root, data, opts) {
 
   map.addEventListener("wheel", (ev) => {
     ev.preventDefault();
+    cancelAnimationFrame(flight);
     const [x, y] = toWorld(ev);
     zoomAt(Math.exp(-ev.deltaY * 0.0016), x, y);
   }, { passive: false });
 
   map.addEventListener("dblclick", (ev) => {
     const [x, y] = toWorld(ev);
-    zoomAt(2, x, y);
+    const z = clamp(state.z * 2, 1, MAX_ZOOM);
+    const k = state.z / z;
+    flyTo(x - (x - state.cx) * k, y - (y - state.cy) * k, z);
   });
 
   const pointers = new Map();
@@ -675,6 +723,7 @@ export function mountMap(root, data, opts) {
   let pinch = null;
   let boxRect = null;
   map.addEventListener("pointerdown", (ev) => {
+    cancelAnimationFrame(flight);
     map.setPointerCapture(ev.pointerId);
     pointers.set(ev.pointerId, ev);
     if (pointers.size === 2) {
@@ -752,20 +801,39 @@ export function mountMap(root, data, opts) {
   map.addEventListener("pointercancel", pointerEnd);
   map.addEventListener("pointerleave", () => setHover(null));
 
+  // Glide to a view: fast away, long settle, in equal steps of zoom.
+  let flight = 0;
+  function flyTo(cx, cy, z) {
+    cancelAnimationFrame(flight);
+    if (calm) {
+      Object.assign(state, { cx, cy, z });
+      applyView();
+      settled();
+      return;
+    }
+    const from = { cx: state.cx, cy: state.cy, z: state.z };
+    const start = performance.now();
+    const step = (now) => {
+      const t = Math.min(1, (now - start) / FLY_MS);
+      const e = 1 - (1 - t) ** 4;
+      state.z = Math.exp(Math.log(from.z) + (Math.log(z) - Math.log(from.z)) * e);
+      state.cx = from.cx + (cx - from.cx) * e;
+      state.cy = from.cy + (cy - from.cy) * e;
+      applyView();
+      if (t < 1) flight = requestAnimationFrame(step);
+      else settled();
+    };
+    flight = requestAnimationFrame(step);
+  }
+
   function fitWorld(x0, y0, x1, y1) {
     const [w, h] = size();
-    state.cx = (x0 + x1) / 2;
-    state.cy = (y0 + y1) / 2;
-    state.z = clamp(Math.min(proj.width / (x1 - x0), (proj.width * h / w) / (y1 - y0)), 1, MAX_ZOOM);
-    applyView();
-    settled();
+    flyTo((x0 + x1) / 2, (y0 + y1) / 2, clamp(Math.min(proj.width / (x1 - x0), (proj.width * h / w) / (y1 - y0)), 1, MAX_ZOOM));
   }
 
   function fitPreset(box) {
     if (!box) {
-      state.cx = 0; state.cy = proj.homeY; state.z = 1;
-      applyView();
-      settled();
+      flyTo(0, proj.homeY, 1);
       return;
     }
     const [w, s, e, n] = box;
@@ -871,6 +939,9 @@ export function mountMap(root, data, opts) {
     });
     strip.append(svg("rect", { class: "dim", x: 0, y: 0, width: state.from, height: 40 }));
     strip.append(svg("rect", { class: "dim", x: state.to, y: 0, width: data.hours - state.to, height: 40 }));
+    if (state.from > 0 || state.to < data.hours) {
+      for (const h of [state.from, state.to]) strip.append(svg("rect", { class: "edge", x: h - 0.04, y: 0, width: 0.08, height: 40 }));
+    }
     const label = (h) => fmtTime(data.start_utc + h * 3600);
     root.querySelector("#fromv").textContent = label(state.from);
     root.querySelector("#tov").textContent = label(state.to);
@@ -892,7 +963,6 @@ export function mountMap(root, data, opts) {
   // Playback: a short window walking through the hours that were listened to. With
   // reduced motion asked for, the button steps once per press instead of running.
   const playButton = root.querySelector("#play");
-  const calm = matchMedia("(prefers-reduced-motion: reduce)").matches;
   let playTimer = 0;
   if (calm) playButton.textContent = "Next hours";
   function stepPlay() {
@@ -918,6 +988,29 @@ export function mountMap(root, data, opts) {
   });
   fromInput.addEventListener("pointerdown", stopPlay);
   toInput.addEventListener("pointerdown", stopPlay);
+  // Drag across the strip to choose the hours; a tap on it clears the choice.
+  const hourAt = (ev) => {
+    const r = strip.getBoundingClientRect();
+    return clamp(Math.floor(((ev.clientX - r.left) / r.width) * data.hours), 0, data.hours - 1);
+  };
+  let brush = null;
+  strip.addEventListener("pointerdown", (ev) => {
+    stopPlay();
+    strip.setPointerCapture(ev.pointerId);
+    brush = { a: hourAt(ev), moved: false };
+  });
+  strip.addEventListener("pointermove", (ev) => {
+    if (!brush) return;
+    const h = hourAt(ev);
+    if (h !== brush.a) brush.moved = true;
+    if (brush.moved) setRange(Math.min(brush.a, h), Math.max(brush.a, h) + 1);
+  });
+  const brushEnd = () => {
+    if (brush && !brush.moved) setRange(0, data.hours);
+    brush = null;
+  };
+  strip.addEventListener("pointerup", brushEnd);
+  strip.addEventListener("pointercancel", brushEnd);
   fromInput.addEventListener("input", rangeChanged);
   toInput.addEventListener("input", rangeChanged);
 
@@ -957,7 +1050,7 @@ export function mountMap(root, data, opts) {
   const ro = new ResizeObserver(() => { applyView(); settled(); });
   ro.observe(stage);
   const nightTimer = setInterval(drawNight, 60000);
-  return () => { ro.disconnect(); clearInterval(nightTimer); clearTimeout(settle); clearInterval(playTimer); };
+  return () => { ro.disconnect(); clearInterval(nightTimer); clearTimeout(settle); clearInterval(playTimer); cancelAnimationFrame(flight); };
 }
 
 export { bandGroup, BAND_GROUPS, SPOT_SIZES, STEPS };

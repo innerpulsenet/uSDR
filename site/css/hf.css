@@ -12,6 +12,7 @@
   --land: #20242b;
   --radius: var(--innerpulse-radius);
   --readout-h: 279px; /* five rows and all ten HF bands */
+  --ip-atmos-accent: rgba(255, 179, 71, .07);
   --totals-h: 371px;  /* six rows, ten bands and the note */
 }
 
@@ -23,6 +24,10 @@ h1, h2, h3, p { margin: 0; }
 :focus-visible { outline: none; box-shadow: var(--ip-focus); border-radius: 2px; }
 .skip { position: absolute; left: -999px; top: 8px; background: var(--innerpulse-surface-2); padding: 8px 12px; z-index: 60; }
 .skip:focus { left: 8px; }
+/* The kit's animated grain, a blended SVG filter over the whole page, stalled frames for up to
+   a second. The same texture is baked into the ground instead, at no cost per frame. */
+body { background-image: url(../brand/grain.png); }
+main, .foot { position: relative; z-index: 1; }
 main { flex: 1; width: min(1360px, 100% - 32px); margin: 0 auto; padding: clamp(20px, 3vw, 40px) 0 clamp(48px, 7vw, 96px); outline: 0; }
 
 /* Masthead: the kit's bar, with the feed's state at the far end. */
@@ -69,6 +74,68 @@ button:disabled { opacity: .45; cursor: not-allowed; border-color: var(--innerpu
 button[aria-pressed="true"] { background: var(--innerpulse-text); color: var(--innerpulse-ground); border-color: var(--innerpulse-text); }
 input[type="search"], select { font: 400 13px var(--innerpulse-sans); background: var(--innerpulse-surface-1); border: 1px solid var(--innerpulse-line-2); color: var(--innerpulse-text); padding: 5px 9px; border-radius: var(--radius); min-height: 32px; }
 
+/* Arrivals. Each resolves to the finished page; see the reduced-motion block. */
+@keyframes rise { from { opacity: 0; transform: translateY(12px); } }
+@keyframes grow { from { transform: scaleX(0); } }
+@keyframes cell { from { opacity: 0; transform: scale(.7); } }
+@keyframes wedge { from { transform: scale(.2); opacity: 0; } }
+@keyframes pulse { from { stroke-width: 4px; stroke-opacity: .7; } to { stroke-width: 30px; stroke-opacity: 0; } }
+@keyframes march { to { stroke-dashoffset: -18; } }
+/* The atmosphere stays out of this: moving it would mean repainting its soft layers. */
+#view.enter > :not(section, .ip-atmos),
+#view.enter .ip-atmos > :not(.ip-atmos-bg) { animation: rise .7s var(--innerpulse-ease) both; }
+#view.enter .ip-atmos > :nth-child(2) { animation-delay: 40ms; }
+#view.enter .ip-atmos > :nth-child(3) { animation-delay: 90ms; }
+#view.enter .ip-atmos > :nth-child(4) { animation-delay: 140ms; }
+#view.enter .ip-atmos > :nth-child(5) { animation-delay: 190ms; }
+.rv { opacity: 0; transform: translateY(16px); transition: opacity .8s var(--innerpulse-ease), transform .8s var(--innerpulse-ease); }
+.rv.in { opacity: 1; transform: none; }
+.rv.in .bar i::after { animation: grow 1s var(--innerpulse-ease) both; animation-delay: calc(var(--i, 0) * 50ms); transform-origin: left; }
+.rv.in .cells24 i { animation: cell .5s var(--innerpulse-ease) both; animation-delay: calc(var(--h, 0) * 22ms); }
+.rv.in .rose path { animation: wedge .8s var(--innerpulse-ease) both; animation-delay: calc(var(--i, 0) * 18ms); }
+
+/* Masthead: the sliding tick under the current section. */
+.ip-masthead-bar nav { position: relative; }
+.nav-tick { position: absolute; left: 0; bottom: 6px; width: 100px; height: 2px; background: var(--innerpulse-pulse); transform-origin: left; pointer-events: none; transition: transform .55s var(--innerpulse-ease), opacity .2s; }
+
+/* Panels are lit from above: a sheen, a lip of light, and a soft drop. */
+.card, .ip-readout, .stage, .strip, .pic { background-image: linear-gradient(180deg, rgba(227, 230, 233, .03), transparent 46%); box-shadow: inset 0 1px 0 rgba(255, 255, 255, .06), 0 22px 46px -32px rgba(0, 0, 0, .9); }
+
+/* Page heads sit in front of a reading of the page's own numbers. */
+.ip-atmos-bg { top: calc(-1 * clamp(20px, 3vw, 40px)); }
+/* Soft edges drawn as gradients: a blur filter this large is costly to keep moving. */
+.ip-fog { filter: none; }
+.ip-fog.f1 { background: radial-gradient(closest-side, var(--ip-atmos-fog-1), transparent); }
+.ip-fog.f2 { background: radial-gradient(closest-side, var(--ip-atmos-fog-2), transparent); }
+.ip-fog.f3 { background: radial-gradient(closest-side, var(--ip-atmos-fog-3), transparent); }
+.page-head .ip-atmos-dial { right: calc(min(58vw, 720px) / -2); opacity: .09; }
+.ip-backdrop { color: var(--innerpulse-amber); opacity: .2; }
+.ip-backdrop svg { display: block; width: 100%; height: 100%; }
+.page-head { padding: clamp(10px, 2vw, 22px) 0 clamp(16px, 2.4vw, 30px); }
+.hero { display: grid; grid-template-columns: minmax(0, 1fr) minmax(280px, 430px); gap: clamp(56px, 5vw, 76px); align-items: center; padding-bottom: clamp(10px, 2vw, 22px); }
+.hero h1 { max-width: 18ch; font-size: clamp(32px, 4.6vw, 62px); }
+.hero-globe { position: relative; margin: 0; }
+.hero-globe canvas { position: relative; display: block; width: 100%; aspect-ratio: 1; }
+.globe-wrap { position: relative; }
+/* The dial's viewBox is centered on 0,0, so that is the point its rings turn about. */
+.ip-dial .d-outer, .ip-dial .d-inner { transform-origin: 0 0; }
+.hero-globe .ip-atmos-dial { position: absolute; inset: -12%; width: auto; aspect-ratio: auto; transform: none; opacity: .13; color: var(--innerpulse-text); pointer-events: none; }
+.hero-globe figcaption { position: relative; margin-top: calc(12% + 12px); text-align: center; font: 400 12px var(--innerpulse-mono); color: var(--innerpulse-text-3); }
+
+/* The picture viewer. */
+.viewer { width: min(1180px, 96vw); max-height: 94vh; padding: 0; color: var(--innerpulse-text); background: var(--innerpulse-surface-1); border: 1px solid var(--innerpulse-line-2); border-radius: 8px; }
+.viewer[open] { animation: rise .45s var(--innerpulse-ease) both; }
+.viewer::backdrop { background: rgba(5, 7, 11, .78); }
+.viewer-bar { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 8px 16px; padding: 12px 14px; border-bottom: 1px solid var(--innerpulse-line); }
+.viewer-bar p { font: 400 13px var(--innerpulse-mono); }
+.viewer-nav { display: flex; gap: 6px; }
+.viewer-pic { max-height: calc(94vh - 66px); overflow: auto; background: #fff; }
+.viewer-pic img { display: block; width: 100%; height: auto; }
+.pic { transition: transform .35s var(--innerpulse-ease), border-color .2s; }
+.pic:hover { transform: translateY(-3px); border-color: var(--innerpulse-line-2); }
+.pic img { transition: transform .9s var(--innerpulse-ease); }
+.pic:hover img { transform: scale(1.03); }
+
 /* The map */
 .map-wrap { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 14px; margin-top: 16px; align-items: start; }
 .map-main { min-width: 0; }
@@ -92,7 +159,10 @@ button[aria-pressed="true"] small[data-air] { color: var(--innerpulse-gunmetal);
 .coast { fill: none; stroke: rgba(227, 230, 233, .2); stroke-width: .75; }
 .graticule { fill: none; stroke: rgba(227, 230, 233, .05); stroke-width: 1; }
 .rings { fill: none; stroke: rgba(227, 230, 233, .14); stroke-width: 1; stroke-dasharray: 3 5; }
-.night { fill: rgba(2, 3, 5, .44); stroke: none; }
+.night { fill: rgba(2, 3, 5, .17); stroke: none; }
+.bloom { fill: none; stroke: #8cdffb; stroke-opacity: .09; stroke-linecap: round; }
+.stage > svg.over { position: absolute; inset: 0; pointer-events: none; cursor: inherit; }
+.pulse { fill: none; stroke-linecap: round; animation: pulse 2.8s var(--innerpulse-ease) infinite; }
 .dusk { fill: none; stroke: rgba(227, 230, 233, .2); stroke-width: 1; stroke-dasharray: 2 4; }
 .sq { fill: rgba(227, 230, 233, .035); stroke: rgba(227, 230, 233, .16); stroke-width: 1; }
 .halo { fill: none; stroke: var(--ocean); stroke-linecap: round; stroke-opacity: .9; }
@@ -109,7 +179,7 @@ button[aria-pressed="true"] small[data-air] { color: var(--innerpulse-gunmetal);
 .home-ring { fill: none; stroke: var(--innerpulse-text); stroke-width: 1.5; }
 .home-dot { fill: var(--innerpulse-text); }
 .cell-sel { fill: rgba(227, 230, 233, .07); stroke: var(--innerpulse-text); stroke-width: 1; }
-.path-sel { fill: none; stroke: var(--innerpulse-text); stroke-width: 1.2; stroke-dasharray: 5 4; }
+.path-sel { fill: none; stroke: var(--innerpulse-text); stroke-width: 1.2; stroke-dasharray: 5 4; animation: march 1s linear infinite; }
 .ring-sel { fill: none; stroke: var(--innerpulse-text); stroke-width: 1.5; }
 .ring-hover { fill: none; stroke: var(--innerpulse-pulse); stroke-width: 1.5; }
 .boxrect { fill: rgba(227, 230, 233, .08); stroke: var(--innerpulse-text); stroke-width: 1; }
@@ -117,13 +187,20 @@ button[aria-pressed="true"] small[data-air] { color: var(--innerpulse-gunmetal);
 .zoomer button { width: 34px; height: 34px; padding: 0; font-size: 17px; background: var(--innerpulse-surface-2); }
 .zoomer button[aria-pressed="true"] { background: var(--innerpulse-text); }
 .strip-wrap { margin-top: 10px; }
-.strip { display: block; width: 100%; height: 42px; background: var(--innerpulse-surface-1); border: 1px solid var(--innerpulse-line-2); border-radius: var(--radius); }
+.strip { cursor: ew-resize; touch-action: none; display: block; width: 100%; height: 42px; background: var(--innerpulse-surface-1); border: 1px solid var(--innerpulse-line-2); border-radius: var(--radius); }
 .strip .sp { fill: var(--series); }
 .strip .out { fill: url(#hatch); }
 .strip .hatch-bar { fill: var(--innerpulse-surface-3); }
 .strip .dim { fill: rgba(11, 13, 16, .74); }
+.strip .edge { fill: var(--innerpulse-text); }
+.strip .sp { transition: fill var(--innerpulse-dur-1); }
+.strip .sp:hover { fill: var(--innerpulse-amber); }
 .range { display: grid; grid-template-columns: auto minmax(0, 1fr) auto minmax(0, 1fr); gap: 4px 10px; align-items: center; margin-top: 8px; font: 500 var(--innerpulse-text-xs)/1.2 var(--innerpulse-mono); letter-spacing: .12em; text-transform: uppercase; color: var(--innerpulse-text-3); }
-.range input { width: 100%; accent-color: var(--innerpulse-text-2); }
+.range input { -webkit-appearance: none; appearance: none; width: 100%; height: 18px; background: transparent; cursor: pointer; }
+.range input::-webkit-slider-runnable-track { height: 2px; background: var(--innerpulse-line-2); }
+.range input::-moz-range-track { height: 2px; background: var(--innerpulse-line-2); }
+.range input::-webkit-slider-thumb { -webkit-appearance: none; width: 10px; height: 18px; margin-top: -8px; background: var(--innerpulse-text); border-radius: 2px; }
+.range input::-moz-range-thumb { width: 10px; height: 18px; border: 0; background: var(--innerpulse-text); border-radius: 2px; }
 .side { display: grid; gap: 12px; min-width: 0; }
 .card { background: var(--innerpulse-surface-1); border: 1px solid var(--innerpulse-line); border-radius: calc(var(--radius) * 2); padding: 14px; min-width: 0; }
 .card h3 { font: 500 var(--innerpulse-text-xs)/1.2 var(--innerpulse-mono); letter-spacing: .12em; text-transform: uppercase; color: var(--innerpulse-text-3); }
@@ -212,6 +289,10 @@ dl { margin: 0; }
 @media (max-width: 1160px) {
   .fresh .age { display: none; }
 }
+@media (max-width: 860px) {
+  .hero { grid-template-columns: minmax(0, 1fr); }
+  .hero-globe { width: min(66vw, 320px); margin: 48px auto 0; }
+}
 @media (max-width: 1040px) {
   .map-wrap { grid-template-columns: minmax(0, 1fr); }
   .side { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -231,9 +312,11 @@ dl { margin: 0; }
   #readout { display: none; }
 }
 @media (max-width: 720px) {
+  .nav-tick { display: none; }
   .fresh { margin-left: auto; margin-right: 12px; }
 }
 @media (prefers-reduced-motion: reduce) {
-  button { transition: none; }
+  button, .pic, .pic img, .nav-tick { transition: none; }
+  .pulse, .path-sel, .viewer[open] { animation: none; }
   * { scroll-behavior: auto; }
 }

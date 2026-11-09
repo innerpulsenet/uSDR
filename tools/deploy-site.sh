@@ -16,7 +16,7 @@ trap 'rm -rf "$stamped"' EXIT
 cp -r site/index.html site/css site/js "$stamped/"
 sed -i -E "s#href=\"((brand/[^\"]+|css/hf)\.css)\"#href=\"\1?v=$version\"#; s#src=\"js/app\.js\"#src=\"js/app.js?v=$version\"#" "$stamped/index.html"
 sed -i -E "s#from \"(\./[a-z]+\.js)\"#from \"\1?v=$version\"#" "$stamped"/js/*.js
-test "$(grep -c "?v=$version" "$stamped/index.html")" -eq 5
+test "$(grep -c "?v=$version" "$stamped/index.html")" -eq 6
 rsync -a "$stamped/index.html" "$stamped/css" "$stamped/js" arm2:www/hf/
 rsync -a site/favicon.ico site/favicon.svg site/apple-touch-icon.png site/brand arm2:www/hf/
 rsync -a site/data/coast-110m.json site/data/land-110m.json site/data/coast-50m.json site/data/land-50m.json site/data/lookups-site.json site/data/ground-stations.json arm2:www/hf/data/

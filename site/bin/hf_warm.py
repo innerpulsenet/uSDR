@@ -5,6 +5,7 @@ view never touches the database.
 Everything here comes from the log. Time not monitored is reported as such,
 and a window with no data stays empty rather than being filled in.
 """
+import base64
 import json
 import math
 import os
@@ -305,6 +306,116 @@ def build_traffic(conn, now):
     return {"generated_utc": now, "flights": sorted(flights.values(), key=lambda x: -x["t"])[:500], "ships": ships}
 
 
+OG_EVERY_S = 3300
+BAND_COLORS = [(0, 163, 184), (225, 102, 74), (134, 92, 231), (143, 148, 155)]
+HERE = os.path.dirname(os.path.abspath(__file__))
+
+
+def band_group(label):
+    digits = re.match(r"\d+", label)
+    if not digits or not label.endswith(" m"):
+        return 3
+    meters = int(digits.group())
+    return 0 if meters >= 40 else 1 if meters >= 17 else 2
+
+
+def write_card(m, now):
+    """The share card: the real stations plotted on the prepared artwork, and how many."""
+    target = os.path.join(OUT, "og.png")
+    if os.path.exists(target) and now - os.path.getmtime(target) < OG_EVERY_S:
+        return
+    with open(os.path.join(HERE, "og-assets.json")) as f:
+        assets = json.load(f)
+    with open(os.path.join(HERE, "og-base.bin"), "rb") as f:
+        px = bytearray(zlib.decompress(f.read()))
+    width, height = assets["width"], assets["height"]
+    globe = assets["globe"]
+    lon0, lat0 = math.radians(globe["lon0"]), math.radians(globe["lat0"])
+
+    def to_card(lat, lon):
+        p, l = math.radians(lat), math.radians(lon) - lon0
+        x = math.cos(p) * math.sin(l)
+        y = math.cos(lat0) * math.sin(p) - math.sin(lat0) * math.cos(p) * math.cos(l)
+        z = math.sin(lat0) * math.sin(p) + math.cos(lat0) * math.cos(p) * math.cos(l)
+        return globe["cx"] + globe["r"] * x, globe["cy"] - globe["r"] * y, z
+
+    def blend(x, y, color, alpha):
+        if 0 <= x < width and 0 <= y < height:
+            i = (y * width + x) * 3
+            for c in range(3):
+                px[i + c] = int(px[i + c] + (color[c] - px[i + c]) * alpha)
+
+    def disc(cx, cy, radius, color, alpha=1.0):
+        reach = int(radius + 2)
+        for y in range(int(cy) - reach, int(cy) + reach + 1):
+            for x in range(int(cx) - reach, int(cx) + reach + 1):
+                cover = max(0.0, min(1.0, radius + 0.5 - math.hypot(x - cx, y - cy)))
+                if cover:
+                    blend(x, y, color, cover * alpha)
+
+    squares = {}
+    for s, _, b, _, ident, n, _, _ in m["spots"]:
+        e = squares.setdefault(s, {"ids": set(), "groups": [0, 0, 0, 0]})
+        e["ids"].add(ident)
+        e["groups"][band_group(m["bands"][b])] += n
+    dots = []
+    for s, e in squares.items():
+        lat, lon = grid_center(m["squares"][s])
+        x, y, z = to_card(lat, lon)
+        if z > 0.03:
+            dots.append((len(e["ids"]), x, y, e["groups"].index(max(e["groups"])), lat, lon))
+    dots.sort(key=lambda d: d[0])
+
+    if m["station_grid"]:
+        home = grid_center(m["station_grid"])
+        h1, l1 = math.radians(home[0]), math.radians(home[1])
+        a = (math.cos(h1) * math.cos(l1), math.cos(h1) * math.sin(l1), math.sin(h1))
+        for count, _, _, group, lat, lon in sorted(dots, key=lambda d: -d[0])[:34]:
+            p2, l2 = math.radians(lat), math.radians(lon)
+            b = (math.cos(p2) * math.cos(l2), math.cos(p2) * math.sin(l2), math.sin(p2))
+            w = math.acos(max(-1.0, min(1.0, sum(i * j for i, j in zip(a, b)))))
+            if w < 0.05:
+                continue
+            for k in range(0, 321):
+                t = k / 320
+                s1, s2 = math.sin((1 - t) * w) / math.sin(w), math.sin(t * w) / math.sin(w)
+                v = [s1 * i + s2 * j for i, j in zip(a, b)]
+                x, y, z = to_card(math.degrees(math.asin(max(-1.0, min(1.0, v[2])))), math.degrees(math.atan2(v[1], v[0])))
+                if z > 0:
+                    blend(int(x), int(y), BAND_COLORS[group], 0.2)
+
+    for count, x, y, group, _, _ in dots:
+        r = 1.6 if count < 2 else 2.4 if count < 5 else 3.4 if count < 20 else 5.0
+        disc(x, y, r + 1.2, (12, 14, 17), 0.85)
+        disc(x, y, r, BAND_COLORS[group])
+    if m["station_grid"]:
+        x, y, z = to_card(*grid_center(m["station_grid"]))
+        if z > 0:
+            for k in range(96):
+                blend(int(x + 9 * math.cos(k / 15.28)), int(y + 9 * math.sin(k / 15.28)), (227, 230, 233), 0.95)
+            disc(x, y, 2.4, (227, 230, 233))
+
+    for stat, value in zip(assets["stats"], (len(m["idents"]), len(m["squares"]))):
+        pen = stat["x"]
+        for ch in f"{value:,}":
+            g = assets["glyphs"][ch]
+            alpha = zlib.decompress(base64.b64decode(g["a"]))
+            for row in range(assets["cell_h"]):
+                for col in range(g["w"]):
+                    a = alpha[row * g["w"] + col]
+                    if a:
+                        blend(pen + col, stat["y"] + row - 8, (227, 230, 233), a / 255)
+            pen += g["advance"]
+
+    def chunk(kind, body):
+        return struct.pack(">I", len(body)) + kind + body + struct.pack(">I", zlib.crc32(kind + body))
+    raw = b"".join(b"\0" + bytes(px[y * width * 3:(y + 1) * width * 3]) for y in range(height))
+    with open(target + ".tmp", "wb") as f:
+        f.write(b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)) + chunk(b"IDAT", zlib.compress(raw, 7)) + chunk(b"IEND", b""))
+    os.chmod(target + ".tmp", 0o644)
+    os.replace(target + ".tmp", target)
+
+
 THUMB_WIDTH = 480
 THUMBS_PER_RUN = 5
 
@@ -418,7 +529,12 @@ def main():
     prune(conn, now)
     station_grid = meta(conn, "grid")
     write("status.json", build_status(conn, now, station_grid))
-    write("map-24h.json", build_map(conn, now, 24, station_grid))
+    day_map = build_map(conn, now, 24, station_grid)
+    write("map-24h.json", day_map)
+    try:
+        write_card(day_map, now)
+    except (OSError, ValueError, KeyError, zlib.error) as e:
+        print(f"hf-site: share card: {e}", file=sys.stderr)
     write("map-7d.json", build_map(conn, now, 24 * 7, station_grid))
     write("activity.json", build_activity(conn, now, station_grid))
     write("log.json", {"generated_utc": now, "rows": [row_out(r) for r in conn.execute(f"SELECT * FROM observations ORDER BY at_utc DESC, id DESC LIMIT 500")]})
