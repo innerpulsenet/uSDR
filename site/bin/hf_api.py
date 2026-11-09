@@ -109,7 +109,7 @@ def clean_listening(s):
     healthy = s.get("healthy")
     if healthy not in (None, 0, 1):
         raise Reject("bad healthy")
-    if s.get("cause") not in ("schedule", "operator"):
+    if s.get("cause") not in ("schedule", "operator", "wideband"):
         raise Reject("bad cause")
     return (
         integer(s.get("id"), "id", 1), integer(s.get("start_utc"), "start_utc", 1), integer(s.get("end_utc"), "end_utc", 1),

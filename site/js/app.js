@@ -74,7 +74,7 @@ async function showNow() {
     </dl>
     ${s.unhealthy_s || s.lost_decodes ? `<p class="ip-notice ip-notice-warn" role="status"><svg class="ip-i sm" aria-hidden="true"><use href="brand/sprite.svg#ip-s-warn"/></svg><span>${s.unhealthy_s ? `${hours(s.unhealthy_s)} of listening failed its radio check and is left out of the figures. ` : ""}${s.lost_decodes ? `${num(s.lost_decodes)} decodes were lost to a full queue.` : ""}</span></p>` : ""}
     <section aria-labelledby="yield"><h2 id="yield">Decodes per hour on air</h2>
-      <p class="note">Divided by the time actually spent on each mode, since the receiver can only do one at a time.</p>
+      <p class="note">Divided by the time actually spent on each mode.</p>
       ${s.by_mode.length ? `<div class="bars">${s.by_mode.map((m) => {
         const rate = m.n / Math.max(m.monitored_s / 3600, 0.1);
         return `<div class="bar"><span>${esc(m.mode)}</span><i style="--w:${(rate / max * 100).toFixed(1)}%"></i><em>${num(Math.round(rate))}/h · ${hours(m.monitored_s)} on air</em></div>`;
@@ -558,7 +558,7 @@ async function showStation() {
     <h1>How this log is made.</h1>
     </header>
     <div class="prose">
-      <p class="lede">A single software-defined receiver on a large wire loop, running unattended. It decodes one mode on one frequency at a time, and a schedule decides which.</p>
+      <p class="lede">A single software-defined receiver on a large wire loop, running unattended. A schedule decides where it tunes and what it decodes there, and FT8 on 80, 40 and 30 meters is decoded alongside whenever those frequencies fall inside the 8 MHz it is taking in.</p>
       <h2>What it listens to</h2>
       <p>Amateur digital modes (FT8, FT4, WSPR and JS8), HFDL aircraft datalink, DSC ship calls, SELCAL, radiofax weather charts and SSTV, all below 30 MHz.</p>
       <h2>Not monitored is not quiet</h2>

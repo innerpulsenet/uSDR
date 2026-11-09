@@ -3353,7 +3353,7 @@ fn with_equalizer(mut st: StereoStatus, eq: Option<&scannerd_engine::cma::Cma>) 
 
 /// An FT8/FT4 decode as the log carries it: the message as the operator
 /// reads it, and its measurements and parts as fields.
-fn ft8_event(slot_ms: u64, d: &scannerd_engine::ft8::Decode) -> DecodeEvent {
+pub(crate) fn ft8_event(slot_ms: u64, d: &scannerd_engine::ft8::Decode) -> DecodeEvent {
     let secs = slot_ms / 1000;
     let mut fields = std::collections::BTreeMap::new();
     fields.insert("snr".to_string(), format!("{:.0}", d.snr_db));
@@ -4286,6 +4286,7 @@ fn run_sdr(
     // first Pager frame, rebuilt when the span rate changes.
     let mut pager_bank: Option<scannerd_engine::pager_bank::PagerBank> = None;
     let mut ais_rx: Option<scannerd_engine::ais::AisReceiver> = None;
+    let wide = crate::wideband::from_env(events.clone());
     let mut ais_key: Option<(f64, f64)> = None;
     let mut ais_frames: Vec<scannerd_engine::ais::AisFrame> = Vec::new();
     let mut ais_logged = Instant::now();
@@ -5534,6 +5535,10 @@ fn run_sdr(
         clean.clear();
         clean.extend_from_slice(&block);
         front.process(&mut clean);
+        if let Some(w) = &wide {
+            let main_dial = (current_mode == SdrMode::Ft8).then(|| inspect_hz.round() as u64);
+            w.feed(&clean, current_rate, current_freq + lo_offset_for(current_rate, lo_offset, current_mode), now_ms(), main_dial);
+        }
 
         // Spectrum is displayed at DEFAULT_FPS. Ingest every block so the
         // pending window stays current; FFT only when a frame is due.

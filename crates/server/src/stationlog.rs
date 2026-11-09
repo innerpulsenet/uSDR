@@ -446,6 +446,11 @@ pub struct Listener {
 }
 
 impl Listener {
+    /// A listener whose segments number from `base`, to stay clear of another's.
+    pub fn numbered_from(base: u64) -> Self {
+        Self { open: None, next_seq: base }
+    }
+
     pub fn decode(&mut self, valid: bool) {
         if let Some(o) = &mut self.open {
             o.seg.decodes += 1;
@@ -562,10 +567,14 @@ fn json_or_null(m: &Map<String, Value>) -> Option<String> {
 }
 
 /// The writer's connection.
+/// Segments that can be open together: the receiver and its channels, with room.
+const OPEN_ROWS: usize = 32;
+
 struct Store {
     conn: Connection,
-    /// The row the segment being written lives in.
-    current: Option<(u64, i64)>,
+    /// The rows the segments being written live in, newest last: the main
+    /// receiver's and any wideband channels'.
+    current: std::collections::VecDeque<(u64, i64)>,
     pictures: PathBuf,
 }
 
@@ -592,7 +601,7 @@ impl Store {
         if version < 3 {
             conn.execute_batch(&format!("BEGIN; {MIGRATE_3} PRAGMA user_version = 3; COMMIT;"))?;
         }
-        Ok(Store { conn, current: None, pictures: pictures_dir(path) })
+        Ok(Store { conn, current: std::collections::VecDeque::new(), pictures: pictures_dir(path) })
     }
 
     fn apply(&mut self, cmds: &[Cmd]) -> rusqlite::Result<()> {
@@ -661,7 +670,7 @@ impl Store {
                 }
                 Cmd::Segment(s) => {
                     let clipped = s.peak_iq.is_some_and(|p| p >= CLIPPED).then_some(0_i64);
-                    let row = self.current.filter(|(seq, _)| *seq == s.seq).map(|(_, row)| row);
+                    let row = self.current.iter().find(|(seq, _)| *seq == s.seq).map(|(_, row)| *row);
                     let row = match row {
                         Some(row) => {
                             tx.prepare_cached("UPDATE listening SET end_utc = ?1, noise_dbfs = ?2, peak_iq = ?3, rfgr_db = ?4, decodes = ?5, valid_decodes = ?6, healthy = COALESCE(?8, healthy) WHERE id = ?7")?
@@ -677,7 +686,12 @@ impl Store {
                             tx.last_insert_rowid()
                         }
                     };
-                    self.current = Some((s.seq, row));
+                    if !self.current.iter().any(|(seq, _)| *seq == s.seq) {
+                        if self.current.len() == OPEN_ROWS {
+                            self.current.pop_front();
+                        }
+                        self.current.push_back((s.seq, row));
+                    }
                 }
             }
         }
@@ -855,7 +869,10 @@ impl StationLog {
             tokio::select! {
                 ev = events.recv() => match ev {
                     Ok(SdrEvent::Decode { inspect_hz, event }) => {
-                        listener.decode(event.valid);
+                        // A wideband channel keeps its own account of its airtime.
+                        if !event.fields.contains_key(crate::wideband::CHANNEL_FIELD) {
+                            listener.decode(event.valid);
+                        }
                         if let Some(o) = observe(inspect_hz, &event, &own_call(), unix_now()) {
                             self.submit(Cmd::Observe(Box::new(o)));
                         }
@@ -1019,6 +1036,11 @@ impl StationLog {
             )
             .optional()?;
         Ok(found.map(|(id, file, meta)| UplinkPicture { id, path: self.pictures_dir().join(file), meta }))
+    }
+
+    /// A stretch of listening reported by something other than the main receiver.
+    pub fn add_segment(&self, segment: Segment) {
+        self.submit(Cmd::Segment(segment));
     }
 
     /// Publish or decline a picture held for review. Only a held one changes.
@@ -1574,6 +1596,18 @@ mod tests {
         assert_eq!(next.meta["station"], "NMG");
         store.apply(&[Cmd::PictureUploaded { id: next.id, at: NOW }]).unwrap();
         assert!(log.next_picture().unwrap().is_none());
+    }
+
+    #[test]
+    fn segments_open_together_each_keep_their_own_row() {
+        let (mut store, _log) = uplink_fixture("open-together");
+        for end in [NOW + 20, NOW + 40, NOW + 60] {
+            store.apply(&[Cmd::Segment(segment(0, NOW, end)), Cmd::Segment(segment(1 << 40, NOW, end))]).unwrap();
+        }
+        let rows: i64 = store.conn.query_row("SELECT COUNT(*) FROM listening", [], |r| r.get(0)).unwrap();
+        assert_eq!(rows, 2);
+        let ended: i64 = store.conn.query_row("SELECT MIN(end_utc) FROM listening", [], |r| r.get(0)).unwrap();
+        assert_eq!(ended as u64, NOW + 60);
     }
 
     #[test]

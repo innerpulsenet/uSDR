@@ -200,7 +200,9 @@ def build_status(conn, now, station_grid):
     ingest = meta(conn, "last_ingest_utc")
     for m in by_mode:
         m["monitored_s"] = monitored.get(m["mode"], 0)
-    return {"generated_utc": now, "last_ingest_utc": int(ingest) if ingest else None, "station_grid": station_grid, "by_mode": by_mode, "monitored_s": sum(monitored.values()),
+    # The receiver's own time. Wideband channels listen alongside it, so they are counted per channel only.
+    receiver_s = conn.execute("SELECT COALESCE(SUM(MIN(end_utc, ?) - MAX(start_utc, ?)), 0) FROM listening WHERE end_utc >= ? AND healthy IS NOT 0 AND cause != 'wideband'", (now, since, since)).fetchone()[0]
+    return {"generated_utc": now, "last_ingest_utc": int(ingest) if ingest else None, "station_grid": station_grid, "by_mode": by_mode, "monitored_s": receiver_s,
             "monitored_by_mode": monitored, "unhealthy_s": bad, "lost_decodes": lost, "last": dict(last) if last else None, "latest": latest}
 
 

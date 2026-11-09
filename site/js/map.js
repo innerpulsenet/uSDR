@@ -653,10 +653,10 @@ export function mountMap(root, data, opts) {
         <dt>Grid squares</dt><dd>${num(seen.cells)}</dd>
         <dt>Aircraft with a track</dt><dd>${num(flights)}</dd>
         <dt>Hours with listening</dt><dd>${hours} of ${span}</dd>
-        <dt>Time on air, all modes</dt><dd>${(secs / 3600).toFixed(1)} h</dd>
+        <dt>Listening, all channels</dt><dd>${(secs / 3600).toFixed(1)} h</dd>
       </dl>
       ${bandList(seen.bands)}
-      ${span > hours ? `<p class="note" style="margin-top:8px">The receiver was tuned here for only part of this range, one mode at a time. A blank region can mean it was listening elsewhere.</p>` : ""}`;
+      ${span > hours ? `<p class="note" style="margin-top:8px">The receiver was tuned here for only part of this range. A blank region can mean it was listening elsewhere.</p>` : ""}`;
   }
 
   function showReadout(html) {

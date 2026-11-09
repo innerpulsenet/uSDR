@@ -21,6 +21,7 @@ mod sdr;
 mod stationlog;
 mod sub_rx;
 mod uplink;
+mod wideband;
 
 use sdr::SdrEvent;
 
@@ -500,6 +501,7 @@ async fn main() -> Result<()> {
         ));
     }
     if let Some(log) = state.station_log.clone() {
+        wideband::attach(Arc::clone(&log));
         match uplink::load(&state.config_path.with_file_name("uplink.toml")) {
             Ok(Some(config)) => {
                 let station = Arc::clone(&state);
@@ -569,6 +571,7 @@ async fn main() -> Result<()> {
         .route("/api/station/pictures/{id}", get(get_station_picture))
         .route("/api/station/pictures/{id}/decision", post(post_station_picture_decision))
         .route("/station/pictures", get(picture_review_page))
+        .route("/api/station/wideband", get(get_station_wideband))
         .route("/api/sdr/digital", post(post_sdr_digital))
         .route("/api/sdr/fax", get(get_sdr_fax))
         .route("/ws", get(ws_upgrade))
@@ -1349,6 +1352,10 @@ async fn post_station_picture_decision(
     let log = st.station_log.clone().ok_or_else(|| anyhow::anyhow!("the station log is not open"))?;
     log.decide_picture(id, req.publish);
     Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+async fn get_station_wideband() -> Json<serde_json::Value> {
+    Json(wideband::snapshot())
 }
 
 async fn picture_review_page() -> Html<&'static str> {
