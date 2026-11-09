@@ -22,8 +22,6 @@ PICTURES = os.environ.get("HF_PICTURES", "/home/patrickh/www/hf/pictures")
 
 AMATEUR = ("FT8", "FT4", "WSPR", "JS8")
 AMATEUR_SQL = ",".join(f"'{m}'" for m in AMATEUR)
-# A DSC call can be a live distress relay. This is a logbook, not a feed.
-DSC_DELAY_S = 6 * 3600
 KEEP_RAW_S = 365 * 86400
 LOW_DISK_BYTES = 8 << 30
 HAM_BANDS = [(1.8, 2.0, "160 m"), (3.5, 4.0, "80 m"), (5.25, 5.45, "60 m"), (7.0, 7.3, "40 m"), (10.1, 10.15, "30 m"),
@@ -39,11 +37,6 @@ def band(hz):
         if low <= mhz <= high:
             return name
     return f"{int(mhz)} MHz"
-
-
-def visible(now):
-    """SQL: rows that may be shown yet."""
-    return f"(mode != 'DSC' OR at_utc <= {now - DSC_DELAY_S})"
 
 
 def unhealthy(column="at_utc"):
@@ -129,13 +122,13 @@ def build_map(conn, now, hours, station_grid):
 
     ground = {str(r["g"]): r["n"] for r in conn.execute("SELECT json_extract(details,'$.gsId') AS g, COUNT(*) AS n FROM observations WHERE mode='HFDL' AND at_utc >= ? AND g IS NOT NULL GROUP BY g", (since,))}
     dsc = [{"t": r["at_utc"], "lat": round(r["lat"], 3), "lon": round(r["lon"], 3), "i": r["ident"], "k": r["kind"]}
-           for r in conn.execute("SELECT at_utc, lat, lon, ident, kind FROM observations WHERE mode='DSC' AND at_utc >= ? AND at_utc <= ? AND lat IS NOT NULL ORDER BY at_utc DESC LIMIT 400", (since, now - DSC_DELAY_S))]
+           for r in conn.execute("SELECT at_utc, lat, lon, ident, kind FROM observations WHERE mode='DSC' AND at_utc >= ? AND lat IS NOT NULL ORDER BY at_utc DESC LIMIT 400", (since,))]
     monitored = [[r["h"], index(modes, r["mode"]), r["s"]] for r in conn.execute(
         "SELECT (start_utc - ?) / 3600 AS h, mode, SUM(end_utc - start_utc) AS s FROM listening WHERE end_utc >= ? AND healthy IS NOT 0 GROUP BY h, mode", (start, since)) if r["h"] >= 0]
     return {"generated_utc": now, "start_utc": start, "hours": hours, "station_grid": station_grid, "modes": modes, "bands": bands,
             "squares": list(squares), "idents": list(idents),
             "spots": [[s, m, b, h, i, n, None if best == -999 else round(best), (t - start) // 60] for (s, m, b, h, i), (n, best, t) in spots.items()],
-            "tracks": tracks[:400], "ground": ground, "dsc": dsc, "monitored": monitored, "dsc_delay_s": DSC_DELAY_S}
+            "tracks": tracks[:400], "ground": ground, "dsc": dsc, "monitored": monitored}
 
 
 def heat_rows(labels, counts, seconds):
@@ -147,7 +140,7 @@ def build_activity(conn, now, station_grid):
     since = now - days * 86400
     first = conn.execute("SELECT MIN(start_utc) FROM listening").fetchone()[0]
     b_counts, b_secs, m_counts, m_secs = {}, {}, {}, {}
-    for r in conn.execute(f"SELECT mode, dial_hz, (at_utc / 3600) % 24 AS h, COUNT(*) AS n FROM observations WHERE at_utc >= ? AND {visible(now)} AND {unhealthy()} GROUP BY mode, dial_hz, h", (since,)):
+    for r in conn.execute(f"SELECT mode, dial_hz, (at_utc / 3600) % 24 AS h, COUNT(*) AS n FROM observations WHERE at_utc >= ? AND {unhealthy()} GROUP BY mode, dial_hz, h", (since,)):
         m_counts[(r["mode"], r["h"])] = m_counts.get((r["mode"], r["h"]), 0) + r["n"]
         if r["mode"] in AMATEUR:
             key = (band(r["dial_hz"]), r["h"])
@@ -161,7 +154,7 @@ def build_activity(conn, now, station_grid):
     mode_labels = sorted({k[0] for k in m_secs})
 
     daily = [dict(r) for r in conn.execute(f"""SELECT at_utc / 86400 * 86400 AS day, mode, COUNT(*) AS n, COUNT(DISTINCT ident) AS idents FROM observations
-                                               WHERE at_utc >= ? AND {visible(now)} GROUP BY day, mode ORDER BY day""", (now - 30 * 86400,))]
+                                               WHERE at_utc >= ? GROUP BY day, mode ORDER BY day""", (now - 30 * 86400,))]
     farthest = []
     if station_grid:
         home = grid_center(station_grid)
@@ -187,11 +180,11 @@ def row_out(r):
 
 def build_status(conn, now, station_grid):
     since = now - 86400
-    by_mode = [dict(r) for r in conn.execute(f"SELECT mode, COUNT(*) AS n, COUNT(DISTINCT ident) AS idents FROM observations WHERE at_utc >= ? AND {visible(now)} GROUP BY mode ORDER BY n DESC", (since,))]
+    by_mode = [dict(r) for r in conn.execute(f"SELECT mode, COUNT(*) AS n, COUNT(DISTINCT ident) AS idents FROM observations WHERE at_utc >= ? GROUP BY mode ORDER BY n DESC", (since,))]
     monitored = {r["mode"]: r["s"] for r in conn.execute("SELECT mode, SUM(MIN(end_utc, ?) - MAX(start_utc, ?)) AS s FROM listening WHERE end_utc >= ? AND healthy IS NOT 0 GROUP BY mode", (now, since, since))}
     bad = conn.execute("SELECT COALESCE(SUM(end_utc - start_utc), 0) FROM listening WHERE end_utc >= ? AND healthy = 0", (since,)).fetchone()[0]
     last = conn.execute("SELECT mode, dial_hz, start_utc, end_utc FROM listening ORDER BY end_utc DESC LIMIT 1").fetchone()
-    latest = [row_out(r) for r in conn.execute(f"SELECT * FROM observations WHERE {visible(now)} ORDER BY at_utc DESC, id DESC LIMIT 40")]
+    latest = [row_out(r) for r in conn.execute(f"SELECT * FROM observations ORDER BY at_utc DESC, id DESC LIMIT 40")]
     lost = conn.execute("SELECT COALESCE(SUM(dropped), 0) FROM gaps WHERE at_utc >= ?", (since,)).fetchone()[0]
     ingest = meta(conn, "last_ingest_utc")
     for m in by_mode:
@@ -214,13 +207,12 @@ def shard_of(ident):
 
 def roll_heard(conn):
     """Adds rows that arrived since the last run to the running per-station totals,
-    and returns the lookup files they changed. Ship calls stay out of it: they are
-    held back six hours, and a name search is not what that log is for."""
+    and returns the lookup files they changed."""
     done = int(meta(conn, "heard_id") or 0)
     top = conn.execute("SELECT COALESCE(MAX(id), 0) FROM observations").fetchone()[0]
     totals = {}
     for r in conn.execute(f"""SELECT ident, mode, dial_hz, at_utc, grid, snr_db FROM observations
-                              WHERE id > ? AND id <= ? AND ident IS NOT NULL AND mode IN ({AMATEUR_SQL},'HFDL') ORDER BY id""", (done, top)):
+                              WHERE id > ? AND id <= ? AND ident IS NOT NULL AND mode IN ({AMATEUR_SQL},'HFDL','DSC') ORDER BY id""", (done, top)):
         # ACARS pads registrations with dots and sends dashes when it has none.
         ident = r["ident"].lstrip(".")
         if not re.search("[A-Z0-9]", ident):
@@ -278,7 +270,7 @@ def main():
     write("map-24h.json", build_map(conn, now, 24, station_grid))
     write("map-7d.json", build_map(conn, now, 24 * 7, station_grid))
     write("activity.json", build_activity(conn, now, station_grid))
-    write("log.json", {"generated_utc": now, "rows": [row_out(r) for r in conn.execute(f"SELECT * FROM observations WHERE {visible(now)} ORDER BY at_utc DESC, id DESC LIMIT 500")]})
+    write("log.json", {"generated_utc": now, "rows": [row_out(r) for r in conn.execute(f"SELECT * FROM observations ORDER BY at_utc DESC, id DESC LIMIT 500")]})
     write("pictures.json", {"generated_utc": now, "pictures": [dict(r) for r in conn.execute("SELECT id, start_utc, end_utc, mode, dial_hz, width, lines, station, scheduled_title, file FROM pictures ORDER BY start_utc DESC LIMIT 300")]})
     free = shutil.disk_usage(os.path.dirname(DB)).free
     if free < LOW_DISK_BYTES:

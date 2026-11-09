@@ -23,8 +23,8 @@ function emptyLog() {
   return `<p class="empty">The log is empty. Nothing has arrived from the receiver yet, so there is nothing to show.</p>`;
 }
 
-// Only these modes are in the lookup files: amateur stations and HFDL flights.
-const LOOKUP_MODES = new Set(["FT8", "FT4", "WSPR", "JS8", "HFDL"]);
+// Only these modes are in the lookup files: the ones with a station to name.
+const LOOKUP_MODES = new Set(["FT8", "FT4", "WSPR", "JS8", "HFDL", "DSC"]);
 
 function callLink(mode, ident) {
   const clean = (ident || "").replace(/^\.+/, "");
@@ -205,7 +205,7 @@ async function showLog() {
 }
 
 function lookupForm(value) {
-  return `<form id="lookup" class="lookup" role="search"><label class="lbl" for="lookupq">Look up</label><input id="lookupq" type="search" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="Callsign, flight or grid square" value="${esc(value)}"><button type="submit">Search</button></form>`;
+  return `<form id="lookup" class="lookup" role="search"><label class="lbl" for="lookupq">Look up</label><input id="lookupq" type="search" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="Callsign, flight, MMSI or square" value="${esc(value)}"><button type="submit">Search</button></form>`;
 }
 
 function wireLookup() {
@@ -255,7 +255,7 @@ async function showWho(params) {
   view.innerHTML = `
     <p class="eyebrow">Station lookup</p>
     <h1>Was it heard here?</h1>
-    <p class="lede">Every amateur station and HFDL flight in the log, by callsign or flight. Ship calls are left out of the search.</p>
+    <p class="lede">Every amateur station, HFDL flight and DSC ship call in the log, by callsign, flight or MMSI.</p>
     ${lookupForm(q)}
     <div id="result"></div>`;
   wireLookup();
@@ -291,8 +291,10 @@ function showStation() {
       <p>Once an hour the receiver checks itself against a time-signal station. A stretch that failed the check or overloaded the receiver is left out of the figures.</p>
       <h2>What a blank map does not prove</h2>
       <p>A wire loop this long on the higher bands has a lobed pattern: strong in some directions, weak in others. A region with no spots does not show that the band was closed to it.</p>
+      <h2>This is not a distress monitor</h2>
+      <p>DSC calls appear here as they are logged, but the receiver spends only part of its time on those frequencies and nobody is watching it. If someone is in trouble at sea, contact a rescue coordination center.</p>
       <h2>What is left out on purpose</h2>
-      <p>The content of aircraft messages is not published. DSC ship calls appear six hours late and are a logbook, not a distress feed. If you are looking for someone in trouble at sea, contact a rescue coordination center.</p>
+      <p>The content of aircraft messages is not published.</p>
       <p>The station itself stays anonymous, and its position is given only as a four-character grid square. Radio amateurs heard on the air appear by their callsigns and locators, as they do on any public spotting network.</p>
       <h2>Aircraft positions</h2>
       <p>Aircraft queue position reports and sometimes send several together. Tracks are drawn in the order of each fix's own timestamp, and split where two fixes could not belong to one flight.</p>

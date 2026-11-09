@@ -142,9 +142,10 @@ class Ingest(unittest.TestCase):
         row = self.data("who/K1.json")["stations"]["K1ABC"]
         self.assertEqual((row[0][4], row[0][5], row[0][6]), (3, -3, "FN31"))
 
-    def test_ship_calls_are_not_in_the_lookup(self):
+    def test_a_ship_call_is_shown_at_once_and_can_be_looked_up(self):
         self.warm_with([self.recent(1, 90, mode="DSC", kind="call", ident="477665200", grid=None, loc_kind="none", snr_db=None)])
-        self.assertFalse(os.path.exists(os.path.join(hf_warm.OUT, "who", "47.json")))
+        self.assertEqual(self.data("who/47.json")["stations"]["477665200"][0][0], "DSC")
+        self.assertEqual([r["i"] for r in self.data("log.json")["rows"]], ["477665200"])
 
     def png(self, w, h):
         return hf_api.PNG_MAGIC + struct.pack(">I", 13) + b"IHDR" + struct.pack(">II", w, h) + b"\x08\x00\x00\x00\x00" + b"\x00" * 16

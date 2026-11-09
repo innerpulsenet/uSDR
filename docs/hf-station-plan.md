@@ -258,7 +258,7 @@ spots doesn't prove the band was closed to it. The Station page says so.
 | Content | Rule |
 |---|---|
 | HFDL | Flight, position, ground station. Never ACARS free text |
-| DSC | Published as logged history, delayed, and clearly not a live distress feed |
+| DSC | Published as logged, with no delay; the Station page says it is not a 24/7 distress monitor |
 | SSTV | Held for approval by default; anyone can transmit any image |
 | WEFAX | NOAA charts automatically; other services only after checking their terms |
 | Station identity | No callsign in pages, JSON, picture names or site source |
