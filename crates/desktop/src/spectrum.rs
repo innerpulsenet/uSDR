@@ -1469,7 +1469,7 @@ impl Panafall {
                         Stroke::new(1.0, theme::text_3()),
                     );
                     painter.text(
-                        pos2(time_axis.right() - 7.0, y),
+                        pos2(time_axis.right() - 12.0, y),
                         Align2::RIGHT_CENTER,
                         fmt_age(next_mark, step_s, visible_s >= 60.0),
                         theme::mono(crate::theme::ty::MICRO),
@@ -1481,11 +1481,14 @@ impl Panafall {
         }
 
         // ---- the palette's ramp down the gutter's edge, top level at the
-        // top and black at the foot, with the levels on hover.
+        // top and black at the foot. It is also the levels control: drag it
+        // and the colors move with the pointer, the wheel widens or narrows
+        // the range, a double click goes back to following the floor.
+        let mut levels_at = None;
         {
             let (black, top) = self.wf_levels(view);
             let lut = view.palette.lut();
-            let ramp = Rect::from_min_max(pos2(time_axis.right() - 4.0, wf.top() + 2.0), pos2(time_axis.right() - 2.0, wf.bottom() - 2.0));
+            let ramp = Rect::from_min_max(pos2(time_axis.right() - 8.0, wf.top() + 2.0), pos2(time_axis.right() - 2.0, wf.bottom() - 2.0));
             if ramp.height() > 8.0 {
                 let mut mesh = Mesh::default();
                 let steps = 48;
@@ -1502,13 +1505,91 @@ impl Panafall {
                     }
                 }
                 painter.add(Shape::mesh(mesh));
-                painter.rect_stroke(ramp.expand(0.5), CornerRadius::same(crate::theme::R_CELL), Stroke::new(1.0, theme::line()), egui::StrokeKind::Outside);
-                ui.interact(time_axis, resp.id.with("ramp"), Sense::hover())
-                    .on_hover_text(format!("Waterfall colors: {black:.0} dBFS and below is the ground, {top:.0} dBFS and above the top of the palette"));
+                let grab = ui.interact(ramp.expand2(vec2(3.0, 0.0)), resp.id.with("ramp"), Sense::click_and_drag());
+                let held = grab.hovered() || grab.dragged();
+                painter.rect_stroke(ramp.expand(0.5), CornerRadius::same(crate::theme::R_CELL), Stroke::new(1.0, if held { theme::AMBER } else { theme::line() }), egui::StrokeKind::Outside);
+                grab.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Slider, true, "Waterfall levels"));
+                if held {
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeVertical);
+                    levels_at = Some(ramp);
+                }
+                if grab.dragged() {
+                    // The color under the pointer stays under it.
+                    view.wf_black += grab.drag_delta().y * (top - black) / ramp.height();
+                    view.wf_black = if view.wf_auto_black { view.wf_black.clamp(-20.0, 20.0) } else { view.wf_black.clamp(-150.0, -20.0) };
+                }
+                if grab.hovered() {
+                    let notches = crate::widgets::wheel(ui);
+                    if notches != 0.0 {
+                        crate::widgets::eat_scroll(ui);
+                        view.wf_range = (view.wf_range - notches * 2.0).clamp(6.0, 120.0);
+                    }
+                }
+                if grab.double_clicked() {
+                    view.wf_auto_black = true;
+                    view.wf_black = -3.0;
+                }
             }
         }
 
         let mut frost = Frost { pan, wf, line: Vec::new(), glow: look.glow, fill: view.fill, bg: (bg_top, bg_bottom), wf_draws };
+
+        // ---- while the ramp is held: the levels in figures, and where the
+        // newest row's levels fall between them, on a plate beside it. Only
+        // then: the gutter has no room for it beside the times.
+        if let Some(ramp) = levels_at {
+            let (black, top) = self.wf_levels(view);
+            let head = [
+                format!("TOP {top:.0} dBFS"),
+                format!("BLACK {black:.0}{}", if view.wf_auto_black { " · follows the floor" } else { "" }),
+                "drag · wheel for range · double-click: auto".to_string(),
+            ];
+            let galleys: Vec<_> = head.iter().enumerate().map(|(i, t)| painter.layout_no_wrap(t.clone(), theme::mono(theme::ty::MICRO), if i == 2 { theme::text_3() } else { theme::text() })).collect();
+            let text_w = galleys.iter().map(|g| g.size().x).fold(0.0, f32::max);
+            let (hist_h, line_h) = (72.0, 14.0);
+            let size = vec2(text_w + 16.0, hist_h + 3.0 * line_h + 20.0);
+            let y = ui.input(|i| i.pointer.latest_pos()).map_or(ramp.center().y, |p| p.y).clamp(wf.top() + size.y / 2.0 + 4.0, (wf.bottom() - size.y / 2.0 - 4.0).max(wf.top() + size.y / 2.0 + 4.0));
+            let plate = Rect::from_center_size(pos2(wf.right() - size.x / 2.0 - 8.0, y), size);
+            if plate.height() <= wf.height() {
+                frost.plate(&painter, plate, theme::RADIUS, theme::line_2());
+                // The newest row's levels, counted into 36 steps from 12 dB
+                // under black to 12 over the top, strongest at the top.
+                let bars = 36usize;
+                let (lo, hi) = (black - 12.0, top + 12.0);
+                let mut counts = vec![0u32; bars];
+                if self.wf_cols > 0 && self.wf_count > 0 {
+                    let row = &self.wf_q[self.wf_head * self.wf_cols..(self.wf_head + 1) * self.wf_cols];
+                    for &q in row {
+                        let v = q as f32 / WF_Q_PER_DB + WF_Q_FLOOR_DB;
+                        if v > -190.0 {
+                            counts[(((v - lo) / (hi - lo)).clamp(0.0, 0.999) * bars as f32) as usize] += 1;
+                        }
+                    }
+                }
+                let most = counts.iter().copied().max().unwrap_or(0).max(1) as f32;
+                let hist = Rect::from_min_size(plate.min + vec2(8.0, 8.0), vec2(plate.width() - 16.0, hist_h));
+                painter.rect_filled(hist, CornerRadius::same(theme::R_CAP), alpha(theme::ink(), 0.6));
+                let bar_h = hist.height() / bars as f32;
+                let level_y = |db: f32| hist.bottom() - (db - lo) / (hi - lo) * hist.height();
+                for (k, &n) in counts.iter().enumerate() {
+                    if n > 0 {
+                        let db = lo + (k as f32 + 0.5) / bars as f32 * (hi - lo);
+                        let c = self.wf_lut.get(wf_quantize(db) as usize).copied().unwrap_or(theme::text_2());
+                        let w = (n as f32 / most).sqrt() * (hist.width() - 2.0);
+                        let y1 = hist.bottom() - k as f32 * bar_h;
+                        painter.rect_filled(Rect::from_min_max(pos2(hist.left() + 1.0, y1 - bar_h + 0.5), pos2(hist.left() + 1.0 + w.max(1.0), y1)), CornerRadius::ZERO, theme::lerp(c, theme::text_2(), 0.35));
+                    }
+                }
+                for (db, c) in [(top, theme::text_2()), (black, theme::AMBER)] {
+                    let y = theme::px(&ctx, level_y(db));
+                    painter.line_segment([pos2(hist.left(), y), pos2(hist.right(), y)], Stroke::new(1.0, alpha(c, 0.8)));
+                }
+                for (i, g) in galleys.into_iter().enumerate() {
+                    let c = if i == 2 { theme::text_3() } else { theme::text() };
+                    painter.galley(pos2(plate.left() + 8.0, hist.bottom() + 6.0 + i as f32 * line_h), g, c);
+                }
+            }
+        }
 
         // ---- replay controls on the waterfall: HOLD when live; when held,
         // how far back, and LIVE (ember: the live state) to return.
@@ -3200,6 +3281,34 @@ mod tests {
         assert_eq!(fmt_age(90.0, 30.0, true), "−1:30");
         // One format down an axis that reaches a minute: not −20s, −40s, −1:00.
         assert_eq!(fmt_age(20.0, 20.0, true), "−0:20");
+    }
+
+    #[test]
+    fn the_palette_ramp_sets_the_waterfall_levels() {
+        let mut h = harness();
+        let [_, wf, _, db] = h.state().pan.regions.unwrap();
+        // The ramp runs down the gutter's right edge, beside the waterfall.
+        let a = pos2(db.right() - 5.0, wf.center().y);
+        let (black, range, center) = (h.state().view.wf_black, h.state().view.wf_range, h.state().pan.center_hz);
+        h.event(Event::PointerMoved(a));
+        h.drag_at(a);
+        h.run_steps(1);
+        for i in 1..=10 {
+            h.event(Event::PointerMoved(a - egui::vec2(0.0, 4.0 * i as f32)));
+            h.run_steps(1);
+        }
+        if let Some(d) = std::env::var_os("USDR_QA_DIR") {
+            let _ = h.render().expect("render").save(std::path::Path::new(&d).join("levels.png"));
+        }
+        h.drop_at(a - egui::vec2(0.0, 40.0));
+        h.run_steps(2);
+        // Dragged up: the colors moved up with it, so black is lower.
+        assert!(h.state().view.wf_black < black - 1.0, "black {} from {black}", h.state().view.wf_black);
+        assert_eq!(h.state().pan.center_hz, center, "the display did not pan under the ramp");
+        assert!(h.state().acts.is_empty(), "nothing was tuned: {:?}", h.state().acts);
+        // The wheel narrows the range.
+        wheel(&mut h, a, 2.0, Modifiers::NONE);
+        assert_eq!(h.state().view.wf_range, range - 4.0);
     }
 
     #[test]
