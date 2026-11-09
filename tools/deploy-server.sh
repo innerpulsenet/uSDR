@@ -9,22 +9,27 @@
 #   tools/deploy-server.sh          build, install, restart
 #   tools/deploy-server.sh --no-build   install what target/trixie already has
 #
+# The binary is built for x86-64-v3 (AVX2, FMA): the DSP loops are written in
+# eight lanes and the radio host, an 11th-generation Core, has them. Another
+# host: USDR_TARGET_CPU=x86-64 tools/deploy-server.sh.
+#
 # The first run also creates the usdr user and seeds its settings from this
 # host's ~/.config/usdr (minus the SoapyRemote line: the radio is local
 # there). Later runs never touch the daemon's settings.
 set -eu
 host=${USDR_HOST:-root@172.16.0.216}
 root=$(cd "$(dirname "$0")/.." && pwd)
-bin="$root/target/trixie/release/usdr"
+bin="$root/target/trixie/server/usdr"
 
 if [ "${1:-}" != "--no-build" ]; then
     podman run --rm \
         -v "$root":/src:Z \
         -v "$HOME/.cargo/registry":/usr/local/cargo/registry:Z \
         -e CARGO_TARGET_DIR=/src/target/trixie \
+        -e RUSTFLAGS="-C target-cpu=${USDR_TARGET_CPU:-x86-64-v3}" \
         -w /src docker.io/library/rust:1.93-trixie \
         sh -c 'apt-get update -qq && apt-get install -y -qq libsoapysdr-dev pkg-config >/dev/null &&
-               cargo build --release -p usdr-server'
+               cargo build --profile server -p usdr-server'
 fi
 
 scp -q "$bin" "$host:/usr/local/bin/usdr.new"

@@ -3593,6 +3593,7 @@ dependencies = [
  "blip25-vocoder",
  "cipher",
  "des",
+ "libc",
  "num-complex",
  "rmbe",
  "rustfft",

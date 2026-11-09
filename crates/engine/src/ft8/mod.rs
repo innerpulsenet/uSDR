@@ -14,6 +14,7 @@
 mod deep;
 pub(crate) mod demod;
 pub(crate) mod ldpc;
+mod osd;
 mod pack;
 mod stream;
 mod subtract;
@@ -36,11 +37,56 @@ pub const F_LIMIT_HZ: f32 = 5_000.0;
 const MAX_CANDIDATES: usize = 300;
 const MIN_SCORE: f32 = 6.0;
 const LDPC_ITERATIONS: usize = 50;
-/// Candidates the second, finer pass may try, strongest first, and the
-/// time it may take: a busy band's leftovers are mostly noise, and the slot
-/// after this one is already filling.
+/// Candidates each search's second, finer pass may try, strongest first.
 const DEEP_CANDIDATES: usize = 120;
-const DEEP_BUDGET: std::time::Duration = std::time::Duration::from_millis(600);
+/// The time a decode's finer passes may take when nobody says otherwise:
+/// the examples and tests. The live decoders are given theirs by the pool
+/// that runs them ([`stream`]), from how much of the slot is left.
+const DEEP_BUDGET: std::time::Duration = std::time::Duration::from_millis(2_500);
+/// Searches of one slot, each after the last one's decodes are taken out.
+const SEARCHES: usize = 3;
+/// The share of the budget by which each search's finer pass must be done.
+/// One deadline for the lot let the first search spend it all, and the
+/// search after subtraction, where the weak signals have just been
+/// uncovered, got none on exactly the busy slots that needed it.
+const SEARCH_SHARE: [f32; SEARCHES] = [0.4, 0.8, 1.0];
+
+/// How hard a slot is searched. The default is what the live decoders run;
+/// [`Options::plain`] is the decoder before the aided passes, for comparing.
+#[derive(Clone, Copy, Debug)]
+pub struct Options {
+    /// Time for the finer passes of every search together.
+    pub budget: std::time::Duration,
+    /// Searches, each after the last one's decodes are subtracted.
+    pub searches: usize,
+    /// Each search has its own share of the budget.
+    pub split_budget: bool,
+    /// Leave out sync candidates that repeat a stronger one.
+    pub distinct: bool,
+    /// Try failed candidates as CQs, with a CQ's fixed bits given.
+    pub ap_cq: bool,
+    /// Run the ordered-statistics decoder where propagation fails.
+    pub osd: bool,
+    pub osd_max_checks: usize,
+    pub osd_max_hard: usize,
+}
+
+impl Default for Options {
+    fn default() -> Self {
+        Options { budget: DEEP_BUDGET, searches: SEARCHES, split_budget: true, distinct: true, ap_cq: true, osd: true, osd_max_checks: 40, osd_max_hard: 30 }
+    }
+}
+
+impl Options {
+    /// Two searches inside one 600 ms deadline, propagation only.
+    pub fn plain() -> Self {
+        Options { budget: std::time::Duration::from_millis(600), searches: 2, split_budget: false, distinct: false, ap_cq: false, osd: false, osd_max_checks: 0, osd_max_hard: 0 }
+    }
+
+    pub fn with_budget(self, budget: std::time::Duration) -> Self {
+        Options { budget, ..self }
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Protocol {
@@ -89,6 +135,10 @@ pub struct Decode {
     pub text: String,
     pub message: Message,
     pub ldpc_errors: u32,
+    /// How it was decoded: "bp" from the waterfall's soft bits, "deep" from
+    /// the matched filter's, "ap" as a CQ with its fixed bits given, "osd"
+    /// by the ordered-statistics decoder.
+    pub method: &'static str,
 }
 
 /// What a message says, field by field.
@@ -120,6 +170,7 @@ struct Found {
     search: usize,
     /// SNR, frequency and start, once measured for the subtraction.
     measured: Option<(f32, f32, f32)>,
+    method: &'static str,
 }
 
 /// Decode one slot of audio at [`RATE_HZ`], starting at the slot boundary.
@@ -132,13 +183,36 @@ pub fn decode_slot(protocol: Protocol, audio: &[f32], hashes: &mut CallHashes) -
 /// [`decode_slot`] searching `f_min..f_max` Hz of the audio for signals'
 /// lowest tones: the passband the receiver's filter lets through.
 pub fn decode_slot_in(protocol: Protocol, audio: &[f32], hashes: &mut CallHashes, f_min: f32, f_max: f32) -> Vec<Decode> {
-    decode_slot_budget(protocol, audio, hashes, f_min, f_max, DEEP_BUDGET)
+    decode_slot_with(protocol, audio, hashes, f_min, f_max, &Options::default())
 }
 
-/// [`decode_slot_in`] with the second pass given `budget` instead of
-/// [`DEEP_BUDGET`]: the sweeps that compare decoders give it all the time
-/// it wants, so a busy test machine does not change what decodes.
+/// [`decode_slot_in`] with the finer passes given `budget`: the sweeps that
+/// compare decoders give it all the time it wants, so a busy test machine
+/// does not change what decodes.
+#[cfg(test)]
 fn decode_slot_budget(protocol: Protocol, audio: &[f32], hashes: &mut CallHashes, f_min: f32, f_max: f32, budget: std::time::Duration) -> Vec<Decode> {
+    decode_slot_with(protocol, audio, hashes, f_min, f_max, &Options::default().with_budget(budget))
+}
+
+/// [`decode_slot_in`], searched as `options` say.
+pub fn decode_slot_with(protocol: Protocol, audio: &[f32], hashes: &mut CallHashes, f_min: f32, f_max: f32, options: &Options) -> Vec<Decode> {
+    name(protocol, find(protocol, audio, f_min, f_max, options), hashes)
+}
+
+/// A payload found in a slot, measured, and how it was decoded; the calls
+/// in it are not yet looked up.
+pub(crate) struct Heard {
+    payload: [u8; 10],
+    errors: usize,
+    /// SNR, frequency and start.
+    measured: (f32, f32, f32),
+    method: &'static str,
+}
+
+/// Everything in a slot, which is nearly all of a decode's work and needs
+/// no table of calls: the live decoders share one table and hold it only
+/// for [`name`].
+pub(crate) fn find(protocol: Protocol, audio: &[f32], f_min: f32, f_max: f32, options: &Options) -> Vec<Heard> {
     let f_max = f_max.min(F_LIMIT_HZ);
     let f_min = f_min.clamp(0.0, f_max - 100.0);
     // Brought to one level first. The waterfall's dB carries an absolute
@@ -150,49 +224,53 @@ fn decode_slot_budget(protocol: Protocol, audio: &[f32], hashes: &mut CallHashes
     if !(rms > 0.0 && rms.is_finite()) {
         return Vec::new();
     }
-    let level: Vec<f32> = audio.iter().map(|x| x * (0.1 / rms)).collect();
-    let audio = &level[..];
+    let mut rest: Vec<f32> = audio.iter().map(|x| x * (0.1 / rms)).collect();
     let started = std::time::Instant::now();
-    let deadline = started.checked_add(budget);
-    let mut found: Vec<Found> = Vec::new();
-    let Some(bb) = search(protocol, audio, f_min, f_max, 0, &mut found, deadline) else {
-        return Vec::new();
+    let searches = options.searches.clamp(1, SEARCHES);
+    let deadline = |search: usize| {
+        let share = if options.split_budget { SEARCH_SHARE[search + SEARCHES - searches] } else { 1.0 };
+        started.checked_add(options.budget.mul_f32(share.min(1.0)))
     };
+    let mut found: Vec<Found> = Vec::new();
     // Every decode taken out of the slot, and the slot searched again for
-    // what they covered. On the crowded sweep in the tests (six strong
-    // signals a slot, each with a weaker one a few tones over and a little
-    // later), the weaker ones went from 0 of 240 decoded to 200 for FT8 and
-    // from 70 to 190 for FT4, with nothing false; the slot's decode took
-    // about 2.5 times as long, most of it the second search's deep pass,
-    // which stays inside the same budget as the first's.
-    let mut residual = None;
-    if !found.is_empty() {
-        let mut rest = audio.to_vec();
-        for d in &mut found {
+    // what they covered, until a search finds nothing new. On the crowded
+    // sweep in the tests (six strong signals a slot, each with a weaker one
+    // a few tones over and a little later), one subtraction took the weaker
+    // ones from 0 of 240 decoded to 200 for FT8 and from 70 to 190 for FT4,
+    // with nothing false.
+    for search in 0..searches {
+        let before = found.len();
+        let Some(bb) = self::search(protocol, &rest, f_min, f_max, search, &mut found, deadline(search), options) else { break };
+        // Measured where it was found: one that only came out once the
+        // stronger signals over it were gone is measured without them.
+        let last = found.len() == before || search + 1 == searches;
+        for d in &mut found[before..] {
             let tones = demod::tones(protocol, &d.payload);
             let m = deep::measure(&bb, d.freq, d.start, &tones);
-            subtract::subtract(protocol, &mut rest, &tones, m.1, m.2, RATE_HZ);
+            if !last {
+                subtract::subtract(protocol, &mut rest, &tones, m.1, m.2, RATE_HZ);
+            }
             d.measured = Some(m);
         }
-        residual = search(protocol, &rest, f_min, f_max, 1, &mut found, deadline);
+        if last {
+            break;
+        }
     }
+    found.into_iter().filter_map(|d| Some(Heard { payload: d.payload, errors: d.errors, measured: d.measured?, method: d.method })).collect()
+}
+
+/// The messages in what [`find`] heard. Calls sent in full are added to
+/// `hashes`, and hashed calls are looked up in it.
+pub(crate) fn name(protocol: Protocol, heard: Vec<Heard>, hashes: &mut CallHashes) -> Vec<Decode> {
     // Once to learn every call sent in full, then again to name the hashes.
-    for d in &found {
+    for d in &heard {
         pack::unpack(&d.payload, hashes);
     }
-    found
+    heard
         .into_iter()
         .filter_map(|d| {
             let (text, message) = pack::unpack(&d.payload, hashes)?;
-            // Measured where it was found: one that only came out once the
-            // stronger signals over it were gone is measured without them.
-            let (snr_db, freq_hz, start_s) = match d.measured {
-                Some(m) => m,
-                None => {
-                    let bb = if d.search == 0 { &bb } else { residual.as_ref()? };
-                    deep::measure(bb, d.freq, d.start, &demod::tones(protocol, &d.payload))
-                }
-            };
+            let (snr_db, freq_hz, start_s) = d.measured;
             Some(Decode {
                 protocol,
                 snr_db: snr_db.clamp(-30.0, 50.0).round(),
@@ -201,9 +279,21 @@ fn decode_slot_budget(protocol: Protocol, audio: &[f32], hashes: &mut CallHashes
                 text,
                 message,
                 ldpc_errors: d.errors as u32,
+                method: d.method,
             })
         })
         .collect()
+}
+
+/// Whether a payload reached with help is a message worth believing. The
+/// aided decoders always land on some codeword, and one in 16,384 of those
+/// passes the CRC by chance; nearly all such words unpack to free text,
+/// telemetry, or calls that are not calls. So only a standard message
+/// between two whole callsigns is kept, and for the CQ attempt only a CQ.
+fn plausible(payload: &[u8; 10], method: &str) -> bool {
+    let Some((_, m)) = pack::unpack(payload, &mut CallHashes::default()) else { return false };
+    let whole = |c: &Option<String>| c.as_deref().is_some_and(|c| !c.starts_with('<') && c.len() >= 3);
+    m.kind == "standard" && whole(&m.de) && if method == "ap" { m.is_cq } else { m.is_cq || whole(&m.to) }
 }
 
 /// One search of the slot: sync candidates from the waterfall, each tried
@@ -211,7 +301,8 @@ fn decode_slot_budget(protocol: Protocol, audio: &[f32], hashes: &mut CallHashes
 /// until `deadline`. New payloads are added to `found`, marked as found by
 /// search number `search`. Returns the slot's baseband, or `None` if the
 /// audio is too short to hold a transmission.
-fn search(protocol: Protocol, audio: &[f32], f_min: f32, f_max: f32, search: usize, found: &mut Vec<Found>, deadline: Option<std::time::Instant>) -> Option<deep::Baseband> {
+#[allow(clippy::too_many_arguments)]
+fn search(protocol: Protocol, audio: &[f32], f_min: f32, f_max: f32, search: usize, found: &mut Vec<Found>, deadline: Option<std::time::Instant>, options: &Options) -> Option<deep::Baseband> {
     let wf = demod::Waterfall::new(protocol, audio, RATE_HZ, f_min, f_max);
     if wf.num_blocks < protocol.symbols() / 2 {
         return None;
@@ -225,20 +316,21 @@ fn search(protocol: Protocol, audio: &[f32], f_min: f32, f_max: f32, search: usi
             (d.freq - wf.freq_hz(c)).abs() < 0.6 * protocol.tone_spacing_hz() && (d.start - wf.start_s(c, RATE_HZ)).abs() < 0.6 * protocol.symbol_period()
         })
     };
-    for c in wf.candidates(MAX_CANDIDATES, MIN_SCORE) {
+    for c in wf.candidates(MAX_CANDIDATES, MIN_SCORE, options.distinct) {
         if near(found, &c) {
             continue;
         }
         match demod::decode_candidate(&wf, &c, LDPC_ITERATIONS) {
             Some((payload, errors)) => {
                 if !found.iter().any(|d| d.payload == payload) {
-                    found.push(Found { payload, errors, freq: wf.freq_hz(&c), start: wf.start_s(&c, RATE_HZ), search, measured: None });
+                    found.push(Found { payload, errors, freq: wf.freq_hz(&c), start: wf.start_s(&c, RATE_HZ), search, measured: None, method: "bp" });
                 }
             }
             None => missed.push(c),
         }
     }
     let bb = deep::Baseband::new(protocol, audio, RATE_HZ);
+    let aid = deep::Aid { ap_cq: options.ap_cq, osd: options.osd, osd_max_checks: options.osd_max_checks, osd_max_hard: options.osd_max_hard };
     for c in missed.into_iter().take(DEEP_CANDIDATES) {
         if deadline.is_some_and(|d| std::time::Instant::now() > d) {
             break;
@@ -246,10 +338,11 @@ fn search(protocol: Protocol, audio: &[f32], f_min: f32, f_max: f32, search: usi
         if near(found, &c) {
             continue;
         }
-        if let Some((payload, freq, start)) = deep::decode(&bb, wf.freq_hz(&c), wf.start_s(&c, RATE_HZ), LDPC_ITERATIONS)
+        if let Some((payload, freq, start, method)) = deep::decode(&bb, wf.freq_hz(&c), wf.start_s(&c, RATE_HZ), LDPC_ITERATIONS, &aid)
             && !found.iter().any(|d| d.payload == payload)
+            && (method == "deep" || plausible(&payload, method))
         {
-            found.push(Found { payload, errors: 0, freq, start, search, measured: None });
+            found.push(Found { payload, errors: 0, freq, start, search, measured: None, method });
         }
     }
     Some(bb)

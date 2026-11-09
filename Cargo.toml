@@ -26,3 +26,10 @@ scannerd-radio = { path = "crates/radio" }
 
 [profile.release]
 opt-level = 3
+
+# The daemon's build (tools/deploy-server.sh): whole-program optimization,
+# which the desktop app's far larger dependency tree would wait minutes for.
+[profile.server]
+inherits = "release"
+lto = "fat"
+codegen-units = 1

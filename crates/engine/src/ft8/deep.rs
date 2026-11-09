@@ -219,9 +219,55 @@ pub fn measure(bb: &Baseband, f0: f32, start_s: f32, sent: &[u8]) -> (f32, f32, 
     (snr as f32, a.freq, a.start)
 }
 
+/// What the deep pass may use beyond plain belief propagation.
+#[derive(Clone, Copy, Debug)]
+pub struct Aid {
+    /// Try the candidate as a CQ, the bits every CQ shares taken as known.
+    pub ap_cq: bool,
+    /// Run the ordered-statistics decoder when propagation fails.
+    pub osd: bool,
+    /// The most parity checks propagation may have left failing for the
+    /// ordered-statistics decoder to be worth running.
+    pub osd_max_checks: usize,
+    /// The most channel bits an ordered-statistics word may contradict.
+    pub osd_max_hard: usize,
+}
+
+/// The bits a plain CQ fixes, as (codeword bit, value): the 28-bit "CQ"
+/// token and its flag, and the message type. FT4 scrambles them.
+fn cq_bits(p: Protocol) -> [(usize, u8); 32] {
+    let mut out = [(0usize, 0u8); 32];
+    for (n, o) in out.iter_mut().enumerate() {
+        // Bits 0..=28 are 26 zeros, then 1 0 0; bits 74..=76 are 0 0 1.
+        let (i, v) = if n < 29 { (n, u8::from(n == 26)) } else { (74 + n - 29, u8::from(n == 31)) };
+        let scramble = if p == Protocol::Ft4 { FT4_XOR[i / 8] >> (7 - i % 8) & 1 } else { 0 };
+        *o = (i, v ^ scramble);
+    }
+    out
+}
+
+/// The payload a codeword carries, if its CRC holds.
+fn payload_of(p: Protocol, cw: &[u8; N]) -> Option<[u8; 10]> {
+    let a91 = ldpc::pack91(cw);
+    if !ldpc::crc_ok(&a91) || cw.iter().all(|&b| b == 0) {
+        return None;
+    }
+    let mut payload = [0u8; 10];
+    payload.copy_from_slice(&a91[..10]);
+    payload[9] &= 0xf8;
+    if p == Protocol::Ft4 {
+        for (b, x) in payload.iter_mut().zip(FT4_XOR) {
+            *b ^= x;
+        }
+    }
+    Some(payload)
+}
+
 /// Try one candidate near (`f0`, `start_s`). Returns the payload with the
-/// refined frequency and start.
-pub fn decode(bb: &Baseband, f0: f32, start_s: f32, iters: usize) -> Option<([u8; 10], f32, f32)> {
+/// refined frequency and start, and how it was reached: "deep" by
+/// propagation alone, "ap" with a CQ's bits given, "osd" by the
+/// ordered-statistics decoder.
+pub fn decode(bb: &Baseband, f0: f32, start_s: f32, iters: usize, aid: &Aid) -> Option<([u8; 10], f32, f32, &'static str)> {
     let p = bb.protocol;
     let Aligned { mut cs, freq, start } = align(bb, f0, start_s);
     // Symbols a crash struck, brought down as in the first pass
@@ -230,25 +276,57 @@ pub fn decode(bb: &Baseband, f0: f32, start_s: f32, iters: usize) -> Option<([u8
     for (row, g) in cs.iter_mut().zip(super::demod::loud_symbol_gains(&rms)) {
         row.iter_mut().for_each(|c| *c *= g);
     }
-    for nsym in 1..=3 {
-        let llr = metrics(p, &cs, nsym);
-        let (cw, errors) = ldpc::bp_decode(&llr, iters);
-        if errors > 0 {
-            continue;
+    let llrs: [[f32; N]; 3] = std::array::from_fn(|i| metrics(p, &cs, i + 1));
+    // The soft bits propagation came nearest a codeword with.
+    let mut nearest = (usize::MAX, 0);
+    for (i, llr) in llrs.iter().enumerate() {
+        let (cw, errors) = ldpc::bp_decode(llr, iters);
+        if errors == 0 {
+            if let Some(payload) = payload_of(p, &cw) {
+                return Some((payload, freq, start, "deep"));
+            }
+        } else if errors < nearest.0 {
+            nearest = (errors, i);
         }
-        let a91 = ldpc::pack91(&cw);
-        if !ldpc::crc_ok(&a91) {
-            continue;
+    }
+    let as_cq = |llr: &[f32; N]| {
+        let mut known = *llr;
+        let sure = 1.01 * llr.iter().fold(0f32, |m, v| m.max(v.abs()));
+        let mut counted = [true; N];
+        for (i, v) in cq_bits(p) {
+            known[i] = if v == 1 { sure } else { -sure };
+            counted[i] = false;
         }
-        let mut payload = [0u8; 10];
-        payload.copy_from_slice(&a91[..10]);
-        payload[9] &= 0xf8;
-        if p == Protocol::Ft4 {
-            for (b, x) in payload.iter_mut().zip(FT4_XOR) {
-                *b ^= x;
+        (known, counted)
+    };
+    if aid.ap_cq {
+        for llr in &llrs {
+            let (known, _) = as_cq(llr);
+            let (cw, errors) = ldpc::bp_decode(&known, iters);
+            if errors == 0
+                && let Some(payload) = payload_of(p, &cw)
+            {
+                return Some((payload, freq, start, "ap"));
             }
         }
-        return Some((payload, freq, start));
+    }
+    if aid.osd && nearest.0 <= aid.osd_max_checks {
+        let llr = &llrs[nearest.1];
+        let (cw, hard, _) = super::osd::decode(llr, &[true; N]);
+        if hard <= aid.osd_max_hard
+            && let Some(payload) = payload_of(p, &cw)
+        {
+            return Some((payload, freq, start, "osd"));
+        }
+        if aid.ap_cq {
+            let (known, counted) = as_cq(llr);
+            let (cw, hard, _) = super::osd::decode(&known, &counted);
+            if hard <= aid.osd_max_hard
+                && let Some(payload) = payload_of(p, &cw)
+            {
+                return Some((payload, freq, start, "ap"));
+            }
+        }
     }
     None
 }

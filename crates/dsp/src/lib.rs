@@ -906,10 +906,18 @@ impl DecimFir {
         // what overlap-save costs, so a longer hop spreads them over more
         // samples. At 2047 taps an 8192-point transform costs about 30% less
         // per sample than the 4096 one, for 1 ms more latency at 6 MS/s.
-        self.fft_len = (self.taps.len() * 4).next_power_of_two();
-        let mut planner = FftPlanner::new();
-        let fft = planner.plan_fft_forward(self.fft_len);
-        let ifft = planner.plan_fft_inverse(self.fft_len);
+        let fft_len = (self.taps.len() * 4).next_power_of_two();
+        // A new cutoff at the same length (every step of a filter drag)
+        // keeps the plans: planning cost a millisecond or two on the radio
+        // thread each time.
+        let (fft, ifft) = match (self.fft.take(), self.ifft.take()) {
+            (Some(fft), Some(ifft)) if self.fft_len == fft_len => (fft, ifft),
+            _ => {
+                let mut planner = FftPlanner::new();
+                (planner.plan_fft_forward(fft_len), planner.plan_fft_inverse(fft_len))
+            }
+        };
+        self.fft_len = fft_len;
         self.response = vec![Complex32::new(0.0, 0.0); self.fft_len];
         for (dst, &tap) in self.response.iter_mut().zip(&self.taps) {
             dst.re = tap;
@@ -2271,6 +2279,27 @@ impl FrontEnd {
         // last whole block goes out now, corrected through the transform of
         // the 4096 samples ending with it (see below), and is carried into
         // the next call's first block for the estimator.
+        //
+        // Idle, and no probe due within this delivery: nothing would be
+        // changed, so nothing is staged or copied back. Only the block count
+        // and the carry move on. On a tuner whose image is already clean,
+        // which is nearly always, this was two copies of every sample.
+        {
+            let total = self.carry.len() + iq.len();
+            let whole = (total / N) as u32;
+            let active = self.warm < self.settle || !self.image.iter().all(|v| v.norm() < 1e-3);
+            if !active && self.probe == 0 && self.idle + whole < IDLE_PROBE_BLOCKS {
+                self.idle += whole;
+                let remainder = total - whole as usize * N;
+                if remainder <= iq.len() {
+                    self.carry.clear();
+                    self.carry.extend_from_slice(&iq[iq.len() - remainder..]);
+                } else {
+                    self.carry.extend_from_slice(iq);
+                }
+                return;
+            }
+        }
         self.stage.clear();
         self.stage.extend_from_slice(&self.carry);
         let prev_carry = self.stage.len();

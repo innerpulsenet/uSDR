@@ -416,12 +416,14 @@ async fn main() -> Result<()> {
         processing: settings.processing.unwrap_or_default(),
     };
 
-    // The FFT frames are the bulk of this stream at 25 fps and can reach
-    // ~70 KB each when zoomed out; 256 slots was ~18 MB of buffered frames
-    // per stalled client. A client that far behind only wants the newest
-    // frame anyway (the Lagged handler resumes from the present), so the
-    // queue stays short and the memory bounded.
-    let (sdr_events, _) = tokio::sync::broadcast::channel(64);
+    // Decodes share this queue with the FFT frames, and arrive in bursts:
+    // every FT8 channel's slot ends at once, a few dozen decodes each. At 64
+    // slots a burst could overrun a subscriber before it was scheduled, and
+    // the station log, the reporters and the clients lost decodes on the
+    // busiest slots. The frames are shared bytes now (encoded once, a
+    // pointer per slot), so a long queue costs a stalled client's worth of
+    // frames once, not per subscriber.
+    let (sdr_events, _) = tokio::sync::broadcast::channel(2_048);
     // Audio is a live monitor: a client that falls behind should skip forward
     // to the present rather than play a growing delay, so the queue is short.
     let (audio_tx, _) = tokio::sync::broadcast::channel(32);
@@ -2019,6 +2021,21 @@ async fn ws_client(mut socket: WebSocket, st: Arc<AppState>, info: ClientInfo, s
 
     loop {
         tokio::select! {
+            // In the order written: on a slow link audio must not wait its
+            // turn behind a 70 KB frame chosen at random ahead of it.
+            biased;
+            frame = audio.recv() => match frame {
+                Ok(f) => {
+                    let buf = sdr::encode_audio_frame(&f, stereo);
+                    if socket.send(Message::Binary(buf.into())).await.is_err() {
+                        return;
+                    }
+                }
+                // Audio is a live monitor. A client that fell behind wants the
+                // present, not a backlog played late.
+                Err(RecvError::Lagged(_)) => continue,
+                Err(RecvError::Closed) => return,
+            },
             ev = sdr_ev.recv() => match ev {
                 Ok(ev) => match &ev {
                     SdrEvent::FftBytes { frame } => {
@@ -2055,18 +2072,6 @@ async fn ws_client(mut socket: WebSocket, st: Arc<AppState>, info: ClientInfo, s
                 // A client that fell behind has missed frames it no longer
                 // wants; the next FFT carries the whole picture, so it simply
                 // resumes from the present.
-                Err(RecvError::Lagged(_)) => continue,
-                Err(RecvError::Closed) => return,
-            },
-            frame = audio.recv() => match frame {
-                Ok(f) => {
-                    let buf = sdr::encode_audio_frame(&f, stereo);
-                    if socket.send(Message::Binary(buf.into())).await.is_err() {
-                        return;
-                    }
-                }
-                // Audio is a live monitor. A client that fell behind wants the
-                // present, not a backlog played late.
                 Err(RecvError::Lagged(_)) => continue,
                 Err(RecvError::Closed) => return,
             },

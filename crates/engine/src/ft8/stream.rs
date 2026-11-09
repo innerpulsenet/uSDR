@@ -13,11 +13,12 @@
 //! Samples land in the slot their time falls in; a slot is cut once audio
 //! past its end has arrived.
 
-use super::{CallHashes, Decode, F_LIMIT_HZ, F_MAX_HZ, F_MIN_HZ, Protocol, RATE_HZ, decode_slot_in};
+use super::{CallHashes, Decode, F_LIMIT_HZ, F_MAX_HZ, F_MIN_HZ, Options, Protocol, RATE_HZ};
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 /// Anti-alias filter length at the input rate: at 48 kHz, flat (within
 /// 0.1 dB) to about 4.5 kHz, so a search out to the widest 5 kHz filter
@@ -32,9 +33,97 @@ const RESYNC_MS: f64 = 250.0;
 /// A slot with less than this share of its audio is not worth decoding.
 const MIN_FILL: f64 = 0.6;
 
+/// The share of its slot period a decode should be done within, counted
+/// from when the slot was cut: the next slot is already filling.
+const DUE: f64 = 0.7;
+/// The most one decode's finer passes are given, however idle the host.
+const BUDGET_MAX: Duration = Duration::from_millis(4_000);
+
 struct SlotBuf {
     audio: Vec<f32>,
     filled: usize,
+}
+
+/// A slot waiting to be decoded.
+struct Job {
+    protocol: Protocol,
+    start: u64,
+    audio: Vec<f32>,
+    band: (f32, f32),
+    cut: Instant,
+    busy: Arc<AtomicBool>,
+    tx: Sender<(u64, Vec<Decode>)>,
+}
+
+/// The workers every slot decoder shares. Every channel's slots end at the
+/// same instant; a thread each meant as many decodes at once as there were
+/// channels, on a host with two cores that also has a radio to read, and
+/// each decode's deadline ran out with a fraction of its work done. Here
+/// they wait their turn, and each is told how long it has from how much of
+/// the slot period is left and how many are behind it.
+struct Pool {
+    jobs: Mutex<Sender<Job>>,
+    waiting: Arc<AtomicU64>,
+    workers: u32,
+}
+
+/// The calls heard in full, kept by every channel together: a station
+/// named on one band is often sent as a hash on another.
+fn calls() -> &'static Mutex<CallHashes> {
+    static CALLS: OnceLock<Mutex<CallHashes>> = OnceLock::new();
+    CALLS.get_or_init(Default::default)
+}
+
+/// Put the calling thread below the threads that carry the radio's samples.
+/// A decode is a burst of seconds of arithmetic, and nothing waits on it.
+fn lower_priority() {
+    #[cfg(target_os = "linux")]
+    // SAFETY: plain system calls on the calling thread's own id.
+    unsafe {
+        let tid = libc::syscall(libc::SYS_gettid) as libc::id_t;
+        libc::setpriority(libc::PRIO_PROCESS, tid, 10);
+    }
+}
+
+fn pool() -> &'static Pool {
+    static POOL: OnceLock<Pool> = OnceLock::new();
+    POOL.get_or_init(|| {
+        let (tx, rx) = channel::<Job>();
+        let rx = Arc::new(Mutex::new(rx));
+        let waiting = Arc::new(AtomicU64::new(0));
+        // One core is left for the radio.
+        let workers = std::thread::available_parallelism().map_or(1, |n| n.get().saturating_sub(1)).clamp(1, 3) as u32;
+        for w in 0..workers {
+            let (rx, waiting) = (rx.clone(), waiting.clone());
+            let _ = std::thread::Builder::new().name(format!("slot-decode-{w}")).spawn(move || {
+                lower_priority();
+                loop {
+                    let job = match rx.lock().unwrap_or_else(|e| e.into_inner()).recv() {
+                        Ok(job) => job,
+                        Err(_) => return,
+                    };
+                    let behind = waiting.fetch_sub(1, Ordering::AcqRel).saturating_sub(1);
+                    let due = job.cut + Duration::from_secs_f64(job.protocol.slot_secs() * DUE);
+                    let left = due.saturating_duration_since(Instant::now());
+                    // This decode's share of what is left, the workers
+                    // taking the queue between them.
+                    let budget = left.mul_f64(f64::from(workers) / (behind as f64 + f64::from(workers))).min(BUDGET_MAX);
+                    let options = Options::default().with_budget(budget);
+                    // A panic in a decode must not leave its channel marked
+                    // busy for good, dropping every later slot.
+                    let decodes = std::panic::catch_unwind(|| {
+                        let heard = super::find(job.protocol, &job.audio, job.band.0, job.band.1, &options);
+                        let mut calls = calls().lock().unwrap_or_else(|e| e.into_inner());
+                        super::name(job.protocol, heard, &mut calls)
+                    })
+                    .unwrap_or_default();
+                    let _ = job.tx.send((job.start, decodes));
+                    job.busy.store(false, Ordering::Release);
+                }
+            });
+        }
+        Pool { jobs: Mutex::new(tx), waiting, workers }
+    })
 }
 
 pub struct SlotDecoder {
@@ -62,7 +151,6 @@ pub struct SlotDecoder {
     /// came out 10 dB down).
     cursor: Option<(u64, usize)>,
     slots: BTreeMap<u64, SlotBuf>,
-    hashes: Arc<Mutex<CallHashes>>,
     busy: Arc<AtomicBool>,
     dropped: Arc<AtomicU64>,
     /// Times the sample clock was thrown away for a stamp too far off.
@@ -103,7 +191,6 @@ impl SlotDecoder {
             current: None,
             cursor: None,
             slots: BTreeMap::new(),
-            hashes: Arc::new(Mutex::new(CallHashes::default())),
             busy: Arc::new(AtomicBool::new(false)),
             dropped: Arc::new(AtomicU64::new(0)),
             resyncs: 0,
@@ -245,6 +332,21 @@ impl SlotDecoder {
     fn filtered(&self, i: u64) -> f32 {
         let half = TAPS / 2;
         let base = i as i64 - half as i64 - self.hist_start as i64;
+        // Nearly always the whole filter lies inside the history: a plain
+        // dot product the compiler can vectorize.
+        if base >= 0
+            && let Some(window) = self.hist.get(base as usize..base as usize + TAPS)
+        {
+            let mut acc = [0f32; 8];
+            let (taps, tail) = self.taps.as_chunks::<8>();
+            let (xs, xtail) = window.as_chunks::<8>();
+            for (h, x) in taps.iter().zip(xs) {
+                for l in 0..8 {
+                    acc[l] += h[l] * x[l];
+                }
+            }
+            return acc.iter().sum::<f32>() + tail.iter().zip(xtail).map(|(h, x)| h * x).sum::<f32>();
+        }
         let mut acc = 0.0;
         for (k, h) in self.taps.iter().enumerate() {
             let n = base + k as i64;
@@ -269,22 +371,17 @@ impl SlotDecoder {
                 let bytes: Vec<u8> = buf.audio.iter().flat_map(|v| v.to_le_bytes()).collect();
                 let _ = std::fs::write(dir.join(format!("{start}.f32")), bytes);
             }
-            // Never queue: a slot decoded late is worth less than the next
-            // one decoded on time, and the host has two cores to share.
+            // One slot of a channel at a time: a slot decoded late is worth
+            // less than the next one decoded on time.
             if self.busy.swap(true, Ordering::AcqRel) {
                 self.dropped.fetch_add(1, Ordering::Relaxed);
                 continue;
             }
-            let (protocol, hashes, busy, tx, (f_min, f_max)) = (self.protocol, self.hashes.clone(), self.busy.clone(), self.tx.clone(), self.band);
-            let spawned = std::thread::Builder::new().name(format!("{}-decode", protocol.label().to_lowercase())).spawn(move || {
-                let decodes = {
-                    let mut h = hashes.lock().unwrap_or_else(|e| e.into_inner());
-                    decode_slot_in(protocol, &buf.audio, &mut h, f_min, f_max)
-                };
-                let _ = tx.send((start, decodes));
-                busy.store(false, Ordering::Release);
-            });
-            if spawned.is_err() {
+            let pool = pool();
+            let job = Job { protocol: self.protocol, start, audio: buf.audio, band: self.band, cut: Instant::now(), busy: self.busy.clone(), tx: self.tx.clone() };
+            pool.waiting.fetch_add(1, Ordering::AcqRel);
+            if pool.workers == 0 || pool.jobs.lock().unwrap_or_else(|e| e.into_inner()).send(job).is_err() {
+                pool.waiting.fetch_sub(1, Ordering::AcqRel);
                 self.busy.store(false, Ordering::Release);
             }
         }

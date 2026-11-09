@@ -237,7 +237,18 @@ impl Default for View {
 const AUTO_RANGE_DEAD_DB: f32 = 1.0;
 /// How long the ceiling has to have been too high before it comes down.
 const AUTO_RANGE_SETTLE_S: f64 = 2.0;
-const WF_ROWS: usize = 768;
+/// Rows of waterfall kept and drawn: enough for a waterfall as tall as a 4K
+/// display at one row a pixel.
+const WF_ROWS: usize = 2048;
+
+/// The rows a waterfall `height` points tall shows, and a row's height in
+/// points: every row a whole number of physical pixels, the same for all of
+/// them. Sized in points, a tall or fractionally scaled window stretched
+/// the rows unevenly, some one pixel and some two.
+fn wf_rows(height: f32, ppp: f32, most: usize) -> (usize, f32) {
+    let row_dev = ppp.round().max(1.0);
+    ((((height * ppp) / row_dev).ceil() as usize).clamp(1, most), row_dev / ppp)
+}
 /// The most ridges drawn, however deep they reach.
 const RIDGES_MAX: usize = 48;
 
@@ -830,7 +841,10 @@ impl Panafall {
     /// The held waterfall: the archived rows from `back` downward, mapped to
     /// the display's current frequency axis, with UTC times beside them.
     fn draw_held(&mut self, ui: &mut Ui, wf: Rect, time_axis: Rect, view: &View, px_w: usize) -> Option<WfDraw> {
-        let rows_vis = (wf.height().round() as usize).clamp(1, 2048);
+        // As live: rows of whole pixels, so holding does not change their pitch.
+        let ppp = ui.ctx().pixels_per_point();
+        let (rows_vis, row_px) = wf_rows(wf.height(), ppp, WF_ROWS);
+        let wf_top = (wf.top() * ppp).round() / ppp;
         // As live: no more columns than pixels, each the strongest it covers.
         let cols = ARCH_W.min(px_w.max(16));
         let (black, top) = self.wf_levels(view);
@@ -895,18 +909,18 @@ impl Panafall {
             h.shown = Some(key);
         }
         let painter = ui.painter_at(wf);
-        let drawn = h.tex.as_ref().map(|t| (t.id(), wf, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE));
+        let held = Rect::from_min_max(pos2(wf.left(), wf_top), pos2(wf.right(), wf_top + rows_vis as f32 * row_px));
+        let drawn = h.tex.as_ref().map(|t| (t.id(), held, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE));
         if let Some((id, rect, uv, tint)) = drawn {
             painter.image(id, rect, uv, tint);
         }
         // Wall-clock times on the held rows, about every 60 px.
         let p = ui.painter();
         p.rect_filled(time_axis, CornerRadius::ZERO, theme::surface_1());
-        let row_px = wf.height() / rows_vis as f32;
         let every = (60.0 / row_px).ceil() as usize;
         for i in (0..rows_vis).step_by(every.max(1)) {
             let Some(row) = self.archive.get(h.back + i) else { break };
-            let y = wf.top() + i as f32 * row_px;
+            let y = wf_top + i as f32 * row_px;
             let secs = row.utc.duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
             p.line_segment([pos2(time_axis.left(), y), pos2(time_axis.left() + 4.0, y)], Stroke::new(1.0, theme::text_3()));
             p.text(
@@ -1361,8 +1375,9 @@ impl Panafall {
         }
 
         // ---- waterfall
-        let rows_vis = (wf.height().round() as usize).clamp(1, WF_ROWS);
-        let px_w = (wf.width() * ctx.pixels_per_point()).round() as usize;
+        let ppp = ctx.pixels_per_point();
+        let (rows_vis, row_px) = wf_rows(wf.height(), ppp, WF_ROWS);
+        let px_w = (wf.width() * ppp).round() as usize;
         // What the waterfall drew, for the overlays on it to frost.
         let mut wf_draws: Vec<WfDraw> = Vec::new();
         if self.hold.is_some() {
@@ -1371,13 +1386,13 @@ impl Panafall {
             self.upload(&ctx, view, now, reduce_motion, rows_vis, px_w);
             &self.wf_tex
         } {
-            let row_px = wf.height() / rows_vis as f32;
             // The newest row is drawn at the top as soon as it arrives: no
             // slide-in that would hold it back by a row interval, and no
             // sub-row offset that would blend it with its neighbor.
             let painter_wf = ui.painter_at(wf);
             let x0 = self.drag_offset_px;
-            let top = wf.top();
+            // On the pixel grid, so no row straddles two.
+            let top = (wf.top() * ppp).round() / ppp;
             // Rows head, head+1, … wrap at WF_ROWS. Drawn in runs of rows
             // that arrived on the same span, each moved by how far the span
             // has panned since; mid-fade, the old palette's picture over the
@@ -1492,7 +1507,7 @@ impl Panafall {
             if let Some(age) = held {
                 // Held: a timeline of the whole history beside LIVE, its
                 // knob where the display is, to drag or click anywhere along.
-                let rows_vis = (wf.height().round() as usize).clamp(1, 2048);
+                let rows_vis = wf_rows(wf.height(), ctx.pixels_per_point(), WF_ROWS).0;
                 let max_back = self.archive.len().saturating_sub(rows_vis.min(self.archive.len()));
                 let span_s = match (self.archive.front(), self.archive.get(max_back)) {
                     (Some(a), Some(b)) => a.utc.duration_since(b.utc).map(|d| d.as_secs_f64()).unwrap_or(0.0),

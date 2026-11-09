@@ -4384,7 +4384,11 @@ fn run_sdr(
     // it keys on wideband magnitude, so it eats the leading edge of exactly
     // the strong narrowband bursts PACKET is here to decode.
     let mut front = FrontEnd::with_blanker(current_rate, processing.blanker);
-    let mut clean: Vec<num_complex::Complex32> = Vec::new();
+    // The corrected block is shared with the wideband workers, so each
+    // delivery is written into a buffer nobody else still holds, from a
+    // short list of them kept for reuse.
+    let mut clean: Arc<Vec<num_complex::Complex32>> = Arc::new(Vec::new());
+    let mut clean_pool: Vec<Arc<Vec<num_complex::Complex32>>> = Vec::new();
     let mut demod = Demod::new(current_mode, inspect_chain.fs_out(), inspect_hz);
     {
         let mut s = status.lock().unwrap();
@@ -5532,9 +5536,28 @@ fn run_sdr(
         // DC offset, LO leakage and the IQ image are removed here, before the
         // spectrum measures the span or the inspect chain mixes out of it. The
         // block is shared with other subscribers, so correct a copy.
-        clean.clear();
-        clean.extend_from_slice(&block);
-        front.process(&mut clean);
+        // Let go of the last delivery first, so its buffer can be the one
+        // reused when the workers have finished with it too.
+        drop(std::mem::take(&mut clean));
+        clean = {
+            let free = match clean_pool.iter_mut().position(|b| Arc::get_mut(b).is_some()) {
+                Some(i) => i,
+                None => {
+                    // Workers far behind hold every buffer: past a few, a
+                    // new one replaces the oldest instead of adding to them.
+                    if clean_pool.len() >= 8 {
+                        clean_pool.remove(0);
+                    }
+                    clean_pool.push(Arc::new(Vec::with_capacity(block.len())));
+                    clean_pool.len() - 1
+                }
+            };
+            let buf = Arc::get_mut(&mut clean_pool[free]).expect("a buffer nobody else holds");
+            buf.clear();
+            buf.extend_from_slice(&block);
+            front.process(buf);
+            Arc::clone(&clean_pool[free])
+        };
         if let Some(w) = &wide {
             let main = crate::stationlog::monitored_mode(current_mode).map(|_| (current_mode, inspect_hz.round() as u64));
             w.feed(&clean, current_rate, current_freq + lo_offset_for(current_rate, lo_offset, current_mode), now_ms(), main);

@@ -5,6 +5,7 @@ edition.workspace = true
 description = "Demodulation, squelch, and call segmentation for scannerd"
 
 [dependencies]
+libc = "0.2"
 anyhow.workspace = true
 aes.workspace = true
 cipher.workspace = true

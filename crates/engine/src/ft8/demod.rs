@@ -231,7 +231,12 @@ impl Waterfall {
 
     /// The strongest `max` sync candidates scoring at least `min_score`,
     /// strongest first.
-    pub fn candidates(&self, max: usize, min_score: f32) -> Vec<Candidate> {
+    ///
+    /// With `distinct`, a candidate within half a tone and half a symbol of
+    /// a stronger one is left out. A signal scores at several neighboring
+    /// offsets of the oversampled grid, and on a busy band the strong
+    /// signals' repeats filled the list before the weak ones got a place.
+    pub fn candidates(&self, max: usize, min_score: f32, distinct: bool) -> Vec<Candidate> {
         let tones = self.protocol.tones();
         let mut out = Vec::new();
         for time_sub in 0..TIME_OSR {
@@ -248,8 +253,27 @@ impl Waterfall {
             }
         }
         out.sort_unstable_by(|a, b| b.score.total_cmp(&a.score));
-        out.truncate(max);
-        out
+        if !distinct {
+            out.truncate(max);
+            return out;
+        }
+        // Positions in steps of the oversampled grid.
+        let at = |c: &Candidate| (c.time_offset * TIME_OSR as i32 + c.time_sub as i32, (c.freq_offset * FREQ_OSR + c.freq_sub) as i32);
+        let mut kept: Vec<Candidate> = Vec::with_capacity(max);
+        for c in out {
+            let (t, f) = at(&c);
+            let shadowed = kept.iter().any(|k| {
+                let (kt, kf) = at(k);
+                (kt - t).abs() <= TIME_OSR as i32 / 2 && (kf - f).abs() <= FREQ_OSR as i32 / 2
+            });
+            if !shadowed {
+                kept.push(c);
+                if kept.len() == max {
+                    break;
+                }
+            }
+        }
+        kept
     }
 
     /// Soft bits, log(P(1)/P(0)), from the tones' powers: for each bit the

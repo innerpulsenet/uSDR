@@ -45,12 +45,17 @@ const KEEP_RESULTS: usize = 12_000;
 const RECORD_S: u64 = 300;
 /// Worker threads, each with its share of the channels.
 const WORKERS: usize = 2;
+/// Samples of the span each channel takes at a time. A whole delivery is
+/// 850 KB at 8 MS/s, and every channel mixing it into scratch of its own
+/// kept tens of megabytes moving through the cache: twelve channels cost a
+/// third more than in tiles this size (`bench_chain`).
+const TILE: usize = 8_192;
 
 /// Marks a decode as from a channel here, not the main receiver.
 pub const CHANNEL_FIELD: &str = "wideChannel";
 
 struct Block {
-    iq: Vec<Complex32>,
+    iq: Arc<Vec<Complex32>>,
     rate: f64,
     center_hz: f64,
     ms: u64,
@@ -145,6 +150,7 @@ struct Channel {
     nco: Nco,
     mixed: Vec<Complex32>,
     chain: HalfbandChain,
+    part: Vec<Complex32>,
     baseband: Vec<Complex32>,
     demod: SsbDemod,
     audio: Vec<f32>,
@@ -169,6 +175,14 @@ impl Channel {
             Some(protocol) => {
                 let mut slots = SlotDecoder::new(protocol, fs);
                 slots.set_band(low, high);
+                // USDR_FT8_DUMP=<dir> keeps every slot's audio under
+                // <dir>/<dial>, for decoding the same slots again offline.
+                if let Some(dir) = std::env::var_os("USDR_FT8_DUMP") {
+                    let dir = std::path::Path::new(&dir).join(spec.dial_hz.to_string());
+                    if std::fs::create_dir_all(&dir).is_ok() {
+                        slots.set_dump(Some(dir));
+                    }
+                }
                 Decoder::Slots(Box::new(slots))
             }
             None => {
@@ -177,18 +191,36 @@ impl Channel {
                 Decoder::Hf(Box::new(hf))
             }
         };
-        Some(Self { spec, center_hz, nco, mixed: Vec::new(), chain, baseband: Vec::new(), demod, audio: Vec::new(), linear: Vec::new(), decoder })
+        Some(Self { spec, center_hz, nco, mixed: Vec::new(), chain, part: Vec::new(), baseband: Vec::new(), demod, audio: Vec::new(), linear: Vec::new(), decoder })
+    }
+
+    /// A tile of the span, mixed and decimated onto the block's baseband.
+    /// The mixer and the filters carry their state across calls, so the
+    /// result is the same however the span is cut.
+    fn ingest(&mut self, iq: &[Complex32]) {
+        self.nco.mix(iq, &mut self.mixed);
+        self.chain.process(&self.mixed, &mut self.part);
+        self.baseband.extend_from_slice(&self.part);
     }
 
     /// One block of the span. Decodes from audio-driven decoders go to `sink`.
+    #[cfg(test)]
     fn process(&mut self, iq: &[Complex32], ms: u64, sink: &Sender<SdrEvent>, status: &Arc<Mutex<SdrStatus>>) {
-        self.nco.mix(iq, &mut self.mixed);
-        self.chain.process(&self.mixed, &mut self.baseband);
+        for tile in iq.chunks(TILE) {
+            self.ingest(tile);
+        }
+        self.finish(ms, sink, status);
+    }
+
+    /// The block's baseband, demodulated and decoded. Decodes from
+    /// audio-driven decoders go to `sink`.
+    fn finish(&mut self, ms: u64, sink: &Sender<SdrEvent>, status: &Arc<Mutex<SdrStatus>>) {
         self.demod.process_with_linear(&self.baseband, &mut self.audio, &mut self.linear);
         match &mut self.decoder {
             Decoder::Slots(slots) => slots.push(&self.linear, ms),
             Decoder::Hf(hf) => hf.push(&self.linear, self.spec.dial_hz as f64, sink, status),
         }
+        self.baseband.clear();
     }
 
     /// Finished FT8 or FT4 slots, each decode as the log carries it.
@@ -243,8 +275,15 @@ fn run(rx: Receiver<Arc<Block>>, specs: Vec<Spec>, events: Sender<SdrEvent>, seq
             retired.append(&mut channels);
             channels = specs.iter().filter(|s| s.heard_in(block.center_hz, block.rate)).filter_map(|s| Channel::new(*s, block.center_hz, block.rate)).collect();
         }
+        // Tile by tile through every channel, so the tile is read from the
+        // cache by all of them.
+        for tile in block.iq.chunks(TILE) {
+            for channel in &mut channels {
+                channel.ingest(tile);
+            }
+        }
         for channel in &mut channels {
-            channel.process(&block.iq, block.ms, &sink, &status);
+            channel.finish(block.ms, &sink, &status);
         }
         for channel in channels.iter_mut().chain(retired.iter_mut()) {
             for (slot_ms, group) in channel.slots_done() {
@@ -288,14 +327,16 @@ pub struct Feed {
 }
 
 impl Feed {
-    pub fn feed(&self, iq: &[Complex32], rate: f64, center_hz: f64, ms: u64, main: Option<(SdrMode, u64)>) {
+    /// The block is shared, not copied: the radio loop keeps its own
+    /// reference and never writes to it again.
+    pub fn feed(&self, iq: &Arc<Vec<Complex32>>, rate: f64, center_hz: f64, ms: u64, main: Option<(SdrMode, u64)>) {
         if let Some(tap) = &self.overview {
             tap.feed(iq, rate, center_hz, ms);
         }
         if !self.specs.iter().any(|s| s.heard_in(center_hz, rate)) {
             return;
         }
-        let block = Arc::new(Block { iq: iq.to_vec(), rate, center_hz, ms, main });
+        let block = Arc::new(Block { iq: Arc::clone(iq), rate, center_hz, ms, main });
         for worker in &self.workers {
             if let Err(TrySendError::Full(_) | TrySendError::Disconnected(_)) = worker.try_send(Arc::clone(&block)) {
                 DROPPED.fetch_add(1, Ordering::Relaxed);

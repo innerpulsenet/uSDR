@@ -1,7 +1,7 @@
 //! Time the receive chain's stages on synthetic 6 MS/s IQ:
 //! `cargo run --release -p scannerd-dsp --example bench_chain`.
 use num_complex::Complex32;
-use scannerd_dsp::{DecodeChain, FrontEnd, Nco, Spectrum};
+use scannerd_dsp::{DecodeChain, FrontEnd, HalfbandChain, Nco, Spectrum};
 use std::time::Instant;
 
 fn main() {
@@ -68,5 +68,36 @@ fn main() {
         ch.set_offset(750e3);
         let mut out = Vec::new();
         time(name, &mut |w| ch.process(w, &mut out));
+    }
+    // Wideband decoder channels as the server cuts them from the span: each
+    // mixed and halved seven times, twelve of them on every delivery, each
+    // with scratch buffers of its own. The whole delivery at once, and in
+    // tiles that keep one channel's scratch in the cache.
+    for tile in [usize::MAX, 16_384, 8_192, 4_096] {
+        struct Channel {
+            nco: Nco,
+            chain: HalfbandChain,
+            mixed: Vec<Complex32>,
+            part: Vec<Complex32>,
+            out: Vec<Complex32>,
+        }
+        let mut channels: Vec<Channel> = (0..12)
+            .map(|k| {
+                let mut nco = Nco::new();
+                nco.set_freq(-2.5e6 + 400e3 * k as f64, fs);
+                Channel { nco, chain: HalfbandChain::new(fs, 6_000.0, 7), mixed: Vec::new(), part: Vec::new(), out: Vec::new() }
+            })
+            .collect();
+        let name = if tile == usize::MAX { "12 wide channels, whole".to_string() } else { format!("12 wide channels, {tile}") };
+        time(&name, &mut |w| {
+            for c in &mut channels {
+                c.out.clear();
+                for chunk in w.chunks(tile.min(w.len().max(1))) {
+                    c.nco.mix(chunk, &mut c.mixed);
+                    c.chain.process(&c.mixed, &mut c.part);
+                    c.out.extend_from_slice(&c.part);
+                }
+            }
+        });
     }
 }
