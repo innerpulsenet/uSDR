@@ -51,6 +51,14 @@ const WORKERS: usize = 2;
 /// third more than in tiles this size (`bench_chain`).
 const TILE: usize = 4_096;
 
+/// Dials no further apart than this share a front end: one mixer and the
+/// first halvings for the group, then a short chain each. Every band's FT8
+/// and WSPR dials are such a pair (10 m's are the widest, 50.6 kHz), and
+/// the stages at the span's full rate are most of what a channel costs.
+const GROUP_SPREAD_HZ: u64 = 60_000;
+/// A group's own rate is at least this many times the band it carries.
+const GROUP_OVERSAMPLE: f64 = 8.0;
+
 /// Marks a decode as from a channel here, not the main receiver.
 pub const CHANNEL_FIELD: &str = "wideChannel";
 
@@ -139,6 +147,109 @@ fn parse_specs(text: &str) -> Vec<Spec> {
         .collect()
 }
 
+/// The specs in dial order, cut into runs no wider than [`GROUP_SPREAD_HZ`].
+fn groups(specs: &[Spec]) -> Vec<Vec<Spec>> {
+    let mut sorted = specs.to_vec();
+    sorted.sort_by_key(|s| s.dial_hz);
+    let mut out: Vec<Vec<Spec>> = Vec::new();
+    for spec in sorted {
+        match out.last_mut() {
+            Some(g) if spec.dial_hz - g[0].dial_hz <= GROUP_SPREAD_HZ => g.push(spec),
+            _ => out.push(vec![spec]),
+        }
+    }
+    out
+}
+
+/// Halvings from `rate` until it is under [`CHAIN_RATE_MAX`].
+fn stages_for(rate: f64) -> u32 {
+    let mut stages = 0_u32;
+    while rate / f64::from(1_u32 << stages) > CHAIN_RATE_MAX {
+        stages += 1;
+    }
+    stages
+}
+
+/// A group's shared front end: the span mixed to the group's middle and
+/// halved as far as the group's width allows.
+struct Front {
+    center_hz: f64,
+    nco: Nco,
+    mixed: Vec<Complex32>,
+    chain: HalfbandChain,
+    part: Vec<Complex32>,
+    out: Vec<Complex32>,
+}
+
+impl Front {
+    /// None when the group is too wide for sharing to save a stage.
+    fn new(group: &[Spec], center_hz: f64, rate: f64) -> Option<Self> {
+        let (low, high) = (group.first()?.dial_hz as f64, group.last()?.dial_hz as f64);
+        let middle = (low + high) / 2.0;
+        let band = (high - low) / 2.0 + CHAIN_BAND_HZ;
+        let mut stages = 0_u32;
+        while stages < stages_for(rate) && rate / f64::from(1_u32 << (stages + 1)) >= GROUP_OVERSAMPLE * band {
+            stages += 1;
+        }
+        if stages < 2 {
+            return None;
+        }
+        let mut nco = Nco::new();
+        nco.set_freq(middle - center_hz, rate);
+        Some(Self { center_hz: middle, nco, mixed: Vec::new(), chain: HalfbandChain::new(rate, band, stages), part: Vec::new(), out: Vec::new() })
+    }
+
+    fn ingest(&mut self, iq: &[Complex32]) {
+        self.nco.mix(iq, &mut self.mixed);
+        self.chain.process(&self.mixed, &mut self.part);
+        self.out.extend_from_slice(&self.part);
+    }
+}
+
+/// The fronts and channels for the specs a span holds. A channel in a
+/// group names its front; the rest take the span itself.
+fn build(specs: &[Spec], center_hz: f64, rate: f64) -> (Vec<Front>, Vec<Channel>) {
+    let (mut fronts, mut channels) = (Vec::new(), Vec::new());
+    let heard: Vec<Spec> = specs.iter().copied().filter(|s| s.heard_in(center_hz, rate)).collect();
+    for group in groups(&heard) {
+        let front = if group.len() > 1 { Front::new(&group, center_hz, rate) } else { None };
+        match front {
+            Some(front) => {
+                let fs = front.chain.fs_out();
+                let stages = stages_for(rate) - front.chain.taps().len() as u32;
+                channels.extend(group.iter().filter_map(|s| Channel::with_chain(*s, center_hz, front.center_hz, fs, stages, Some(fronts.len()))));
+                fronts.push(front);
+            }
+            None => channels.extend(group.iter().filter_map(|s| Channel::new(*s, center_hz, rate))),
+        }
+    }
+    (fronts, channels)
+}
+
+/// One block of the span through every front and channel.
+fn process_block(fronts: &mut [Front], channels: &mut [Channel], iq: &[Complex32], ms: u64, sink: &Sender<SdrEvent>, status: &Arc<Mutex<SdrStatus>>) {
+    for front in fronts.iter_mut() {
+        front.out.clear();
+        for tile in iq.chunks(TILE) {
+            front.ingest(tile);
+        }
+    }
+    // A channel at a time through the block's tiles, so its own scratch
+    // stays in the cache from one tile to the next: on the radio host that
+    // order measured a tenth cheaper than a tile through every channel.
+    for channel in channels.iter_mut() {
+        match channel.front {
+            Some(f) => channel.ingest(&fronts[f].out),
+            None => {
+                for tile in iq.chunks(TILE) {
+                    channel.ingest(tile);
+                }
+            }
+        }
+        channel.finish(ms, sink, status);
+    }
+}
+
 enum Decoder {
     Slots(Box<SlotDecoder>),
     Hf(Box<HfDecoder>),
@@ -156,18 +267,24 @@ struct Channel {
     audio: Vec<f32>,
     linear: Vec<f32>,
     decoder: Decoder,
+    /// The shared front end this channel takes its samples from, if any.
+    front: Option<usize>,
 }
 
 impl Channel {
+    /// A channel cut straight from the span.
     fn new(spec: Spec, center_hz: f64, rate: f64) -> Option<Self> {
-        let mut stages = 0_u32;
-        while rate / f64::from(1_u32 << stages) > CHAIN_RATE_MAX {
-            stages += 1;
-        }
+        Self::with_chain(spec, center_hz, center_hz, rate, stages_for(rate), None)
+    }
+
+    /// A channel cut from samples at `rate` centered on `input_hz`: the
+    /// span, or a group's front end. `center_hz` is the span's, for the
+    /// record.
+    fn with_chain(spec: Spec, center_hz: f64, input_hz: f64, rate: f64, stages: u32, front: Option<usize>) -> Option<Self> {
         let chain = HalfbandChain::new(rate, CHAIN_BAND_HZ, stages);
         let fs = chain.fs_out();
         let mut nco = Nco::new();
-        nco.set_freq(spec.dial_hz as f64 - center_hz, rate);
+        nco.set_freq(spec.dial_hz as f64 - input_hz, rate);
         let (low, high) = spec.mode.filter_edges();
         let (low, high) = (low.abs().min(high.abs()), low.abs().max(high.abs()));
         let demod = SsbDemod::with_shape(fs, Sideband::Upper, low, high, spec.mode.filter_shape());
@@ -191,7 +308,7 @@ impl Channel {
                 Decoder::Hf(Box::new(hf))
             }
         };
-        Some(Self { spec, center_hz, nco, mixed: Vec::new(), chain, part: Vec::new(), baseband: Vec::new(), demod, audio: Vec::new(), linear: Vec::new(), decoder })
+        Some(Self { spec, center_hz, nco, mixed: Vec::new(), chain, part: Vec::new(), baseband: Vec::new(), demod, audio: Vec::new(), linear: Vec::new(), decoder, front })
     }
 
     /// A tile of the span, mixed and decimated onto the block's baseband.
@@ -262,6 +379,7 @@ fn run(rx: Receiver<Arc<Block>>, specs: Vec<Spec>, events: Sender<SdrEvent>, seq
         specs.iter().filter(|s| s.logs).enumerate().map(|(i, s)| (*s, Listener::numbered_from((seq_base + i as u64 + 1) << 40))).collect();
     let mut last_second = 0;
     let mut channels: Vec<Channel> = Vec::new();
+    let mut fronts: Vec<Front> = Vec::new();
     // Channels from before a retune, kept until their last decode comes back.
     let mut retired: Vec<Channel> = Vec::new();
     let mut key = None;
@@ -273,18 +391,9 @@ fn run(rx: Receiver<Arc<Block>>, specs: Vec<Spec>, events: Sender<SdrEvent>, seq
         if key != Some((block.rate, block.center_hz)) {
             key = Some((block.rate, block.center_hz));
             retired.append(&mut channels);
-            channels = specs.iter().filter(|s| s.heard_in(block.center_hz, block.rate)).filter_map(|s| Channel::new(*s, block.center_hz, block.rate)).collect();
+            (fronts, channels) = build(&specs, block.center_hz, block.rate);
         }
-        // A channel at a time through the block's tiles, so its own scratch
-        // stays in the cache from one tile to the next: on the radio host
-        // that order measured a tenth cheaper than a tile through every
-        // channel.
-        for channel in &mut channels {
-            for tile in block.iq.chunks(TILE) {
-                channel.ingest(tile);
-            }
-            channel.finish(block.ms, &sink, &status);
-        }
+        process_block(&mut fronts, &mut channels, &block.iq, block.ms, &sink, &status);
         for channel in channels.iter_mut().chain(retired.iter_mut()) {
             for (slot_ms, group) in channel.slots_done() {
                 deliver(channel.spec, channel.center_hz, slot_ms, group, block.main, &events, &mut records);
@@ -353,9 +462,12 @@ pub fn from_env(events: Sender<SdrEvent>) -> Option<Feed> {
         return None;
     }
     let mut workers = Vec::new();
+    // Whole groups to a worker, so the dials that share a front end are
+    // processed together.
+    let grouped = groups(&specs);
     for w in 0..WORKERS {
         let (tx, rx) = sync_channel(QUEUE);
-        let share: Vec<Spec> = specs.iter().enumerate().filter(|(i, _)| i % WORKERS == w).map(|(_, s)| *s).collect();
+        let share: Vec<Spec> = grouped.iter().enumerate().filter(|(i, _)| i % WORKERS == w).flat_map(|(_, g)| g.iter().copied()).collect();
         let (events, base) = (events.clone(), (w * specs.len()) as u64);
         if let Err(e) = std::thread::Builder::new().name(format!("wideband-{w}")).spawn(move || run(rx, share, events, base)) {
             eprintln!("wideband: could not start a worker: {e}");
@@ -399,6 +511,61 @@ mod tests {
     fn the_channel_list_reads_as_written_and_skips_the_rest() {
         let got = parse_specs("FT8+7074000, WSPR?7038600,NOPE+1,FT4?not,DSC+50000000");
         assert_eq!(got, vec![Spec { mode: SdrMode::Ft8, dial_hz: 7_074_000, logs: true }, Spec { mode: SdrMode::Wspr, dial_hz: 7_038_600, logs: false }]);
+    }
+
+    #[test]
+    fn dials_close_together_share_a_front_end() {
+        let specs = [spec(SdrMode::Ft8, 7_074_000), spec(SdrMode::Wspr, 7_038_600), spec(SdrMode::Dsc, 8_412_800), spec(SdrMode::Ft8, 10_136_000), spec(SdrMode::Wspr, 10_138_700)];
+        let (fronts, channels) = build(&specs, 6_855_000.0, 8e6);
+        assert_eq!(fronts.len(), 2);
+        assert_eq!(channels.len(), 5);
+        let front_of = |dial: u64| channels.iter().find(|c| c.spec.dial_hz == dial).and_then(|c| c.front);
+        assert!(front_of(7_074_000).is_some() && front_of(7_074_000) == front_of(7_038_600));
+        assert!(front_of(10_136_000).is_some() && front_of(10_136_000) == front_of(10_138_700));
+        assert_eq!(front_of(8_412_800), None);
+        // The decoders see the rate they always did.
+        let alone = Channel::new(spec(SdrMode::Ft8, 7_074_000), 6_855_000.0, 8e6).expect("a channel");
+        assert!(channels.iter().all(|c| c.chain.fs_out() == alone.chain.fs_out()));
+    }
+
+    #[test]
+    fn a_signal_in_a_shared_front_end_is_decoded() {
+        let rate = 2_000_000.0;
+        let center = 7_000_000.0;
+        let dial = 7_074_000_u64;
+        let offset = dial as f64 - center;
+        let start_ms = 1_800_000_000_000_u64;
+        let audio = scannerd_engine::ft8::synthesize(scannerd_engine::ft8::Protocol::Ft8, "CQ K1ABC FN42", 1_500.0, 0.5, 15.0).expect("a message");
+        let (mut fronts, mut channels) = build(&[spec(SdrMode::Ft8, dial), spec(SdrMode::Wspr, 7_038_600)], center, rate);
+        assert_eq!(fronts.len(), 1);
+        let (sink, _keep) = broadcast::channel(16);
+        let status = Arc::new(Mutex::new(SdrStatus::default()));
+        let total = (rate * 16.0) as usize;
+        let mut sent = 0;
+        let mut block = Vec::with_capacity(26_624);
+        while sent < total {
+            block.clear();
+            for n in sent..(sent + 26_624).min(total) {
+                let t = n as f64 / rate;
+                let at = t * 12_000.0;
+                let i = at as usize;
+                let a = audio.get(i).copied().unwrap_or(0.0) as f64;
+                let b = audio.get(i + 1).copied().unwrap_or(0.0) as f64;
+                let v = a + (b - a) * (at - i as f64);
+                let phase = std::f64::consts::TAU * offset * t;
+                block.push(Complex32::new((v * phase.cos()) as f32, (v * phase.sin()) as f32));
+            }
+            sent += block.len();
+            process_block(&mut fronts, &mut channels, &block, start_ms + (sent as f64 / rate * 1_000.0) as u64, &sink, &status);
+        }
+        let ft8 = channels.iter_mut().find(|c| c.spec.dial_hz == dial).expect("the FT8 channel");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
+        let mut got = Vec::new();
+        while got.is_empty() && std::time::Instant::now() < deadline {
+            got = ft8.slots_done();
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        assert!(got.iter().flat_map(|(_, g)| g).any(|e| e.summary.contains("K1ABC")), "{got:?}");
     }
 
     #[test]
