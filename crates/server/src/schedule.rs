@@ -21,6 +21,11 @@
 //! the list gets covered, and every fifth pick revisits the least-heard one so a
 //! band that has come back is noticed.
 //!
+//! With wideband channels running, the tuner holds a slice of spectrum for a
+//! while, chosen by what those channels have measured at this hour, so they keep
+//! listening instead of being rebuilt on every hop. The main decoder moves around
+//! inside the slice, to whatever the channels are not already covering.
+//!
 //! Everything is clock-injected, like the scanner, so all of it is testable
 //! without hardware or real time.
 
@@ -28,7 +33,7 @@ use crate::sdr::SdrMode;
 use crate::stationlog::monitored_mode;
 use anyhow::{Context, Result};
 use serde_json::Value;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use usdr_proto::ScheduleStatus;
 
 /// How long touching the radio holds the schedule.
@@ -50,6 +55,18 @@ const CHART_NO_START_S: u64 = 3 * 60;
 const PICTURE_OVERRUN_S: u64 = 20 * 60;
 /// Every this many picks of a mode, take the least-heard frequency instead.
 const EXPLORE_EVERY: u32 = 5;
+/// Where the span can sit: 160 to 40 m, 80 to 30 m, 20 to 15 m, 15 to 10 m. The
+/// receiver's filters part at 12 MHz, so no slice crosses it.
+const SLICE_CENTERS: [u64; 4] = [5_400_000, 6_855_000, 17_607_000, 24_620_000];
+/// How far from center a channel still decodes well, with the 8 MHz span.
+const SLICE_REACH_HZ: f64 = 3_680_000.0;
+/// The highest audio a channel listens to, above its dial.
+const SLICE_TOP_AUDIO_HZ: f64 = 3_100.0;
+/// How long the tuner stays on a slice before choosing again.
+const SLICE_HOLD_S: u64 = 900;
+/// Every this many choices, take the slice visited longest ago, so a band that
+/// has come back is noticed.
+const SLICE_EXPLORE_EVERY: u32 = 5;
 /// Only charts whose title holds all of these are worth the air time.
 const CHART_WORDS: [&str; 2] = ["SURFACE", "ANALYSIS"];
 /// The radiofax stations in reach of Connecticut worth a slot.
@@ -79,15 +96,13 @@ struct Plan {
     dwell_s: u64,
 }
 
-const PLANS: [Plan; 8] = [
+const PLANS: [Plan; 6] = [
     Plan { mode: SdrMode::Ft8, share: 0.30, dwell_s: 120 },
-    Plan { mode: SdrMode::Hfdl, share: 0.25, dwell_s: 120 },
+    Plan { mode: SdrMode::Hfdl, share: 0.30, dwell_s: 120 },
     Plan { mode: SdrMode::Dsc, share: 0.15, dwell_s: 600 },
     Plan { mode: SdrMode::Wspr, share: 0.10, dwell_s: 360 },
-    Plan { mode: SdrMode::Selcal, share: 0.08, dwell_s: 600 },
-    Plan { mode: SdrMode::Js8, share: 0.05, dwell_s: 180 },
+    Plan { mode: SdrMode::Selcal, share: 0.10, dwell_s: 600 },
     Plan { mode: SdrMode::Sstv, share: 0.05, dwell_s: 480 },
-    Plan { mode: SdrMode::Ft4, share: 0.02, dwell_s: 120 },
 ];
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -257,7 +272,9 @@ pub struct Inputs {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Action {
-    Hop { mode: SdrMode, dial_hz: u64 },
+    /// Decode `mode` at `dial_hz`. With `center_hz` the span sits there (the
+    /// wideband plan); without, the tuner moves only if the dial has left the span.
+    Hop { mode: SdrMode, dial_hz: u64, center_hz: Option<u64> },
     /// The listening recorded from `since` to `until` was, or was not, on a
     /// working radio.
     MarkHealth { since: u64, until: u64, healthy: bool },
@@ -289,6 +306,18 @@ pub struct Scheduler {
     last_good: u64,
     health: Health,
     last_chart: u64,
+    /// What wideband channels are decoding, by mode and dial. Empty means none.
+    channels: BTreeSet<(SdrMode, u64)>,
+    slice: Option<u64>,
+    slice_until: u64,
+    slice_picks: u32,
+    slice_visited: BTreeMap<u64, u64>,
+}
+
+/// Whether a dial and the audio above it sit in the part of a slice that decodes well.
+fn in_slice(center_hz: u64, dial_hz: u64) -> bool {
+    let offset = dial_hz as f64 - center_hz as f64;
+    offset.abs() < SLICE_REACH_HZ && (offset + SLICE_TOP_AUDIO_HZ).abs() < SLICE_REACH_HZ
 }
 
 impl Scheduler {
@@ -323,6 +352,11 @@ impl Scheduler {
     /// End a hold early.
     pub fn resume(&mut self) {
         self.hold_until = 0;
+    }
+
+    /// Tell the schedule what the wideband channels are decoding.
+    pub fn set_channels(&mut self, channels: BTreeSet<(SdrMode, u64)>) {
+        self.channels = channels;
     }
 
     pub fn set_yields(&mut self, yields: Yields) {
@@ -432,7 +466,12 @@ impl Scheduler {
     }
 
     fn begin_health(&mut self, now: u64, step: usize, out: &mut Vec<Action>) {
-        let dial_hz = health_dials(now)[step];
+        // A WWV frequency already in the slice costs the channels nothing.
+        let mut dials = health_dials(now);
+        if let Some(center) = self.slice {
+            dials.sort_by_key(|d| !in_slice(center, *d));
+        }
+        let dial_hz = dials[step];
         self.start(Kind::Health { step }, SdrMode::Wwv, dial_hz, now + HEALTH_STEP_S, format!("radio check · WWV {} MHz", dial_hz / 1_000_000), out);
     }
 
@@ -449,12 +488,61 @@ impl Scheduler {
         }
     }
 
-    /// The mode furthest behind its share.
-    fn behind(&self) -> Option<&'static Plan> {
+    /// The slice to hold now, choosing again when the last has run its time.
+    fn choose_slice(&mut self, now: u64) -> Option<u64> {
+        if self.channels.is_empty() {
+            return None;
+        }
+        if self.slice.is_some() && now < self.slice_until {
+            return self.slice;
+        }
+        self.slice_picks += 1;
+        let hour = hour_of(now);
+        let chosen = if self.slice_picks.is_multiple_of(SLICE_EXPLORE_EVERY) {
+            SLICE_CENTERS.iter().copied().min_by_key(|c| self.slice_visited.get(c).copied().unwrap_or(0))
+        } else {
+            SLICE_CENTERS.iter().copied().max_by(|a, b| {
+                self.slice_score(*a, hour).total_cmp(&self.slice_score(*b, hour)).then(off_band(*b, hour).cmp(&off_band(*a, hour)))
+            })
+        };
+        self.slice = chosen;
+        self.slice_until = now + SLICE_HOLD_S;
+        if let Some(c) = chosen {
+            self.slice_visited.insert(c, now);
+        }
+        chosen
+    }
+
+    /// Decodes per second a slice's channels have managed around this hour of the day.
+    fn slice_score(&self, center_hz: u64, hour: u8) -> f64 {
+        self.channels
+            .iter()
+            .filter(|(_, dial)| in_slice(center_hz, *dial))
+            .map(|(mode, dial)| {
+                let y = self.around(monitored_mode(*mode).unwrap_or(""), *dial, hour);
+                (y.observations as f64 + 0.5) / (y.monitored_s as f64 + 300.0)
+            })
+            .sum()
+    }
+
+    /// Dials the main decoder could usefully take for a mode. Inside a slice, the
+    /// ones no channel is already on, unless `loose`.
+    fn targets_for(&self, mode: SdrMode, slice: Option<u64>, loose: bool) -> Vec<u64> {
+        self.catalog
+            .targets
+            .iter()
+            .filter(|t| t.mode == mode)
+            .map(|t| t.dial_hz)
+            .filter(|d| slice.is_none_or(|c| in_slice(c, *d) && (loose || !self.channels.contains(&(mode, *d)))))
+            .collect()
+    }
+
+    /// The mode furthest behind its share, among those with somewhere to go.
+    fn behind(&self, slice: Option<u64>, loose: bool) -> Option<&'static Plan> {
         let total: u64 = self.used.values().sum();
         PLANS
             .iter()
-            .filter(|p| self.catalog.targets.iter().any(|t| t.mode == p.mode))
+            .filter(|p| !self.targets_for(p.mode, slice, loose).is_empty())
             .max_by(|a, b| self.deficit(a, total).total_cmp(&self.deficit(b, total)).then(b.share.total_cmp(&a.share)))
     }
 
@@ -463,10 +551,18 @@ impl Scheduler {
     }
 
     fn begin_planned(&mut self, now: u64, out: &mut Vec<Action>) {
-        let Some(plan) = self.behind() else { return };
+        let slice = self.choose_slice(now);
+        // Inside a slice, what the channels are not doing; failing that, anything there.
+        let (plan, loose) = match self.behind(slice, false) {
+            Some(plan) => (plan, false),
+            None => match self.behind(slice, true) {
+                Some(plan) => (plan, true),
+                None => return,
+            },
+        };
         let label = monitored_mode(plan.mode).unwrap_or("");
         let hour = hour_of(now);
-        let dials: Vec<u64> = self.catalog.targets.iter().filter(|t| t.mode == plan.mode).map(|t| t.dial_hz).collect();
+        let dials = self.targets_for(plan.mode, slice, loose);
         let n = self.picks.entry(plan.mode).or_insert(0);
         *n += 1;
         let explore = *n % EXPLORE_EVERY == 0;
@@ -509,8 +605,20 @@ impl Scheduler {
     }
 
     fn start(&mut self, kind: Kind, mode: SdrMode, dial_hz: u64, end: u64, label: String, out: &mut Vec<Action>) {
-        out.push(Action::Hop { mode, dial_hz });
+        out.push(Action::Hop { mode, dial_hz, center_hz: self.center_for(dial_hz) });
         self.slot = Some(Slot { kind, mode, dial_hz, end, label });
+    }
+
+    /// Where the span should sit for a dial: the held slice if it reaches, else
+    /// one that does, else the dial itself. `None` when no channels are running.
+    fn center_for(&self, dial_hz: u64) -> Option<u64> {
+        if self.channels.is_empty() {
+            return None;
+        }
+        Some(match self.slice {
+            Some(c) if in_slice(c, dial_hz) => c,
+            _ => SLICE_CENTERS.iter().copied().find(|c| in_slice(*c, dial_hz)).unwrap_or(dial_hz),
+        })
     }
 
     fn state(&self, now: u64) -> &'static str {
@@ -606,7 +714,7 @@ mod tests {
     }
 
     fn hops(a: &[Action]) -> Vec<(SdrMode, u64)> {
-        a.iter().filter_map(|x| if let Action::Hop { mode, dial_hz } = x { Some((*mode, *dial_hz)) } else { None }).collect()
+        a.iter().filter_map(|x| if let Action::Hop { mode, dial_hz, .. } = x { Some((*mode, *dial_hz)) } else { None }).collect()
     }
 
     /// A scheduler already past its first radio check.
@@ -737,6 +845,73 @@ mod tests {
     fn the_night_checks_the_lower_bands_first() {
         assert_eq!(health_dials(DAY + 3_600)[0], 5_000_000);
         assert_eq!(health_dials(NOON)[0], 10_000_000);
+    }
+
+    fn with_channels(targets: Vec<Target>, channels: &[(SdrMode, u64)]) -> Scheduler {
+        let mut s = running(catalog(targets, vec![]), NOON);
+        s.next_health = u64::MAX;
+        s.slot = None;
+        s.set_channels(channels.iter().copied().collect());
+        s
+    }
+
+    fn center_of(a: &[Action]) -> Option<u64> {
+        a.iter().find_map(|x| if let Action::Hop { center_hz, .. } = x { *center_hz } else { None })
+    }
+
+    #[test]
+    fn a_slice_is_held_and_the_decoder_takes_what_channels_do_not_cover() {
+        let targets = vec![Target { mode: SdrMode::Ft8, dial_hz: 7_074_000 }, Target { mode: SdrMode::Selcal, dial_hz: 8_891_000 }, Target { mode: SdrMode::Ft8, dial_hz: 14_074_000 }];
+        let mut s = with_channels(targets, &[(SdrMode::Ft8, 7_074_000)]);
+        s.yields.insert(("FT8".to_string(), 7_074_000, hour_of(NOON)), Yield { monitored_s: 100, observations: 500 });
+        let first = s.tick(at(NOON));
+        assert_eq!(hops(&first), vec![(SdrMode::Selcal, 8_891_000)], "the channel has FT8 already");
+        assert_eq!(center_of(&first), Some(6_855_000));
+        s.slot = None;
+        assert_eq!(center_of(&s.tick(at(NOON + SLICE_HOLD_S - 1))), Some(6_855_000), "still held");
+    }
+
+    #[test]
+    fn a_slice_with_nothing_else_to_do_still_gets_a_decoder() {
+        let mut s = with_channels(vec![Target { mode: SdrMode::Ft8, dial_hz: 7_074_000 }], &[(SdrMode::Ft8, 7_074_000)]);
+        assert_eq!(hops(&s.tick(at(NOON))), vec![(SdrMode::Ft8, 7_074_000)]);
+    }
+
+    #[test]
+    fn every_so_often_the_longest_unvisited_slice_is_tried() {
+        let targets = vec![Target { mode: SdrMode::Ft8, dial_hz: 7_074_000 }, Target { mode: SdrMode::Ft8, dial_hz: 28_074_000 }];
+        let mut s = with_channels(targets, &[(SdrMode::Ft8, 7_074_000), (SdrMode::Ft8, 28_074_000)]);
+        s.yields.insert(("FT8".to_string(), 7_074_000, hour_of(NOON)), Yield { monitored_s: 100, observations: 500 });
+        let mut centers = Vec::new();
+        let mut now = NOON;
+        for _ in 0..SLICE_EXPLORE_EVERY {
+            s.slot = None;
+            s.tick(at(now));
+            centers.push(s.slice.unwrap());
+            now += SLICE_HOLD_S;
+        }
+        assert_eq!(centers[0], 6_855_000);
+        assert_ne!(*centers.last().unwrap(), 6_855_000, "the fifth choice goes looking");
+    }
+
+    #[test]
+    fn a_chart_outside_the_slice_moves_the_span_and_without_channels_nothing_changes() {
+        let mut s = with_channels(vec![Target { mode: SdrMode::Ft8, dial_hz: 7_074_000 }], &[(SdrMode::Ft8, 7_074_000)]);
+        s.tick(at(NOON));
+        assert_eq!(s.center_for(9_108_100), Some(6_855_000), "in the slice already");
+        assert_eq!(s.center_for(14_074_000), Some(17_607_000));
+        assert_eq!(s.center_for(12_750_000), Some(12_750_000), "in no slice at all");
+        let mut plain = running(catalog(vec![Target { mode: SdrMode::Ft8, dial_hz: 7_074_000 }], vec![]), NOON);
+        plain.next_health = u64::MAX;
+        assert_eq!(center_of(&plain.tick(at(NOON))), None);
+    }
+
+    #[test]
+    fn no_slice_crosses_the_receivers_filter_split() {
+        for c in SLICE_CENTERS {
+            let (low, high) = (c as f64 - SLICE_REACH_HZ, c as f64 + SLICE_REACH_HZ);
+            assert!(high < 12_000_000.0 || low > 12_000_000.0, "{c} straddles 12 MHz");
+        }
     }
 
     #[test]

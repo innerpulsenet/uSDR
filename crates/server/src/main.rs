@@ -465,7 +465,8 @@ async fn main() -> Result<()> {
     {
         eprintln!("pictures will not be kept: {e:#}");
     }
-    let scheduler = schedule::Scheduler::new(catalog, settings.schedule_enabled.unwrap_or(false));
+    let mut scheduler = schedule::Scheduler::new(catalog, settings.schedule_enabled.unwrap_or(false));
+    scheduler.set_channels(wideband::logging_channels());
     let state = Arc::new(AppState {
         sdr: Mutex::new(Some(runtime)),
         calls,
@@ -1221,7 +1222,7 @@ async fn schedule_loop(st: Arc<AppState>) {
         let actions = st.schedule.lock().expect("schedule").tick(inputs);
         for action in actions {
             match action {
-                schedule::Action::Hop { mode, dial_hz } => schedule_hop(&st, mode, dial_hz as f64),
+                schedule::Action::Hop { mode, dial_hz, center_hz } => schedule_hop(&st, mode, dial_hz as f64, center_hz.map(|c| c as f64)),
                 schedule::Action::MarkHealth { since, until, healthy } => {
                     if let Some(log) = &st.station_log {
                         log.mark_health(since, until, healthy);
@@ -1250,16 +1251,22 @@ fn schedule_inputs(st: &AppState, utc: u64) -> schedule::Inputs {
     schedule::Inputs { utc, picture_busy, wwv_locked: s.mode == sdr::SdrMode::Wwv && reading.is_some_and(|d| d.locked) }
 }
 
-/// Move the receiver, without touching the operator's saved settings. The tuner
-/// moves only if the frequency is outside the span it already covers.
-fn schedule_hop(st: &AppState, mode: sdr::SdrMode, dial_hz: f64) {
+/// Move the receiver, without touching the operator's saved settings. With a
+/// wideband slice the span sits at `center`; otherwise the tuner moves only if the
+/// frequency is outside the span it already covers.
+fn schedule_hop(st: &AppState, mode: sdr::SdrMode, dial_hz: f64, center: Option<f64>) {
     let sdr = st.sdr.lock().expect("sdr");
     let Some(runtime) = sdr.as_ref() else { return };
-    let (center, rate) = {
+    let (tuned, rate, lo_offset) = {
         let s = runtime.status.lock().expect("sdr status");
-        (s.freq_hz, s.rate_hz)
+        (s.freq_hz, s.rate_hz, s.lo_offset_hz)
     };
-    let moved = runtime.set_mode(mode).and_then(|()| if (dial_hz - center).abs() > rate * 0.4 { runtime.tune(dial_hz) } else { Ok(()) }).and_then(|()| runtime.inspect(dial_hz));
+    let tune_to = match center {
+        // The tuned frequency sits below the span's center by the LO offset.
+        Some(c) => Some(c - lo_offset).filter(|target| (target - tuned).abs() > 1_000.0),
+        None => ((dial_hz - tuned).abs() > rate * 0.4).then_some(dial_hz),
+    };
+    let moved = runtime.set_mode(mode).and_then(|()| tune_to.map_or(Ok(()), |f| runtime.tune(f))).and_then(|()| runtime.inspect(dial_hz));
     if let Err(e) = moved {
         eprintln!("schedule: moving to {dial_hz} Hz: {e:#}");
     }

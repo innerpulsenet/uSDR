@@ -322,6 +322,12 @@ pub fn from_env(events: Sender<SdrEvent>) -> Option<Feed> {
     Some(Feed { workers, specs })
 }
 
+/// The channels that log, by mode and dial, for the schedule to plan around.
+pub fn logging_channels() -> std::collections::BTreeSet<(SdrMode, u64)> {
+    let text = std::env::var("USDR_WIDE").unwrap_or_default();
+    parse_specs(&text).into_iter().filter(|s| s.logs).map(|s| (s.mode, s.dial_hz)).collect()
+}
+
 /// What the channels have decoded, for comparing with the main decoder.
 pub fn snapshot() -> Value {
     let kept = results().lock().expect("wideband results");
