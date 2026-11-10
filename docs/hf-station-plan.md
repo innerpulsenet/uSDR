@@ -399,7 +399,11 @@ decoder going to the chart, unless that would cut off a picture or a radio check
 receiver's own radiofax path was checked after the change on DWD's 16:36 surface analysis,
 1296 rows, filed against its timetable entry. The first chart a channel received
 was NMF's 16:00 iceberg analysis, 920 rows, untimetabled, which the picture check passed
-(row correlation 0.70).
+(row correlation 0.70). The first evening showed a gap: DWD's 18:00 chart on 13880.6 kHz,
+outside every slice, held the main receiver until 18:19:38, and NMG's 18:20 chart, due a
+second later with a channel on 17144.5 kHz, went to the main receiver on 8502.0 kHz instead,
+which heard no start tone. The finished chart still counted as the slot in progress. A chart
+whose picture is over, or never began, no longer holds a chart back from its channel.
 
 **What has to change.**
 

@@ -548,13 +548,18 @@ impl Scheduler {
         let chart = &self.catalog.charts[index];
         let label = format!("{} · {}", chart.station, chart.title);
         let hour = hour_of(now);
-        // The span is on the slice unless the radio check has taken it elsewhere.
-        let here = self.slice.filter(|c| self.slot.as_ref().is_none_or(|s| in_slice(*c, s.dial_hz)));
+        // A chart on the main receiver whose picture is over, or never began,
+        // ends on this tick: it holds nothing back. (Charts back to back, the
+        // second one's lead minute falls just as the first one's picture ends.)
+        let over = |s: &Slot| matches!(s.kind, Kind::Chart { at_utc, started } if !n.picture_busy && (started || now >= at_utc + CHART_NO_START_S));
+        // The span is on the slice unless the radio check or a chart has taken
+        // it elsewhere.
+        let here = self.slice.filter(|c| self.slot.as_ref().is_none_or(|s| over(s) || in_slice(*c, s.dial_hz)));
         // Moving is for a slice the planner holds, never from under a picture,
         // a radio check or another chart, and only to a slice on this side of
         // the split with planned work in it: the decoder's hop there is what
         // moves the span.
-        let movable = self.slice.is_some() && !self.pinned && !n.picture_busy && self.slot.as_ref().is_none_or(|s| s.kind == Kind::Planned);
+        let movable = self.slice.is_some() && !self.pinned && !n.picture_busy && self.slot.as_ref().is_none_or(|s| s.kind == Kind::Planned || over(s));
         let side = if self.is_night(now) { NIGHT_SLICES } else { DAY_SLICES };
         let found = here.and_then(|c| self.chart_channel(index, c, hour).map(|d| (c, d))).or_else(|| {
             movable
@@ -1126,6 +1131,25 @@ mod tests {
         assert_eq!(center_of(&a), Some(17_607_000), "{a:?}");
         assert!(hops(&a).iter().all(|h| h.0 == SdrMode::Ft8), "{a:?}");
         assert!(s.status(lead + 1).label.contains("chart on a channel"));
+    }
+
+    #[test]
+    fn a_chart_right_after_one_on_the_radio_still_goes_to_its_channel() {
+        // DDH3 at 1800 on 13880.6 kHz, outside every slice, then NMG at 1820
+        // with a channel in the day slice: the evening of 2026-11-10.
+        let mut s = with_channels(vec![ft8(14074)], &[(SdrMode::Ft8, 14_074_000), (SdrMode::Wefax, NMG_17)]);
+        s.catalog.charts = vec![chart(12 * 60, 13_880_600), chart(12 * 60 + 20, NMG_17)];
+        s.tick(at(NOON - 20 * 60));
+        s.slot = None;
+        assert_eq!(hops(&s.tick(at(NOON - 60))), vec![(SdrMode::Wefax, 13_880_600)]);
+        let busy = |t| Inputs { utc: t, picture_busy: true, ..Default::default() };
+        assert!(hops(&s.tick(busy(NOON + 60))).is_empty());
+        assert!(hops(&s.tick(busy(NOON + 19 * 60 + 38))).is_empty(), "the second chart waits for the first picture");
+        // The first picture ends in the second chart's lead minute.
+        let a = s.tick(at(NOON + 19 * 60 + 39));
+        assert!(hops(&a).iter().all(|h| h.0 == SdrMode::Ft8), "{a:?}");
+        assert_eq!(center_of(&a), Some(17_607_000), "{a:?}");
+        assert!(s.status(NOON + 19 * 60 + 39).label.contains("chart on a channel"));
     }
 
     #[test]
