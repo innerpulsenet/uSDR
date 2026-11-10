@@ -404,6 +404,21 @@ outside every slice, held the main receiver until 18:19:38, and NMG's 18:20 char
 second later with a channel on 17144.5 kHz, went to the main receiver on 8502.0 kHz instead,
 which heard no start tone. The finished chart still counted as the slot in progress. A chart
 whose picture is over, or never began, no longer holds a chart back from its channel.
+After the fix, DWD's 22:00 surface analysis went to the 7878.1 kHz channel and was filed
+against its timetable entry (1296 rows), and the 6338.6 kHz channel filed two NMF charts
+the same evening.
+
+**NAVTEX.** The directory lists only 518 kHz, which no slice reaches, so NAVTEX is a
+timetabled main-receiver visit rather than a channel: dial 517.0 kHz, 30 s before the
+station's slot to 11 minutes after it, with all channels dark meanwhile. Boston, Chesapeake
+and Yarmouth take turns, one per 4-hour cycle (Boston 00:50 and 12:50 UTC, Chesapeake 06:10
+and 18:10, Yarmouth 11:20 and 23:20), so six visits, about an hour a day. Charts win: a
+chart on the main receiver goes first, a channel chart in the slice ends a visit, and a
+visit is passed over while a channel is receiving a chart. The log keeps each message by its
+id with its text (up to 4000 characters); the site lists each message once from its best
+copy. The first two visits on 2026-11-10 copied nothing: a manual one 22:38–22:52
+(Sydney NS and San Juan slots), noise -81 dBFS, and the schedule's Yarmouth visit
+23:19–23:31, noise -84 dBFS. 518 kHz reception on this antenna is not yet shown.
 
 **What has to change.**
 
