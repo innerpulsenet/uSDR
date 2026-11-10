@@ -13,6 +13,11 @@
 //! is a shadow, whose decodes are kept only for comparing with the main decoder.
 //! Each logging channel keeps its own listening record, marked `wideband`, so its
 //! airtime is never mistaken for the receiver's.
+//!
+//! SSTV below 10 MHz is sent on the lower sideband, as amateur voice is, and a
+//! channel there demodulates it that way. Its pictures go to the approval queue
+//! like the main receiver's, unless the main receiver was on the same dial for
+//! the whole picture and keeps its own.
 
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -106,18 +111,34 @@ struct Spec {
     logs: bool,
 }
 
+/// Below this, picture modes go out on the lower sideband.
+const LOWER_SIDEBAND_BELOW_HZ: u64 = 10_000_000;
+
 impl Spec {
-    /// How far above the dial this mode's audio reaches.
+    fn new(mode: SdrMode, dial_hz: u64, logs: bool) -> Self {
+        Spec { mode, dial_hz, logs }
+    }
+
+    /// The data modes here are all upper sideband except SSTV low down.
+    fn sideband(self) -> Sideband {
+        if self.mode == SdrMode::Sstv && self.dial_hz < LOWER_SIDEBAND_BELOW_HZ { Sideband::Lower } else { Sideband::Upper }
+    }
+
+    /// How far from the dial this mode's audio reaches, on its sideband's side.
     fn top_hz(self) -> f64 {
         let (low, high) = self.mode.filter_edges();
         f64::from(low.abs().max(high.abs()))
     }
 
-    /// Whether a span holds this dial and all the audio above it.
+    /// Whether a span holds this dial and all the audio beside it.
     fn heard_in(self, center_hz: f64, rate: f64) -> bool {
         let half = rate * USABLE;
         let dial = self.dial_hz as f64;
-        (dial - center_hz).abs() < half && (dial + self.top_hz() - center_hz).abs() < half
+        let edge = match self.sideband() {
+            Sideband::Lower => dial - self.top_hz(),
+            Sideband::Upper => dial + self.top_hz(),
+        };
+        (dial - center_hz).abs() < half && (edge - center_hz).abs() < half
     }
 }
 
@@ -130,6 +151,7 @@ fn parse_mode(name: &str) -> Option<SdrMode> {
         "DSC" => SdrMode::Dsc,
         "HFDL" => SdrMode::Hfdl,
         "SELCAL" => SdrMode::Selcal,
+        "SSTV" => SdrMode::Sstv,
         _ => return None,
     })
 }
@@ -142,7 +164,7 @@ fn parse_specs(text: &str) -> Vec<Spec> {
             let at = item.find(['+', '?'])?;
             let mode = parse_mode(&item[..at])?;
             let dial_hz: u64 = item[at + 1..].parse().ok()?;
-            (dial_hz < 30_000_000).then_some(Spec { mode, dial_hz, logs: item.as_bytes()[at] == b'+' })
+            (dial_hz < 30_000_000).then_some(Spec::new(mode, dial_hz, item.as_bytes()[at] == b'+'))
         })
         .collect()
 }
@@ -287,7 +309,7 @@ impl Channel {
         nco.set_freq(spec.dial_hz as f64 - input_hz, rate);
         let (low, high) = spec.mode.filter_edges();
         let (low, high) = (low.abs().min(high.abs()), low.abs().max(high.abs()));
-        let demod = SsbDemod::with_shape(fs, Sideband::Upper, low, high, spec.mode.filter_shape());
+        let demod = SsbDemod::with_shape(fs, spec.sideband(), low, high, spec.mode.filter_shape());
         let decoder = match spec.mode.ft8_protocol() {
             Some(protocol) => {
                 let mut slots = SlotDecoder::new(protocol, fs);
@@ -349,6 +371,14 @@ impl Channel {
     fn busy(&self) -> bool {
         matches!(&self.decoder, Decoder::Slots(slots) if slots.busy())
     }
+
+    /// Pictures are this channel's to keep unless it only shadows, or the main
+    /// receiver is decoding the same mode on the same dial.
+    fn follow_main(&mut self, main: Option<(SdrMode, u64)>) {
+        if let Decoder::Hf(hf) = &mut self.decoder {
+            hf.set_kept_elsewhere(!self.spec.logs || main == Some((self.spec.mode, self.spec.dial_hz)));
+        }
+    }
 }
 
 /// Keep a result, and send its decodes on if this channel logs.
@@ -392,6 +422,9 @@ fn run(rx: Receiver<Arc<Block>>, specs: Vec<Spec>, events: Sender<SdrEvent>, seq
             key = Some((block.rate, block.center_hz));
             retired.append(&mut channels);
             (fronts, channels) = build(&specs, block.center_hz, block.rate);
+        }
+        for channel in &mut channels {
+            channel.follow_main(block.main);
         }
         process_block(&mut fronts, &mut channels, &block.iq, block.ms, &sink, &status);
         for channel in channels.iter_mut().chain(retired.iter_mut()) {
@@ -496,7 +529,7 @@ mod tests {
     use super::*;
 
     fn spec(mode: SdrMode, dial_hz: u64) -> Spec {
-        Spec { mode, dial_hz, logs: true }
+        Spec::new(mode, dial_hz, true)
     }
 
     #[test]
@@ -510,7 +543,70 @@ mod tests {
     #[test]
     fn the_channel_list_reads_as_written_and_skips_the_rest() {
         let got = parse_specs("FT8+7074000, WSPR?7038600,NOPE+1,FT4?not,DSC+50000000");
-        assert_eq!(got, vec![Spec { mode: SdrMode::Ft8, dial_hz: 7_074_000, logs: true }, Spec { mode: SdrMode::Wspr, dial_hz: 7_038_600, logs: false }]);
+        assert_eq!(got, vec![Spec::new(SdrMode::Ft8, 7_074_000, true), Spec::new(SdrMode::Wspr, 7_038_600, false)]);
+        assert_eq!(parse_specs("SSTV+14230000,SSTV?7171000"), vec![Spec::new(SdrMode::Sstv, 14_230_000, true), Spec::new(SdrMode::Sstv, 7_171_000, false)]);
+    }
+
+    #[test]
+    fn sstv_takes_the_lower_sideband_below_ten_megahertz() {
+        assert_eq!(spec(SdrMode::Sstv, 7_171_000).sideband(), Sideband::Lower);
+        assert_eq!(spec(SdrMode::Sstv, 3_845_000).sideband(), Sideband::Lower);
+        assert_eq!(spec(SdrMode::Sstv, 14_230_000).sideband(), Sideband::Upper);
+        assert_eq!(spec(SdrMode::Ft8, 7_074_000).sideband(), Sideband::Upper);
+        // Its audio sits below the dial, so the span has to reach down for it.
+        let top = spec(SdrMode::Sstv, 7_171_000).top_hz();
+        let rate = 8e6;
+        // The dial just inside the span's top edge: its audio reaches down into it.
+        let center = 7_171_000.0 - rate * USABLE + top / 2.0;
+        assert!(spec(SdrMode::Sstv, 7_171_000).heard_in(center, rate));
+        // The dial just inside the low edge: its audio falls off the bottom.
+        let center = 7_171_000.0 + rate * USABLE - top / 2.0;
+        assert!(!spec(SdrMode::Sstv, 7_171_000).heard_in(center, rate), "the audio is past the span's low edge");
+    }
+
+    /// The night spans hold 40 m's calling frequency and the day spans 20 m's.
+    #[test]
+    fn the_sstv_calling_frequencies_sit_in_their_spans() {
+        let rate = 8e6;
+        assert!(spec(SdrMode::Sstv, 7_171_000).heard_in(5_400_000.0, rate));
+        assert!(spec(SdrMode::Sstv, 7_171_000).heard_in(6_855_000.0, rate));
+        assert!(spec(SdrMode::Sstv, 14_230_000).heard_in(17_607_000.0, rate));
+    }
+
+    /// A tone below a lower-sideband channel's dial comes out as audio; above
+    /// it, the filter takes it away. Upper sideband the other way round.
+    #[test]
+    fn a_channel_hears_its_own_sideband_only() {
+        let rate = 250_000.0;
+        let center = 7_150_000.0;
+        let dial = 7_171_000_u64;
+        let level = |tone_offset: f64, lower: bool| {
+            let mut channel = Channel::new(Spec::new(if lower { SdrMode::Sstv } else { SdrMode::Ft8 }, dial, false), center, rate).expect("a channel");
+            let (sink, _keep) = broadcast::channel(16);
+            let status = Arc::new(Mutex::new(SdrStatus::default()));
+            let f = dial as f64 + tone_offset - center;
+            let mut energy = 0.0_f64;
+            let mut n = 0_usize;
+            for b in 0..20 {
+                let block: Vec<Complex32> = (0..16_384)
+                    .map(|i| {
+                        let t = (b * 16_384 + i) as f64 / rate;
+                        let p = std::f64::consts::TAU * f * t;
+                        Complex32::new(0.1 * p.cos() as f32, 0.1 * p.sin() as f32)
+                    })
+                    .collect();
+                channel.process(&block, 0, &sink, &status);
+                if b >= 10 {
+                    energy += channel.linear.iter().map(|v| f64::from(*v) * f64::from(*v)).sum::<f64>();
+                    n += channel.linear.len();
+                }
+            }
+            energy / n.max(1) as f64
+        };
+        let (lsb_wanted, lsb_unwanted) = (level(-1_900.0, true), level(1_900.0, true));
+        assert!(lsb_wanted > 100.0 * lsb_unwanted, "LSB: {lsb_wanted} against {lsb_unwanted}");
+        let (usb_wanted, usb_unwanted) = (level(1_900.0, false), level(-1_900.0, false));
+        assert!(usb_wanted > 100.0 * usb_unwanted, "USB: {usb_wanted} against {usb_unwanted}");
     }
 
     #[test]

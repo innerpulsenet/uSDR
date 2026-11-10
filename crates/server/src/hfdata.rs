@@ -165,7 +165,9 @@ enum Kind {
     /// Feld Hell, and how many columns have gone out.
     Hell { dec: Box<HellDecoder>, sent: u32 },
     Js8(Box<Js8Decoder>),
-    Sstv { dec: Box<SstvDecoder>, picture: Option<u32>, rows: u32, frame: SstvFrame },
+    /// `elsewhere`: the picture in progress has had another keeper since its
+    /// first row, so this decoder does not file it.
+    Sstv { dec: Box<SstvDecoder>, picture: Option<u32>, rows: u32, frame: SstvFrame, elsewhere: bool },
     Drm {
         rx: Box<DrmReceiver>,
         audio: Box<crate::drm_audio::DrmAudio>,
@@ -357,6 +359,8 @@ pub struct HfDecoder {
     /// The reading last sent; `None` until the first, which always goes so
     /// a new decoder's reading replaces the last mode's.
     reading: Option<DigitalReading>,
+    /// See [`HfDecoder::set_kept_elsewhere`].
+    kept_elsewhere: bool,
 }
 
 /// The amateur preset at amateur speed; above it, the commercial one, whose
@@ -410,7 +414,7 @@ impl HfDecoder {
             SdrMode::Mfsk => Kind::Mfsk(Box::new(MfskDecoder::new(fs, MfskConfig::default()))),
             SdrMode::Hell => Kind::Hell { dec: Box::new(HellDecoder::new(fs)), sent: 0 },
             SdrMode::Js8 => Kind::Js8(Box::new(Js8Decoder::new(fs, &Js8Speed::ALL))),
-            SdrMode::Sstv => Kind::Sstv { dec: Box::new(SstvDecoder::new(fs)), picture: None, rows: 0, frame: SstvFrame::default() },
+            SdrMode::Sstv => Kind::Sstv { dec: Box::new(SstvDecoder::new(fs)), picture: None, rows: 0, frame: SstvFrame::default(), elsewhere: false },
             SdrMode::Drm => Kind::Drm {
                 rx: Box::new(DrmReceiver::new(fs)),
                 audio: Box::new(crate::drm_audio::DrmAudio::new(fs as f64)),
@@ -431,7 +435,14 @@ impl HfDecoder {
             }
             _ => return None,
         };
-        Some(HfDecoder { kind, fs, last_reading: Instant::now() - Duration::from_secs(1), reading: None })
+        Some(HfDecoder { kind, fs, last_reading: Instant::now() - Duration::from_secs(1), reading: None, kept_elsewhere: false })
+    }
+
+    /// Whether another decoder is keeping this dial's pictures now: the main
+    /// receiver on the same dial, beside a wideband channel. A picture is
+    /// left to the other only if it was there for the whole of it.
+    pub fn set_kept_elsewhere(&mut self, on: bool) {
+        self.kept_elsewhere = on;
     }
 
     /// New settings, applied without rebuilding: a decoder keeps its lock.
@@ -602,6 +613,7 @@ impl HfDecoder {
         let send = |ev: DecodeEvent| {
             let _ = events.send(SdrEvent::Decode { inspect_hz: dial_hz, event: ev });
         };
+        let kept_elsewhere = self.kept_elsewhere;
         match &mut self.kind {
             Kind::Wefax { dec, picture, rows, started_hz, started_utc } => {
                 dec.push(audio);
@@ -859,13 +871,15 @@ impl HfDecoder {
                     send(hf_event("JS8", &e));
                 }
             }
-            Kind::Sstv { dec, picture, rows, frame: collected } => {
+            Kind::Sstv { dec, picture, rows, frame: collected, elsewhere } => {
+                *elsewhere &= kept_elsewhere;
                 dec.push(audio);
                 for e in dec.take() {
                     match &e {
                         SstvEvent::Start { width, height, .. } => {
                             *picture = Some(NEXT_PICTURE.fetch_add(1, Ordering::Relaxed));
                             *rows = 0;
+                            *elsewhere = kept_elsewhere;
                             *collected = SstvFrame::begin(*width, *height);
                             let mut ev = hf_event("SSTV", &e);
                             ev.fields.insert("image".into(), picture.unwrap_or(0).to_string());
@@ -879,7 +893,7 @@ impl HfDecoder {
                             collected.row(*line, rgb);
                         }
                         SstvEvent::End { .. } => {
-                            if picture.is_some() {
+                            if picture.is_some() && !*elsewhere {
                                 collected.hand_over(*rows, dial_hz);
                             }
                             let mut ev = hf_event("SSTV", &e);
