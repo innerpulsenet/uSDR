@@ -436,7 +436,7 @@ impl Scheduler {
         if !self.pinned {
             self.channel_chart = None;
         }
-        self.chart_to_channel(n.utc);
+        self.chart_to_channel(n);
         if self.slot.is_some() && self.keep_slot(n, &mut out) {
             return out;
         }
@@ -538,16 +538,42 @@ impl Scheduler {
     }
 
     /// A chart due now that a channel in the held slice covers is left to the
-    /// channel, and the slice kept for it. While one is, a chart that would
+    /// channel, and the slice kept for it. A channel in another slice will do
+    /// too: the span would have moved for the chart anyway, and this way the
+    /// main decoder stays free. While a channel has a chart, one that would
     /// move the span waits its turn: it is passed over.
-    fn chart_to_channel(&mut self, now: u64) {
+    fn chart_to_channel(&mut self, n: Inputs) {
+        let now = n.utc;
         let Some((index, at_utc)) = self.chart_due(now) else { return };
         let chart = &self.catalog.charts[index];
         let label = format!("{} · {}", chart.station, chart.title);
+        let hour = hour_of(now);
         // The span is on the slice unless the radio check has taken it elsewhere.
         let here = self.slice.filter(|c| self.slot.as_ref().is_none_or(|s| in_slice(*c, s.dial_hz)));
-        match here.and_then(|c| self.chart_channel(index, c, hour_of(now))) {
-            Some(dial_hz) => {
+        // Moving is for a slice the planner holds, never from under a picture,
+        // a radio check or another chart, and only to a slice on this side of
+        // the split with planned work in it: the decoder's hop there is what
+        // moves the span.
+        let movable = self.slice.is_some() && !self.pinned && !n.picture_busy && self.slot.as_ref().is_none_or(|s| s.kind == Kind::Planned);
+        let side = if self.is_night(now) { NIGHT_SLICES } else { DAY_SLICES };
+        let found = here.and_then(|c| self.chart_channel(index, c, hour).map(|d| (c, d))).or_else(|| {
+            movable
+                .then(|| {
+                    side.iter()
+                        .copied()
+                        .filter(|c| PLANS.iter().any(|p| !self.targets_for(p.mode, Some(*c), true).is_empty()))
+                        .find_map(|c| self.chart_channel(index, c, hour).map(|d| (c, d)))
+                })
+                .flatten()
+        });
+        match found {
+            Some((center_hz, dial_hz)) => {
+                if self.slice != Some(center_hz) {
+                    // The planned slot ends, and the next starts in the new slice.
+                    self.slice = Some(center_hz);
+                    self.slice_visited.insert(center_hz, now);
+                    self.slot = None;
+                }
                 self.last_chart = at_utc;
                 self.visited.insert((SdrMode::Wefax, dial_hz), now);
                 self.chart_pin_until = at_utc + CHART_MAX_S;
@@ -1077,6 +1103,29 @@ mod tests {
         s.slot = None;
         assert_eq!(hops(&s.tick(at(late + 1)))[0].0, SdrMode::Wwv);
         assert!(!s.status(late + 1).label.contains("chart"));
+    }
+
+    #[test]
+    fn a_chart_a_channel_in_another_slice_covers_moves_the_slice_not_the_decoder() {
+        let targets = vec![ft8(14074), ft8(24915)];
+        let mut s = with_channels(targets, &[(SdrMode::Ft8, 14_074_000), (SdrMode::Ft8, 24_915_000), (SdrMode::Wefax, NMG_17)]);
+        s.catalog.charts = vec![chart(12 * 60 + 30, NMG_17)];
+        s.tick(at(NOON));
+        s.slice = Some(24_620_000);
+        s.slice_until = NOON + 3_600;
+        // A picture on the main receiver is not cut off for it.
+        let lead = NOON + 29 * 60;
+        s.slot = None;
+        assert_eq!(center_of(&s.tick(at(lead - 30))), Some(24_620_000));
+        let busy = s.tick(Inputs { utc: lead, picture_busy: true, ..Default::default() });
+        assert!(hops(&busy).is_empty(), "{busy:?}");
+        assert_eq!(s.slice, Some(24_620_000));
+        // Otherwise the slice moves to the channel and the decoder works there.
+        s.last_chart = 0;
+        let a = s.tick(at(lead + 1));
+        assert_eq!(center_of(&a), Some(17_607_000), "{a:?}");
+        assert!(hops(&a).iter().all(|h| h.0 == SdrMode::Ft8), "{a:?}");
+        assert!(s.status(lead + 1).label.contains("chart on a channel"));
     }
 
     #[test]

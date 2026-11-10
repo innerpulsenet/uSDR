@@ -358,6 +358,49 @@ records the wideband channels too):
   wsprnet, and there is no reference decoder here to check new ones against), and JS8
   subtraction (off the channel list).
 
+**Stage 5: more channels, 2026-11-10.** Added to `USDR_WIDE` on CT 216, cheapest first, 50
+channels in all, every one logging:
+
+- **SELCAL** on 5598, 6628, 8825 and 8906 kHz, inside both night slices. 11396 and 13306 kHz
+  are in no slice (the night slices reach up to 10.54 MHz, the day slice starts at 13.93) and
+  stay on hops. In its first 15 minutes the 8825 channel heard three aircraft (DE-LQ, PS-AJ,
+  FS-JL) while the main decoder on 8906 heard none, and the codes were on the site's SELCAL
+  list with the next batch.
+- **FT4** on 80, 40, 30, 20, 17, 15, 12 and 10 m. As shadows against the main decoder on
+  14.080 MHz for 76 slots: all 76 of its stations and one more, 881 of 902 messages in the
+  same slot, most of the rest a slot apart on one side or the other. Logging since. A logging
+  channel's FT4 decodes go to PSKReporter as FT8's do.
+- **60 and 160 m:** FT8 and WSPR on 5357 and 5364.7 kHz, and WSPR on 1836.6 kHz, which only
+  the 5.4 MHz slice reaches.
+- **Radiofax**, one frequency per station a slice holds: NMF 6340.5, DDK3 7880 and NMG
+  8503.9 kHz at night, NMG 17146.4 kHz by day. The stations send on several frequencies at
+  once; with a channel on each of them the first afternoon filed NMF's 16:00 chart twice.
+
+CPU on the 6.855 MHz slice, 180 s each, back to back, the main decoder on SELCAL:
+
+| Channels | Wideband workers | Slot decoder pool | Dropped blocks |
+|---|---|---|---|
+| The 31 from Stage 4 | 0.25 core | 0.08 | 0 |
+| + SELCAL, FT4, 60 m and 160 m (46) | 0.34 | 0.17 | 0 |
+| + radiofax (50, three of them in this slice) | 0.38 | 0.18 | 0 |
+
+A radiofax channel costs about 0.015 of a core. On the 24.62 MHz day slice the workers went
+from 0.125 to 0.16 of a core and the slot pool from 0.23 to 0.41: FT4 decodes every 7.5 s.
+
+**Charts on channels.** WEFAX is a channel mode (`WEFAX+9108100`, the dial 1.9 kHz below the
+listed frequency). A channel starts a chart on its own tone and files it like the main
+receiver's. When a timetabled chart's frequency is a channel inside the held slice, the
+schedule leaves the chart to it: the main decoder carries on, and the slice stays until the
+chart's time is up, or longer while the picture is still coming in, up to the picture overrun.
+A radio check or another chart that would move the span waits. A slice chosen in the 15
+minutes before such a chart is the one that holds it, and when the chart comes due in
+another slice on the same side of the split, the slice moves to it rather than the main
+decoder going to the chart, unless that would cut off a picture or a radio check. The
+receiver's own radiofax path was checked after the change on DWD's 16:36 surface analysis,
+1296 rows, filed against its timetable entry. The first chart a channel received
+was NMF's 16:00 iceberg analysis, 920 rows, untimetabled, which the picture check passed
+(row correlation 0.70).
+
 **What has to change.**
 
 - **Channels from the span.** A narrow channel filter per decoder, one `HfDecoder` per
