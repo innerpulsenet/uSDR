@@ -17,7 +17,7 @@ import zlib
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from hf_schema import DETAILS, HF_LIMIT_HZ, LOC_KINDS, MODES, connect  # noqa: E402
+from hf_schema import DETAILS, HF_LIMIT_HZ, LOC_KINDS, LONG_DETAILS, MODES, connect  # noqa: E402
 
 DB = os.environ.get("HF_DB", "/var/lib/hf-site/hf.sqlite")
 PICTURES = os.environ.get("HF_PICTURES", "/home/patrickh/www/hf/pictures")
@@ -88,7 +88,12 @@ def clean_details(mode, details):
     kept = {}
     for key in DETAILS[mode] & details.keys():
         value = details[key]
-        if isinstance(value, str) and len(value) <= 64 or isinstance(value, (int, float)) and not isinstance(value, bool):
+        long = LONG_DETAILS.get((mode, key))
+        if long and isinstance(value, str):
+            # Line ends only: no other control characters.
+            if len(value) <= long and all(c == "\n" or c.isprintable() for c in value):
+                kept[key] = value
+        elif isinstance(value, str) and len(value) <= 64 or isinstance(value, (int, float)) and not isinstance(value, bool):
             kept[key] = value
     return json.dumps(kept, separators=(",", ":")) if kept else None
 

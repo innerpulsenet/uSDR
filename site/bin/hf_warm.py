@@ -181,7 +181,31 @@ def build_activity(conn, now, station_grid):
         f"SELECT substr(grid,1,4) AS g, MIN(at_utc) AS t FROM observations WHERE mode IN ({AMATEUR_SQL}) AND grid IS NOT NULL GROUP BY g HAVING t >= ? ORDER BY t DESC LIMIT 100", (now - 86400,))]
     selcal = [dict(r) for r in conn.execute("SELECT at_utc AS t, ident AS code, dial_hz FROM observations WHERE mode='SELCAL' ORDER BY id DESC LIMIT 100")]
     return {"generated_utc": now, "first_listening_utc": first, "days": days, "bands": heat_rows(labels, b_counts, b_secs), "modes": heat_rows(mode_labels, m_counts, m_secs),
-            "daily": daily, "farthest": farthest, "new_squares": new_squares, "selcal": selcal}
+            "daily": daily, "farthest": farthest, "new_squares": new_squares, "selcal": selcal, "navtex": navtex_messages(conn, now)}
+
+
+# The stations whose slots the receiver visits, and any others a slot catches.
+NAVTEX_NAMES = {"A": "Miami", "C": "Moisie", "E": "Charleston", "F": "Boston", "G": "New Orleans", "N": "Chesapeake", "O": "St. John's",
+                "Q": "Sydney, Nova Scotia", "R": "San Juan", "U": "Yarmouth", "X": "Cartwright"}
+
+
+def navtex_messages(conn, now, days=7, limit=40):
+    """Each NAVTEX message once, newest first. Stations repeat a message at every
+    broadcast until it is canceled; the best copy is the newest complete one."""
+    best = {}
+    for r in conn.execute("SELECT at_utc, ident, details FROM observations WHERE mode='NAVTEX' AND at_utc >= ? ORDER BY at_utc DESC", (now - days * 86400,)):
+        d = json.loads(r["details"] or "{}")
+        complete = d.get("complete") == "yes"
+        seen = best.get(r["ident"])
+        if seen is None:
+            best[r["ident"]] = {"t": r["at_utc"], "first": r["at_utc"], "n": 1, "id": r["ident"], "station": d.get("station"), "name": NAVTEX_NAMES.get(d.get("station")),
+                                "subject": d.get("subjectName"), "complete": complete, "text": d.get("text", "")}
+            continue
+        seen["n"] += 1
+        seen["first"] = r["at_utc"]
+        if complete and not seen["complete"]:
+            seen.update(complete=True, text=d.get("text", ""))
+    return sorted(best.values(), key=lambda m: -m["t"])[:limit]
 
 
 def row_out(r):

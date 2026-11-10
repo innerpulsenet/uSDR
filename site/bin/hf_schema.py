@@ -6,7 +6,7 @@ here because this is the side the public can reach.
 import os
 import sqlite3
 
-MODES = {"FT8", "FT4", "WSPR", "JS8", "HFDL", "DSC", "SELCAL", "WEFAX", "SSTV"}
+MODES = {"FT8", "FT4", "WSPR", "JS8", "HFDL", "DSC", "SELCAL", "WEFAX", "SSTV", "NAVTEX"}
 HF_LIMIT_HZ = 30_000_000
 LOC_KINDS = {"reported", "grid4", "grid6", "ground_station", "none"}
 
@@ -20,7 +20,12 @@ DETAILS = {
     "SELCAL": {"repeat", "offsetHz"},
     "WEFAX": {"lines", "width"},
     "SSTV": {"lines", "complete"},
+    "NAVTEX": {"station", "subject", "subjectName", "serial", "complete", "text"},
 }
+
+# Details allowed past the usual 64 characters, and how far. A NAVTEX message is
+# a public broadcast of a few lines to a couple of thousand characters.
+LONG_DETAILS = {("NAVTEX", "text"): 4000}
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS observations (

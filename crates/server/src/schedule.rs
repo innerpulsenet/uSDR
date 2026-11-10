@@ -7,7 +7,8 @@
 //! 1. The operator. Touching the frequency, mode or span holds the schedule for
 //!    [`HOLD_S`], with the radio left where they put it.
 //! 2. A picture being received is never cut off.
-//! 3. Timetabled radiofax charts, which start a minute early for the tone.
+//! 3. Timetabled radiofax charts, which start a minute early for the tone, then
+//!    timetabled NAVTEX broadcasts on 518 kHz.
 //! 4. A regular check on WWV. A stranded tuner hears nothing, which looks
 //!    exactly like a quiet band, so a failed check marks the time since the last
 //!    good one as unhealthy and stops the hopping until the radio passes again.
@@ -79,6 +80,21 @@ const SLICE_EXPLORE_EVERY: u32 = 5;
 const CHART_WORDS: [&str; 2] = ["SURFACE", "ANALYSIS"];
 /// The radiofax stations in reach of Connecticut worth a slot.
 const CHART_STATIONS: [&str; 3] = ["NMF", "NMG", "DDH3"];
+/// NAVTEX stations the schedule visits. All share 518 kHz, each in its own
+/// ten-minute slot every four hours. A visit takes the span off every channel,
+/// so each four-hour cycle visits one of them, in turn: every station twice a
+/// day, twelve hours apart, an hour of the air in all. Boston is the nearest;
+/// Chesapeake and Yarmouth cover the coast to either side.
+const NAVTEX_STATIONS: [&str; 3] = ["F", "N", "U"];
+const NAVTEX_CYCLE_S: u64 = 4 * 3_600;
+/// NAVTEX's dial sits 1 kHz below the carrier.
+const NAVTEX_DIAL_HZ: u64 = 517_000;
+/// Start this long before a station's slot, so the decoder has the phasing.
+const NAVTEX_LEAD_S: i64 = 30;
+/// A slot can still be caught this long after it begins.
+const NAVTEX_LATE_S: i64 = 120;
+/// The slot and a minute more for a message that runs late.
+const NAVTEX_STAY_S: u64 = 11 * 60;
 /// Radiofax lists its assigned frequency; the dial sits this far below.
 const WEFAX_OFFSET_HZ: f64 = 1_900.0;
 /// DSC's tones are centered this far above the dial.
@@ -135,10 +151,22 @@ struct Chart {
     freqs: Vec<ChartFreq>,
 }
 
+/// One NAVTEX station's broadcast slot.
+#[derive(Clone, Debug, PartialEq)]
+struct Broadcast {
+    /// UTC minute of the day.
+    minute: u16,
+    /// The station's NAVTEX letter, and its turn among [`NAVTEX_STATIONS`].
+    id: String,
+    turn: usize,
+    name: String,
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct Catalog {
     targets: Vec<Target>,
     charts: Vec<Chart>,
+    navtex: Vec<Broadcast>,
 }
 
 fn hhmm(s: &str) -> Option<u16> {
@@ -239,7 +267,22 @@ impl Catalog {
             }
         }
         charts.sort_by_key(|c| c.minute);
-        Ok(Catalog { targets, charts })
+
+        let mut navtex = Vec::new();
+        for station in d["navtex"].as_array().unwrap_or(&empty) {
+            let id = station["id"].as_str().unwrap_or("");
+            let Some(turn) = NAVTEX_STATIONS.iter().position(|s| *s == id) else { continue };
+            if station["freq_khz"].as_f64() != Some(518.0) {
+                continue;
+            }
+            // "Boston, Massachusetts (USCG)" is Boston.
+            let name = station["name"].as_str().unwrap_or("").split([',', '(']).next().unwrap_or("").trim().to_string();
+            for minute in station["times_utc"].as_array().unwrap_or(&empty).iter().filter_map(Value::as_str).filter_map(hhmm) {
+                navtex.push(Broadcast { minute, id: id.to_string(), turn, name: name.clone() });
+            }
+        }
+        navtex.sort_by_key(|b| b.minute);
+        Ok(Catalog { targets, charts, navtex })
     }
 }
 
@@ -257,6 +300,7 @@ enum Kind {
     Planned,
     Chart { at_utc: u64, started: bool },
     Health { step: usize },
+    Navtex,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -330,6 +374,7 @@ pub struct Scheduler {
     /// Whether that holds now, and what the chart is.
     pinned: bool,
     channel_chart: Option<String>,
+    last_navtex: u64,
 }
 
 /// The middle of a Maidenhead square, latitude then longitude.
@@ -437,6 +482,14 @@ impl Scheduler {
             self.channel_chart = None;
         }
         self.chart_to_channel(n);
+        if self.pinned
+            && let Some((index, at_utc)) = self.navtex_due(n.utc)
+        {
+            // Going to 518 kHz would take the span from under the chart.
+            self.last_navtex = at_utc;
+            let b = &self.catalog.navtex[index];
+            eprintln!("schedule: NAVTEX {} passed over, a channel is receiving a chart", b.id);
+        }
         if self.slot.is_some() && self.keep_slot(n, &mut out) {
             return out;
         }
@@ -449,6 +502,7 @@ impl Scheduler {
     fn keep_slot(&mut self, n: Inputs, out: &mut Vec<Action>) -> bool {
         let now = n.utc;
         let due_chart = self.chart_due(now).is_some();
+        let due_navtex = !self.pinned && self.navtex_due(now).is_some();
         let slot = self.slot.as_mut().expect("a slot");
         match slot.kind {
             Kind::Health { step } => {
@@ -489,8 +543,9 @@ impl Scheduler {
                 if n.picture_busy && now < slot.end + PICTURE_OVERRUN_S {
                     return true;
                 }
-                now < slot.end && !due_chart
+                now < slot.end && !due_chart && !due_navtex
             }
+            Kind::Navtex => now < slot.end && !due_chart,
         }
     }
 
@@ -503,6 +558,8 @@ impl Scheduler {
         }
         if let Some((index, at_utc)) = self.chart_due(now) {
             self.begin_chart(index, at_utc, now, out);
+        } else if let Some((index, at_utc)) = self.navtex_due(now).filter(|_| !self.pinned) {
+            self.begin_navtex(index, at_utc, out);
         } else if now >= self.next_health && !self.pinned {
             self.begin_health(now, 0, out);
         } else {
@@ -521,6 +578,26 @@ impl Scheduler {
                 ((-CHART_LATE_S..=CHART_LEAD_S).contains(&until) && at != self.last_chart).then_some((i, at))
             })
         })
+    }
+
+    /// The NAVTEX broadcast to start now and when it is, if one is: a
+    /// station's slot, in the cycle that is its turn.
+    fn navtex_due(&self, now: u64) -> Option<(usize, u64)> {
+        let day_start = now - now % 86_400;
+        self.catalog.navtex.iter().enumerate().find_map(|(i, b)| {
+            [day_start.wrapping_sub(86_400), day_start, day_start + 86_400].into_iter().find_map(|day| {
+                let at = day.wrapping_add(u64::from(b.minute) * 60);
+                let until = at as i64 - now as i64;
+                let turn = (at / NAVTEX_CYCLE_S) as usize % NAVTEX_STATIONS.len() == b.turn;
+                (turn && (-NAVTEX_LATE_S..=NAVTEX_LEAD_S).contains(&until) && at != self.last_navtex).then_some((i, at))
+            })
+        })
+    }
+
+    fn begin_navtex(&mut self, index: usize, at_utc: u64, out: &mut Vec<Action>) {
+        let b = self.catalog.navtex[index].clone();
+        self.last_navtex = at_utc;
+        self.start(Kind::Navtex, SdrMode::Navtex, NAVTEX_DIAL_HZ, at_utc + NAVTEX_STAY_S, format!("NAVTEX · {} · {}", b.id, b.name), out);
     }
 
     /// A chart's frequencies on the air at its time.
@@ -559,7 +636,7 @@ impl Scheduler {
         // a radio check or another chart, and only to a slice on this side of
         // the split with planned work in it: the decoder's hop there is what
         // moves the span.
-        let movable = self.slice.is_some() && !self.pinned && !n.picture_busy && self.slot.as_ref().is_none_or(|s| s.kind == Kind::Planned || over(s));
+        let movable = self.slice.is_some() && !self.pinned && !n.picture_busy && self.slot.as_ref().is_none_or(|s| matches!(s.kind, Kind::Planned | Kind::Navtex) || over(s));
         let side = if self.is_night(now) { NIGHT_SLICES } else { DAY_SLICES };
         let found = here.and_then(|c| self.chart_channel(index, c, hour).map(|d| (c, d))).or_else(|| {
             movable
@@ -573,10 +650,14 @@ impl Scheduler {
         });
         match found {
             Some((center_hz, dial_hz)) => {
-                if self.slice != Some(center_hz) {
-                    // The planned slot ends, and the next starts in the new slice.
+                let moved = self.slice != Some(center_hz);
+                if moved {
                     self.slice = Some(center_hz);
                     self.slice_visited.insert(center_hz, now);
+                }
+                if moved || self.slot.as_ref().is_some_and(|s| !in_slice(center_hz, s.dial_hz)) {
+                    // The slot ends (a planned one, NAVTEX, or a chart that is
+                    // over), and the next starts in the slice.
                     self.slot = None;
                 }
                 self.last_chart = at_utc;
@@ -793,7 +874,8 @@ impl Scheduler {
             match self.slot.as_ref().map(|s| &s.kind) {
                 Some(Kind::Health { .. }) => "checking",
                 Some(Kind::Chart { .. }) => "chart",
-                Some(Kind::Planned) => "monitoring",
+                // The site and the desktop know these states; NAVTEX is monitoring.
+                Some(Kind::Planned | Kind::Navtex) => "monitoring",
                 None => "idle",
             }
         }
@@ -868,7 +950,7 @@ mod tests {
     }
 
     fn catalog(targets: Vec<Target>, charts: Vec<Chart>) -> Catalog {
-        Catalog { targets, charts }
+        Catalog { targets, charts, navtex: vec![] }
     }
 
     fn chart(minute: u16, dial_hz: u64) -> Chart {
@@ -1152,6 +1234,66 @@ mod tests {
         assert!(s.status(NOON + 19 * 60 + 39).label.contains("chart on a channel"));
     }
 
+    fn navtex(minute: u16, id: &str) -> Broadcast {
+        let turn = NAVTEX_STATIONS.iter().position(|s| *s == id).unwrap();
+        Broadcast { minute, id: id.into(), turn, name: "Boston".into() }
+    }
+
+    #[test]
+    fn each_navtex_station_gets_its_turn_of_the_cycles() {
+        let mut s = with_channels(vec![ft8(7074)], &[(SdrMode::Ft8, 7_074_000)]);
+        // F's 0050 is in the first cycle of the day, its turn; N's 0210 is too, not N's.
+        s.catalog.navtex = vec![navtex(50, "F"), navtex(2 * 60 + 10, "N"), navtex(6 * 60 + 10, "N")];
+        let f = DAY + 50 * 60;
+        s.tick(at(f - 10 * 60));
+        let a = s.tick(at(f - 30));
+        assert_eq!(hops(&a), vec![(SdrMode::Navtex, NAVTEX_DIAL_HZ)], "{a:?}");
+        assert_eq!(center_of(&a), Some(NAVTEX_DIAL_HZ), "518 kHz is in no slice");
+        assert_eq!(s.status(f).state, "monitoring");
+        assert_eq!(s.status(f).label, "NAVTEX · F · Boston");
+        assert!(hops(&s.tick(at(f + 9 * 60))).is_empty(), "the slot runs its ten minutes");
+        let back = s.tick(at(f + NAVTEX_STAY_S));
+        assert_eq!(hops(&back)[0].0, SdrMode::Ft8, "{back:?}");
+        let n = DAY + 2 * 3_600 + 10 * 60;
+        s.slot = None;
+        assert!(hops(&s.tick(at(n))).iter().all(|h| h.0 != SdrMode::Navtex), "not N's cycle");
+        let n = DAY + 6 * 3_600 + 10 * 60;
+        s.slot = None;
+        assert_eq!(hops(&s.tick(at(n - 30)))[0].0, SdrMode::Navtex, "N's cycle");
+    }
+
+    #[test]
+    fn navtex_waits_for_nothing_but_a_chart() {
+        let mut s = with_channels(vec![ft8(14074)], &[(SdrMode::Ft8, 14_074_000), (SdrMode::Wefax, NMG_17)]);
+        // F's 1250, the fourth cycle; a chart on a channel at 1240 holds the slice.
+        s.catalog.navtex = vec![navtex(12 * 60 + 50, "F")];
+        s.catalog.charts = vec![chart(12 * 60 + 40, NMG_17)];
+        s.tick(at(NOON));
+        s.slot = None;
+        s.tick(at(NOON + 39 * 60));
+        assert!(s.pinned);
+        let a = s.tick(at(NOON + 50 * 60 - 30));
+        assert!(hops(&a).iter().all(|h| h.0 != SdrMode::Navtex), "{a:?}");
+        // A planned slot gives way to it, though.
+        let mut s = with_channels(vec![ft8(14074)], &[(SdrMode::Ft8, 14_074_000)]);
+        s.catalog.navtex = vec![navtex(12 * 60 + 50, "F")];
+        s.tick(at(NOON + 49 * 60));
+        assert_eq!(hops(&s.tick(at(NOON + 50 * 60 - 30))), vec![(SdrMode::Navtex, NAVTEX_DIAL_HZ)]);
+    }
+
+    #[test]
+    fn a_chart_on_a_channel_ends_a_navtex_visit() {
+        let mut s = with_channels(vec![ft8(14074)], &[(SdrMode::Ft8, 14_074_000), (SdrMode::Wefax, NMG_17)]);
+        s.catalog.navtex = vec![navtex(12 * 60 + 50, "F")];
+        s.catalog.charts = vec![chart(12 * 60 + 55, NMG_17)];
+        s.tick(at(NOON + 40 * 60));
+        s.slot = None;
+        assert_eq!(hops(&s.tick(at(NOON + 50 * 60)))[0].0, SdrMode::Navtex);
+        let a = s.tick(at(NOON + 54 * 60));
+        assert!(hops(&a).iter().all(|h| h.0 == SdrMode::Ft8), "{a:?}");
+        assert_eq!(center_of(&a), Some(17_607_000), "back in the slice for the channel's chart");
+    }
+
     #[test]
     fn a_chart_no_channel_in_the_slice_covers_takes_the_radio() {
         let mut s = with_channels(vec![ft8(14074)], &[(SdrMode::Ft8, 14_074_000), (SdrMode::Wefax, 9_108_100)]);
@@ -1318,6 +1460,10 @@ mod tests {
         assert_eq!(c.charts.iter().filter(|x| x.station == "NMF").count(), 12);
         assert_eq!(c.charts.iter().filter(|x| x.station == "NMG").count(), 8);
         assert_eq!(c.charts.iter().filter(|x| x.station == "DDH3").count(), 6);
+        assert_eq!(c.navtex.len(), 18, "three stations, six slots each");
+        let boston: Vec<u16> = c.navtex.iter().filter(|b| b.id == "F").map(|b| b.minute).collect();
+        assert_eq!(boston, [50, 290, 530, 770, 1010, 1250]);
+        assert!(c.navtex.iter().all(|b| b.name == "Boston" || b.name == "Portsmouth" || b.name == "Yarmouth"), "{:?}", c.navtex);
         assert!(c.charts.iter().all(|x| !x.freqs.is_empty()));
         // At the NMF chart at 0233 the published window picks 4235 and the
         // always-on frequencies, none of the daytime-only ones.

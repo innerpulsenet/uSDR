@@ -104,6 +104,25 @@ class Ingest(unittest.TestCase):
         stored = self.server.conn.execute("SELECT details FROM observations").fetchone()[0]
         self.assertEqual(json.loads(stored), {"flight": "BA117"})
 
+    def test_a_navtex_message_keeps_its_text_and_nothing_hidden_in_it(self):
+        text = "ZCZC FA12\n" + "GALE WARNING " * 200 + "\nNNNN"
+        ok = {**OBS, "dial_hz": 517000, "freq_hz": 517000, "mode": "NAVTEX", "kind": "message", "ident": "FA12", "grid": None, "loc_kind": "none",
+              "details": {"station": "F", "subjectName": "Navigational warning", "complete": "yes", "text": text}}
+        bell = {**ok, "id": 2, "details": {**ok["details"], "text": "ZCZC\x07"}}
+        self.assertEqual(self.send(batch(observations=[ok, bell]))[0], 200)
+        stored = [json.loads(r[0]) for r in self.server.conn.execute("SELECT details FROM observations ORDER BY id")]
+        self.assertEqual(stored[0]["text"], text)
+        self.assertNotIn("text", stored[1])
+
+    def test_a_repeated_navtex_message_is_listed_once_with_its_best_copy(self):
+        def msg(rid, age_s, complete, text):
+            return self.recent(rid, age_s, dial_hz=517000, freq_hz=517000, mode="NAVTEX", kind="message", ident="FA12", grid=None, loc_kind="none", snr_db=None,
+                               details={"station": "F", "subjectName": "Navigational warning", "complete": complete, "text": text})
+        self.warm_with([msg(1, 9000, "yes", "WHOLE"), msg(2, 60, "no", "CUT")])
+        m = self.data("activity.json")["navtex"]
+        self.assertEqual(len(m), 1)
+        self.assertEqual((m[0]["id"], m[0]["name"], m[0]["n"], m[0]["text"], m[0]["complete"]), ("FA12", "Boston", 2, "WHOLE", True))
+
     def test_a_gzip_bomb_is_refused(self):
         bomb = gzip.compress(b" " * (hf_api.MAX_JSON + 1024))
         self.assertLess(len(bomb), hf_api.MAX_BODY)
