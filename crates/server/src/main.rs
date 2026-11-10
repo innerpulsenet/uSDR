@@ -1245,7 +1245,8 @@ async fn schedule_loop(st: Arc<AppState>) {
 
 fn schedule_inputs(st: &AppState, utc: u64) -> schedule::Inputs {
     let sdr = st.sdr.lock().expect("sdr");
-    let Some(runtime) = sdr.as_ref() else { return schedule::Inputs { utc, ..Default::default() } };
+    let channel_chart_busy = wideband::chart_busy();
+    let Some(runtime) = sdr.as_ref() else { return schedule::Inputs { utc, channel_chart_busy, ..Default::default() } };
     let s = runtime.status.lock().expect("sdr status");
     let reading = s.digital.as_ref();
     let picture_busy = match s.mode {
@@ -1253,7 +1254,7 @@ fn schedule_inputs(st: &AppState, utc: u64) -> schedule::Inputs {
         sdr::SdrMode::Sstv => reading.is_some_and(|d| d.locked),
         _ => false,
     };
-    schedule::Inputs { utc, picture_busy, wwv_locked: s.mode == sdr::SdrMode::Wwv && reading.is_some_and(|d| d.locked) }
+    schedule::Inputs { utc, picture_busy, wwv_locked: s.mode == sdr::SdrMode::Wwv && reading.is_some_and(|d| d.locked), channel_chart_busy }
 }
 
 /// Move the receiver, without touching the operator's saved settings. With a

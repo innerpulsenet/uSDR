@@ -10,7 +10,8 @@ desktop client, so radiofax rows arrive too: with --pgm they are written as
 a gray PGM picture when the run ends. Every decode prints as it lands, and
 the decoder's reading (lock, audio frequency, SNR, PSK31 channels, fax
 state) prints whenever it changes, with the station reporter's state at the
-end.
+end. Wideband channels' decodes print too, marked [channel], but only the main
+decoder's count toward the result.
 
 It retunes the receiver and leaves it where it was asked to go, so run it
 when nobody is listening to something else. Needs the `websockets` module.
@@ -85,10 +86,12 @@ async def main():
             m = json.loads(msg)
             if m.get("type") == "decode":
                 e = m["event"]
-                decodes += 1
                 f = e.get("fields", {})
+                channel = "wideChannel" in f
+                decodes += not channel
                 extra = " ".join(f"{k}={f[k]}" for k in ("df", "snr", "channel", "id") if k in f)
-                print(f"{time.strftime('%H:%M:%S', time.gmtime())} [{e['protocol']} {e['kind']}] {e['summary'][:160]!r} {extra}")
+                where = " [channel]" if channel else ""
+                print(f"{time.strftime('%H:%M:%S', time.gmtime())}{where} [{e['protocol']} {e['kind']}] {e['summary'][:160]!r} {extra}")
             elif m.get("type") in ("status", "hello"):
                 st = m.get("sdr", m)
                 r = st.get("digital")
@@ -113,7 +116,7 @@ async def main():
                 for i in range(n):
                     f.write(got.get(i, bytes([128]) * width))
             print("wrote", pgm)
-    print(f"{decodes} decodes")
+    print(f"{decodes} decodes from the main decoder")
     sys.exit(0 if decodes or rows else 1)
 
 

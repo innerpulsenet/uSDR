@@ -17,10 +17,13 @@
 //! SSTV below 10 MHz is sent on the lower sideband, as amateur voice is, and a
 //! channel there demodulates it that way. Its pictures go to the approval queue
 //! like the main receiver's, unless the main receiver was on the same dial for
-//! the whole picture and keeps its own.
+//! the whole picture and keeps its own. Radiofax channels (`WEFAX+9108100`, the
+//! dial 1.9 kHz below the listed frequency) start a chart on its own start tone
+//! and keep it the same way; while one is mid-chart, [`chart_busy`] tells the
+//! schedule not to move the span.
 
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, SyncSender, TrySendError, sync_channel};
 use std::sync::{Arc, Mutex, OnceLock};
 
@@ -89,6 +92,8 @@ pub struct ChannelResult {
 
 static RESULTS: OnceLock<Mutex<VecDeque<ChannelResult>>> = OnceLock::new();
 static DROPPED: AtomicU64 = AtomicU64::new(0);
+/// Per worker, whether one of its radiofax channels is in the middle of a chart.
+static CHARTING: [AtomicBool; WORKERS] = [const { AtomicBool::new(false) }; WORKERS];
 static LOG: OnceLock<Arc<StationLog>> = OnceLock::new();
 
 /// Where the channels' listening records go.
@@ -152,6 +157,7 @@ fn parse_mode(name: &str) -> Option<SdrMode> {
         "HFDL" => SdrMode::Hfdl,
         "SELCAL" => SdrMode::Selcal,
         "SSTV" => SdrMode::Sstv,
+        "WEFAX" => SdrMode::Wefax,
         _ => return None,
     })
 }
@@ -327,6 +333,7 @@ impl Channel {
             None => {
                 let mut hf = HfDecoder::new(spec.mode, fs)?;
                 hf.set_band(low, high);
+                hf.set_channel();
                 Decoder::Hf(Box::new(hf))
             }
         };
@@ -372,6 +379,11 @@ impl Channel {
         matches!(&self.decoder, Decoder::Slots(slots) if slots.busy())
     }
 
+    /// A radiofax channel between a chart's start and its end.
+    fn charting(&self) -> bool {
+        self.spec.mode == SdrMode::Wefax && matches!(&self.decoder, Decoder::Hf(hf) if hf.picture_busy())
+    }
+
     /// Pictures are this channel's to keep unless it only shadows, or the main
     /// receiver is decoding the same mode on the same dial.
     fn follow_main(&mut self, main: Option<(SdrMode, u64)>) {
@@ -403,7 +415,7 @@ fn deliver(spec: Spec, center_hz: f64, at_ms: u64, group: Vec<DecodeEvent>, main
     kept.push_back(ChannelResult { mode: name, dial_hz: spec.dial_hz, at_ms, center_hz: center_hz as u64, decodes, idents });
 }
 
-fn run(rx: Receiver<Arc<Block>>, specs: Vec<Spec>, events: Sender<SdrEvent>, seq_base: u64) {
+fn run(rx: Receiver<Arc<Block>>, specs: Vec<Spec>, events: Sender<SdrEvent>, seq_base: u64, worker: usize) {
     // One record per logging channel, numbered well clear of the main receiver's.
     let mut records: Vec<(Spec, Listener)> =
         specs.iter().filter(|s| s.logs).enumerate().map(|(i, s)| (*s, Listener::numbered_from((seq_base + i as u64 + 1) << 40))).collect();
@@ -433,6 +445,7 @@ fn run(rx: Receiver<Arc<Block>>, specs: Vec<Spec>, events: Sender<SdrEvent>, seq
             }
         }
         retired.retain(Channel::busy);
+        CHARTING[worker].store(channels.iter().any(Channel::charting), Ordering::Relaxed);
         loop {
             match drained.try_recv() {
                 Ok(SdrEvent::Decode { inspect_hz, event }) => {
@@ -502,7 +515,7 @@ pub fn from_env(events: Sender<SdrEvent>) -> Option<Feed> {
         let (tx, rx) = sync_channel(QUEUE);
         let share: Vec<Spec> = grouped.iter().enumerate().filter(|(i, _)| i % WORKERS == w).flat_map(|(_, g)| g.iter().copied()).collect();
         let (events, base) = (events.clone(), (w * specs.len()) as u64);
-        if let Err(e) = std::thread::Builder::new().name(format!("wideband-{w}")).spawn(move || run(rx, share, events, base)) {
+        if let Err(e) = std::thread::Builder::new().name(format!("wideband-{w}")).spawn(move || run(rx, share, events, base, w)) {
             eprintln!("wideband: could not start a worker: {e}");
             return None;
         }
@@ -516,6 +529,11 @@ pub fn from_env(events: Sender<SdrEvent>) -> Option<Feed> {
 pub fn logging_channels() -> std::collections::BTreeSet<(SdrMode, u64)> {
     let text = std::env::var("USDR_WIDE").unwrap_or_default();
     parse_specs(&text).into_iter().filter(|s| s.logs).map(|s| (s.mode, s.dial_hz)).collect()
+}
+
+/// Whether a radiofax channel is in the middle of a chart, so the span must stay.
+pub fn chart_busy() -> bool {
+    CHARTING.iter().any(|c| c.load(Ordering::Relaxed))
 }
 
 /// What the channels have decoded, for comparing with the main decoder.
@@ -543,6 +561,7 @@ mod tests {
     #[test]
     fn the_channel_list_reads_as_written_and_skips_the_rest() {
         let got = parse_specs("FT8+7074000, WSPR?7038600,NOPE+1,FT4?not,DSC+50000000");
+        assert_eq!(parse_specs("WEFAX+9108100"), vec![Spec::new(SdrMode::Wefax, 9_108_100, true)]);
         assert_eq!(got, vec![Spec::new(SdrMode::Ft8, 7_074_000, true), Spec::new(SdrMode::Wspr, 7_038_600, false)]);
         assert_eq!(parse_specs("SSTV+14230000,SSTV?7171000"), vec![Spec::new(SdrMode::Sstv, 14_230_000, true), Spec::new(SdrMode::Sstv, 7_171_000, false)]);
     }
@@ -662,6 +681,73 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(50));
         }
         assert!(got.iter().flat_map(|(_, g)| g).any(|e| e.summary.contains("K1ABC")), "{got:?}");
+    }
+
+    /// A chart through a channel: start tone, phasing, picture, stop tone.
+    /// The channel says it is charting from the start to the stop, and the
+    /// picture comes out as the main receiver's would.
+    #[test]
+    fn a_radiofax_channel_receives_a_chart_on_its_own_start_tone() {
+        let rate = 250_000.0;
+        let center = 9_050_000.0;
+        let dial = 9_108_100_u64;
+        let mut channel = Channel::new(spec(SdrMode::Wefax, dial), center, rate).expect("a channel");
+        let (sink, mut rx) = broadcast::channel(8_192);
+        let status = Arc::new(Mutex::new(SdrStatus::default()));
+        // The audio frequency at time t: 1500 Hz black, 2300 Hz white, 120 LPM.
+        let line_s = 0.5;
+        let square = |t: f64, hz: f64| if (t * hz).fract() < 0.5 { 1_500.0 } else { 2_300.0 };
+        let audio_hz = |t: f64| -> f64 {
+            if t < 5.0 {
+                square(t, 300.0)
+            } else if t < 15.0 {
+                // Phasing: white, with a black pulse 5% of the line wide.
+                if ((t - 5.0) / line_s).fract() < 0.05 { 1_500.0 } else { 2_300.0 }
+            } else if t < 25.0 {
+                // A gray ramp across each line.
+                1_500.0 + 800.0 * ((t - 15.0) / line_s).fract()
+            } else if t < 30.0 {
+                square(t, 450.0)
+            } else {
+                1_900.0
+            }
+        };
+        let offset = dial as f64 - center;
+        let mut phase = 0.0_f64;
+        // Noise about 25 dB down in 3 kHz: a carrier with none at all makes
+        // false start tones out of rounding.
+        let mut seed = 0x2545_f491_4f6c_dd1d_u64;
+        let mut noise = move || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            ((seed >> 11) as f64 / (1_u64 << 53) as f64 - 0.5) * 0.35
+        };
+        let mut seen_charting = false;
+        let mut events = Vec::new();
+        let block = 25_000;
+        for b in 0..(33.0 * rate / block as f64) as usize {
+            let iq: Vec<Complex32> = (0..block)
+                .map(|i| {
+                    let t = (b * block + i) as f64 / rate;
+                    phase = (phase + std::f64::consts::TAU * (offset + audio_hz(t)) / rate) % std::f64::consts::TAU;
+                    Complex32::new((0.3 * phase.cos() + noise()) as f32, (0.3 * phase.sin() + noise()) as f32)
+                })
+                .collect();
+            channel.process(&iq, (b * block) as u64 * 1_000 / rate as u64, &sink, &status);
+            seen_charting |= channel.charting();
+            while let Ok(ev) = rx.try_recv() {
+                if let SdrEvent::Decode { event, .. } = ev {
+                    events.push(event);
+                }
+            }
+        }
+        let kinds: Vec<&str> = events.iter().filter(|e| e.protocol == "WEFAX").map(|e| e.kind.as_str()).collect();
+        assert!(seen_charting, "{kinds:?}");
+        assert!(!channel.charting(), "the stop tone ends it: {kinds:?}");
+        assert_eq!(kinds, vec!["start", "picture"]);
+        let lines: u32 = events.iter().find(|e| e.kind == "picture").and_then(|e| e.fields.get("lines")?.parse().ok()).unwrap_or(0);
+        assert!(lines >= 10, "{lines} lines");
     }
 
     #[test]
