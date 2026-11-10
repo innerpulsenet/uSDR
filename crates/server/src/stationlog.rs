@@ -145,9 +145,9 @@ CREATE TABLE uplink (
 
 /// The modes that may leave this host. Default deny, so a decoder added later
 /// stays home until someone decides otherwise.
-/// NAVTEX joins once the site backend accepts it: a batch with a mode it does not
-/// know is refused whole, which would stall the uplink.
-const UPLINK_MODES: [&str; 9] = ["FT8", "FT4", "WSPR", "JS8", "HFDL", "DSC", "SELCAL", "WEFAX", "SSTV"];
+/// The site backend refuses a whole batch with a mode it does not know, which would
+/// stall the uplink: a mode joins here only after the site that accepts it is live.
+const UPLINK_MODES: [&str; 10] = ["FT8", "FT4", "WSPR", "JS8", "HFDL", "DSC", "SELCAL", "WEFAX", "SSTV", "NAVTEX"];
 const UPLINK_LIMIT_HZ: i64 = 30_000_000;
 /// A stay's health is settled by the next radio check, or by this long passing.
 const UPLINK_SETTLE_S: u64 = 3 * 3_600;
