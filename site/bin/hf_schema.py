@@ -42,6 +42,8 @@ CREATE TABLE IF NOT EXISTS listening (
     decodes INTEGER NOT NULL, valid_decodes INTEGER NOT NULL, healthy INTEGER
 );
 CREATE INDEX IF NOT EXISTS listening_start ON listening (start_utc);
+-- Pages leave out what failed its radio check; this keeps that test from scanning every stay.
+CREATE INDEX IF NOT EXISTS listening_unhealthy ON listening (start_utc, end_utc) WHERE healthy = 0;
 CREATE TABLE IF NOT EXISTS spectrum (minute INTEGER PRIMARY KEY, lo INTEGER NOT NULL, data BLOB NOT NULL);
 CREATE TABLE IF NOT EXISTS gaps (id INTEGER PRIMARY KEY, at_utc INTEGER NOT NULL, kind TEXT NOT NULL, dropped INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS pictures (

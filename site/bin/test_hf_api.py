@@ -226,7 +226,32 @@ class Ingest(unittest.TestCase):
     def test_a_ship_call_is_shown_at_once_and_can_be_looked_up(self):
         self.warm_with([self.recent(1, 90, mode="DSC", kind="call", ident="477665200", grid=None, loc_kind="none", snr_db=None)])
         self.assertEqual(self.data("who/47.json")["stations"]["477665200"][0][0], "DSC")
-        self.assertEqual([r["i"] for r in self.data("log.json")["rows"]], ["477665200"])
+        ships = self.data("traffic.json")["ships"]
+        self.assertEqual([(s["i"], s["n"]) for s in ships], [("477665200", 1)])
+
+    def test_the_log_has_one_row_per_station_with_its_bands_and_latest_square(self):
+        self.warm_with([self.recent(1, 900, grid="FN31"), self.recent(2, 300, grid="FN42", snr_db=-2.0),
+                        self.recent(3, 200, dial_hz=7074000, freq_hz=7075000, grid=None, loc_kind="none"),
+                        self.recent(4, 100, ident="W2XYZ", mode="WSPR", dial_hz=7038600, freq_hz=7040000)])
+        log = self.data("log.json")
+        rows = {r[0]: r for r in log["amateur"]}
+        self.assertEqual(set(rows), {"K1ABC", "W2XYZ"})
+        call, modes, bands, n, first, last, best, grid, new = rows["K1ABC"]
+        self.assertEqual((n, best, grid), (3, -2, "FN42"), "the square is the latest one sent, not the latest row")
+        self.assertEqual([b for i, b in enumerate(log["bands"]) if bands & (1 << i)], ["40 m", "20 m"])
+        self.assertEqual([m for i, m in enumerate(log["modes"]) if modes & (1 << i)], ["FT8"])
+        self.assertEqual([m for i, m in enumerate(log["modes"]) if rows["W2XYZ"][1] & (1 << i)], ["WSPR"])
+        self.assertEqual(rows["W2XYZ"][0], log["amateur"][0][0], "the latest heard comes first")
+
+    def test_pictures_are_listed_by_month(self):
+        png = self.png(320, 256)
+        self.assertEqual(self.picture(png, id=1, mode="SSTV", start_utc=int(time.time()) - 60, end_utc=int(time.time()), width=320, lines=256, station=None, scheduled_title=None)[0], 200)
+        hf_warm.main()
+        index = self.data("pictures.json")
+        month = time.strftime("%Y-%m", time.gmtime())
+        self.assertEqual(index["months"], [{"month": month, "n": 1, "modes": {"SSTV": 1}}])
+        self.assertEqual(len(index["pictures"]), 1)
+        self.assertEqual(self.data(f"pictures-{month}.json")["pictures"][0]["mode"], "SSTV")
 
     def png(self, w, h):
         return hf_api.PNG_MAGIC + struct.pack(">I", 13) + b"IHDR" + struct.pack(">II", w, h) + b"\x08\x00\x00\x00\x00" + b"\x00" * 16

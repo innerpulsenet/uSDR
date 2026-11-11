@@ -11,9 +11,9 @@
   --ocean: #0c0e11;
   --land: #20242b;
   --radius: var(--innerpulse-radius);
-  --readout-h: 279px; /* five rows and all ten HF bands */
+  --air: var(--innerpulse-amber);      /* aircraft, on the map and in its legends */
+  --sea: var(--innerpulse-text);       /* ships */
   --ip-atmos-accent: rgba(255, 179, 71, .07);
-  --totals-h: 371px;  /* six rows, ten bands and the note */
   --mast-h: 63px;     /* the masthead and its hairline, for what sticks under it */
 }
 
@@ -165,7 +165,6 @@ input[type="search"], select { font: 400 13px var(--innerpulse-sans); background
 .map-main { min-width: 0; }
 .map-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 16px; margin-bottom: 12px; }
 .map-head h1 { font-size: clamp(22px, 2.4vw, 30px); margin: 0; max-width: none; }
-.filters > summary { display: none; }
 .strip-foot { display: flex; align-items: center; gap: 12px; margin-top: 6px; }
 .strip-foot button { flex: none; min-width: 72px; }
 .nowline { margin-top: 14px; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; font-size: 15px; color: var(--innerpulse-text); }
@@ -194,12 +193,6 @@ button[aria-pressed="true"] small[data-air] { color: var(--innerpulse-gunmetal);
 .fc-hint { margin-top: 8px; font-size: 12px; color: var(--innerpulse-text-3); }
 .stage > svg.on-target { cursor: pointer; }
 .track-hover { fill: none; stroke: var(--innerpulse-amber); stroke-width: 2.4; }
-.traffic-panels { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-top: 12px; align-items: start; }
-.traffic-map .track { stroke: var(--innerpulse-amber); stroke-width: 1.1; stroke-opacity: .75; }
-.traffic-map .track.old { stroke-width: .7; stroke-opacity: .22; }
-.traffic-map .fix { stroke: var(--innerpulse-amber); stroke-width: 2.4; stroke-opacity: .6; }
-.traffic-map .plane { fill: var(--innerpulse-amber); }
-.traffic-map .plane.old { fill: rgba(255, 179, 71, .34); }
 .pulse.air { stroke: var(--innerpulse-amber); }
 .track-sel { fill: none; stroke: var(--innerpulse-text); stroke-width: 2.2; }
 .kv dd.wrap { text-align: right; white-space: normal; max-width: 180px; font-size: 12px; }
@@ -215,11 +208,7 @@ button[aria-pressed="true"] small[data-air] { color: var(--innerpulse-gunmetal);
 .b1 { stroke: var(--innerpulse-chart-2); }
 .b2 { stroke: var(--innerpulse-chart-3); }
 .b3 { stroke: var(--innerpulse-chart-other); }
-.track { fill: none; stroke: var(--innerpulse-text-2); stroke-width: .75; stroke-opacity: .4; }
-.fix { fill: none; stroke: var(--innerpulse-text-2); stroke-width: 2; stroke-linecap: round; stroke-opacity: .6; }
-.plane { fill: var(--innerpulse-text-2); stroke: none; }
 .gs { fill: var(--ocean); stroke: var(--innerpulse-text); stroke-width: 1.5; }
-.ship { fill: var(--innerpulse-text); stroke: var(--ocean); stroke-width: 1; }
 .home-ring { fill: none; stroke: var(--innerpulse-text); stroke-width: 1.5; }
 .home-dot { fill: var(--innerpulse-text); }
 .cell-sel { fill: rgba(227, 230, 233, .07); stroke: var(--innerpulse-text); stroke-width: 1; }
@@ -258,12 +247,6 @@ dl { margin: 0; }
 .bandlist dd { margin: 0; color: var(--innerpulse-text-2); }
 /* These two change with what is under the pointer and in view. A fixed height keeps
    the page, and so the map, from moving when they do. */
-#readout, #totals { overflow-y: auto; }
-#readout { height: var(--readout-h); }
-#square { height: 272px; overflow-y: auto; margin-top: 12px; }
-#square table { margin-top: 6px; }
-#square th { position: sticky; top: -14px; background: var(--innerpulse-surface-1); }
-#totals { height: var(--totals-h); }
 
 .key { display: grid; gap: 10px; margin-top: 10px; }
 .key .row { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 14px; font: 400 12px/1.3 var(--innerpulse-mono); color: var(--innerpulse-text-2); }
@@ -543,16 +526,14 @@ dl { margin: 0; }
 @media (max-width: 1040px) {
   .map-wrap { grid-template-columns: minmax(0, 1fr); }
   .side { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .traffic-panels { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 @media (max-width: 760px) {
   .twocol { grid-template-columns: minmax(0, 1fr); }
   .side { grid-template-columns: minmax(0, 1fr); }
-  .traffic-panels { grid-template-columns: minmax(0, 1fr); }
-  .stage.tall { height: 110vw; min-height: 340px; }
+  .stage.tall { height: 88vw; min-height: 300px; }
+  .view-totals div { flex: 1 0 45%; border-left: 0; padding: 0 14px; }
   .flight-card { left: 8px; right: 8px; top: auto; bottom: 8px; width: auto; max-width: none; }
   .stage { aspect-ratio: auto; height: 74vw; min-height: 280px; }
-  .filters > summary { display: block; cursor: pointer; font: 500 var(--innerpulse-text-xs)/1.2 var(--innerpulse-mono); letter-spacing: .12em; text-transform: uppercase; color: var(--innerpulse-text-2); padding: 10px 0; }
   .strip-foot { align-items: flex-start; }
   .hide-s { display: none; }
   .board .scale span:nth-child(even) { display: none; }
@@ -567,10 +548,6 @@ dl { margin: 0; }
   .spec-key { margin-left: 0; }
   .notes .wide { grid-column: auto; }
 }
-/* Nothing points on a touch screen, so the tap's list under the map does this job. */
-@media (hover: none) {
-  #readout { display: none; }
-}
 @media (max-width: 720px) {
   .nav-tick { display: none; }
   .fresh { margin-left: auto; margin-right: 12px; }
@@ -583,3 +560,152 @@ dl { margin: 0; }
   .pulse, .path-sel, .viewer[open] { animation: none; }
   * { scroll-behavior: auto; }
 }
+
+/* The map: one viewer, a layer per kind of traffic. */
+.map-head { justify-content: space-between; align-items: flex-end; gap: 12px 24px; }
+.map-head .tools { margin: 0; gap: 8px 18px; }
+.track { fill: none; stroke: var(--air); stroke-width: 1.1; stroke-opacity: .75; }
+.track.old { stroke-width: .7; stroke-opacity: .24; }
+.fix { fill: none; stroke: var(--air); stroke-width: 2.4; stroke-linecap: round; stroke-opacity: .6; }
+.plane { fill: var(--air); stroke: var(--ocean); stroke-width: .6; }
+.plane.old { fill: rgba(255, 179, 71, .36); stroke: none; }
+/* Beside the amateur dots the tracks step back, so neither buries the other. */
+.with-squares .track { stroke-opacity: .5; stroke-width: .9; }
+.with-squares .track.old { stroke-opacity: .13; }
+.with-squares .fix { stroke-opacity: .32; stroke-width: 2; }
+.ship { fill: var(--sea); stroke: var(--ocean); stroke-width: 1.2; }
+.fc-sub { display: block; margin-top: 2px; font: 400 12px var(--innerpulse-sans); color: var(--innerpulse-text-3); }
+.fc-sub .ip-live { font-size: 12px; }
+.flight-card { max-height: calc(100% - 16px); overflow-y: auto; }
+.flight-card .bandlist { margin-top: 10px; }
+.layers-card .layers { gap: 0; margin-top: 10px; padding-top: 0; border-top: 0; }
+.layer { border-top: 1px solid var(--innerpulse-line); padding: 9px 0; }
+.layer:last-child { padding-bottom: 0; }
+.layer-row { display: flex; align-items: center; gap: 8px; min-height: 30px; }
+.layer-row .ip-check { flex: 1; min-width: 0; font-size: 13.5px; color: var(--innerpulse-text); }
+.layer-row .glyph { display: inline-flex; width: 18px; }
+.layer-row .glyph svg { width: 18px; height: 12px; overflow: visible; }
+.layer .lc { font: 500 12.5px var(--innerpulse-mono); color: var(--innerpulse-text-2); }
+.layer .only { min-height: 24px; padding: 0 7px; font-size: 11.5px; color: var(--innerpulse-text-3); border-color: var(--innerpulse-line); }
+.layer .only:hover { color: var(--innerpulse-text); }
+.layer-sub { display: grid; gap: 8px; padding: 8px 0 2px 25px; }
+.layer-sub .chips button { min-height: 28px; padding: 0 9px; font-size: 12px; }
+.layer-sub .key { margin-top: 2px; }
+.layer-sub .note { font-size: 12px; }
+.layer.off .layer-sub { display: none; }
+.layer.off .layer-row .ip-check { color: var(--innerpulse-text-3); }
+.layer.off .glyph { opacity: .4; }
+.strip .sp-ham { fill: var(--innerpulse-text-3); }
+.strip .sp-air { fill: var(--air); }
+.strip .sp-ship { fill: var(--sea); }
+.strip .sp:hover { fill: var(--innerpulse-text); }
+.kd { display: inline-block; width: 8px; height: 8px; margin: 0 4px 0 2px; border-radius: 1px; vertical-align: 0; }
+.kd.ham { background: var(--innerpulse-text-3); }
+.kd.air { background: var(--air); }
+.kd.ship { background: var(--sea); }
+.inview-sec { margin-top: 26px; }
+.inview-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px 20px; }
+#listtabs button small, .log-tabs small, .pic-tools small { margin-left: 5px; font: 400 11px var(--innerpulse-mono); color: var(--innerpulse-text-3); }
+#listtabs button[aria-pressed="true"] small, .pic-tools button[aria-pressed="true"] small { color: var(--innerpulse-gunmetal); }
+#inview { margin-top: 6px; }
+.live-dot { display: inline-block; width: 6px; height: 6px; margin-left: 5px; border-radius: 50%; background: var(--air); box-shadow: 0 0 0 3px rgba(255, 179, 71, .18); vertical-align: 1px; }
+
+/* Sortable tables: the headings are the sort controls. */
+table.sortable th { padding: 0 14px 0 0; }
+table.sortable th.n, table.sortable td.n { text-align: right; }
+.th-sort { all: unset; display: inline-flex; align-items: center; gap: 5px; padding: 9px 0; cursor: pointer; font: inherit; letter-spacing: inherit; text-transform: inherit; color: inherit; white-space: nowrap; }
+.th-sort:hover { color: var(--innerpulse-text); }
+.th-sort:focus-visible { box-shadow: var(--ip-focus); border-radius: 2px; }
+.th-sort i { width: 7px; height: 7px; opacity: 0; border: solid currentColor; border-width: 0 1.5px 1.5px 0; transform: translateY(-2px) rotate(45deg); transition: transform var(--innerpulse-dur-1); }
+th[aria-sort="descending"] .th-sort, th[aria-sort="ascending"] .th-sort { color: var(--innerpulse-text); }
+th[aria-sort="descending"] .th-sort i { opacity: .9; }
+th[aria-sort="ascending"] .th-sort i { opacity: .9; transform: translateY(2px) rotate(-135deg); }
+table.sortable td.wrap { white-space: normal; min-width: 140px; max-width: 280px; }
+table.pickable tbody tr { cursor: pointer; }
+table.pickable tbody tr:focus-visible { outline: none; box-shadow: inset 2px 0 0 var(--innerpulse-pulse); background: var(--innerpulse-surface-1); }
+table.sortable tr.picked { background: var(--innerpulse-surface-2); box-shadow: inset 2px 0 0 var(--innerpulse-text); }
+.more-rows { display: flex; align-items: center; gap: 14px; margin-top: 12px; font: 400 12px var(--innerpulse-mono); color: var(--innerpulse-text-3); }
+.brg { display: inline-flex; align-items: center; gap: 6px; }
+.brg svg { width: 12px; height: 12px; fill: var(--innerpulse-text-2); flex: none; }
+.bd { display: inline-block; min-width: 26px; margin-right: 3px; padding: 1px 4px; border-radius: 3px; text-align: center; font: 500 11px/1.4 var(--innerpulse-mono); color: var(--innerpulse-ground); }
+.bd.g0 { background: var(--innerpulse-chart-1); }
+.bd.g1 { background: var(--innerpulse-chart-2); }
+.bd.g2 { background: var(--innerpulse-chart-3); }
+.bd.g3 { background: var(--innerpulse-chart-other); }
+.new-badge { display: inline-block; margin-left: 4px; padding: 0 5px; border: 1px solid var(--innerpulse-pulse); border-radius: 3px; font: 500 10px/1.5 var(--innerpulse-mono); letter-spacing: .06em; text-transform: uppercase; color: var(--innerpulse-text); vertical-align: 1px; }
+
+/* The log: a tab per kind of station, a row per station. */
+.log-new { margin-top: 14px; }
+.log-tabs { display: flex; flex-wrap: wrap; gap: 0; margin-top: 28px; border-bottom: 1px solid var(--innerpulse-line-2); }
+.log-tabs button { border: 0; border-radius: 0; min-height: 42px; padding: 0 16px; font-size: 14px; color: var(--innerpulse-text-2); background: transparent; box-shadow: inset 0 -2px 0 transparent; }
+.log-tabs button:hover { color: var(--innerpulse-text); }
+.log-tabs button[aria-selected="true"] { color: var(--innerpulse-text); box-shadow: inset 0 -2px 0 var(--innerpulse-pulse); }
+.log-tools { margin-top: 14px; gap: 8px 20px; }
+.log-tools .chips button i { display: inline-block; width: 7px; height: 7px; margin-right: 6px; border-radius: 2px; }
+.log-tools small { margin-left: 4px; font: 400 11px var(--innerpulse-mono); color: var(--innerpulse-text-3); }
+.log-tools button[aria-pressed="true"] small { color: var(--innerpulse-gunmetal); }
+#logn { margin-top: 4px; }
+
+/* Pictures: by day, newest first, the older days folded away. */
+.pic div { position: relative; }
+.pic .kind { position: absolute; right: 12px; top: 11px; margin: 0; font: 500 10px/1.4 var(--innerpulse-mono); letter-spacing: .1em; text-transform: uppercase; color: var(--innerpulse-text-3); }
+.pic b { padding-right: 52px; }
+.pic.sstv a { background: #000; }
+.pic.sstv img { object-fit: contain; object-position: center; image-rendering: auto; }
+.pic-tools { margin-top: 8px; gap: 8px 20px; }
+.latest { margin-top: 6px; }
+.latest-row { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(180px, 220px); gap: 12px; margin-top: 14px; overflow-x: auto; padding-bottom: 8px; scroll-snap-type: x proximity; }
+.latest-card { display: block; scroll-snap-align: start; text-decoration: none; background: var(--innerpulse-surface-1); border: 1px solid var(--innerpulse-line); border-radius: calc(var(--radius) * 2); overflow: hidden; transition: border-color .2s; }
+.latest-card:hover { border-color: var(--innerpulse-line-2); }
+.latest-card img { display: block; width: 100%; aspect-ratio: 4 / 3; object-fit: cover; object-position: top; background: #fff; }
+.latest-card b { display: block; padding: 8px 10px 0; font-size: 12.5px; font-weight: 600; line-height: 1.3; }
+.latest-card span { display: block; padding: 2px 10px 10px; font: 400 11px/1.4 var(--innerpulse-mono); color: var(--innerpulse-text-3); }
+.day { margin-top: 18px; border-top: 1px solid var(--innerpulse-line); }
+.day > summary { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; padding: 14px 0 4px; cursor: pointer; list-style: none; }
+.day > summary::-webkit-details-marker { display: none; }
+.day > summary::before { content: ""; width: 7px; height: 7px; border: solid var(--innerpulse-text-3); border-width: 0 1.5px 1.5px 0; transform: rotate(-45deg); transition: transform var(--innerpulse-dur-1); }
+.day[open] > summary::before { transform: rotate(45deg); }
+.day > summary h2 { font-size: clamp(17px, 1.6vw, 20px); }
+.day-n { font: 400 12px var(--innerpulse-mono); color: var(--innerpulse-text-3); }
+.day-peek { display: flex; gap: 4px; margin-left: auto; }
+.day-peek img { width: 44px; height: 33px; object-fit: cover; object-position: top; border-radius: 2px; background: #fff; opacity: .8; }
+.day[open] .day-peek { display: none; }
+.day .gallery { margin-top: 10px; }
+.viewer-full { font-size: 12.5px; align-self: center; margin-right: 6px; }
+.viewer.small-pic .viewer-pic { background: #000; display: grid; place-items: center; }
+.viewer.small-pic .viewer-pic img { width: min(100%, 800px); }
+
+@media (max-width: 1040px) {
+  .map-head { align-items: flex-start; }
+}
+@media (max-width: 760px) {
+  .layer-sub { padding-left: 0; }
+  .day-peek { display: none; }
+  .log-tabs button { padding: 0 11px; font-size: 13px; }
+  table.sortable td.wrap { min-width: 110px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .th-sort i, .day > summary::before, .latest-card { transition: none; }
+}
+
+.view-sum { margin-top: 12px; }
+.view-totals { display: flex; flex-wrap: wrap; gap: 10px 0; border: 1px solid var(--innerpulse-line); border-radius: calc(var(--radius) * 2); background: var(--innerpulse-surface-1); padding: 12px 0; }
+.view-totals div { padding: 0 18px; border-left: 1px solid var(--innerpulse-line); }
+.view-totals div:first-child { border-left: 0; }
+.view-totals dt { font: 500 var(--innerpulse-text-xs)/1.2 var(--innerpulse-mono); letter-spacing: .1em; text-transform: uppercase; color: var(--innerpulse-text-3); }
+.view-totals dd { margin: 4px 0 0; font: 600 18px/1.1 var(--innerpulse-mono); font-variant-numeric: tabular-nums; color: var(--innerpulse-text); }
+.view-bands { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; margin-top: 10px; font: 400 12px var(--innerpulse-mono); color: var(--innerpulse-text-2); }
+.view-bands .lbl { font: 500 var(--innerpulse-text-xs)/1.2 var(--innerpulse-mono); letter-spacing: .12em; text-transform: uppercase; color: var(--innerpulse-text-3); }
+.view-bands span:not(.lbl):not(.bd) { display: inline-flex; align-items: center; }
+.view-sum .note { margin-top: 8px; }
+.inview-sec > .note { margin-top: 10px; }
+.flight-card .kv { grid-template-columns: auto minmax(0, 1fr); column-gap: 14px; }
+.flight-card .kv dt { white-space: nowrap; }
+.flight-card .kv dd.wrap { max-width: none; }
+
+/* Long tables read inside a frame of their own, the header pinned, so a page of
+   a hundred rows does not run the page on for screens. */
+.scroll.frame { max-height: min(72vh, 680px); overflow: auto; overscroll-behavior: contain; border: 1px solid var(--innerpulse-surface-3); border-radius: 4px; }
+.scroll.frame.short { max-height: min(50vh, 380px); }
+.scroll.frame thead th { position: sticky; top: 0; z-index: 3; background: var(--innerpulse-surface-1, var(--innerpulse-ground)); box-shadow: 0 1px 0 var(--innerpulse-surface-3); }
+.scroll.frame:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }

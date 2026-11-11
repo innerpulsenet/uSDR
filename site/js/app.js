@@ -1,8 +1,8 @@
-import { bandGroup, BAND_GROUPS, bearing, gridCenter, SPOT_SIZES, mountMap, STEPS } from "./map.js";
+import { bandGroup, BAND_GROUPS, bandPills, bearing, gridCenter, kmBetween, SPOT_SIZES, mountMap, STEPS } from "./map.js";
 import { mountGlobe } from "./globe.js";
 import { atmosphere, calm, dress, moveTick } from "./motion.js";
 import { ago, esc, fmtClock, fmtTime, hours, khz, num } from "./util.js";
-import { callLink, dialFigure, modeBoard, modeChip, modeColor, MODE_SLOT, rowsTable, wireReadout } from "./figures.js";
+import { bearingCell, callLink, dialFigure, modeBoard, modeChip, modeColor, MODE_SLOT, rowsTable, sortableTable, wireReadout } from "./figures.js";
 
 const view = document.getElementById("view");
 const STALE_S = 20 * 60;
@@ -71,7 +71,7 @@ async function showNow() {
         ${s.by_mode.length ? modeBoard(s.by_mode) : emptyLog()}
       </section>
       <section aria-labelledby="latest"><h2 id="latest">Latest</h2>
-        ${s.latest.length ? `${rowsTable(s.latest.slice(0, 14), { compact: true })}<p class="more"><a class="go" href="#/log">The latest 500 entries</a></p>` : emptyLog()}
+        ${s.latest.length ? `${rowsTable(s.latest.slice(0, 14), { compact: true })}<p class="more"><a class="go" href="#/log">Everyone heard today</a></p>` : emptyLog()}
       </section>
     </div>`;
   drawNowLine();
@@ -99,62 +99,108 @@ async function drawNowLine() {
   line.innerHTML = `<p class="nowline">${said}${n.next_chart ? ` <span class="next">Next chart: ${esc(n.next_chart)}.</span>` : ""}</p>`;
 }
 
+// One glyph per layer, shared by the layer list and anything else that names a layer.
+const GLYPH = {
+  squares: `<svg viewBox="0 0 18 12" aria-hidden="true"><circle cx="5" cy="6" r="3.2" fill="var(--innerpulse-chart-1)"/><circle cx="12" cy="4.5" r="2.4" fill="var(--innerpulse-chart-2)"/><circle cx="13" cy="9" r="1.8" fill="var(--innerpulse-chart-3)"/></svg>`,
+  tracks: `<svg viewBox="0 0 18 12" aria-hidden="true"><path d="M1 10.5 L9 6.5" fill="none" stroke="var(--air)" stroke-width="1.2"/><path d="M17 2 L8.5 3.2 L10.6 6.5 L10.2 10.4Z" fill="var(--air)"/></svg>`,
+  ground: `<svg viewBox="0 0 18 12" aria-hidden="true"><rect x="4.5" y="1.5" width="9" height="9" fill="none" stroke="var(--innerpulse-text)" stroke-width="1.5"/></svg>`,
+  dsc: `<svg viewBox="0 0 18 12" aria-hidden="true"><rect x="5.5" y="2.5" width="7" height="7" transform="rotate(45 9 6)" fill="var(--sea)"/></svg>`,
+  night: `<svg viewBox="0 0 18 12" aria-hidden="true"><rect x=".5" y=".5" width="17" height="11" rx="2" fill="#020305" stroke="var(--innerpulse-line-2)"/><path d="M9 .5V11.5" stroke="rgba(227,230,233,.4)" stroke-dasharray="1.5 1.5"/></svg>`,
+};
+
+function layerRow(key, name, sub = "") {
+  const only = key === "night" ? "" : `<button type="button" class="only" data-only="${key}" title="Show only this layer, or every layer again">Only</button>`;
+  return `<div class="layer" data-for="${key}">
+    <div class="layer-row"><label class="ip-check"><input type="checkbox" data-layer="${key}"><span class="glyph">${GLYPH[key]}</span><span>${name}</span></label><b class="lc num" data-count="${key}"></b>${only}</div>
+    ${sub ? `<div class="layer-sub">${sub}</div>` : ""}
+  </div>`;
+}
+
 function mapShell(w) {
   return `
-    <div class="map-head"><p class="eyebrow">The map</p><h1>Where it heard from.</h1></div>
-    <details class="filters" id="filters" open><summary>Filters</summary>
-    <div class="tools">
-      <div class="chips"><span class="lbl">Window</span><button type="button" data-w="24h" aria-pressed="${w === "24h"}">24 hours</button><button type="button" data-w="7d" aria-pressed="${w === "7d"}">7 days</button></div>
-      <div class="chips"><span class="lbl">Projection</span><button type="button" data-proj="eq">Flat</button><button type="button" data-proj="az">From the station</button></div>
-      <div class="chips" id="presets"><span class="lbl">Go to</span></div>
+    <div class="map-head">
+      <div><p class="eyebrow">The map</p><h1>Who it heard, and where.</h1></div>
+      <div class="tools">
+        <div class="chips"><span class="lbl">Window</span><button type="button" data-w="24h" aria-pressed="${w === "24h"}">24 hours</button><button type="button" data-w="7d" aria-pressed="${w === "7d"}">7 days</button></div>
+        <div class="chips"><span class="lbl">Projection</span><button type="button" data-proj="eq">Flat</button><button type="button" data-proj="az">From the station</button></div>
+        <div class="chips" id="presets"><span class="lbl">Go to</span></div>
+      </div>
     </div>
-    <div class="tools"><div class="chips" id="bands"><span class="lbl">Band</span></div><div class="chips" id="modes"><span class="lbl">Mode</span></div></div>
-    </details>
-    <div class="map-wrap" style="margin-top:6px">
+    <div class="map-wrap">
       <div class="map-main">
-        <div class="stage">
+        <div class="stage tall">
           <div class="zoomer"><button type="button" id="zin" aria-label="Zoom in">+</button><button type="button" id="zout" aria-label="Zoom out">−</button><button type="button" id="box" aria-pressed="false" aria-label="Drag a box to zoom to an area" title="Drag a box to zoom to an area">▭</button></div>
+          <div class="flight-card" id="mapcard" aria-live="polite" hidden></div>
         </div>
         <div class="strip-wrap">
-          <svg id="strip" class="strip" role="img" aria-label="Spots per hour. Hatched hours had no listening."></svg>
+          <svg id="strip" class="strip" role="img" aria-label="Stations, aircraft and ships heard per hour, for the layers that are on. Hatched hours had no listening to any of them."></svg>
           <div class="range"><label for="from">From</label><input id="from" type="range" min="0" step="1"><label for="to">To</label><input id="to" type="range" step="1"></div>
-          <div class="strip-foot"><button type="button" id="play" aria-pressed="false">Play</button><p class="note"><span id="fromv" class="num"></span> to <span id="tov" class="num"></span>. Hatched hours had no listening at all, which is not the same as a quiet band.</p></div>
+          <div class="strip-foot"><button type="button" id="play" aria-pressed="false">Play</button><p class="note"><span id="fromv" class="num"></span> to <span id="tov" class="num"></span>. Bars count <i class="kd ham"></i>stations, <i class="kd air"></i>aircraft and <i class="kd ship"></i>ships each hour. Hatched hours had no listening at all, which is not the same as a quiet band.</p></div>
         </div>
-        <div class="card" id="square" aria-live="polite"></div>
       </div>
-      <div class="side">
-        <div class="card" id="readout"><h3>Under the pointer</h3><p class="note" style="margin-top:8px">Point at a dot or a flight. Scroll to zoom, drag to pan, or use ▭ to drag out an area (shift-drag does the same).</p></div>
-        <div class="card" id="totals"></div>
-        <div class="card"><h3>Reading the dots</h3>
-          <div class="key">
-            <div class="row" aria-label="Dot size is the number of different stations heard in that square">${SPOT_SIZES.map((s) => `<span><svg class="swatch" viewBox="0 0 15 15" aria-hidden="true"><circle cx="7.5" cy="7.5" r="${s.px / 2}" fill="var(--innerpulse-text-2)"/></svg>${s.label}</span>`).join("")}</div>
-            <div class="row" aria-label="Dot color is the band group heard most in that square">${BAND_GROUPS.map((b, i) => `<span><svg class="swatch" viewBox="0 0 15 15" aria-hidden="true"><circle cx="7.5" cy="7.5" r="5" fill="var(--innerpulse-chart-${i + 1})"/></svg>${b}</span>`).join("")}</div>
-          </div>
-          <p class="note" style="margin-top:8px">One dot per grid square, at the square's center. Size is different stations heard; color is the bands with the most decodes there. A pulsing dot was heard in the last hour of the log.</p>
+      <aside class="side" aria-label="Layers and totals">
+        <div class="card layers-card"><h3>On the map</h3>
           <div class="layers">
-            <label class="ip-check"><input type="checkbox" data-layer="squares" checked><span>Amateur stations</span></label>
-            <label class="ip-check"><input type="checkbox" data-layer="tracks" checked><svg viewBox="0 0 18 12" aria-hidden="true"><path d="M1 10 L9 6" fill="none" stroke="var(--innerpulse-text-2)" stroke-width="1"/><path d="M17 2 L8.5 3.2 L10.6 6.5 L10.2 10.4Z" fill="var(--innerpulse-text)"/></svg><span>Aircraft positions</span></label>
-            <label class="ip-check"><input type="checkbox" data-layer="ground" checked><svg viewBox="0 0 18 12" aria-hidden="true"><rect x="4.5" y="1.5" width="9" height="9" fill="none" stroke="var(--innerpulse-text)" stroke-width="1.5"/></svg><span>HFDL ground stations</span></label>
-            <label class="ip-check"><input type="checkbox" data-layer="dsc" checked><svg viewBox="0 0 18 12" aria-hidden="true"><rect x="6" y="3" width="6" height="6" transform="rotate(45 9 6)" fill="var(--innerpulse-text)"/></svg><span>Ship calls</span></label>
-            <label class="ip-check"><input type="checkbox" data-layer="night" checked><svg viewBox="0 0 18 12" aria-hidden="true"><rect x=".5" y=".5" width="17" height="11" fill="#020305" stroke="var(--innerpulse-line-2)"/></svg><span>Night side, at the end of these hours</span></label>
+            ${layerRow("squares", "Amateur stations", `
+              <div class="chips" id="modes"><span class="lbl">Mode</span></div>
+              <div class="chips" id="bands"><span class="lbl">Band</span></div>
+              <div class="key">
+                <div class="row" aria-label="Dot size is the number of different stations heard in that square">${SPOT_SIZES.map((s) => `<span><svg class="swatch" viewBox="0 0 15 15" aria-hidden="true"><circle cx="7.5" cy="7.5" r="${s.px / 2}" fill="var(--innerpulse-text-2)"/></svg>${s.label}</span>`).join("")}</div>
+                <div class="row" aria-label="Dot color is the band group heard most in that square">${BAND_GROUPS.map((b, i) => `<span><svg class="swatch" viewBox="0 0 15 15" aria-hidden="true"><circle cx="7.5" cy="7.5" r="5" fill="var(--innerpulse-chart-${i + 1})"/></svg>${b}</span>`).join("")}</div>
+              </div>
+              <p class="note">One dot per grid square: size is stations heard, color the bands with the most decodes. Band chips show time spent listening there.</p>`)}
+            ${layerRow("tracks", "Aircraft, HFDL", `<div class="chips"><span class="lbl">Show</span><button type="button" data-air-recent="0">Every track</button><button type="button" data-air-recent="1">Still reporting</button></div>
+              <p class="note">Bright tracks reported within the hour. Positions are what the aircraft sent, in the order of their own timestamps.</p>`)}
+            ${layerRow("ground", "HFDL ground stations")}
+            ${layerRow("dsc", "Ships, DSC", `<p class="note">Only calls that carried a position. Most don't; the Log lists every ship heard.</p>`)}
+            ${layerRow("night", "Night side, at the end of these hours")}
           </div>
         </div>
-      </div>
-    </div>`;
+      </aside>
+    </div>
+    <section class="inview-sec" aria-labelledby="hinview">
+      <div class="inview-head"><h2 id="hinview">In this view</h2><div class="chips" id="listtabs" role="tablist" aria-label="What to list"></div></div>
+      <div id="totals" class="view-sum" aria-live="polite"></div>
+      <p class="note">What the map shows, as a list. It follows the view, the hours and the filters; pan or zoom to narrow it. Click a row to find it on the map, or a heading to sort.</p>
+      <div id="inview"></div>
+    </section>`;
+}
+
+// Ship and aircraft details the map shows on its card and in its list.
+function trafficLookups(t, names, stations) {
+  const gsName = Object.fromEntries(stations.map((s) => [String(s.id), s.name]));
+  const flights = new Map(t.flights.map((f) => [f.i, f]));
+  const ships = new Map(t.ships.map((s) => [s.i, s]));
+  return {
+    flightInfo: (flight) => {
+      const row = flights.get(flight);
+      return { operator: aircraftAirline(flight, names.airlines), reg: row?.reg, gs: gsName[row?.gs], n: row?.n };
+    },
+    shipInfo: (mmsi) => {
+      const row = ships.get(mmsi) || { i: mmsi };
+      return { flag: shipFlag(row, names.flags), from: row.from, cat: row.cat, what: row.what, n: row.n };
+    },
+  };
 }
 
 async function showMap(params) {
   const w = params.w === "7d" ? "7d" : "24h";
-  [coast, land, ground] = await Promise.all([coast || load("coast-110m.json"), land || load("land-110m.json"), ground || load("ground-stations.json")]);
-  const data = await load(`map-${w}.json`);
+  const [data, t, names] = await Promise.all([
+    load(`map-${w}.json`), load("traffic.json").catch(() => ({ flights: [], ships: [] })), lookups || load("lookups-site.json"),
+    coast || load("coast-110m.json").then((v) => { coast = v; }), land || load("land-110m.json").then((v) => { land = v; }),
+    ground || load("ground-stations.json").then((v) => { ground = v; }),
+  ]);
+  lookups = names;
   shownBuilt = data.generated_utc;
   view.innerHTML = mapShell(w);
-  view.querySelector("#filters").open = !matchMedia("(max-width: 760px)").matches;
   view.querySelectorAll("[data-w]").forEach((b) => b.addEventListener("click", () => {
-    location.hash = `#/map?w=${b.dataset.w}`;
+    const p = new URLSearchParams(location.hash.split("?")[1] || "");
+    p.set("w", b.dataset.w);
+    for (const k of ["t", "v", "s", "f", "d"]) p.delete(k);
+    location.hash = `#/map?${p}`;
   }));
   unmount = mountMap(view, data, {
-    coast, land, ground, params,
+    coast, land, ground, params, ...trafficLookups(t, names, ground),
     loadFine: async () => {
       const [fineCoast, fineLand] = await Promise.all([load("coast-50m.json"), load("land-50m.json")]);
       return { coast: fineCoast, land: fineLand };
@@ -237,7 +283,7 @@ async function showActivity() {
       </section>
     </div>
     <section aria-labelledby="h5"><h2 id="h5" data-rail="SELCAL">SELCAL calls</h2><p class="note">A SELCAL call is a two-pair code sent to wake one aircraft's radio. It carries no position.</p>
-      ${a.selcal.length ? `<div class="scroll"><table><thead><tr><th>Time</th><th>Code</th><th>kHz</th></tr></thead><tbody>${a.selcal.map((c) => `<tr><td>${fmtTime(c.t)}</td><td class="id">${esc(c.code)}</td><td>${khz(c.dial_hz)}</td></tr>`).join("")}</tbody></table></div>` : `<p class="empty">No SELCAL calls logged.</p>`}
+      ${a.selcal.length ? `<div class="scroll frame short" tabindex="0" role="region" aria-label="SELCAL calls"><table><thead><tr><th>Time</th><th>Code</th><th>kHz</th></tr></thead><tbody>${a.selcal.map((c) => `<tr><td>${fmtTime(c.t)}</td><td class="id">${esc(c.code)}</td><td>${khz(c.dial_hz)}</td></tr>`).join("")}</tbody></table></div><p class="more"><a class="go" href="#/log?tab=selcal">Every SELCAL code in the log</a></p>` : `<p class="empty">No SELCAL calls logged.</p>`}
     </section>
     ${navtexSection(a.navtex)}
     ${beaconSection(a.beacons)}`;
@@ -429,27 +475,183 @@ function wireSpectrum(s) {
   draw();
 }
 
-async function showPictures() {
-  const { pictures, generated_utc: built } = await load("pictures.json");
-  shownBuilt = built;
+// Pictures: grouped by UTC day, newest first, with only the latest few days open, so the
+// page stays one screen of recent pictures however long the station runs. Older months
+// are files of their own, loaded only when asked for.
+const PIC_KINDS = { WEFAX: "Weather charts", SSTV: "SSTV" };
+const OPEN_DAYS = 3;
+// An open day shows this many pictures until asked for the rest.
+const DAY_SHOWN = 12;
+const MONTH_NAMES = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+
+// Radiofax is tuned 1.9 kHz below the frequency stations publish; SSTV is listed by its dial.
+const picKhz = (p) => khz(p.mode === "WEFAX" ? p.dial_hz + 1900 : p.dial_hz);
+const picTitle = (p) => (p.mode === "WEFAX" ? p.scheduled_title || "Untitled chart" : "SSTV picture");
+const picAlt = (p) => (p.mode === "WEFAX"
+  ? `Radiofax chart received ${fmtTime(p.start_utc)}${p.scheduled_title ? `, scheduled as ${p.scheduled_title}` : ""}`
+  : `SSTV picture received ${fmtTime(p.start_utc)} on ${picKhz(p)} kHz`);
+const picMeta = (p) => [fmtTime(p.start_utc), p.station, `${picKhz(p)} kHz`].filter(Boolean).join(" · ");
+const dayOf = (t) => Math.floor(t / 86400);
+
+function dayLabel(day, today) {
+  const d = new Date(day * 86400000);
+  const date = `${MONTH_NAMES[d.getUTCMonth()].slice(0, 3)} ${d.getUTCDate()}`;
+  return day === today ? `Today, ${date}` : day === today - 1 ? `Yesterday, ${date}` : `${["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"][d.getUTCDay()]}, ${date}`;
+}
+const monthLabel = (m) => `${MONTH_NAMES[Number(m.slice(5)) - 1]} ${m.slice(0, 4)}`;
+
+function picCard(p, i) {
+  return `<article class="pic${p.mode === "SSTV" ? " sstv" : ""}">
+    <a href="pictures/${encodeURIComponent(p.file)}" data-pic="${i}"><img loading="lazy" src="pictures/${encodeURIComponent(p.thumb || p.file)}" alt="${esc(picAlt(p))}"></a>
+    <div><span class="kind">${esc(p.mode === "WEFAX" ? "Chart" : "SSTV")}</span><b>${esc(picTitle(p))}</b><span>${esc(picMeta(p))}</span></div>
+  </article>`;
+}
+
+async function showPictures(params) {
+  const index = await load("pictures.json");
+  shownBuilt = index.generated_utc;
+  const state = { kind: PIC_KINDS[params.k] ? params.k : "", station: params.st || "", month: params.mo || "" };
+  let pictures = index.pictures;
+  if (state.month && index.months?.some((m) => m.month === state.month)) {
+    pictures = (await load(`pictures-${state.month}.json`)).pictures;
+  } else {
+    state.month = "";
+  }
+  const all = index.months ? index.months.reduce((a, m) => a + m.n, 0) : pictures.length;
+
   view.innerHTML = `
-    <header class="page-head ip-atmos">${atmosphere(pictures.map((p) => p.lines))}
+    <header class="page-head ip-atmos">${atmosphere(index.pictures.map((p) => p.lines))}
     <p class="eyebrow">Pictures</p>
-    <h1>Weather charts off the air.</h1>
-    <p class="lede">Received as radiofax and kept as they arrived, noise included. Titles come from the transmitting station's timetable, because a chart does not state its own.</p>
+    <h1>Pictures off the air.</h1>
+    <p class="lede">Weather charts sent by radiofax, and SSTV pictures sent by radio amateurs, kept as they arrived, noise included. A chart's title comes from the station's timetable, because a chart does not state its own. SSTV pictures are checked by hand before they appear.</p>
     </header>
-    ${pictures.length ? `<div class="gallery">${pictures.map((p) => `<article class="pic">
-      <a href="pictures/${encodeURIComponent(p.file)}"><img loading="lazy" src="pictures/${encodeURIComponent(p.thumb || p.file)}" alt="Radiofax chart received ${fmtTime(p.start_utc)}${p.scheduled_title ? `, scheduled as ${esc(p.scheduled_title)}` : ""}"></a>
-      <div><b>${esc(p.scheduled_title || "Untitled picture")}</b><span>${fmtTime(p.start_utc)} · ${esc(p.station || "")} · ${khz(p.dial_hz + 1900)} kHz</span></div>
-    </article>`).join("")}</div>` : `<p class="empty">No charts have been published yet. Charts appear here once they pass a quality check.</p>`}`;
-  view.querySelectorAll(".pic a").forEach((a, i) => a.addEventListener("click", (ev) => {
-    ev.preventDefault();
-    openViewer(pictures.map((p) => ({
-      src: `pictures/${encodeURIComponent(p.file)}`,
-      alt: `Radiofax chart received ${fmtTime(p.start_utc)}${p.scheduled_title ? `, scheduled as ${p.scheduled_title}` : ""}`,
-      title: `${p.scheduled_title || "Untitled picture"} · ${fmtTime(p.start_utc)}`,
-    })), i);
-  }));
+    <div id="latest-charts"></div>
+    <div class="tools pic-tools" id="pictools"></div>
+    <p class="note" id="picn" aria-live="polite"></p>
+    <div id="days"></div>`;
+
+  const shown = () => pictures.filter((p) => (!state.kind || p.mode === state.kind) && (!state.station || p.station === state.station));
+  const save = () => {
+    const p = new URLSearchParams();
+    if (state.kind) p.set("k", state.kind);
+    if (state.station) p.set("st", state.station);
+    if (state.month) p.set("mo", state.month);
+    history.replaceState(null, "", `#/pictures${p.size ? `?${p}` : ""}`);
+  };
+
+  // The newest copy of each chart the stations send, so today's analysis is one look away.
+  function drawLatest() {
+    const box = view.querySelector("#latest-charts");
+    const charts = new Map();
+    for (const p of index.pictures) {
+      if (p.mode !== "WEFAX" || !p.scheduled_title) continue;
+      const key = `${p.station}|${p.scheduled_title}`;
+      if (!charts.has(key)) charts.set(key, p);
+    }
+    if (state.month || state.kind === "SSTV" || charts.size < 2) { box.innerHTML = ""; return; }
+    const list = [...charts.values()].filter((p) => !state.station || p.station === state.station).slice(0, 10);
+    box.innerHTML = list.length ? `<section class="latest" aria-labelledby="hlatest"><h2 id="hlatest">The latest of each chart</h2>
+      <p class="note">The newest copy of every chart received in the last 30 days.</p>
+      <div class="latest-row">${list.map((p) => `<a class="latest-card" href="pictures/${encodeURIComponent(p.file)}" data-latest="${esc(p.file)}">
+        <img loading="lazy" src="pictures/${encodeURIComponent(p.thumb || p.file)}" alt="${esc(picAlt(p))}"><b>${esc(p.scheduled_title)}</b><span>${esc(p.station || "")} · ${ago(p.start_utc)}</span></a>`).join("")}</div></section>` : "";
+    box.querySelectorAll("[data-latest]").forEach((a) => a.addEventListener("click", (ev) => {
+      ev.preventDefault();
+      openViewer(list.map(viewerItem), list.findIndex((p) => p.file === a.dataset.latest));
+    }));
+  }
+
+  function drawTools() {
+    const kinds = Object.keys(PIC_KINDS).filter((k) => pictures.some((p) => p.mode === k));
+    const stations = [...new Set(pictures.filter((p) => p.mode === "WEFAX" && p.station).map((p) => p.station))].sort();
+    const count = (pred) => pictures.filter(pred).length;
+    view.querySelector("#pictools").innerHTML = `
+      <div class="chips"><span class="lbl">Show</span><button type="button" data-k="" aria-pressed="${!state.kind}">Everything <small>${num(pictures.length)}</small></button>${kinds.map((k) => `<button type="button" data-k="${k}" aria-pressed="${state.kind === k}">${PIC_KINDS[k]} <small>${num(count((p) => p.mode === k))}</small></button>`).join("")}</div>
+      ${stations.length > 1 && state.kind !== "SSTV" ? `<div class="chips"><span class="lbl">Station</span><button type="button" data-st="" aria-pressed="${!state.station}">All</button>${stations.map((s) => `<button type="button" data-st="${esc(s)}" aria-pressed="${state.station === s}">${esc(s)} <small>${num(count((p) => p.station === s))}</small></button>`).join("")}</div>` : ""}
+      ${index.months && index.months.length > 1 ? `<div class="chips"><label class="lbl" for="picmonth">Month</label><select id="picmonth"><option value="">Last 30 days</option>${index.months.map((m) => `<option value="${m.month}"${m.month === state.month ? " selected" : ""}>${monthLabel(m.month)} (${num(m.n)})</option>`).join("")}</select></div>` : ""}`;
+  }
+
+  const viewerItem = (p) => ({ src: `pictures/${encodeURIComponent(p.file)}`, alt: picAlt(p), title: `${picTitle(p)} · ${picMeta(p)}`, sstv: p.mode === "SSTV" });
+
+  function drawDays() {
+    const list = shown();
+    const box = view.querySelector("#days");
+    const where = state.month ? `in ${monthLabel(state.month)}` : "in the last 30 days";
+    view.querySelector("#picn").textContent = list.length ? `${num(list.length)} picture${list.length === 1 ? "" : "s"} ${where}${all > index.pictures.length && !state.month ? `, ${num(all)} in all; older months are under Month` : ""}.` : "";
+    if (!pictures.length) {
+      box.innerHTML = `<p class="empty">No pictures ${where} yet. Charts appear once they pass a quality check, and SSTV pictures once they are approved.</p>`;
+      return;
+    }
+    if (!list.length) {
+      box.innerHTML = `<p class="empty">No pictures match these filters.</p>`;
+      return;
+    }
+    const today = dayOf(Date.now() / 1000);
+    const days = [];
+    for (const p of list) {
+      const d = dayOf(p.start_utc);
+      if (!days.length || days[days.length - 1].day !== d) days.push({ day: d, items: [] });
+      days[days.length - 1].items.push(p);
+    }
+    let at = 0;
+    box.innerHTML = days.map((d, n) => {
+      const first = at;
+      at += d.items.length;
+      const tally = Object.keys(PIC_KINDS).map((k) => [k, d.items.filter((p) => p.mode === k).length]).filter(([, c]) => c)
+        .map(([k, c]) => `${num(c)} ${k === "WEFAX" ? (c === 1 ? "chart" : "charts") : "SSTV"}`).join(", ");
+      const open = n < OPEN_DAYS;
+      return `<details class="day"${open ? " open" : ""} data-first="${first}" data-count="${d.items.length}">
+        <summary><h2>${dayLabel(d.day, today)}</h2><span class="day-n">${tally}</span>
+          <span class="day-peek" aria-hidden="true">${d.items.slice(0, 8).map((p) => `<img loading="lazy" src="pictures/${encodeURIComponent(p.thumb || p.file)}" alt="">`).join("")}</span></summary>
+        <div class="gallery">${open ? d.items.slice(0, DAY_SHOWN).map((p, i) => picCard(p, first + i)).join("") : ""}</div>
+        ${open && d.items.length > DAY_SHOWN ? `<p class="more-rows"><button type="button" data-rest="${first}">Show the other ${num(d.items.length - DAY_SHOWN)}</button><span>${num(DAY_SHOWN)} of ${num(d.items.length)}</span></p>` : ""}
+      </details>`;
+    }).join("");
+    // An open day's other pictures, when asked for.
+    box.querySelectorAll("[data-rest]").forEach((b) => b.addEventListener("click", () => {
+      const det = b.closest("details.day");
+      const first = Number(det.dataset.first);
+      det.querySelector(".gallery").innerHTML = list.slice(first, first + Number(det.dataset.count)).map((p, i) => picCard(p, first + i)).join("");
+      b.parentElement.remove();
+    }));
+    // A closed day fills its gallery the first time it is opened.
+    box.querySelectorAll("details.day").forEach((det) => det.addEventListener("toggle", () => {
+      const gal = det.querySelector(".gallery");
+      if (!det.open || gal.children.length) return;
+      const first = Number(det.dataset.first);
+      gal.innerHTML = list.slice(first, first + Number(det.dataset.count)).map((p, i) => picCard(p, first + i)).join("");
+    }));
+    box.onclick = (ev) => {
+      const a = ev.target.closest("[data-pic]");
+      if (!a) return;
+      ev.preventDefault();
+      openViewer(list.map(viewerItem), Number(a.dataset.pic));
+    };
+  }
+
+  view.querySelector("#pictools").addEventListener("click", (ev) => {
+    const b = ev.target.closest("button");
+    if (!b) return;
+    if (b.dataset.k !== undefined) { state.kind = b.dataset.k; if (state.kind === "SSTV") state.station = ""; }
+    else if (b.dataset.st !== undefined) state.station = b.dataset.st;
+    else return;
+    save();
+    drawTools();
+    drawLatest();
+    drawDays();
+  });
+  view.querySelector("#pictools").addEventListener("change", async (ev) => {
+    if (ev.target.id !== "picmonth") return;
+    state.month = ev.target.value;
+    pictures = state.month ? (await load(`pictures-${state.month}.json`)).pictures : index.pictures;
+    state.station = pictures.some((p) => p.station === state.station) ? state.station : "";
+    save();
+    drawTools();
+    drawLatest();
+    drawDays();
+  });
+  drawTools();
+  drawLatest();
+  drawDays();
 }
 
 // A picture at full size in a dialog, stepping through the others with the arrow keys.
@@ -459,7 +661,7 @@ function openViewer(items, start) {
     box = document.createElement("dialog");
     box.id = "viewer";
     box.className = "viewer";
-    box.innerHTML = `<div class="viewer-bar"><p id="viewer-title"></p><div class="viewer-nav"><button type="button" data-step="-1" aria-label="Previous picture">Previous</button><button type="button" data-step="1" aria-label="Next picture">Next</button><button type="button" data-close>Close</button></div></div><div class="viewer-pic"><img alt=""></div>`;
+    box.innerHTML = `<div class="viewer-bar"><p id="viewer-title"></p><div class="viewer-nav"><a class="viewer-full" target="_blank" rel="noopener">Full size</a><button type="button" data-step="-1" aria-label="Previous picture">Previous</button><button type="button" data-step="1" aria-label="Next picture">Next</button><button type="button" data-close>Close</button></div></div><div class="viewer-pic"><img alt=""></div>`;
     document.body.append(box);
     box.addEventListener("click", (ev) => { if (ev.target === box) box.close(); });
     box.querySelector("[data-close]").addEventListener("click", () => box.close());
@@ -471,6 +673,8 @@ function openViewer(items, start) {
     img.src = p.src;
     img.alt = p.alt;
     box.querySelector("#viewer-title").textContent = p.title;
+    box.querySelector(".viewer-full").href = p.src;
+    box.classList.toggle("small-pic", Boolean(p.sstv));
     box.querySelector('[data-step="-1"]').disabled = at === 0;
     box.querySelector('[data-step="1"]').disabled = at === items.length - 1;
   };
@@ -484,51 +688,201 @@ function openViewer(items, start) {
   box.showModal();
 }
 
-function minuteCounts(rows) {
-  if (!rows.length) return [];
-  const newest = rows[0].t;
-  const buckets = new Array(Math.min(96, Math.floor((newest - rows[rows.length - 1].t) / 60) + 1)).fill(0);
-  for (const r of rows) {
-    const i = buckets.length - 1 - Math.floor((newest - r.t) / 60);
-    if (i >= 0) buckets[i] += 1;
-  }
-  return buckets;
-}
+// The log: one line per station, aircraft, ship and SELCAL code, never one per decode,
+// so a busy minute of FT8 cannot push everything else off the page.
+const LOG_TABS = [
+  { key: "amateur", label: "Amateur stations" },
+  { key: "aircraft", label: "Aircraft" },
+  { key: "ships", label: "Ships" },
+  { key: "selcal", label: "SELCAL" },
+];
+// "First time in the log" means little until the log has a few days behind it.
+const NEW_AFTER_S = 3 * 86400;
 
-async function showLog() {
-  const { rows, generated_utc: built } = await load("log.json");
-  shownBuilt = built;
-  const counts = {};
-  for (const r of rows) counts[r.m] = (counts[r.m] || 0) + 1;
-  const modes = Object.keys(counts).sort((a, b) => counts[b] - counts[a]);
+const newBadge = (on) => (on ? ` <span class="new-badge">New</span>` : "");
+const agoCell = (t) => `<span title="${fmtTime(t)}">${ago(t)}</span>`;
+
+async function showLog(params) {
+  const [log, t, status, names] = await Promise.all([
+    load("log.json"), load("traffic.json").catch(() => ({ flights: [], ships: [] })), load("status.json").catch(() => ({})), lookups || load("lookups-site.json"),
+  ]);
+  ground ||= await load("ground-stations.json").catch(() => []);
+  lookups = names;
+  shownBuilt = log.generated_utc;
+  if (!log.amateur) throw new Error("log.json is from before this page; reload in a few minutes");
+  const home = status.station_grid ? gridCenter(status.station_grid) : null;
+  const gsName = Object.fromEntries(ground.map((s) => [String(s.id), s.name]));
+  const showNew = log.log_began && log.log_began < log.since - NEW_AFTER_S;
+
+  const amateur = log.amateur.map(([call, modes, bands, n, first, last, best, grid, isNew]) => {
+    const at = grid ? gridCenter(grid) : null;
+    return {
+      call, n, first, last, best, grid, isNew: Boolean(isNew && showNew),
+      modes: log.modes.filter((_, i) => modes & (1 << i)),
+      bands: log.bands.filter((_, i) => bands & (1 << i)).reverse(),
+      km: at && home ? kmBetween(home, at) : null,
+      brg: at && home ? bearing(home, at) : null,
+    };
+  });
+  const flights = t.flights.map((f) => ({ ...f, op: aircraftAirline(f.i, names.airlines), gsn: gsName[f.gs] || "", isNew: Boolean(f.new && showNew) }));
+  const ships = t.ships.map((s) => ({ ...s, flag: shipFlag(s, names.flags), call: [s.cat, s.what].filter(Boolean).join(", "), isNew: Boolean(s.new && showNew), km: s.la != null && home ? kmBetween(home, [s.lo, s.la]) : null }));
+  const selcal = log.selcal;
+
+  // When stations were last heard, by hour: the header's backdrop.
+  const perHour = new Array(24).fill(0);
+  for (const r of amateur) {
+    const h = Math.floor((log.generated_utc - r.last) / 3600);
+    if (h >= 0 && h < 24) perHour[23 - h] += 1;
+  }
+  const located = amateur.filter((r) => r.km != null);
+  const farthest = located.reduce((a, r) => (!a || r.km > a.km ? r : a), null);
+  const newCount = amateur.filter((r) => r.isNew).length;
+  const counts = { amateur: amateur.length, aircraft: flights.length, ships: ships.length, selcal: selcal.length };
+  let tab = LOG_TABS.some((x) => x.key === params.tab) ? params.tab : "amateur";
+
   view.innerHTML = `
-    <header class="page-head ip-atmos">${atmosphere(minuteCounts(rows))}
+    <header class="page-head ip-atmos">${atmosphere(perHour)}
     <p class="eyebrow">Log</p>
-    <h1>The latest 500 entries.</h1>
-    <p class="lede">${rows.length ? `These reach back to ${fmtTime(rows[rows.length - 1].t)}. Look up a station to search everything the log has kept.` : "Nothing has arrived from the receiver yet."}</p>
+    <h1>Everyone it heard.</h1>
+    <p class="lede">One line for each amateur station and aircraft heard in the last 24 hours, and each ship and SELCAL code in the last 7 days. Sort by distance for the far ones, or look up a call to search everything the log has kept.</p>
     ${lookupForm("")}
     </header>
-    <div class="tools log-tools">
-      <div class="chips" id="logmodes" role="group" aria-label="Mode"><span class="lbl">Mode</span><button type="button" data-m="" aria-pressed="true">All <small>${num(rows.length)}</small></button>${modes.map((m) => `<button type="button" data-m="${esc(m)}" aria-pressed="false"><i style="background:${modeColor(m)}"></i>${esc(m)} <small>${num(counts[m])}</small></button>`).join("")}</div>
-      <div class="chips"><label class="lbl" for="logq">Filter</label><input id="logq" type="search" placeholder="Call or square, within these rows"></div>
-      <p class="note" id="logn" aria-live="polite"></p>
-    </div>
+    <dl class="ip-readout">
+      <div><dt>Amateur stations</dt><dd>${num(amateur.length)}</dd></div>
+      <div><dt>With a locator</dt><dd>${num(located.length)}</dd></div>
+      <div><dt>Farthest</dt><dd>${farthest ? `${num(Math.round(farthest.km))} km` : "None"}</dd>${farthest ? `<span class="q"><a href="#/who?c=${encodeURIComponent(farthest.call)}">${esc(farthest.call)}</a> in ${esc(farthest.grid)}</span>` : ""}</div>
+      <div><dt>Aircraft</dt><dd>${num(flights.length)}</dd></div>
+      <div><dt>Ships, 7 days</dt><dd>${num(ships.length)}</dd></div>
+    </dl>
+    ${showNew ? (newCount ? `<p class="note log-new">${num(newCount)} amateur station${newCount === 1 ? " is" : "s are"} in the log for the first time today. Filter for them below.</p>` : "") : log.log_began ? `<p class="note log-new">The log began ${fmtTime(log.log_began)}, so nearly everyone is new to it. Stations heard for the first time will be marked once it is ${NEW_AFTER_S / 86400} days old.</p>` : ""}
+    <div class="log-tabs" role="tablist" aria-label="What to list">${LOG_TABS.map((x) => `<button type="button" role="tab" data-tab="${x.key}" aria-selected="${x.key === tab}">${x.label}<small>${num(counts[x.key])}</small></button>`).join("")}</div>
+    <div class="tools log-tools" id="logtools"></div>
+    <p class="note" id="logn" aria-live="polite"></p>
     <div id="logrows"></div>`;
-  let mode = "";
-  const draw = () => {
-    const q = view.querySelector("#logq").value.trim().toUpperCase();
-    const shown = rows.filter((r) => (!mode || r.m === mode) && (!q || `${r.i || ""} ${r.g || ""}`.toUpperCase().includes(q)));
-    view.querySelector("#logn").textContent = shown.length === rows.length ? "" : `${num(shown.length)} of ${num(rows.length)} shown`;
-    view.querySelector("#logrows").innerHTML = shown.length ? rowsTable(shown.slice(0, 500), { sticky: true }) : rows.length ? `<p class="empty">No entries match.</p>` : emptyLog();
-  };
   wireLookup();
-  view.querySelectorAll("#logmodes button").forEach((b) => b.addEventListener("click", () => {
-    mode = b.dataset.m;
-    view.querySelectorAll("#logmodes button").forEach((o) => o.setAttribute("aria-pressed", String(o === b)));
-    draw();
-  }));
-  view.querySelector("#logq").addEventListener("input", draw);
-  draw();
+
+  const tools = view.querySelector("#logtools");
+  const rowsBox = view.querySelector("#logrows");
+  const countLine = view.querySelector("#logn");
+  const filter = { q: "", modes: new Set(), bands: new Set(), onlyNew: false, from: "", placed: false };
+  const chip = (attr, value, label, on) => `<button type="button" data-${attr}="${esc(value)}" aria-pressed="${on}">${label}</button>`;
+  const search = (placeholder) => `<div class="chips"><label class="lbl" for="logq">Filter</label><input id="logq" type="search" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="${placeholder}" value="${esc(filter.q)}"></div>`;
+
+  function drawTools() {
+    if (tab === "amateur") {
+      const modes = log.modes.filter((m) => amateur.some((r) => r.modes.includes(m)));
+      const bands = log.bands.filter((b) => amateur.some((r) => r.bands.includes(b))).reverse();
+      tools.innerHTML = `${search("Call or square")}
+        <div class="chips"><span class="lbl">Mode</span>${modes.map((m) => chip("mode", m, `<i style="background:${modeColor(m)}"></i>${esc(m)}`, filter.modes.has(m))).join("")}</div>
+        <div class="chips"><span class="lbl">Band</span>${bands.map((b) => chip("band", b, esc(b), filter.bands.has(b))).join("")}</div>
+        ${showNew ? `<div class="chips">${chip("new", "1", `First time today <small>${num(newCount)}</small>`, filter.onlyNew)}</div>` : ""}`;
+    } else if (tab === "aircraft") {
+      tools.innerHTML = `${search("Flight, operator or registration")}<div class="chips">${chip("placed", "1", "With a position", filter.placed)}</div>`;
+    } else if (tab === "ships") {
+      tools.innerHTML = `${search("MMSI or flag")}<div class="chips"><span class="lbl">From</span>${chip("from", "", "Both", filter.from === "")}${chip("from", "ship", "Ships", filter.from === "ship")}${chip("from", "coast", "Coast stations", filter.from === "coast")}</div><div class="chips">${chip("placed", "1", "With a position", filter.placed)}</div>`;
+    } else {
+      tools.innerHTML = search("Code");
+    }
+    const q = tools.querySelector("#logq");
+    q.addEventListener("input", () => { filter.q = q.value.trim().toUpperCase(); drawRows(); });
+  }
+  tools.addEventListener("click", (ev) => {
+    const b = ev.target.closest("button");
+    if (!b) return;
+    const toggle = (set, v) => (set.has(v) ? set.delete(v) : set.add(v));
+    if (b.dataset.mode) toggle(filter.modes, b.dataset.mode);
+    else if (b.dataset.band) toggle(filter.bands, b.dataset.band);
+    else if (b.dataset.new) filter.onlyNew = !filter.onlyNew;
+    else if (b.dataset.placed) filter.placed = !filter.placed;
+    else if (b.dataset.from !== undefined) filter.from = b.dataset.from;
+    else return;
+    drawTools();
+    drawRows();
+  });
+
+  const has = (...fields) => !filter.q || fields.some((f) => String(f || "").toUpperCase().includes(filter.q));
+  const said = (shown, total, what) => { countLine.textContent = shown === total ? `${num(total)} ${what}.` : `${num(shown)} of ${num(total)} ${what} match.`; };
+  const empty = (text) => { rowsBox.innerHTML = `<p class="empty">${text}</p>`; };
+
+  function drawRows() {
+    if (tab === "amateur") {
+      const shown = amateur.filter((r) => has(r.call, r.grid)
+        && (!filter.modes.size || r.modes.some((m) => filter.modes.has(m)))
+        && (!filter.bands.size || r.bands.some((b) => filter.bands.has(b)))
+        && (!filter.onlyNew || r.isNew));
+      said(shown.length, amateur.length, "amateur stations in the last 24 hours");
+      if (!amateur.length) return empty("No amateur station has been heard in the last 24 hours.");
+      if (!shown.length) return empty("No station matches these filters.");
+      sortableTable(rowsBox, [
+        { label: "Station", value: (r) => r.call, html: (r) => `${callLink(r.modes[0], r.call)}${newBadge(r.isNew)}`, cls: "id", asc: true },
+        { label: "Square", value: (r) => r.grid, html: (r) => (r.grid ? `<a href="#/map?w=24h&s=${esc(r.grid)}" title="Show ${esc(r.grid)} on the map">${esc(r.grid)}</a>` : ""), asc: true },
+        { label: "km", value: (r) => r.km, html: (r) => (r.km == null ? "" : num(Math.round(r.km))), num: true },
+        { label: "Bearing", value: (r) => r.brg, html: (r) => bearingCell(r.brg), cls: "hide-s", asc: true },
+        { label: "Bands", value: (r) => r.bands.length, html: (r) => bandPills(r.bands) },
+        { label: "Modes", value: (r) => r.modes.join(" "), html: (r) => r.modes.map(esc).join(" "), cls: "hide-s", asc: true },
+        { label: "Decodes", value: (r) => r.n, num: true },
+        { label: "Best", value: (r) => r.best, html: (r) => (r.best == null ? "" : `${r.best} dB`), num: true, cls: "hide-s" },
+        { label: "Last heard", value: (r) => r.last, html: (r) => agoCell(r.last) },
+        { label: "First today", value: (r) => r.first, html: (r) => fmtTime(r.first), cls: "hide-s", asc: true },
+      ], shown, { sort: 8, page: 100, caption: "Amateur stations heard in the last 24 hours" });
+    } else if (tab === "aircraft") {
+      const shown = flights.filter((f) => has(f.i, f.op, f.reg) && (!filter.placed || f.la != null));
+      said(shown.length, flights.length, "aircraft in the last 24 hours");
+      if (!flights.length) return empty("No aircraft has been heard on HFDL in the last 24 hours.");
+      if (!shown.length) return empty("No aircraft matches these filters.");
+      sortableTable(rowsBox, [
+        { label: "Flight", value: (f) => f.i, html: (f) => `${callLink("HFDL", f.i)}${newBadge(f.isNew)}`, cls: "id", asc: true },
+        { label: "Operator", value: (f) => f.op || null, html: (f) => esc(f.op), cls: "wrap", asc: true },
+        { label: "Registration", value: (f) => f.reg || null, html: (f) => esc(f.reg || ""), cls: "hide-s", asc: true },
+        { label: "Ground station", value: (f) => f.gsn || null, html: (f) => esc(f.gsn), cls: "hide-s", asc: true },
+        { label: "Messages", value: (f) => f.n, num: true },
+        { label: "Last position", value: (f) => (f.la == null ? null : f.la), html: (f) => (f.la == null ? "" : `<a href="#/map?w=24h&l=tracks,ground,night&f=${encodeURIComponent(f.i)}" title="Show this flight on the map">${f.la}, ${f.lo}</a>`), cls: "hide-s" },
+        { label: "Last heard", value: (f) => f.t, html: (f) => agoCell(f.t) },
+      ], shown, { sort: 6, page: 100, caption: "Aircraft heard on HFDL in the last 24 hours" });
+    } else if (tab === "ships") {
+      const shown = ships.filter((s) => has(s.i, s.flag) && (!filter.from || s.from === filter.from) && (!filter.placed || s.la != null));
+      said(shown.length, ships.length, "ships and coast stations in the last 7 days");
+      if (!ships.length) return empty("No DSC call has been heard in the last 7 days.");
+      if (!shown.length) return empty("No ship matches these filters.");
+      sortableTable(rowsBox, [
+        { label: "MMSI", value: (s) => s.i, html: (s) => `${callLink("DSC", s.i)}${newBadge(s.isNew)}`, cls: "id", asc: true },
+        { label: "Flag", value: (s) => s.flag || null, html: (s) => esc(s.flag), asc: true },
+        { label: "From", value: (s) => s.from || null, html: (s) => (s.from === "coast" ? "Coast station" : s.from === "ship" ? "Ship" : ""), cls: "hide-s", asc: true },
+        { label: "Calls", value: (s) => s.n, num: true },
+        { label: "Latest call", value: (s) => s.call || null, html: (s) => esc(s.call), cls: "wrap", asc: true },
+        { label: "MHz", value: (s) => s.mhz.length, html: (s) => s.mhz.join(", "), cls: "hide-s" },
+        { label: "Position", value: (s) => s.km, html: (s) => (s.la == null ? "" : `<a href="#/map?w=7d&l=dsc,night&d=${encodeURIComponent(s.i)}" title="Show this position on the map">${s.la.toFixed(2)}, ${s.lo.toFixed(2)}</a>`), cls: "hide-s" },
+        { label: "Last heard", value: (s) => s.t, html: (s) => agoCell(s.t) },
+      ], shown, { sort: 7, page: 100, caption: "DSC ship and coast station calls in the last 7 days" });
+    } else {
+      const shown = selcal.filter((c) => has(c.code));
+      said(shown.length, selcal.length, "SELCAL codes in the last 7 days");
+      if (!selcal.length) return empty("No SELCAL call has been heard in the last 7 days.");
+      if (!shown.length) return empty("No code matches.");
+      sortableTable(rowsBox, [
+        { label: "Code", value: (c) => c.code, cls: "id", asc: true },
+        { label: "Calls", value: (c) => c.n, num: true },
+        { label: "kHz", value: (c) => c.khz.length, html: (c) => c.khz.map((k) => k.toFixed(1)).join(", ") },
+        { label: "First heard", value: (c) => c.a, html: (c) => fmtTime(c.a), cls: "hide-s", asc: true },
+        { label: "Last heard", value: (c) => c.t, html: (c) => agoCell(c.t) },
+      ], shown, { sort: 4, page: 100, caption: "SELCAL codes heard in the last 7 days" });
+      countLine.textContent += " A code is the aircraft's selective-calling address. The register that would name the aircraft isn't public, so codes stay codes.";
+    }
+  }
+
+  view.querySelector(".log-tabs").addEventListener("click", (ev) => {
+    const b = ev.target.closest("[data-tab]");
+    if (!b || b.dataset.tab === tab) return;
+    tab = b.dataset.tab;
+    filter.q = "";
+    filter.placed = false;
+    view.querySelectorAll("[data-tab]").forEach((o) => o.setAttribute("aria-selected", String(o === b)));
+    history.replaceState(null, "", tab === "amateur" ? "#/log" : `#/log?tab=${tab}`);
+    drawTools();
+    drawRows();
+  });
+  drawTools();
+  drawRows();
 }
 
 function lookupForm(value) {
@@ -600,7 +954,7 @@ async function showWho(params) {
   }
   const near = Object.entries(stations).filter(([id]) => id.startsWith(q)).sort((a, b) => a[0].localeCompare(b[0]));
   out.innerHTML = near.length
-    ? `<h2 class="who-id">${num(near.length)} beginning with ${esc(q)}</h2><div class="scroll"><table><thead><tr><th>Station</th><th>Decodes</th><th>Last heard</th></tr></thead><tbody>
+    ? `<h2 class="who-id">${num(near.length)} beginning with ${esc(q)}</h2><div class="scroll frame" tabindex="0" role="region" aria-label="Stations beginning with ${esc(q)}"><table><thead><tr><th>Station</th><th>Decodes</th><th>Last heard</th></tr></thead><tbody>
        ${near.slice(0, 200).map(([id, rows]) => `<tr><td class="id"><a href="#/who?c=${encodeURIComponent(id)}">${esc(id)}</a></td><td>${num(rows.reduce((a, r) => a + r[4], 0))}</td><td>${fmtTime(Math.max(...rows.map((r) => r[3])))}</td></tr>`).join("")}
        </tbody></table></div>`
     : `<p class="empty">${esc(q)} is not in this log. The receiver listens to one frequency at a time, so a station missing here may simply have been on the air while it was listening somewhere else.</p>`;
@@ -709,95 +1063,6 @@ function shipFlag(ship, table) {
   return table[mid] || "";
 }
 
-const TRAFFIC_VIEWS = {
-  World: null,
-  "N. Atlantic": [-80, 25, -5, 62],
-  "N. America": [-130, 20, -60, 56],
-  Caribbean: [-92, 8, -55, 30],
-  Europe: [-12, 35, 42, 66],
-};
-
-function trafficMap(w) {
-  return `<section class="traffic-map" aria-labelledby="hmap"><h2 id="hmap" data-rail="Map">Aircraft and ships on the map</h2>
-    <p class="note">Point anywhere along a track for that flight's details. Click to keep it selected.</p>
-    <div class="tools" style="margin-top:12px">
-      <div class="chips"><span class="lbl">Window</span><button type="button" data-w="24h" aria-pressed="${w === "24h"}">24 hours</button><button type="button" data-w="7d" aria-pressed="${w === "7d"}">7 days</button></div>
-      <div class="chips"><span class="lbl">Projection</span><button type="button" data-proj="eq">Flat</button><button type="button" data-proj="az">From the station</button></div>
-      <div class="chips" id="presets"><span class="lbl">Go to</span></div>
-    </div>
-    <div class="stage tall">
-      <div class="zoomer"><button type="button" id="zin" aria-label="Zoom in">+</button><button type="button" id="zout" aria-label="Zoom out">−</button><button type="button" id="box" aria-pressed="false" aria-label="Drag a box to zoom to an area" title="Drag a box to zoom to an area">▭</button></div>
-      <div class="flight-card" id="flightcard" aria-live="polite" hidden></div>
-    </div>
-    <div class="strip-wrap">
-      <svg id="strip" class="strip" role="img" aria-label="Aircraft positions and ship calls per hour. Hatched hours had no listening to either."></svg>
-      <div class="range"><label for="from">From</label><input id="from" type="range" min="0" step="1"><label for="to">To</label><input id="to" type="range" step="1"></div>
-      <div class="strip-foot"><button type="button" id="play" aria-pressed="false">Play</button><p class="note"><span id="fromv" class="num"></span> to <span id="tov" class="num"></span>. Hatched hours had no listening on HFDL or DSC.</p></div>
-    </div>
-    <div class="traffic-panels">
-      <div class="card" id="totals"></div>
-      <div class="card"><h3>Layers</h3>
-        <div class="layers" style="border:0;padding:0;margin-top:10px">
-          <label class="ip-check"><input type="checkbox" data-layer="tracks" checked><svg viewBox="0 0 18 12" aria-hidden="true"><path d="M1 10 L9 6" fill="none" stroke="#ffb347" stroke-width="1"/><path d="M17 2 L8.5 3.2 L10.6 6.5 L10.2 10.4Z" fill="#ffb347"/></svg><span>Aircraft, brighter if heard this hour</span></label>
-          <label class="ip-check"><input type="checkbox" data-layer="ground" checked><svg viewBox="0 0 18 12" aria-hidden="true"><rect x="4.5" y="1.5" width="9" height="9" fill="none" stroke="#e3e6e9" stroke-width="1.5"/></svg><span>HFDL ground stations</span></label>
-          <label class="ip-check"><input type="checkbox" data-layer="dsc" checked><svg viewBox="0 0 18 12" aria-hidden="true"><rect x="6" y="3" width="6" height="6" transform="rotate(45 9 6)" fill="#e3e6e9"/></svg><span>Ship calls with a position</span></label>
-          <label class="ip-check"><input type="checkbox" data-layer="night" checked><svg viewBox="0 0 18 12" aria-hidden="true"><rect x=".5" y=".5" width="17" height="11" fill="#020305" stroke="rgba(227,230,233,.16)"/></svg><span>Night side, at the end of these hours</span></label>
-        </div>
-      </div>
-    </div>
-  </section>`;
-}
-
-async function showTraffic(params) {
-  const w = params.w === "7d" ? "7d" : "24h";
-  const [t, names, stations, m, coastLines, landRings] = await Promise.all([
-    load("traffic.json"), lookups || load("lookups-site.json"), ground || load("ground-stations.json"),
-    load(`map-${w}.json`), coast || load("coast-110m.json"), land || load("land-110m.json"),
-  ]);
-  lookups = names;
-  ground = stations;
-  coast = coastLines;
-  land = landRings;
-  shownBuilt = t.generated_utc;
-  const tracked = new Set(m.tracks.map((x) => x.i));
-  const gsName = Object.fromEntries(stations.map((s) => [String(s.id), s.name]));
-  view.innerHTML = `
-    <header class="page-head ip-atmos">${atmosphere(t.flights.slice(0, 96).map((f) => f.n))}
-    <p class="eyebrow">Traffic</p>
-    <h1>Who was on the air.</h1>
-    <p class="lede">Aircraft heard on HFDL in the last 24 hours and DSC ship calls in the last 30 days. Airlines and flag states come from published designator tables, and are blank where a code doesn't match one.</p>
-    </header>
-    ${trafficMap(w)}
-    <section aria-labelledby="hair"><h2 id="hair" data-rail="Aircraft">Aircraft</h2>
-      ${t.flights.length ? `<div class="scroll"><table><thead><tr><th>Flight</th><th>Operator</th><th class="hide-s">Registration</th><th class="hide-s">Ground station</th><th>Messages</th><th class="hide-s">Last position</th><th>Last heard</th></tr></thead><tbody>
-      ${t.flights.map((f) => `<tr><td class="id">${callLink("HFDL", f.i)}</td><td>${esc(aircraftAirline(f.i, names.airlines))}</td><td class="hide-s">${esc(f.reg || "")}</td><td class="hide-s">${esc(gsName[f.gs] || "")}</td><td>${num(f.n)}</td><td class="hide-s">${f.la === undefined ? "" : tracked.has(f.i) ? `<button type="button" class="show-flight" data-flight="${esc(f.i)}" title="Show this flight on the map">${f.la}, ${f.lo}</button>` : `${f.la}, ${f.lo}`}</td><td>${fmtTime(f.t)}</td></tr>`).join("")}
-      </tbody></table></div>` : emptyLog()}
-    </section>
-    <section aria-labelledby="hship"><h2 id="hship" data-rail="Ships">Ship and coast station calls</h2>
-      ${t.ships.length ? `<div class="scroll"><table><thead><tr><th>Time</th><th>MMSI</th><th>Flag</th><th>From</th><th>Call</th><th class="hide-s">kHz</th><th class="hide-s">Position</th></tr></thead><tbody>
-      ${t.ships.map((s) => `<tr><td>${fmtTime(s.t)}</td><td class="id">${callLink("DSC", s.i)}</td><td>${esc(shipFlag(s, names.flags))}</td><td>${esc(s.from || "")}</td><td>${esc([s.cat, s.what].filter(Boolean).join(", "))}</td><td class="hide-s">${khz(s.f)}</td><td class="hide-s">${s.la == null ? "" : `${s.la.toFixed(2)}, ${s.lo.toFixed(2)}`}</td></tr>`).join("")}
-      </tbody></table></div>` : emptyLog()}
-    </section>`;
-  view.querySelectorAll("[data-w]").forEach((b) => b.addEventListener("click", () => { location.hash = `#/traffic?w=${b.dataset.w}`; }));
-  const cleanup = mountMap(view, { ...m, spots: [], squares: [], idents: [], air: [] }, {
-    coast, land, ground, params, traffic: true, presets: TRAFFIC_VIEWS,
-    flightInfo: (flight) => {
-      const row = t.flights.find((x) => x.i === flight);
-      return { operator: aircraftAirline(flight, names.airlines), reg: row?.reg, gs: gsName[row?.gs], n: row?.n };
-    },
-    loadFine: async () => {
-      const [fineCoast, fineLand] = await Promise.all([load("coast-50m.json"), load("land-50m.json")]);
-      return { coast: fineCoast, land: fineLand };
-    },
-    onParams: (p) => history.replaceState(null, "", `#/traffic?${new URLSearchParams(p)}`),
-  });
-  unmount = cleanup;
-  view.querySelectorAll(".show-flight").forEach((b) => b.addEventListener("click", () => {
-    cleanup.focusFlight(b.dataset.flight);
-    view.querySelector(".traffic-map").scrollIntoView({ block: "start", behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
-  }));
-}
-
 const USDR_SHOTS = [
   { file: "usdr-ft8.webp", title: "uSDR desktop, FT8 on 20 meters", caption: "FT8 on 20 meters: every signal in the passband, decoded together.", alt: "The uSDR desktop app tuned to FT8 on 14.074 MHz, with spectrum, waterfall and a table of decoded stations." },
   { file: "usdr-wwv.webp", title: "uSDR desktop, WWV at 10 MHz", caption: "WWV at 10 MHz, the time code read off the air. The station uses this signal for its radio check.", alt: "The uSDR desktop app tuned to WWV on 10 MHz, showing the spectrum and the decoded time code." },
@@ -891,7 +1156,7 @@ async function showStation() {
   }));
 }
 
-const VIEWS = { now: showNow, map: showMap, activity: showActivity, pictures: showPictures, log: showLog, station: showStation, who: showWho, traffic: showTraffic };
+const VIEWS = { now: showNow, map: showMap, activity: showActivity, pictures: showPictures, log: showLog, station: showStation, who: showWho };
 
 const LOADING = `<div class="ip-skeleton-block" style="height:64px;max-width:520px"></div><div class="ip-skeleton-block" style="height:320px;margin-top:20px"></div>`;
 
@@ -996,7 +1261,15 @@ if (find) {
 let lastRoute = "";
 function hashChanged() {
   const { name, params } = route();
-  const key = `${name}|${name === "map" ? params.w || "24h" : name === "who" ? params.c || "" : name === "traffic" ? params.w || "24h" : ""}`;
+  // Traffic was a page of its own; it is now the map with aircraft and ships on.
+  if (name === "traffic") {
+    const p = new URLSearchParams({ w: params.w === "7d" ? "7d" : "24h", l: "tracks,ground,dsc,night" });
+    if (params.f) p.set("f", params.f);
+    lastRoute = "";
+    location.replace(`#/map?${p}`);
+    return;
+  }
+  const key = `${name}|${name === "map" ? params.w || "24h" : name === "who" ? params.c || "" : ""}`;
   if (key === lastRoute) return;
   // A new page starts at its top; the first one keeps wherever the browser restored.
   if (lastRoute) scrollTo(0, 0);

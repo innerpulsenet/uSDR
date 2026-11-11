@@ -282,7 +282,8 @@ def build_status(conn, now, station_grid):
     monitored = {r["mode"]: r["s"] for r in conn.execute("SELECT mode, SUM(MIN(end_utc, ?) - MAX(start_utc, ?)) AS s FROM listening WHERE end_utc >= ? AND healthy IS NOT 0 GROUP BY mode", (now, since, since))}
     bad = conn.execute("SELECT COALESCE(SUM(end_utc - start_utc), 0) FROM listening WHERE end_utc >= ? AND healthy = 0", (since,)).fetchone()[0]
     last = conn.execute("SELECT mode, dial_hz, start_utc, end_utc FROM listening ORDER BY end_utc DESC LIMIT 1").fetchone()
-    latest = [row_out(r) for r in conn.execute(f"SELECT * FROM observations ORDER BY at_utc DESC, id DESC LIMIT 40")]
+    # A beacon is the same eighteen stations every three minutes; they have their own grid.
+    latest = [row_out(r) for r in conn.execute(f"SELECT * FROM observations WHERE mode != 'BEACON' ORDER BY at_utc DESC, id DESC LIMIT 40")]
     lost = conn.execute("SELECT COALESCE(SUM(dropped), 0) FROM gaps WHERE at_utc >= ?", (since,)).fetchone()[0]
     ingest = meta(conn, "last_ingest_utc")
     for m in by_mode:
@@ -351,10 +352,16 @@ def build_health(conn, now):
     timeline = [[r["start_utc"], r["end_utc"], r["mode"], r["dial_hz"], r["healthy"], r["valid_decodes"], r["cause"]] for r in conn.execute(
         "SELECT start_utc, end_utc, mode, dial_hz, healthy, valid_decodes, cause FROM listening WHERE end_utc >= ? ORDER BY start_utc", (since,))]
     judged = conn.execute("SELECT COALESCE(SUM(healthy = 1), 0) AS passed, COALESCE(SUM(healthy = 0), 0) AS failed FROM listening WHERE end_utc >= ? AND cause != 'wideband'", (since,)).fetchone()
-    # What is really being decoded alongside, as "FT8 80 / 40 / 30 m".
+    # What is really being decoded alongside: amateur bands by name ("FT8 80 / 40 / 30 m"),
+    # everything else by frequency ("HFDL 5.65 / 6.66 / 8.91 MHz"), each once.
     alongside = {}
     for r in conn.execute("SELECT DISTINCT mode, dial_hz FROM listening WHERE cause = 'wideband' AND end_utc >= ? ORDER BY dial_hz", (since,)):
-        alongside.setdefault(r["mode"], []).append(band(r["dial_hz"]).removesuffix(" m"))
+        name = band(r["dial_hz"])
+        ham = name.endswith(" m") and (r["mode"] in AMATEUR or r["mode"] == "BEACON")
+        names = alongside.setdefault((r["mode"], ham), [])
+        label = name.removesuffix(" m") if ham else f"{r['dial_hz'] / 1e6:.2f}"
+        if label not in names:
+            names.append(label)
     cells, lowest = {}, {}
     for r in conn.execute("SELECT dial_hz, (start_utc / 3600) % 24 AS h, noise_dbfs, peak_iq, end_utc - start_utc AS s FROM listening WHERE end_utc >= ? AND noise_dbfs IS NOT NULL", (now - 14 * 86400,)):
         label = band(r["dial_hz"])
@@ -367,7 +374,7 @@ def build_health(conn, now):
     labels = sorted(lowest, key=lowest.get)
     bands = [{"label": label, "cells": [[round(cells[(label, h)]["sum"] / cells[(label, h)]["s"], 1), round(cells[(label, h)]["peak"], 3), cells[(label, h)]["s"]] if (label, h) in cells else None for h in range(24)]} for label in labels]
     return {"generated_utc": now, "since": since, "timeline": timeline, "bands": bands, "checks": {"passed": judged["passed"], "failed": judged["failed"]},
-            "alongside": ", ".join(f"{mode} {' / '.join(names)} m" for mode, names in alongside.items())}
+            "alongside": ", ".join(f"{mode} {' / '.join(names)} {'m' if ham else 'MHz'}" for (mode, ham), names in alongside.items())}
 
 
 def details_of(row):
@@ -377,7 +384,16 @@ def details_of(row):
         return {}
 
 
+def first_heard(conn, since):
+    """Idents whose first appearance anywhere in the log is after `since`, and when the log began."""
+    began = conn.execute("SELECT MIN(first_utc) FROM heard").fetchone()[0]
+    new = {r[0] for r in conn.execute("SELECT ident FROM heard GROUP BY ident HAVING MIN(first_utc) >= ?", (since,))}
+    return began, new
+
+
 def build_traffic(conn, now):
+    """Aircraft over the last day and ships over the last week, one row each."""
+    _, new = first_heard(conn, now - 86400)
     flights = {}
     for r in conn.execute("SELECT at_utc, ident, lat, lon, details FROM observations WHERE mode = 'HFDL' AND at_utc >= ? AND ident IS NOT NULL ORDER BY at_utc", (now - 86400,)):
         ident = r["ident"].lstrip(".")
@@ -385,7 +401,7 @@ def build_traffic(conn, now):
         if not re.search("[A-Z0-9]", ident) or re.fullmatch(r"GS\d+", ident):
             continue
         d = details_of(r)
-        f = flights.setdefault(ident, {"i": ident, "n": 0, "t": 0})
+        f = flights.setdefault(ident, {"i": ident, "n": 0, "a": r["at_utc"], "t": 0})
         f["n"] += 1
         f["t"] = r["at_utc"]
         if d.get("reg"):
@@ -394,11 +410,77 @@ def build_traffic(conn, now):
             f["gs"] = d["gsId"]
         if r["lat"] is not None:
             f["la"], f["lo"] = round(r["lat"], 2), round(r["lon"], 2)
-    ships = []
-    for r in conn.execute("SELECT at_utc, ident, kind, dial_hz, lat, lon, details FROM observations WHERE mode = 'DSC' AND at_utc >= ? ORDER BY at_utc DESC LIMIT 500", (now - 30 * 86400,)):
+    for ident, f in flights.items():
+        if ident in new:
+            f["new"] = 1
+    # One row per MMSI: most calls are routine tests, and a list of every call buries the ships.
+    ships = {}
+    for r in conn.execute("SELECT at_utc, ident, kind, dial_hz, lat, lon, details FROM observations WHERE mode = 'DSC' AND at_utc >= ? AND ident IS NOT NULL ORDER BY at_utc", (now - 7 * 86400,)):
         d = details_of(r)
-        ships.append({"t": r["at_utc"], "i": r["ident"], "k": r["kind"], "f": r["dial_hz"], "cat": d.get("categoryName"), "what": d.get("natureName") or d.get("tc1Name"), "from": d.get("fromKind"), "mid": d.get("fromMid"), "la": r["lat"], "lo": r["lon"]})
-    return {"generated_utc": now, "flights": sorted(flights.values(), key=lambda x: -x["t"])[:500], "ships": ships}
+        s = ships.setdefault(r["ident"], {"i": r["ident"], "n": 0, "a": r["at_utc"], "mhz": []})
+        s["n"] += 1
+        s["t"] = r["at_utc"]
+        s["k"] = r["kind"]
+        s["cat"] = d.get("categoryName")
+        s["what"] = d.get("natureName") or d.get("tc1Name")
+        if d.get("fromKind"):
+            s["from"] = d["fromKind"]
+        if d.get("fromMid"):
+            s["mid"] = d["fromMid"]
+        mhz = int(r["dial_hz"] / 1e6)
+        if mhz not in s["mhz"]:
+            s["mhz"].append(mhz)
+        if r["lat"] is not None:
+            s["la"], s["lo"], s["pt"] = round(r["lat"], 3), round(r["lon"], 3), r["at_utc"]
+    for ident, s in ships.items():
+        s["mhz"].sort()
+        if ident in new:
+            s["new"] = 1
+    return {"generated_utc": now, "flights": sorted(flights.values(), key=lambda x: -x["t"])[:4000],
+            "ships": sorted(ships.values(), key=lambda x: -x["t"])[:3000]}
+
+
+def build_log(conn, now):
+    """Every amateur station heard in the last day, one row each, and the SELCAL codes of
+    the last week. Aircraft and ships come from traffic.json, which the Log page reads too."""
+    since = now - 86400
+    began, new = first_heard(conn, since)
+    failed = conn.execute("SELECT 1 FROM listening WHERE healthy = 0 AND end_utc >= ? LIMIT 1", (since,)).fetchone()
+    healthy_only = f"AND {unhealthy()}" if failed else ""
+    rows = {}
+    for r in conn.execute(f"""SELECT ident, mode, dial_hz, COUNT(*) AS n, MIN(at_utc) AS a, MAX(at_utc) AS b, MAX(snr_db) AS best
+                              FROM observations WHERE at_utc >= ? AND mode IN ({AMATEUR_SQL}) AND ident IS NOT NULL {healthy_only}
+                              GROUP BY ident, mode, dial_hz""", (since,)):
+        if not re.fullmatch(r"[A-Z0-9/]+", r["ident"]):
+            continue
+        s = rows.setdefault(r["ident"], {"modes": 0, "bands": 0, "n": 0, "a": r["a"], "b": 0, "best": None, "grid": None})
+        s["modes"] |= 1 << AMATEUR.index(r["mode"])
+        label = band(r["dial_hz"])
+        if label in BAND_ORDER:
+            s["bands"] |= 1 << BAND_ORDER.index(label)
+        s["n"] += r["n"]
+        s["a"] = min(s["a"], r["a"])
+        s["b"] = max(s["b"], r["b"])
+        if r["best"] is not None and (s["best"] is None or r["best"] > s["best"]):
+            s["best"] = r["best"]
+    # The square from each station's latest report that carried one: SQLite takes the bare
+    # column from the row that holds the MAX.
+    for r in conn.execute(f"""SELECT ident, substr(grid,1,4) AS g, MAX(at_utc) FROM observations
+                              WHERE at_utc >= ? AND mode IN ({AMATEUR_SQL}) AND ident IS NOT NULL AND grid IS NOT NULL GROUP BY ident""", (since,)):
+        if r["ident"] in rows and re.fullmatch(r"[A-Ra-r]{2}\d{2}", r["g"] or ""):
+            rows[r["ident"]]["grid"] = r["g"].upper()
+    amateur = [[i, s["modes"], s["bands"], s["n"], s["a"], s["b"], None if s["best"] is None else round(s["best"]), s["grid"], 1 if i in new else 0]
+               for i, s in sorted(rows.items(), key=lambda kv: -kv[1]["b"])]
+    selcal = {}
+    for r in conn.execute("SELECT ident, dial_hz, at_utc FROM observations WHERE mode = 'SELCAL' AND at_utc >= ? AND ident IS NOT NULL ORDER BY at_utc", (now - 7 * 86400,)):
+        c = selcal.setdefault(r["ident"], {"code": r["ident"], "n": 0, "a": r["at_utc"], "khz": []})
+        c["n"] += 1
+        c["t"] = r["at_utc"]
+        khz = round(r["dial_hz"] / 1000, 1)
+        if khz not in c["khz"]:
+            c["khz"].append(khz)
+    return {"generated_utc": now, "since": since, "log_began": began, "modes": list(AMATEUR), "bands": BAND_ORDER,
+            "amateur": amateur, "selcal": sorted(selcal.values(), key=lambda x: -x["t"])}
 
 
 OG_EVERY_S = 3300
@@ -674,8 +756,10 @@ def write_thumbnail(path, target):
 
 
 def picture_list(conn, now):
+    """The last 30 days of pictures, an index of every month, and one file per month, so
+    the page can reach back a year without ever loading it all at once."""
     pictures, made = [], 0
-    for r in conn.execute("SELECT id, start_utc, end_utc, mode, dial_hz, width, lines, station, scheduled_title, file FROM pictures ORDER BY start_utc DESC LIMIT 300"):
+    for r in conn.execute("SELECT id, start_utc, end_utc, mode, dial_hz, width, lines, station, scheduled_title, file FROM pictures ORDER BY start_utc DESC"):
         p = dict(r)
         name = f"thumb-{os.path.basename(p['file'])}"
         target = os.path.join(PICTURES, name)
@@ -688,7 +772,20 @@ def picture_list(conn, now):
         if os.path.exists(target):
             p["thumb"] = name
         pictures.append(p)
-    return {"generated_utc": now, "pictures": pictures}
+    by_month = {}
+    for p in pictures:
+        by_month.setdefault(time.strftime("%Y-%m", time.gmtime(p["start_utc"])), []).append(p)
+    for month, items in by_month.items():
+        write(f"pictures-{month}.json", {"generated_utc": now, "month": month, "pictures": items})
+    # A month whose pictures have all been pruned loses its file too.
+    for name in os.listdir(OUT) if os.path.isdir(OUT) else []:
+        m = re.fullmatch(r"pictures-(\d{4}-\d{2})\.json", name)
+        if m and m.group(1) not in by_month:
+            os.remove(os.path.join(OUT, name))
+    months = [{"month": m, "n": len(items), "modes": {mode: sum(1 for p in items if p["mode"] == mode) for mode in sorted({p["mode"] for p in items})}}
+              for m, items in by_month.items()]
+    recent = [p for p in pictures if p["start_utc"] >= now - 30 * 86400]
+    return {"generated_utc": now, "since": now - 30 * 86400, "months": months, "pictures": recent}
 
 
 def prune(conn, now):
@@ -723,7 +820,7 @@ def main():
         print(f"hf-site: share card: {e}", file=sys.stderr)
     write("map-7d.json", build_map(conn, now, 24 * 7, station_grid))
     write("activity.json", build_activity(conn, now, station_grid))
-    write("log.json", {"generated_utc": now, "rows": [row_out(r) for r in conn.execute(f"SELECT * FROM observations ORDER BY at_utc DESC, id DESC LIMIT 500")]})
+    write("log.json", build_log(conn, now))
     write("pictures.json", picture_list(conn, now))
     write("health.json", build_health(conn, now))
     write("traffic.json", build_traffic(conn, now))
