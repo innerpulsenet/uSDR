@@ -152,3 +152,50 @@ export function wireReadout(figure, line, idle) {
   figure.addEventListener("pointerdown", show);
   figure.addEventListener("pointerleave", () => show({ target: figure.ownerDocument.body }));
 }
+
+// A table whose headings sort it, shown a page at a time. Each column is
+// { label, value(row), html(row)?, num?, cls?, asc? }: `value` is what it sorts by
+// (null always sorts last), `html` what the cell shows, `asc` a column whose first
+// click sorts upward (names, times read as "earliest"). `onPick` makes rows act.
+export function sortableTable(box, cols, rows, { sort = 0, desc = true, page = 100, onPick, picked, caption = "" } = {}) {
+  let shown = page;
+  const cmp = (col) => (a, b) => {
+    const [x, y] = [col.value(a), col.value(b)];
+    if (x == null || x === "") return y == null || y === "" ? 0 : 1;
+    if (y == null || y === "") return -1;
+    return (x < y ? -1 : x > y ? 1 : 0) * (desc ? -1 : 1);
+  };
+  let sorted = [];
+  const draw = () => {
+    sorted = [...rows].sort(cmp(cols[sort]));
+    const head = cols.map((c, i) => `<th class="${c.cls || ""}${c.num ? " n" : ""}" aria-sort="${i === sort ? (desc ? "descending" : "ascending") : "none"}"><button type="button" class="th-sort" data-sort="${i}">${c.label}<i aria-hidden="true"></i></button></th>`).join("");
+    const body = sorted.slice(0, shown).map((r, i) => `<tr${onPick ? ` data-pick="${i}" tabindex="0"` : ""}${picked && picked(r) ? ' class="picked"' : ""}>${cols.map((c) => `<td class="${c.cls || ""}${c.num ? " n" : ""}">${c.html ? c.html(r) : esc(c.value(r) ?? "")}</td>`).join("")}</tr>`).join("");
+    box.innerHTML = `<div class="scroll frame" tabindex="0" role="region" aria-label="${esc(caption || "Table")}"><table class="sortable${onPick ? " pickable" : ""}">${caption ? `<caption class="sr">${esc(caption)}</caption>` : ""}<thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>
+      ${sorted.length > shown ? `<p class="more-rows"><button type="button" data-more>Show ${num(Math.min(page, sorted.length - shown))} more</button><span>${num(shown)} of ${num(sorted.length)}</span></p>` : ""}`;
+  };
+  box.onclick = (ev) => {
+    const s = ev.target.closest("[data-sort]");
+    if (s) {
+      const i = Number(s.dataset.sort);
+      if (i === sort) desc = !desc;
+      else { sort = i; desc = !cols[i].asc; }
+      draw();
+      return;
+    }
+    if (ev.target.closest("[data-more]")) { shown += page; draw(); return; }
+    const tr = ev.target.closest("[data-pick]");
+    if (tr && onPick && !ev.target.closest("a, button")) onPick(sorted[Number(tr.dataset.pick)]);
+  };
+  box.onkeydown = (ev) => {
+    const tr = ev.target.closest?.("[data-pick]");
+    if (tr && onPick && (ev.key === "Enter" || ev.key === " ")) { ev.preventDefault(); onPick(sorted[Number(tr.dataset.pick)]); }
+  };
+  draw();
+  return { redraw: draw };
+}
+
+// Sixteen compass points, for a bearing in degrees.
+const POINTS = ["N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW"];
+export const compass = (deg) => POINTS[Math.round(deg / 22.5) % 16];
+// A small arrow turned to a bearing, beside its compass point.
+export const bearingCell = (deg) => (deg == null ? "" : `<span class="brg"><svg viewBox="-6 -6 12 12" aria-hidden="true"><path d="M0-5L3 3L0 1.4L-3 3Z" transform="rotate(${Math.round(deg)})"/></svg>${compass(deg)}</span>`);

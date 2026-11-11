@@ -6,7 +6,7 @@ here because this is the side the public can reach.
 import os
 import sqlite3
 
-MODES = {"FT8", "FT4", "WSPR", "JS8", "HFDL", "DSC", "SELCAL", "WEFAX", "SSTV"}
+MODES = {"FT8", "FT4", "WSPR", "JS8", "HFDL", "DSC", "SELCAL", "WEFAX", "SSTV", "NAVTEX", "BEACON"}
 HF_LIMIT_HZ = 30_000_000
 LOC_KINDS = {"reported", "grid4", "grid6", "ground_station", "none"}
 
@@ -20,7 +20,13 @@ DETAILS = {
     "SELCAL": {"repeat", "offsetHz"},
     "WEFAX": {"lines", "width"},
     "SSTV": {"lines", "complete"},
+    "NAVTEX": {"station", "subject", "subjectName", "serial", "complete", "text"},
+    "BEACON": {"steps", "dash1", "dash2", "dash3", "dash4"},
 }
+
+# Details allowed past the usual 64 characters, and how far. A NAVTEX message is
+# a public broadcast of a few lines to a couple of thousand characters.
+LONG_DETAILS = {("NAVTEX", "text"): 4000}
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS observations (
@@ -36,6 +42,8 @@ CREATE TABLE IF NOT EXISTS listening (
     decodes INTEGER NOT NULL, valid_decodes INTEGER NOT NULL, healthy INTEGER
 );
 CREATE INDEX IF NOT EXISTS listening_start ON listening (start_utc);
+-- Pages leave out what failed its radio check; this keeps that test from scanning every stay.
+CREATE INDEX IF NOT EXISTS listening_unhealthy ON listening (start_utc, end_utc) WHERE healthy = 0;
 CREATE TABLE IF NOT EXISTS spectrum (minute INTEGER PRIMARY KEY, lo INTEGER NOT NULL, data BLOB NOT NULL);
 CREATE TABLE IF NOT EXISTS gaps (id INTEGER PRIMARY KEY, at_utc INTEGER NOT NULL, kind TEXT NOT NULL, dropped INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS pictures (

@@ -2,3 +2,4 @@
 /.hermes
 /.claude
 /.zcode
+__pycache__/

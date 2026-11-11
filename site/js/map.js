@@ -4,6 +4,7 @@
 // per size and color keeps the node count small however many squares there are.
 import { calm } from "./motion.js";
 import { ago, el, esc, fmtTime, hours, num } from "./util.js";
+import { bearingCell, compass, sortableTable } from "./figures.js";
 
 const NS = "http://www.w3.org/2000/svg";
 const RAD = Math.PI / 180;
@@ -40,6 +41,7 @@ const BAND_GROUPS = ["160–40 m", "30–17 m", "15–10 m"];
 const PRESETS = {
   World: null,
   "N. America": [-130, 20, -60, 56],
+  "N. Atlantic": [-80, 25, -5, 62],
   Caribbean: [-92, 8, -55, 30],
   "S. America": [-85, -56, -33, 14],
   Europe: [-12, 35, 42, 66],
@@ -56,6 +58,9 @@ function bandList(bands) {
   const rows = Object.entries(bands).sort((a, b) => b[1].size - a[1].size);
   return rows.length ? `<dl class="bandlist">${rows.map(([b, ids]) => `<div><dt>${esc(b)}</dt><dd>${num(ids.size)}</dd></div>`).join("")}</dl>` : "";
 }
+
+// Bands as small chips in their group's color, shortest wavelength last.
+export const bandPills = (labels) => labels.map((b) => `<span class="bd g${bandGroup(b)}">${esc(String(b).replace(" m", ""))}</span>`).join("");
 
 function sizeOf(n) {
   let size = 0;
@@ -214,39 +219,55 @@ function terminator(ms, altitude = 0) {
   return { line, sunnyNorth: dec > 0 };
 }
 
+// Every kind of traffic on one map, each a layer of its own: amateur squares, aircraft
+// tracks, HFDL ground stations, ship positions and the night side. A layer that is off
+// leaves the map, the totals, the time strip and the list under the map alike.
+export const LAYERS = ["squares", "tracks", "ground", "dsc", "night"];
+const LAYER_MODES = { squares: new Set(["FT8", "FT4", "WSPR", "JS8"]), tracks: new Set(["HFDL"]), ground: new Set(["HFDL"]), dsc: new Set(["DSC"]) };
+// How many rows the list under the map shows before asking.
+const LIST_PAGE = 60;
+
 export function mountMap(root, data, opts) {
-  const { coast, land, ground, params, onParams, loadFine, traffic, flightInfo } = opts;
+  const { coast, land, ground, params, onParams, loadFine } = opts;
+  const flightInfo = opts.flightInfo || (() => ({}));
+  const shipInfo = opts.shipInfo || (() => ({}));
   const presets = opts.presets || PRESETS;
-  // Traffic mode: the same map, showing only aircraft and ships.
-  const AIR_MODES = new Set(["HFDL", "DSC"]);
-  const isRecent = (t) => Date.now() / 1000 - t < 3600;
+  const now = () => Date.now() / 1000;
+  // Still reporting: the aircraft's last fix is within the hour.
+  const isRecent = (t) => now() - t < 3600;
   let base = { coast, land };
   let fine = null;
   let fineAsked = false;
   const home = data.station_grid ? gridCenter(data.station_grid) : null;
+  const askedLayers = params.l === undefined ? null : new Set(params.l.split(",").filter(Boolean));
   const state = {
     proj: params.p === "az" && home ? "az" : "eq",
     cx: 0, cy: 0, z: 1,
     from: 0, to: data.hours,
     band: new Set(), mode: new Set(),
-    layers: { squares: !traffic, tracks: true, ground: true, dsc: true, night: true },
-    selected: null, box: false, pinned: null, hoverFlight: null,
+    layers: Object.fromEntries(LAYERS.map((l) => [l, askedLayers ? askedLayers.has(l) : true])),
+    airRecent: params.a === "1",
+    selected: null, box: false, pinned: null, hoverFlight: null, ship: null,
+    list: params.list || "",
+    listPicked: Boolean(params.list),
   };
   let proj = new Projection(state.proj, home);
   state.cy = proj.homeY;
 
   const stage = root.querySelector(".stage");
-  const map = svg("svg", { role: "img", "aria-label": "World map of what the receiver logged. Use the panel beside it for the same figures as text." });
+  const map = svg("svg", { role: "img", "aria-label": "World map of what the receiver logged. The list under the map gives the same things as text." });
   stage.prepend(map);
   // Selection and pulses move on their own layer, so that they never repaint the map.
   const over = svg("svg", { class: "over", "aria-hidden": "true" });
   map.after(over);
   const g = {};
-  for (const name of ["base", "night", "squares", "tracks", "spots", "points", "ui"]) map.append((g[name] = svg("g")));
+  for (const name of ["base", "night", "squares", "spots", "tracks", "points", "ui"]) map.append((g[name] = svg("g")));
   for (const name of ["pulses", "sel"]) over.append((g[name] = svg("g")));
 
-  const readout = root.querySelector("#readout");
   const totals = root.querySelector("#totals");
+  const card = root.querySelector("#mapcard");
+  const listBox = root.querySelector("#inview");
+  const listTabs = root.querySelector("#listtabs");
 
   function size() {
     return [Math.max(stage.clientWidth, 1), Math.max(stage.clientHeight, 1)];
@@ -323,10 +344,15 @@ export function mountMap(root, data, opts) {
       && (!state.band.size || state.band.has(data.bands[b]))
       && (!state.mode.size || state.mode.has(data.modes[m]));
   }
+  const inHours = (t) => {
+    const h = (t - data.start_utc) / 3600;
+    return h >= state.from && h < state.to;
+  };
 
   // The stations inside the chosen hours, bands and modes, added up by square.
   function aggregate() {
     const cells = new Map();
+    if (!state.layers.squares) return cells;
     for (const [sq, m, b, h, id, n, best] of data.spots) {
       if (!chosen(m, b, h)) continue;
       const grid = data.squares[sq];
@@ -341,33 +367,21 @@ export function mountMap(root, data, opts) {
     return cells;
   }
 
-  // Who was heard in the chosen square, under the same filters as the dots.
-  function drawSquareList() {
-    const key = state.selected;
-    const panel = root.querySelector("#square");
-    if (!panel) return;
-    if (!key) {
-      panel.innerHTML = `<h3>In this square</h3><p class="note" style="margin-top:8px">Click a dot to list the stations heard there.</p>`;
-      return;
-    }
+  // Who was heard in one square, under the same filters as the dots.
+  function stationsIn(key) {
     const sq = data.squares.indexOf(key);
     const who = new Map();
     for (const [s, m, b, h, id, n, best, t] of data.spots) {
       if (s !== sq || !chosen(m, b, h)) continue;
-      const w = who.get(id) || { n: 0, best: null, t: 0, bands: new Set() };
+      const w = who.get(id) || { id, call: data.idents[id], n: 0, best: null, t: 0, bands: new Set(), modes: new Set() };
       w.n += n;
-      w.t = Math.max(w.t, t);
+      w.t = Math.max(w.t, data.start_utc + t * 60);
       w.bands.add(data.bands[b]);
+      w.modes.add(data.modes[m]);
       if (best !== null && (w.best === null || best > w.best)) w.best = best;
       who.set(id, w);
     }
-    const rows = [...who].sort((a, b) => b[1].n - a[1].n);
-    panel.innerHTML = `<h3>In ${esc(key)}: ${num(rows.length)} station${rows.length === 1 ? "" : "s"}</h3>
-      <table><thead><tr><th>Station</th><th>Decodes</th><th>Best</th><th>Bands</th><th>Last heard</th></tr></thead><tbody>
-      ${rows.map(([id, w]) => {
-        const call = data.idents[id];
-        return `<tr><td class="id"><a href="#/who?c=${encodeURIComponent(call)}">${esc(call)}</a></td><td>${num(w.n)}</td><td>${w.best === null ? "" : `${w.best} dB`}</td><td>${[...w.bands].map(esc).join(", ")}</td><td>${fmtTime(data.start_utc + w.t * 60)}</td></tr>`;
-      }).join("")}</tbody></table>`;
+    return [...who.values()];
   }
 
   function cellPath(key) {
@@ -401,14 +415,12 @@ export function mountMap(root, data, opts) {
     cellsNow = aggregate();
     dots = [];
     const bySize = SPOT_SIZES.map(() => new Array(BAND_GROUPS.length + 1).fill(""));
-    if (state.layers.squares) {
-      for (const [key, c] of cellsNow) {
-        const [lon, lat] = gridCenter(key);
-        const [x, y] = proj.forward(lon, lat);
-        const size = sizeOf(c.stations.size);
-        bySize[size][c.groups.indexOf(Math.max(...c.groups))] += `M${x.toFixed(2)} ${y.toFixed(2)}h0`;
-        dots.push({ key, x, y, px: SPOT_SIZES[size].px });
-      }
+    for (const [key, c] of cellsNow) {
+      const [lon, lat] = gridCenter(key);
+      const [x, y] = proj.forward(lon, lat);
+      const size = sizeOf(c.stations.size);
+      bySize[size][c.groups.indexOf(Math.max(...c.groups))] += `M${x.toFixed(2)} ${y.toFixed(2)}h0`;
+      dots.push({ key, x, y, px: SPOT_SIZES[size].px });
     }
     const paths = [];
     for (let s = SPOT_SIZES.length - 1; s >= 0; s--) {
@@ -425,37 +437,37 @@ export function mountMap(root, data, opts) {
     drawPulses();
   }
 
-  // Squares heard in the last hour of the log. Only when the hours end at the present.
+  // What was heard in the last hour of the log: squares by band, aircraft still reporting.
+  // Only when the hours end at the present.
   function drawPulses() {
-    const groups = new Array(BAND_GROUPS.length + 1).fill("");
-    if (traffic) {
-      // The aircraft still reporting: each one's latest position, if within the hour.
-      let air = "";
-      if (!calm && state.layers.tracks && state.to >= data.hours) {
+    const out = [];
+    if (!calm && state.to >= data.hours) {
+      const groups = new Array(BAND_GROUPS.length + 1).fill("");
+      if (state.layers.squares) {
+        const newest = data.spots.reduce((a, r) => Math.max(a, r[7]), 0);
+        const latest = new Map();
+        for (const [sq, m, b, h, , , , t] of data.spots) {
+          if (t >= newest - PULSE_MINUTES && chosen(m, b, h) && t >= (latest.get(sq)?.t ?? -1)) latest.set(sq, { t, group: bandGroup(data.bands[b]) });
+        }
+        for (const [sq, l] of [...latest].sort((a, b) => b[1].t - a[1].t).slice(0, MAX_PULSES)) {
+          const [lon, lat] = gridCenter(data.squares[sq]);
+          const [x, y] = proj.forward(lon, lat);
+          groups[l.group] += `M${x.toFixed(2)} ${y.toFixed(2)}h0`;
+        }
+      }
+      groups.forEach((d, i) => { if (d) out.push(svg("path", { class: `pulse b${i}`, d, style: `animation-delay:${i * 0.5}s` })); });
+      if (state.layers.tracks) {
+        let air = "";
         for (const t of data.tracks) {
-          const last = t.s[t.s.length - 1];
-          const f = last[last.length - 1];
+          const f = t.s[t.s.length - 1].at(-1);
           if (!isRecent(f[0])) continue;
           const [x, y] = proj.forward(f[2], f[1]);
           air += `M${x.toFixed(2)} ${y.toFixed(2)}h0`;
         }
-      }
-      g.pulses.replaceChildren(...(air ? [svg("path", { class: "pulse air", d: air })] : []));
-      return;
-    }
-    if (!calm && state.layers.squares && state.to >= data.hours) {
-      const newest = data.spots.reduce((a, r) => Math.max(a, r[7]), 0);
-      const latest = new Map();
-      for (const [sq, m, b, h, , , , t] of data.spots) {
-        if (t >= newest - PULSE_MINUTES && chosen(m, b, h) && t >= (latest.get(sq)?.t ?? -1)) latest.set(sq, { t, group: bandGroup(data.bands[b]) });
-      }
-      for (const [sq, l] of [...latest].sort((a, b) => b[1].t - a[1].t).slice(0, MAX_PULSES)) {
-        const [lon, lat] = gridCenter(data.squares[sq]);
-        const [x, y] = proj.forward(lon, lat);
-        groups[l.group] += `M${x.toFixed(2)} ${y.toFixed(2)}h0`;
+        if (air) out.push(svg("path", { class: "pulse air", d: air, style: "animation-delay:1.2s" }));
       }
     }
-    g.pulses.replaceChildren(...groups.flatMap((d, i) => (d ? [svg("path", { class: `pulse b${i}`, d, style: `animation-delay:${i * 0.5}s` })] : [])));
+    g.pulses.replaceChildren(...out);
   }
 
   // A dot is only the center of a square about 200 km wide. Close in, show the square.
@@ -471,15 +483,15 @@ export function mountMap(root, data, opts) {
     for (const d of dots) {
       const dist = Math.hypot(d.x - x, d.y - y) / u;
       const gap = dist - d.px / 2;
-      if (gap <= extraPx && gap < bestGap) { bestGap = gap; best = { ...d, dist }; }
+      if (gap <= extraPx && gap < bestGap) { bestGap = gap; best = { ...d, dist, gap }; }
     }
     return best;
   }
 
-  function trackVisible(fixTime) {
-    const t = (fixTime - data.start_utc) / 3600;
-    return t >= state.from && t < state.to;
-  }
+  const lastFix = (t) => t.s[t.s.length - 1].at(-1);
+  // A flight is drawn when the layer is on, it has a fix in the chosen hours, and, when
+  // only those still reporting are asked for, its latest fix is within the hour.
+  const flightShown = (t) => !state.airRecent || isRecent(lastFix(t)[0]);
 
   // Each flight's drawn path in map units, for finding the one under the pointer.
   let trackHits = [];
@@ -492,9 +504,10 @@ export function mountMap(root, data, opts) {
     let old = "";
     let fixes = "";
     for (const t of data.tracks) {
-      const fresh = !traffic || isRecent(t.s[t.s.length - 1].at(-1)[0]);
+      if (!flightShown(t)) continue;
+      const fresh = isRecent(lastFix(t)[0]);
       for (const seg of t.s) {
-        const shown = seg.filter((f) => trackVisible(f[0]));
+        const shown = seg.filter((f) => inHours(f[0]));
         if (shown.length) trackHits.push({ t, fresh, pts: shown.map((f) => [...proj.forward(f[2], f[1]), f]) });
         if (shown.length >= 2) {
           const d = pathOf(proj, shown.map((f) => [f[2], f[1]]));
@@ -509,15 +522,15 @@ export function mountMap(root, data, opts) {
     g.tracks.append(svg("path", { class: "track old", d: old }), svg("path", { class: "track", d: lines }), svg("path", { class: "fix", d: fixes }));
   }
 
-  // An arrowhead on each flight's latest leg, pointing the way it was going.
+  // An arrowhead on each flight's latest leg, pointing the way it was going. Those still
+  // reporting always get one; the rest only once zoomed in, or they would bury the dots.
   function headsPath(u, wantFresh) {
     let d = "";
-    const scale = traffic ? 1.5 : 1;
     for (const t of data.tracks) {
-      if (traffic && isRecent(t.s[t.s.length - 1].at(-1)[0]) !== wantFresh) continue;
+      if (!flightShown(t) || isRecent(lastFix(t)[0]) !== wantFresh) continue;
       let last = null;
       for (const seg of t.s) {
-        const shown = seg.filter((f) => trackVisible(f[0]));
+        const shown = seg.filter((f) => inHours(f[0]));
         if (shown.length >= 2) last = shown;
       }
       if (!last) continue;
@@ -531,34 +544,44 @@ export function mountMap(root, data, opts) {
         bx + (forward * Math.cos(angle) - side * Math.sin(angle)) * u,
         by + (forward * Math.sin(angle) + side * Math.cos(angle)) * u,
       ].map((v) => v.toFixed(3)).join(" ");
-      d += `M${at(5 * scale, 0)}L${at(-3.5 * scale, 3 * scale)}L${at(-1.5 * scale, 0)}L${at(-3.5 * scale, -3 * scale)}Z`;
+      d += `M${at(7.5, 0)}L${at(-5, 4.5)}L${at(-2.2, 0)}L${at(-5, -4.5)}Z`;
     }
     return d;
   }
 
+  // The ship calls with a position, latest first, each MMSI once: its most recent fix.
+  function shipsShown() {
+    if (!state.layers.dsc) return [];
+    const seen = new Map();
+    for (const d of data.dsc) {
+      if (!inHours(d.t)) continue;
+      const s = seen.get(d.i) || { i: d.i, t: d.t, lat: d.lat, lon: d.lon, k: d.k, fixes: 0 };
+      s.fixes += 1;
+      if (d.t > s.t) Object.assign(s, { t: d.t, lat: d.lat, lon: d.lon, k: d.k });
+      seen.set(d.i, s);
+    }
+    return [...seen.values()];
+  }
+  const groundShown = () => (state.layers.ground ? ground.filter((s) => String(s.id) in data.ground) : []);
+
   function drawPoints() {
     g.points.replaceChildren();
     const u = unitsPerPx();
-    // At world scale two hundred arrowheads would bury the spots; the tracks alone will do.
-    if (state.layers.tracks && (traffic || state.z >= HEADS_ZOOM)) {
+    if (state.layers.tracks) {
       g.points.append(svg("path", { class: "plane", d: headsPath(u, true) }));
-      if (traffic) g.points.append(svg("path", { class: "plane old", d: headsPath(u, false) }));
+      if (state.z >= HEADS_ZOOM || !state.layers.squares) g.points.append(svg("path", { class: "plane old", d: headsPath(u, false) }));
     }
-    if (state.layers.ground) {
-      for (const s of ground) {
-        if (!(String(s.id) in data.ground) || !inView(s.lon, s.lat, 2)) continue;
-        const [x, y] = proj.forward(s.lon, s.lat);
-        const r = (traffic ? 6 : 4.5) * u;
-        g.points.append(svg("rect", { class: "gs", x: x - r, y: y - r, width: 2 * r, height: 2 * r }));
-      }
+    for (const s of groundShown()) {
+      if (!inView(s.lon, s.lat, 2)) continue;
+      const [x, y] = proj.forward(s.lon, s.lat);
+      const r = 5.5 * u;
+      g.points.append(svg("rect", { class: "gs", x: x - r, y: y - r, width: 2 * r, height: 2 * r }));
     }
-    if (state.layers.dsc) {
-      for (const d of data.dsc) {
-        if ((d.t - data.start_utc) / 3600 < state.from || (d.t - data.start_utc) / 3600 >= state.to || !inView(d.lon, d.lat, 2)) continue;
-        const [x, y] = proj.forward(d.lon, d.lat);
-        const r = (traffic ? 5.5 : 3.2) * u;
-        g.points.append(svg("rect", { class: "ship", x: x - r, y: y - r, width: 2 * r, height: 2 * r, transform: `rotate(45 ${x} ${y})` }));
-      }
+    for (const d of shipsShown()) {
+      if (!inView(d.lon, d.lat, 2)) continue;
+      const [x, y] = proj.forward(d.lon, d.lat);
+      const r = 4.6 * u;
+      g.points.append(svg("rect", { class: "ship", x: x - r, y: y - r, width: 2 * r, height: 2 * r, transform: `rotate(45 ${x} ${y})` }));
     }
     if (home) {
       const [x, y] = proj.forward(home[0], home[1]);
@@ -574,7 +597,7 @@ export function mountMap(root, data, opts) {
     if (d) g.sel.append(svg("circle", { class: cls, cx: d.x, cy: d.y, r: (d.px / 2 + 3.5) * unitsPerPx() }));
   }
 
-  // The steel ring is the square chosen; the one ember ring is the one being pointed at.
+  // The steel ring is what is chosen; the ember ring is what is being pointed at.
   function drawSelection() {
     g.sel.replaceChildren();
     if (state.selected && !cellsNow.has(state.selected)) state.selected = null;
@@ -585,13 +608,19 @@ export function mountMap(root, data, opts) {
     }
     if (hoverKey && hoverKey !== state.selected) ring(hoverKey, "ring-hover");
     const showFlight = (ident, cls) => {
-      const flight = ident && data.tracks.find((t) => t.i === ident);
+      const flight = ident && state.layers.tracks && data.tracks.find((t) => t.i === ident);
       if (!flight) return;
-      const shown = flight.s.map((seg) => seg.filter((f) => trackVisible(f[0]))).filter((seg) => seg.length >= 2);
+      const shown = flight.s.map((seg) => seg.filter((f) => inHours(f[0]))).filter((seg) => seg.length >= 2);
       g.sel.append(svg("path", { class: cls, d: shown.map((seg) => pathOf(proj, seg.map((f) => [f[2], f[1]]))).join("") }));
     };
     if (state.hoverFlight !== state.pinned) showFlight(state.hoverFlight, "track-hover");
     showFlight(state.pinned, "track-sel");
+    const ship = state.ship && shipsShown().find((s) => s.i === state.ship);
+    if (ship) {
+      const [x, y] = proj.forward(ship.lon, ship.lat);
+      g.sel.append(svg("circle", { class: "ring-sel", cx: x, cy: y, r: 10 * unitsPerPx() }));
+      if (home) g.sel.append(svg("path", { class: "path-sel", d: pathOf(proj, greatCircle(home, [ship.lon, ship.lat])) }));
+    }
   }
 
   function setHover(key) {
@@ -600,173 +629,185 @@ export function mountMap(root, data, opts) {
     drawSelection();
   }
 
-  function summarizeTraffic() {
-    let flights = 0;
-    let positions = 0;
-    for (const t of data.tracks) {
-      let here = 0;
-      for (const seg of t.s) for (const f of seg) if (trackVisible(f[0]) && inView(f[2], f[1])) here += 1;
-      if (here) flights += 1;
-      positions += here;
+  // What each layer holds inside the view and the chosen hours: the map's own legend counts,
+  // the totals card and the list under the map all read from here.
+  function inViewNow() {
+    const squares = [];
+    for (const [key, c] of cellsNow) if (inView(...gridCenter(key))) squares.push({ key, ...c });
+    const flights = [];
+    if (state.layers.tracks) {
+      for (const t of data.tracks) {
+        if (!flightShown(t)) continue;
+        let here = 0;
+        let last = null;
+        for (const seg of t.s) for (const f of seg) {
+          if (!inHours(f[0])) continue;
+          if (inView(f[2], f[1])) here += 1;
+          if (!last || f[0] > last[0]) last = f;
+        }
+        if (here) flights.push({ t, here, last, fresh: isRecent(lastFix(t)[0]) });
+      }
     }
-    const stations = ground.filter((s) => String(s.id) in data.ground && inView(s.lon, s.lat)).length;
-    const ships = data.dsc.filter((d) => {
-      const h = (d.t - data.start_utc) / 3600;
-      return h >= state.from && h < state.to && inView(d.lon, d.lat);
-    }).length;
-    const on = data.monitored.filter(([h, m]) => h >= state.from && h < state.to && AIR_MODES.has(data.modes[m]));
-    const secs = on.reduce((a, [, , s]) => a + s, 0);
-    totals.innerHTML = `
-      <h3>In this view</h3>
-      <dl class="kv">
-        <dt>Aircraft with a track</dt><dd>${num(flights)}</dd>
-        <dt>Reported positions</dt><dd>${num(positions)}</dd>
-        <dt>HFDL ground stations</dt><dd>${num(stations)}</dd>
-        <dt>Ship calls with a position</dt><dd>${num(ships)}</dd>
-        <dt>Hours with listening</dt><dd>${new Set(on.map(([h]) => h)).size} of ${state.to - state.from}</dd>
-        <dt>Time on HFDL and DSC</dt><dd>${(secs / 3600).toFixed(1)} h</dd>
-      </dl>
-      <p class="note" style="margin-top:8px">Tracks come only from aircraft that sent positions while the receiver was on an HFDL frequency. Most ship calls carry no position at all.</p>`;
+    const ships = shipsShown().filter((s) => inView(s.lon, s.lat));
+    const stations = groundShown().filter((s) => inView(s.lon, s.lat));
+    return { squares, flights, ships, stations };
   }
 
-  function summarize() {
-    if (traffic) return summarizeTraffic();
-    const seen = { n: 0, cells: 0, stations: new Set(), bands: {} };
-    for (const [key, c] of cellsNow) {
-      const [lon, lat] = gridCenter(key);
-      if (!inView(lon, lat)) continue;
-      seen.n += c.n;
-      seen.cells += 1;
-      for (const id of c.stations) seen.stations.add(id);
+  const layerCount = (name, n, word) => {
+    const out = root.querySelector(`[data-count="${name}"]`);
+    if (out) out.textContent = state.layers[name] ? num(n) : "";
+    if (out) out.title = state.layers[name] ? `${num(n)} ${word} in this view and these hours` : "";
+  };
+
+  function summarize(v) {
+    const listened = data.monitored.filter(([h, m]) => h >= state.from && h < state.to && enabledModes().has(data.modes[m]));
+    const hoursOn = new Set(listened.map(([h]) => h)).size;
+    const secs = listened.reduce((a, [, , s]) => a + s, 0);
+    const span = state.to - state.from;
+    const stationIds = new Set();
+    let decodes = 0;
+    const bands = {};
+    for (const c of v.squares) {
+      decodes += c.n;
+      for (const id of c.stations) stationIds.add(id);
       for (const b in c.bands) {
-        const ids = (seen.bands[b] ||= new Set());
+        const ids = (bands[b] ||= new Set());
         for (const id of c.bands[b]) ids.add(id);
       }
     }
-    let flights = 0;
-    for (const t of data.tracks) {
-      if (t.s.some((s) => s.some((f) => trackVisible(f[0]) && inView(f[2], f[1])))) flights += 1;
-    }
-    const monitored = data.monitored.filter(([h]) => h >= state.from && h < state.to);
-    const hours = new Set(monitored.map(([h]) => h)).size;
-    const secs = monitored.reduce((a, [, , s]) => a + s, 0);
-    const span = state.to - state.from;
-    totals.innerHTML = `
-      <h3>In this view</h3>
-      <dl class="kv">
-        <dt>Stations with a locator</dt><dd>${num(seen.stations.size)}</dd>
-        <dt>Decodes from them</dt><dd>${num(seen.n)}</dd>
-        <dt>Grid squares</dt><dd>${num(seen.cells)}</dd>
-        <dt>Aircraft with a track</dt><dd>${num(flights)}</dd>
-        <dt>Hours with listening</dt><dd>${hours} of ${span}</dd>
-        <dt>Listening, all channels</dt><dd>${(secs / 3600).toFixed(1)} h</dd>
-      </dl>
-      ${bandList(seen.bands)}
-      ${span > hours ? `<p class="note" style="margin-top:8px">The receiver was tuned here for only part of this range. A blank region can mean it was listening elsewhere.</p>` : ""}`;
+    layerCount("squares", stationIds.size, "stations");
+    layerCount("tracks", v.flights.length, "aircraft");
+    layerCount("ground", v.stations.length, "ground stations");
+    layerCount("dsc", v.ships.length, "ships");
+    const rows = [];
+    if (state.layers.squares) rows.push(["Amateur stations", num(stationIds.size)], ["Decodes from them", num(decodes)], ["Grid squares", num(v.squares.length)]);
+    if (state.layers.tracks) rows.push(["Aircraft with a track", num(v.flights.length)], ["Positions", num(v.flights.reduce((a, f) => a + f.here, 0))]);
+    if (state.layers.ground) rows.push(["Ground stations", num(v.stations.length)]);
+    if (state.layers.dsc) rows.push(["Ships placed", num(v.ships.length)]);
+    if (rows.length) rows.push(["Hours listened", `${hoursOn} of ${span}`], ["Channel-hours", (secs / 3600).toFixed(1)]);
+    const byBand = Object.entries(bands).sort((a, b) => b[1].size - a[1].size);
+    totals.innerHTML = rows.length
+      ? `<dl class="view-totals">${rows.map(([k, val]) => `<div><dt>${k}</dt><dd>${val}</dd></div>`).join("")}</dl>
+        ${state.layers.squares && byBand.length ? `<p class="view-bands"><span class="lbl">Stations by band</span>${byBand.map(([b, ids]) => `<span>${bandPills([b])}${num(ids.size)}</span>`).join("")}</p>` : ""}
+        ${span > hoursOn ? `<p class="note">The receiver covered these modes for only ${hoursOn} of these ${span} hours. A blank region can mean it was listening elsewhere.</p>` : ""}`
+      : "";
   }
 
-  // On the traffic map the details sit on the map, where the eye already is.
-  const card = root.querySelector("#flightcard");
-  function showReadout(html) {
-    if (card) {
-      card.innerHTML = html;
-      card.hidden = false;
-      return;
-    }
-    readout.innerHTML = `<h3>Under the pointer</h3>${html}`;
+  // The card on the map: what the pointer is over, or else what is chosen.
+  let cardFor = null;
+  function showCard(html, key = null) {
+    cardFor = key;
+    card.innerHTML = html;
+    card.hidden = false;
   }
   function restCard() {
-    if (!card) return;
-    const held = state.pinned && data.tracks.find((t) => t.i === state.pinned);
-    if (held) showReadout(flightText(held, held.s[held.s.length - 1].at(-1)));
-    else card.hidden = true;
+    if (state.pinned && state.layers.tracks) {
+      const held = data.tracks.find((t) => t.i === state.pinned);
+      if (held) return showCard(flightText(held, lastFix(held)), `f:${held.i}`);
+    }
+    if (state.ship) {
+      const s = shipsShown().find((x) => x.i === state.ship);
+      if (s) return showCard(shipText(s), `s:${s.i}`);
+    }
+    if (state.selected && cellsNow.has(state.selected)) return showCard(cellText(state.selected), `q:${state.selected}`);
+    cardFor = null;
+    card.hidden = true;
   }
-  card?.addEventListener("click", (ev) => {
+  card.addEventListener("click", (ev) => {
     if (ev.target.closest("[data-unpin]")) {
-      pinFlight(null);
-      restCard();
+      clearChoice();
+      redrawList();
+      pushParams();
     }
   });
 
-  function describeCell(key) {
+  const head = (title, sub, held) => `<div class="fc-head"><div><b>${title}</b>${sub ? `<span class="fc-sub">${sub}</span>` : ""}</div>${held ? `<button type="button" data-unpin aria-label="Clear this selection">Clear</button>` : ""}</div>`;
+  const row = (label, value) => (value || value === 0 ? `<dt>${label}</dt><dd class="wrap">${value}</dd>` : "");
+  const away = (lon, lat) => (home ? `${num(Math.round(kmBetween(home, [lon, lat])))} km ${compass(bearing(home, [lon, lat]))}` : "");
+
+  function cellText(key) {
     const c = cellsNow.get(key);
-    if (!c) return false;
-    const distance = home ? `<dt>From the station's square</dt><dd>${num(Math.round(kmBetween(home, gridCenter(key))))} km</dd>` : "";
-    showReadout(`<dl class="kv"><dt>Grid square</dt><dd>${esc(key)}</dd><dt>Stations</dt><dd>${num(c.stations.size)}</dd><dt>Decodes</dt><dd>${num(c.n)}</dd>
-      ${c.best === null ? "" : `<dt>Best report</dt><dd>${c.best} dB</dd>`}${distance}</dl>${bandList(c.bands)}`);
-    return true;
+    const held = state.selected === key;
+    const [lon, lat] = gridCenter(key);
+    return `${head(esc(key), "Grid square", held)}<dl class="kv">${row("Stations", num(c.stations.size))}${row("Decodes", num(c.n))}
+      ${c.best === null ? "" : row("Best report", `${c.best} dB`)}${row("From the station", away(lon, lat))}</dl>${bandList(c.bands)}
+      ${held ? `<p class="fc-hint">The stations are listed under the map.</p>` : `<p class="fc-hint">Click to list its stations</p>`}`;
+  }
+
+  function flightText(t, f) {
+    const info = flightInfo(t.i);
+    const count = t.s.reduce((a, seg) => a + seg.length, 0);
+    const last = lastFix(t);
+    const held = state.pinned === t.i;
+    return `${head(esc(t.i), isRecent(last[0]) ? `<span class="ip-live">Reporting</span>` : "Aircraft, HFDL", held)}
+      <dl class="kv">${row("Operator", esc(info.operator || ""))}${row("Registration", esc(info.reg || ""))}${row("Ground station", esc(info.gs || ""))}
+      ${row("Messages, 24 h", info.n ? num(info.n) : "")}${row("Positions on track", num(count))}
+      ${row(held ? "Latest position" : "This position", `${f[1].toFixed(2)}, ${f[2].toFixed(2)}`)}${row("Reported", fmtTime(f[0]))}${row("Last heard", ago(last[0]))}</dl>
+      ${held ? `<a class="fc-link" href="#/who?c=${encodeURIComponent(t.i)}">Full history</a>` : `<p class="fc-hint">Click to keep this selected</p>`}`;
+  }
+
+  function shipText(s) {
+    const info = shipInfo(s.i);
+    const held = state.ship === s.i;
+    return `${head(esc(s.i), info.from === "coast" ? "Coast station, DSC" : "Ship, DSC", held)}
+      <dl class="kv">${row("Flag", esc(info.flag || ""))}${row("Latest call", esc([info.cat, info.what].filter(Boolean).join(", ")))}
+      ${row("Calls, 7 days", info.n ? num(info.n) : "")}${row("Position", `${s.lat.toFixed(2)}, ${s.lon.toFixed(2)}`)}${row("From the station", away(s.lon, s.lat))}${row("Position sent", fmtTime(s.t))}</dl>
+      ${held ? `<a class="fc-link" href="#/who?c=${encodeURIComponent(s.i)}">Full history</a>` : `<p class="fc-hint">Click to keep this selected</p>`}`;
+  }
+
+  // Whatever is closest to the pointer, within a few pixels, across every layer that is on.
+  function under(x, y, touch) {
+    const u = unitsPerPx();
+    const reach = touch ? 16 : 8;
+    let best = null;
+    const offer = (gap, hit) => { if (gap <= reach && (!best || gap < best.gap)) best = { gap, ...hit }; };
+    for (const s of groundShown()) {
+      const [mx, my] = proj.forward(s.lon, s.lat);
+      offer(Math.hypot(mx - x, my - y) / u - 3, { kind: "gs", s });
+    }
+    for (const s of shipsShown()) {
+      const [mx, my] = proj.forward(s.lon, s.lat);
+      offer(Math.hypot(mx - x, my - y) / u - 3, { kind: "ship", s });
+    }
+    const dot = nearestDot(x, y, reach);
+    if (dot) offer(Math.max(dot.gap, 0), { kind: "cell", key: dot.key });
+    // A track is a thin line, so it yields to a mark the pointer is actually on.
+    const hit = flightNear(x, y, touch ? 26 : 14);
+    if (hit) offer(hit.d + 2, { kind: "flight", t: hit.t, f: hit.f });
+    return best;
   }
 
   function hover(ev) {
     const [x, y] = toWorld(ev);
-    const u = unitsPerPx();
-    // Whatever is closest to the pointer, within a few pixels, of the things on the map.
-    let near = null;
-    let nearD = 8;
-    const consider = (lon, lat, describe) => {
-      const [mx, my] = proj.forward(lon, lat);
-      const d = Math.hypot(mx - x, my - y) / u;
-      if (d < nearD) { nearD = d; near = describe; }
-    };
-    if (state.layers.tracks && !traffic) {
-      for (const t of data.tracks) for (const seg of t.s) for (const f of seg) {
-        if (trackVisible(f[0])) consider(f[2], f[1], () => flightText(t, f));
-      }
-    }
-    if (state.layers.ground) {
-      for (const s of ground) {
-        if (String(s.id) in data.ground) consider(s.lon, s.lat, () => `<dl class="kv"><dt>HFDL ground station</dt><dd>${esc(s.name)}</dd><dt>Messages heard</dt><dd>${num(data.ground[String(s.id)])}</dd></dl>`);
-      }
-    }
-    if (state.layers.dsc) {
-      for (const c of data.dsc) {
-        const h = (c.t - data.start_utc) / 3600;
-        if (h >= state.from && h < state.to) consider(c.lon, c.lat, () => `<dl class="kv"><dt>Ship call</dt><dd>${esc(c.i || "")}</dd><dt>Logged</dt><dd>${fmtTime(c.t)}</dd><dt>Position</dt><dd>${c.lat.toFixed(2)}, ${c.lon.toFixed(2)}</dd></dl>`);
-      }
-    }
-    if (traffic) {
-      const hit = near ? null : flightNear(x, y, 14);
-      map.classList.toggle("on-target", Boolean(near || hit));
-      setHoverFlight(hit ? hit.t.i : null);
-      if (near) showReadout(near());
-      else if (hit) showReadout(flightText(hit.t, hit.f));
-      else restCard();
-      return;
-    }
-    const dot = nearestDot(x, y);
-    if (near && (!dot || nearD < dot.dist)) {
-      setHover(null);
-      showReadout(near());
-      return;
-    }
-    if (dot) {
-      setHover(dot.key);
-      describeCell(dot.key);
-      return;
-    }
-    setHover(null);
-    const pinned = state.pinned && data.tracks.find((t) => t.i === state.pinned);
-    if (pinned) {
-      const last = pinned.s[pinned.s.length - 1];
-      showReadout(flightText(pinned, last[last.length - 1]));
-      return;
-    }
-    showReadout(`<p class="note" style="margin-top:8px">Nothing logged here for the chosen hours.</p>`);
+    const hit = under(x, y, false);
+    map.classList.toggle("on-target", Boolean(hit));
+    setHover(hit?.kind === "cell" ? hit.key : null);
+    setHoverFlight(hit?.kind === "flight" ? hit.t.i : null);
+    if (!hit) return restCard();
+    if (hit.kind === "cell") showCard(cellText(hit.key));
+    else if (hit.kind === "flight") showCard(flightText(hit.t, hit.f));
+    else if (hit.kind === "ship") showCard(shipText(hit.s));
+    else showCard(`${head(esc(hit.s.name), "HFDL ground station", false)}<dl class="kv">${row("Messages heard", num(data.ground[String(hit.s.id)]))}${row("From the station", away(hit.s.lon, hit.s.lat))}</dl>`);
   }
 
-  function flightText(t, f) {
-    if (!traffic) return `<dl class="kv"><dt>Flight</dt><dd>${esc(t.i)}</dd><dt>Position at</dt><dd>${fmtTime(f[0])}</dd><dt>Reported</dt><dd>${f[1].toFixed(2)}, ${f[2].toFixed(2)}</dd></dl>`;
-    const info = (flightInfo && flightInfo(t.i)) || {};
-    const count = t.s.reduce((a, seg) => a + seg.length, 0);
-    const last = t.s[t.s.length - 1].at(-1);
-    const row = (label, value) => (value ? `<dt>${label}</dt><dd class="wrap">${esc(value)}</dd>` : "");
-    const held = state.pinned === t.i;
-    return `<div class="fc-head"><b>${esc(t.i)}</b>${held ? `<button type="button" data-unpin aria-label="Clear this selection">Clear</button>` : ""}</div>
-      <dl class="kv">${row("Operator", info.operator)}${row("Registration", info.reg)}${row("Ground station", info.gs)}
-      ${row("Messages, 24 h", info.n ? num(info.n) : "")}<dt>Positions on track</dt><dd>${num(count)}</dd>
-      <dt>${held ? "Latest position" : "This position"}</dt><dd>${f[1].toFixed(2)}, ${f[2].toFixed(2)}</dd>
-      <dt>Reported</dt><dd>${fmtTime(f[0])}</dd><dt>Last heard</dt><dd>${ago(last[0])}</dd></dl>
-      ${held ? `<a class="fc-link" href="#/who?c=${encodeURIComponent(t.i)}">Full history</a>` : `<p class="fc-hint">Click to keep this selected</p>`}`;
+  function clearChoice() {
+    state.selected = null;
+    state.pinned = null;
+    state.ship = null;
+    drawSelection();
+    restCard();
+  }
+
+  function choose(hit) {
+    state.selected = hit?.kind === "cell" ? hit.key : null;
+    state.pinned = hit?.kind === "flight" ? hit.t.i : null;
+    state.ship = hit?.kind === "ship" ? hit.s.i : null;
+    if (state.selected) state.list = "square";
+    else if (state.list === "square") state.list = "";
+    drawSelection();
+    restCard();
+    redrawList();
+    pushParams();
   }
 
   // The flight whose drawn path is nearest the pointer, within reach, or none. Older
@@ -780,7 +821,7 @@ export function mountMap(root, data, opts) {
       const score = d + (hit.fresh ? 0 : 4);
       if (d <= reachPx && score < bestScore) {
         bestScore = score;
-        best = { t: hit.t, f };
+        best = { t: hit.t, f, d };
       }
     };
     for (const hit of trackHits) {
@@ -805,26 +846,30 @@ export function mountMap(root, data, opts) {
     drawSelection();
   }
 
-  function pinFlight(ident) {
-    state.pinned = ident;
-    drawSelection();
-    const flight = ident && data.tracks.find((t) => t.i === ident);
-    if (flight) {
-      const last = flight.s[flight.s.length - 1];
-      showReadout(flightText(flight, last[last.length - 1]));
-    }
+  // Bring something into view and hold it selected.
+  function fitPoints(points, minPad = 8) {
+    const xs = points.map((p) => p[0]);
+    const ys = points.map((p) => p[1]);
+    const pad = Math.max(minPad, (Math.max(...xs) - Math.min(...xs)) * 0.25);
+    fitWorld(Math.min(...xs) - pad, Math.min(...ys) - pad, Math.max(...xs) + pad, Math.max(...ys) + pad);
   }
-
-  // Bring a flight into view and hold it selected.
   function focusFlight(ident) {
     const flight = data.tracks.find((t) => t.i === ident);
     if (!flight) return;
-    pinFlight(ident);
-    const points = flight.s.flat().map((f) => proj.forward(f[2], f[1]));
-    const xs = points.map((p) => p[0]);
-    const ys = points.map((p) => p[1]);
-    const pad = Math.max(8, (Math.max(...xs) - Math.min(...xs)) * 0.25);
-    fitWorld(Math.min(...xs) - pad, Math.min(...ys) - pad, Math.max(...xs) + pad, Math.max(...ys) + pad);
+    choose({ kind: "flight", t: flight, f: lastFix(flight) });
+    fitPoints(flight.s.flat().filter((f) => inHours(f[0])).map((f) => proj.forward(f[2], f[1])));
+  }
+  function focusShip(ident) {
+    const s = shipsShown().find((x) => x.i === ident);
+    if (!s) return;
+    choose({ kind: "ship", s });
+    fitPoints([proj.forward(s.lon, s.lat)], 14);
+  }
+  function focusSquare(key) {
+    if (!cellsNow.has(key)) return;
+    choose({ kind: "cell", key });
+    const [x, y] = proj.forward(...gridCenter(key));
+    flyTo(x, y, Math.max(state.z, 6));
   }
 
   function applyView() {
@@ -842,19 +887,23 @@ export function mountMap(root, data, opts) {
       drawSquares();
       drawPoints();
       drawSelection();
-      summarize();
+      redrawList();
       pushParams();
     }, 90);
   }
 
   function pushParams() {
     const p = { w: data.hours === 24 ? "24h" : "7d" };
+    if (LAYERS.some((l) => !state.layers[l])) p.l = LAYERS.filter((l) => state.layers[l]).join(",");
+    if (state.airRecent) p.a = "1";
     if (state.proj === "az") p.p = "az";
     if (state.z > 1.01) p.v = `${state.cx.toFixed(2)},${state.cy.toFixed(2)},${state.z.toFixed(2)}`;
     if (state.band.size) p.b = [...state.band].join(",");
     if (state.mode.size) p.m = [...state.mode].join(",");
     if (state.selected) p.s = state.selected;
     if (state.pinned) p.f = state.pinned;
+    if (state.ship) p.d = state.ship;
+    if (state.listPicked && state.list !== "square") p.list = state.list;
     if (state.from !== 0 || state.to !== data.hours) p.t = `${state.from},${state.to}`;
     onParams(p);
   }
@@ -864,10 +913,106 @@ export function mountMap(root, data, opts) {
     drawTracks();
     drawPoints();
     drawSelection();
-    drawSquareList();
-    summarize();
+    restCard();
+    redrawList();
     pushParams();
   }
+
+  // The list under the map: the same things as the map, as text, inside the view.
+  const fromHome = (lon, lat) => (home ? kmBetween(home, [lon, lat]) : null);
+  const bearingTo = (lon, lat) => (home ? bearing(home, [lon, lat]) : null);
+  const kmCell = (v) => (v == null ? "" : num(Math.round(v)));
+  const callCell = (id) => `<a href="#/who?c=${encodeURIComponent(id)}">${esc(id)}</a>`;
+  function listTabsFor(v) {
+    const tabs = [];
+    if (state.selected) tabs.push(["square", `Stations in ${state.selected}`, cellsNow.get(state.selected)?.stations.size || 0]);
+    if (state.layers.squares) tabs.push(["squares", "Grid squares", v.squares.length]);
+    if (state.layers.tracks) tabs.push(["aircraft", "Aircraft", v.flights.length]);
+    if (state.layers.dsc) tabs.push(["ships", "Ships", v.ships.length]);
+    if (state.layers.ground) tabs.push(["ground", "Ground stations", v.stations.length]);
+    return tabs;
+  }
+  let listSig = "";
+  function redrawList() {
+    const v = inViewNow();
+    summarize(v);
+    if (!listBox) return;
+    const tabs = listTabsFor(v);
+    if (!tabs.some(([k]) => k === state.list)) state.list = tabs[0]?.[0] || "";
+    listTabs.innerHTML = tabs.map(([k, label, n]) => `<button type="button" role="tab" data-list="${k}" aria-selected="${k === state.list}" aria-pressed="${k === state.list}">${esc(label)} <small>${num(n)}</small></button>`).join("");
+    // Rebuilding the table resets its sort and paging, so only do it when its rows changed.
+    const sig = `${state.list}|${state.selected}|${state.pinned}|${state.ship}|${tabs.map((t) => t[2]).join(",")}|${viewBox().map((n) => n.toFixed(1)).join(",")}|${state.from},${state.to}|${[...state.band]}|${[...state.mode]}|${state.airRecent}`;
+    if (sig === listSig) return;
+    listSig = sig;
+    const empty = (what) => { listBox.innerHTML = `<p class="empty">${what}</p>`; };
+    if (!state.list) return empty("Every layer is off, so there is nothing to list. Turn a layer on above.");
+    if (state.list === "square") {
+      const rows = stationsIn(state.selected);
+      sortableTable(listBox, [
+        { label: "Station", value: (r) => r.call, html: (r) => callCell(r.call), cls: "id", asc: true },
+        { label: "Decodes", value: (r) => r.n, num: true },
+        { label: "Best", value: (r) => r.best, html: (r) => (r.best === null ? "" : `${r.best} dB`), num: true },
+        { label: "Modes", value: (r) => [...r.modes].join(" "), cls: "hide-s", asc: true },
+        { label: "Bands", value: (r) => r.bands.size, html: (r) => bandPills([...r.bands].sort((a, b) => parseInt(b, 10) - parseInt(a, 10))) },
+        { label: "Last heard", value: (r) => r.t, html: (r) => fmtTime(r.t) },
+      ], rows, { sort: 1, page: LIST_PAGE, caption: `Stations heard in ${state.selected}` });
+      return;
+    }
+    if (state.list === "squares") {
+      if (!v.squares.length) return empty("No amateur station with a locator in this view and these hours.");
+      sortableTable(listBox, [
+        { label: "Square", value: (r) => r.key, cls: "id", asc: true },
+        { label: "Stations", value: (r) => r.stations.size, num: true },
+        { label: "Decodes", value: (r) => r.n, num: true },
+        { label: "Best", value: (r) => r.best, html: (r) => (r.best === null ? "" : `${r.best} dB`), num: true },
+        { label: "km", value: (r) => fromHome(...gridCenter(r.key)), html: (r) => kmCell(fromHome(...gridCenter(r.key))), num: true },
+        { label: "Bearing", value: (r) => bearingTo(...gridCenter(r.key)), html: (r) => bearingCell(bearingTo(...gridCenter(r.key))), cls: "hide-s", asc: true },
+        { label: "Bands", value: (r) => Object.keys(r.bands).length, html: (r) => bandPills(Object.keys(r.bands).sort((a, b) => parseInt(b, 10) - parseInt(a, 10))), cls: "hide-s" },
+      ], v.squares, { sort: 1, page: LIST_PAGE, onPick: (r) => focusSquare(r.key), caption: "Grid squares in this view" });
+      return;
+    }
+    if (state.list === "aircraft") {
+      if (!v.flights.length) return empty("No aircraft reported a position in this view and these hours.");
+      sortableTable(listBox, [
+        { label: "Flight", value: (r) => r.t.i, html: (r) => `${callCell(r.t.i)}${r.fresh ? ' <span class="live-dot" title="Still reporting"></span>' : ""}`, cls: "id", asc: true },
+        { label: "Operator", value: (r) => flightInfo(r.t.i).operator || null, html: (r) => esc(flightInfo(r.t.i).operator || ""), asc: true, cls: "wrap" },
+        { label: "Registration", value: (r) => flightInfo(r.t.i).reg || null, html: (r) => esc(flightInfo(r.t.i).reg || ""), cls: "hide-s", asc: true },
+        { label: "Ground station", value: (r) => flightInfo(r.t.i).gs || null, html: (r) => esc(flightInfo(r.t.i).gs || ""), cls: "hide-s", asc: true },
+        { label: "Positions", value: (r) => r.here, num: true },
+        { label: "Last position", value: (r) => r.last[0], html: (r) => fmtTime(r.last[0]) },
+      ], v.flights, { sort: 5, page: LIST_PAGE, onPick: (r) => focusFlight(r.t.i), picked: (r) => r.t.i === state.pinned, caption: "Aircraft in this view" });
+      return;
+    }
+    if (state.list === "ships") {
+      if (!v.ships.length) return empty("No ship sent a position in this view and these hours. Most calls carry none; the Log lists every ship heard.");
+      sortableTable(listBox, [
+        { label: "MMSI", value: (r) => r.i, html: (r) => callCell(r.i), cls: "id", asc: true },
+        { label: "Flag", value: (r) => shipInfo(r.i).flag || null, html: (r) => esc(shipInfo(r.i).flag || ""), asc: true },
+        { label: "Latest call", value: (r) => [shipInfo(r.i).cat, shipInfo(r.i).what].filter(Boolean).join(", ") || null, html: (r) => esc([shipInfo(r.i).cat, shipInfo(r.i).what].filter(Boolean).join(", ")), cls: "hide-s wrap", asc: true },
+        { label: "km", value: (r) => fromHome(r.lon, r.lat), html: (r) => kmCell(fromHome(r.lon, r.lat)), num: true },
+        { label: "Position", value: (r) => r.lat, html: (r) => `${r.lat.toFixed(2)}, ${r.lon.toFixed(2)}`, cls: "hide-s" },
+        { label: "Sent", value: (r) => r.t, html: (r) => fmtTime(r.t) },
+      ], v.ships, { sort: 5, page: LIST_PAGE, onPick: (r) => focusShip(r.i), picked: (r) => r.i === state.ship, caption: "Ships in this view" });
+      return;
+    }
+    if (state.list === "ground") {
+      if (!v.stations.length) return empty("No HFDL ground station heard from in this view.");
+      sortableTable(listBox, [
+        { label: "Ground station", value: (r) => r.name, cls: "id", asc: true },
+        { label: "Messages", value: (r) => data.ground[String(r.id)], num: true },
+        { label: "km", value: (r) => fromHome(r.lon, r.lat), html: (r) => kmCell(fromHome(r.lon, r.lat)), num: true },
+        { label: "Bearing", value: (r) => bearingTo(r.lon, r.lat), html: (r) => bearingCell(bearingTo(r.lon, r.lat)), asc: true },
+      ], v.stations, { sort: 1, page: LIST_PAGE, onPick: (r) => fitPoints([proj.forward(r.lon, r.lat)], 20), caption: "HFDL ground stations in this view" });
+    }
+  }
+  listTabs?.addEventListener("click", (ev) => {
+    const b = ev.target.closest("[data-list]");
+    if (!b) return;
+    state.list = b.dataset.list;
+    state.listPicked = true;
+    redrawList();
+    pushParams();
+  });
 
   function toWorld(ev) {
     const r = map.getBoundingClientRect();
@@ -946,7 +1091,7 @@ export function mountMap(root, data, opts) {
       const u = unitsPerPx();
       const [dx, dy] = [ev.clientX - drag.x, ev.clientY - drag.y];
       // A hand holding still is rarely perfectly still; a click shouldn't become a drag.
-      if (Math.hypot(dx, dy) > (traffic ? 6 : 3)) drag.moved = true;
+      if (Math.hypot(dx, dy) > 5) drag.moved = true;
       state.cx = drag.cx - dx * u;
       state.cy = drag.cy - dy * u;
       applyView();
@@ -960,7 +1105,7 @@ export function mountMap(root, data, opts) {
       const b = boxRect;
       boxRect = null;
       b.el.remove();
-      if (b.x1 !== undefined && Math.abs(b.x1 - b.x0) * 1 > unitsPerPx() * 10) {
+      if (b.x1 !== undefined && Math.abs(b.x1 - b.x0) > unitsPerPx() * 10) {
         fitWorld(Math.min(b.x0, b.x1), Math.min(b.y0, b.y1), Math.max(b.x0, b.x1), Math.max(b.y0, b.y1));
       }
       setBox(false);
@@ -969,16 +1114,7 @@ export function mountMap(root, data, opts) {
     if (drag) {
       if (!drag.moved) {
         const [x, y] = toWorld(ev);
-        if (traffic) {
-          const hit = flightNear(x, y, ev.pointerType === "touch" ? 28 : 16);
-          pinFlight(hit ? hit.t.i : null);
-          restCard();
-        }
-        const dot = nearestDot(x, y, ev.pointerType === "touch" ? 14 : 5);
-        state.selected = dot ? dot.key : null;
-        drawSelection();
-        drawSquareList();
-        if (state.selected) describeCell(state.selected);
+        choose(under(x, y, ev.pointerType === "touch"));
       }
       drag = null;
       settled();
@@ -988,10 +1124,8 @@ export function mountMap(root, data, opts) {
   map.addEventListener("pointercancel", pointerEnd);
   map.addEventListener("pointerleave", () => {
     setHover(null);
-    if (traffic) {
-      setHoverFlight(null);
-      restCard();
-    }
+    setHoverFlight(null);
+    restCard();
   });
 
   // Glide to a view: fast away, long settle, in equal steps of zoom.
@@ -1006,8 +1140,8 @@ export function mountMap(root, data, opts) {
     }
     const from = { cx: state.cx, cy: state.cy, z: state.z };
     const start = performance.now();
-    const step = (now) => {
-      const t = Math.min(1, (now - start) / FLY_MS);
+    const step = (t0) => {
+      const t = Math.min(1, (t0 - start) / FLY_MS);
       const e = 1 - (1 - t) ** 4;
       state.z = Math.exp(Math.log(from.z) + (Math.log(z) - Math.log(from.z)) * e);
       state.cx = from.cx + (cx - from.cx) * e;
@@ -1072,22 +1206,59 @@ export function mountMap(root, data, opts) {
     b.setAttribute("aria-pressed", String(b.dataset.proj === state.proj));
   });
 
+  // The modes whose listening counts toward the layers that are on.
+  function enabledModes() {
+    const out = new Set();
+    for (const l in LAYER_MODES) if (state.layers[l]) for (const m of LAYER_MODES[l]) out.add(m);
+    return out;
+  }
+
+  function showLayerState() {
+    root.querySelectorAll("[data-layer]").forEach((input) => {
+      input.checked = state.layers[input.dataset.layer];
+      input.closest(".layer")?.classList.toggle("off", !input.checked);
+    });
+    stage.classList.toggle("with-squares", state.layers.squares);
+  }
   root.querySelectorAll("[data-layer]").forEach((input) => {
     input.addEventListener("change", () => {
       state.layers[input.dataset.layer] = input.checked;
+      if (!state.layers.tracks) state.pinned = null;
+      if (!state.layers.dsc) state.ship = null;
+      showLayerState();
       drawNight();
+      drawStrip();
+      redraw();
+    });
+  });
+  // Show one layer alone, or every layer again.
+  root.querySelectorAll("[data-only]").forEach((b) => b.addEventListener("click", () => {
+    const only = b.dataset.only;
+    const alone = LAYERS.every((l) => state.layers[l] === (l === only || l === "night"));
+    for (const l of LAYERS) state.layers[l] = alone ? true : l === only || l === "night";
+    showLayerState();
+    drawNight();
+    drawStrip();
+    redraw();
+  }));
+  root.querySelectorAll("[data-air-recent]").forEach((b) => {
+    b.setAttribute("aria-pressed", String((b.dataset.airRecent === "1") === state.airRecent));
+    b.addEventListener("click", () => {
+      state.airRecent = b.dataset.airRecent === "1";
+      root.querySelectorAll("[data-air-recent]").forEach((o) => o.setAttribute("aria-pressed", String(o === b)));
       redraw();
     });
   });
 
-  function chipSet(container, values, set, chosen, withAir) {
+  function chipSet(container, values, set, picked, withAir) {
     for (const v of values) {
-      const b = el("button", { type: "button", "aria-pressed": String(chosen.includes(v)) }, v);
+      const b = el("button", { type: "button", "aria-pressed": String(picked.includes(v)) }, v);
       if (withAir) b.append(" ", el("small", { "data-air": v }));
-      if (chosen.includes(v)) set.add(v);
+      if (picked.includes(v)) set.add(v);
       b.addEventListener("click", () => {
         set.has(v) ? set.delete(v) : set.add(v);
         b.setAttribute("aria-pressed", String(set.has(v)));
+        drawStrip();
         redraw();
       });
       container.append(b);
@@ -1098,7 +1269,7 @@ export function mountMap(root, data, opts) {
   const air = data.air || [];
   const bandNames = [...new Set([...data.spots.map((s) => data.bands[s[2]]), ...air.map((a) => data.bands[a[1]])])]
     .sort((a, b) => parseInt(b, 10) - parseInt(a, 10));
-  if (!traffic) chipSet(root.querySelector("#bands"), bandNames, state.band, (params.b || "").split(","), true);
+  chipSet(root.querySelector("#bands"), bandNames, state.band, (params.b || "").split(","), true);
   function drawAir() {
     const per = {};
     for (const [h, b, s] of air) if (h >= state.from && h < state.to) per[data.bands[b]] = (per[data.bands[b]] || 0) + s;
@@ -1108,9 +1279,10 @@ export function mountMap(root, data, opts) {
       n.parentElement.title = s ? `Listened to amateur modes on ${n.dataset.air} for ${hours(s)} in these hours` : `No listening on ${n.dataset.air} in these hours`;
     });
   }
-  if (!traffic) chipSet(root.querySelector("#modes"), spotModes, state.mode, (params.m || "").split(","));
+  chipSet(root.querySelector("#modes"), spotModes, state.mode, (params.m || "").split(","));
 
-  // The time strip: spots per hour, with hours nobody was listening hatched.
+  // The time strip: what each layer heard per hour, stacked, with hours nobody was
+  // listening to any of them hatched.
   const strip = root.querySelector("#strip");
   const fromInput = root.querySelector("#from");
   const toInput = root.querySelector("#to");
@@ -1119,29 +1291,51 @@ export function mountMap(root, data, opts) {
   toInput.min = 1;
 
   function listenedHours() {
-    return new Set(data.monitored.filter(([, m]) => !traffic || AIR_MODES.has(data.modes[m])).map(([h]) => h));
+    const modes = enabledModes();
+    return new Set(data.monitored.filter(([, m]) => modes.has(data.modes[m])).map(([h]) => h));
+  }
+
+  // Distinct stations, aircraft and ships per hour: the three are counted alike, so one
+  // scale serves them all.
+  function perHour() {
+    const make = () => Array.from({ length: data.hours }, () => new Set());
+    const amateur = make();
+    const aircraft = make();
+    const ships = make();
+    if (state.layers.squares) {
+      for (const [, m, b, h, id] of data.spots) {
+        if (h >= 0 && h < data.hours && (!state.band.size || state.band.has(data.bands[b])) && (!state.mode.size || state.mode.has(data.modes[m]))) amateur[h].add(id);
+      }
+    }
+    const hourOf = (t) => Math.floor((t - data.start_utc) / 3600);
+    if (state.layers.tracks) {
+      for (const t of data.tracks) {
+        if (!flightShown(t)) continue;
+        for (const seg of t.s) for (const f of seg) { const h = hourOf(f[0]); if (h >= 0 && h < data.hours) aircraft[h].add(t.i); }
+      }
+    }
+    if (state.layers.dsc) for (const d of data.dsc) { const h = hourOf(d.t); if (h >= 0 && h < data.hours) ships[h].add(d.i); }
+    return [amateur, aircraft, ships].map((a) => a.map((s) => s.size));
   }
 
   function drawStrip() {
-    const per = new Array(data.hours).fill(0);
-    for (const [, , , h, , n] of data.spots) if (h >= 0 && h < data.hours) per[h] += n;
-    if (traffic) {
-      const tally = (t) => {
-        const h = Math.floor((t - data.start_utc) / 3600);
-        if (h >= 0 && h < data.hours) per[h] += 1;
-      };
-      for (const t of data.tracks) for (const seg of t.s) for (const f of seg) tally(f[0]);
-      for (const d of data.dsc) tally(d.t);
-    }
+    const series = perHour();
     const listened = listenedHours();
-    const max = Math.max(1, ...per);
+    const max = Math.max(1, ...series[0].map((_, h) => series[0][h] + series[1][h] + series[2][h]));
     strip.setAttribute("viewBox", `0 0 ${data.hours} 40`);
     strip.setAttribute("preserveAspectRatio", "none");
     strip.innerHTML = `<defs><pattern id="hatch" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45) scale(${data.hours / 900} 1)"><rect class="hatch-bar" width="3" height="6"/></pattern></defs>`;
-    per.forEach((n, h) => {
-      if (!listened.has(h)) strip.append(svg("rect", { class: "out", x: h, y: 0, width: 1, height: 40 }));
-      else if (n) strip.append(svg("rect", { class: "sp", x: h + 0.08, y: 40 - (n / max) * 38, width: 0.84, height: (n / max) * 38 }));
-    });
+    for (let h = 0; h < data.hours; h++) {
+      if (!listened.has(h)) { strip.append(svg("rect", { class: "out", x: h, y: 0, width: 1, height: 40 })); continue; }
+      let y = 40;
+      ["sp-ham", "sp-air", "sp-ship"].forEach((cls, i) => {
+        const v = series[i][h];
+        if (!v) return;
+        const hgt = Math.max(0.8, (v / max) * 38);
+        y -= hgt;
+        strip.append(svg("rect", { class: `sp ${cls}`, x: h + 0.08, y, width: 0.84, height: hgt }));
+      });
+    }
     strip.append(svg("rect", { class: "dim", x: 0, y: 0, width: state.from, height: 40 }));
     strip.append(svg("rect", { class: "dim", x: state.to, y: 0, width: data.hours - state.to, height: 40 }));
     if (state.from > 0 || state.to < data.hours) {
@@ -1233,12 +1427,14 @@ export function mountMap(root, data, opts) {
   // A link to a square opens on it.
   if (/^[A-Ra-r]{2}\d{2}$/.test(params.s || "")) {
     state.selected = params.s.toUpperCase();
+    state.list = "square";
     if (!params.v) {
       const [x, y] = proj.forward(...gridCenter(state.selected));
       Object.assign(state, { cx: x, cy: y, z: 8 });
     }
   }
 
+  showLayerState();
   chooseBase();
   drawBase();
   drawNight();
@@ -1248,17 +1444,22 @@ export function mountMap(root, data, opts) {
   drawSpots();
   drawTracks();
   drawPoints();
-  if (params.f && data.tracks.some((t) => t.i === params.f)) pinFlight(params.f);
+  if (params.f && data.tracks.some((t) => t.i === params.f)) {
+    state.pinned = params.f;
+    if (!params.v) focusFlight(params.f);
+  }
+  if (params.d && shipsShown().some((s) => s.i === params.d)) {
+    state.ship = params.d;
+    if (!params.v) focusShip(params.d);
+  }
   drawSelection();
-  drawSquareList();
-  summarize();
+  restCard();
+  redrawList();
 
   const ro = new ResizeObserver(() => { applyView(); settled(); });
   ro.observe(stage);
   const nightTimer = setInterval(drawNight, 60000);
-  const cleanup = () => { ro.disconnect(); clearInterval(nightTimer); clearTimeout(settle); clearInterval(playTimer); cancelAnimationFrame(flight); };
-  cleanup.focusFlight = focusFlight;
-  return cleanup;
+  return () => { ro.disconnect(); clearInterval(nightTimer); clearTimeout(settle); clearInterval(playTimer); cancelAnimationFrame(flight); };
 }
 
 export { bandGroup, BAND_GROUPS, SPOT_SIZES, STEPS };
