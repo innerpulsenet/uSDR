@@ -77,7 +77,7 @@ pub fn strip(app: &mut App, ui: &mut Ui) {
             ui.horizontal_centered(|ui| {
                 ui.spacing_mut().item_spacing.x = 12.0;
                 let (r, _) = ui.allocate_exact_size(vec2(20.0, 20.0), Sense::hover());
-                crate::brand::mark_static(ui.painter(), r);
+                crate::brand::app_mark_static(ui.painter(), r);
                 let live = app.have_status && app.link.is_some();
                 if !live {
                     widgets::chip(ui, widgets::Tone::Idle, "not connected");

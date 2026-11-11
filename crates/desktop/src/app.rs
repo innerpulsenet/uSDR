@@ -1308,7 +1308,7 @@ impl App {
         ui.horizontal_centered(|ui| {
             ui.spacing_mut().item_spacing.x = 10.0;
             let (r, mark) = ui.allocate_exact_size(vec2(22.0, 22.0), Sense::click());
-            brand::mark_static(ui.painter(), r);
+            brand::app_mark_static(ui.painter(), r);
             let word = theme::steel_label(ui, "uSDR", theme::wordmark(20.0)).interact(Sense::click());
             if mark.double_clicked() || word.double_clicked() {
                 self.toggle_shade(ui.ctx());
@@ -2110,7 +2110,7 @@ impl App {
                     crate::chrome::title_drag(ui, ui.max_rect().expand2(vec2(EDGE as f32, 0.0)));
                     ui.horizontal_centered(|ui| {
                         let (r, _) = ui.allocate_exact_size(vec2(18.0, 18.0), Sense::hover());
-                        brand::mark_static(ui.painter(), r);
+                        brand::app_mark_static(ui.painter(), r);
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), crate::chrome::window_keys);
                     });
                 });

@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="16" height="16" role="img" aria-label="uSDR">
+<defs><linearGradient id="tile" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#171a1f"/><stop offset=".55" stop-color="#0b0d10"/></linearGradient></defs>
+<rect width="16" height="16" rx="2.4" fill="url(#tile)"/>
+<rect x="2" y="7" width="1" height="1" fill="#f43a2a"/>
+<rect x="2" y="8" width="1" height="1" fill="#0a40d0"/>
+<rect x="2" y="8" width="1" height="1" fill="#ffe050"/>
+<rect x="4" y="3" width="1" height="5" fill="#f43a2a"/>
+<rect x="4" y="8" width="1" height="1" fill="#0a40d0"/>
+<rect x="4" y="9" width="1" height="1" fill="#0a40d0"/>
+<rect x="4" y="10" width="1" height="1" fill="#0a40d0"/>
+<rect x="4" y="11" width="1" height="1" fill="#0a40d0"/>
+<rect x="4" y="12" width="1" height="1" fill="#0a40d0"/>
+<rect x="4" y="8" width="1" height="1" fill="#ffe050"/>
+<rect x="6" y="4" width="1" height="4" fill="#f43a2a"/>
+<rect x="6" y="8" width="1" height="1" fill="#0a40d0"/>
+<rect x="6" y="9" width="1" height="1" fill="#0a40d0"/>
+<rect x="6" y="10" width="1" height="1" fill="#0a40d0"/>
+<rect x="6" y="11" width="1" height="1" fill="#0a40d0"/>
+<rect x="6" y="8" width="1" height="1" fill="#ffe050"/>
+<rect x="8" y="5" width="1" height="3" fill="#f43a2a"/>
+<rect x="8" y="8" width="1" height="1" fill="#0a40d0"/>
+<rect x="8" y="9" width="1" height="1" fill="#0a40d0"/>
+<rect x="8" y="10" width="1" height="1" fill="#0a40d0"/>
+<rect x="8" y="8" width="1" height="1" fill="#ffe050"/>
+<rect x="10" y="3" width="1" height="5" fill="#f43a2a"/>
+<rect x="10" y="8" width="1" height="1" fill="#0a40d0"/>
+<rect x="10" y="9" width="1" height="1" fill="#0a40d0"/>
+<rect x="10" y="10" width="1" height="1" fill="#0a40d0"/>
+<rect x="10" y="11" width="1" height="1" fill="#0a40d0"/>
+<rect x="10" y="12" width="1" height="1" fill="#0a40d0"/>
+<rect x="10" y="8" width="1" height="1" fill="#ffe050"/>
+<rect x="12" y="7" width="1" height="1" fill="#f43a2a"/>
+<rect x="12" y="8" width="1" height="1" fill="#0a40d0"/>
+<rect x="12" y="8" width="1" height="1" fill="#ffe050"/>
+</svg>

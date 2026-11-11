@@ -1,5 +1,7 @@
-//! The innerpulse mark, its two motions, and uSDR's take on it: the mark as
-//! six carriers on a panadapter, received into a waterfall.
+//! The innerpulse mark, its two motions, and uSDR's take on it: the app mark
+//! (the bars split at their axis, ember above and waterfall below, as on the
+//! icon) and the connect screen's splash, six carriers on a panadapter
+//! received into a waterfall.
 //!
 //! Geometry and timing follow the brand kit (`scripts/pulse.mjs`): six bars
 //! 22u wide with 4u corners, spread over x = −92…92 in a 220u box, heights
@@ -77,7 +79,61 @@ pub fn paint_mark(painter: &Painter, rect: Rect, h: [f32; 6], color: Color32) {
     }
 }
 
-/// A live mark: draws in once, then beats while `moving`.
+// The app mark's waterfall, from Colormap::Midnight (and the icon's
+// packaging/icon/make_icon.py, which uses the same colors).
+const WF_BLUE: Color32 = Color32::from_rgb(0x0a, 0x40, 0xd0);
+const WF_YELLOW: Color32 = Color32::from_rgb(0xff, 0xe0, 0x50);
+const WF_ORANGE: Color32 = Color32::from_rgb(0xff, 0xa0, 0x20);
+const WF_HOT: Color32 = Color32::from_rgb(0xff, 0xf0, 0xe6);
+/// One Morse unit down the strip, in mark units.
+const DOT: f32 = 4.2;
+/// Each bar's keying as (start, length) in Morse units below the axis: a dit
+/// on the outer bars and U, S, D, R on the four between, as on the icon.
+const KEYING: [&[(f32, f32)]; 6] = [
+    &[(1.0, 1.0)],
+    &[(1.0, 1.0), (3.0, 1.0), (5.0, 3.0)],
+    &[(2.0, 1.0), (4.0, 1.0), (6.0, 1.0)],
+    &[(1.0, 3.0), (5.0, 1.0), (7.0, 1.0)],
+    &[(2.0, 1.0), (4.0, 3.0), (8.0, 1.0)],
+    &[(2.0, 1.0)],
+];
+
+/// uSDR's mark, as on its icon: the innerpulse bars split at their axis,
+/// ember above and a strip of waterfall below. Under 40 px the strip is
+/// plain blue (a carrier there would be a blur, as the window does not sit
+/// on whole pixels the way the small icons do); from 40 px each strip has
+/// its carrier and keyed bursts.
+pub fn paint_app_mark(painter: &Painter, rect: Rect, h: [f32; 6]) {
+    let size = rect.width().min(rect.height());
+    let s = size / 220.0;
+    let c = rect.center();
+    let r = (4.0 * s).round().clamp(0.0, 255.0) as u8;
+    let top = CornerRadius { nw: r, ne: r, sw: 0, se: 0 };
+    let bottom = CornerRadius { nw: 0, ne: 0, sw: r, se: r };
+    let detail = size >= 40.0;
+    for (i, hi) in h.iter().enumerate() {
+        let x = c.x + (-92.0 + PITCH * i as f32) * s;
+        let (x0, x1) = (x - BAR_W / 2.0 * s, x + BAR_W / 2.0 * s);
+        let half = (hi + 11.0) * s;
+        painter.rect_filled(Rect::from_min_max(pos2(x0, c.y - half), pos2(x1, c.y)), top, theme::EMBER);
+        painter.rect_filled(Rect::from_min_max(pos2(x0, c.y), pos2(x1, c.y + half)), bottom, WF_BLUE);
+        if !detail {
+            continue;
+        }
+        let line = (1.1 * s).max(1.0);
+        painter.rect_filled(Rect::from_min_max(pos2(x - line / 2.0, c.y), pos2(x + line / 2.0, c.y + half - r as f32)), 0.0, WF_YELLOW);
+        for &(t, n) in KEYING[i] {
+            let (y0, y1) = (c.y + t * DOT * s, c.y + (t + n * 0.86) * DOT * s);
+            if y1 > c.y + half - r as f32 {
+                break;
+            }
+            painter.rect_filled(Rect::from_min_max(pos2(x - 5.0 * s, y0), pos2(x + 5.0 * s, y1)), 0.0, WF_ORANGE);
+            painter.rect_filled(Rect::from_min_max(pos2(x - line * 0.7, y0), pos2(x + line * 0.7, y1)), 0.0, WF_HOT);
+        }
+    }
+}
+
+/// A live uSDR mark: draws in once, then beats while `moving`.
 pub fn mark(ui: &mut egui::Ui, size: f32, period: f32, reduce_motion: bool) -> egui::Response {
     let (rect, resp) = ui.allocate_exact_size(vec2(size, size), egui::Sense::hover());
     let now = ui.input(|i| i.time);
@@ -85,16 +141,21 @@ pub fn mark(ui: &mut egui::Ui, size: f32, period: f32, reduce_motion: bool) -> e
     let born = ui.ctx().data_mut(|d| *d.get_temp_mut_or_insert_with(key, move || now));
     let age = (ui.input(|i| i.time) - born) as f32;
     let moving = size >= 48.0 && !reduce_motion;
-    paint_mark(ui.painter(), rect, heights_at(age, period, moving), theme::EMBER);
+    paint_app_mark(ui.painter(), rect, heights_at(age, period, moving));
     if moving && (age < 1.2 || period > 0.0) {
         crate::anim::more(ui.ctx());
     }
     resp
 }
 
-/// The static mark at text height, for the credit and the masthead.
+/// The static innerpulse mark at text height, for the credit.
 pub fn mark_static(painter: &Painter, rect: Rect) {
     paint_mark(painter, rect, HEIGHTS, theme::EMBER);
+}
+
+/// The static uSDR mark, for the masthead, the title bar and the strip.
+pub fn app_mark_static(painter: &Painter, rect: Rect) {
+    paint_app_mark(painter, rect, HEIGHTS);
 }
 
 // ---------- the receive splash ----------
@@ -269,5 +330,35 @@ pub fn credit(ui: &mut egui::Ui) {
     );
     if resp.on_hover_text("An innerpulse project").clicked() {
         ui.ctx().open_url(egui::OpenUrl::new_tab("https://www.innerpulse.net/portfolio/#p-usdr"));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The app mark at the sizes the window draws it (title bar, strip,
+    /// masthead, reconnect, connect card) and two larger, beside the plain
+    /// innerpulse mark, on the plate. `USDR_QA_DIR=<dir> cargo test -p
+    /// usdr-desktop qa_renders_the_marks -- --ignored`.
+    #[test]
+    #[ignore]
+    fn qa_renders_the_marks() {
+        let Some(dir) = std::env::var_os("USDR_QA_DIR").map(std::path::PathBuf::from) else { return };
+        let sizes = [12.0, 18.0, 20.0, 22.0, 48.0, 56.0, 96.0, 160.0];
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(560.0, 200.0)).wgpu().build_ui(move |ui| {
+            crate::theme::paint_plate(ui.painter(), ui.max_rect(), crate::theme::plate());
+            let mut x = ui.max_rect().left() + 10.0;
+            let y = ui.max_rect().top() + 10.0;
+            for s in sizes {
+                paint_app_mark(ui.painter(), Rect::from_min_size(pos2(x, y), vec2(s, s)), HEIGHTS);
+                if s <= 22.0 {
+                    mark_static(ui.painter(), Rect::from_min_size(pos2(x, y + s + 8.0), vec2(s, s)));
+                }
+                x += s + 12.0;
+            }
+        });
+        h.run();
+        h.render().expect("render").save(dir.join("marks.png")).expect("save");
     }
 }

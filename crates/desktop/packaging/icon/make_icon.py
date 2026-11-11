@@ -1,239 +1,211 @@
 #!/usr/bin/env python3
-"""Draw the uSDR app icon at every size the launcher and Windows take.
+"""Draw the uSDR app icon at every size the launcher, Windows and the
+server's page take.
 
-The innerpulse tile and mark with a receiver's twist: the six bars stand as
-carriers on a panadapter, the tallest is tuned (an amber passband and VFO
-line through it), and below the frequency scale the carriers write into a
-waterfall in the Midnight ramp. Carbon ground, steel rim lit from above.
+The innerpulse mark split at its axis: each of the six bars is ember above
+the line and a strip of waterfall below it, as if the mark were a row of
+carriers writing down the screen. Each strip has its carrier (a bright
+vertical trace) and keyed bursts on it, and the four middle bars key U, S, D
+and R in Morse, newest at the top. Carbon tile, steel rim lit from above.
 
-128 px and up come from the vector (usdr-icon.svg, rendered by
-rsvg-convert). 16 to 64 px are laid out on their own pixel grid, as the brand
-kit's small icons are, so the bars stay separate instead of smearing into a
-block: 16 and 24 carry only the tuned mark, 32 to 64 add the scale and the
-waterfall.
+Geometry is the brand kit's: bars 22u wide with 4u corners at a 36.8u pitch,
+heights 12 · 76.74 · 56.21 · 42 · 82.16 · 12, each bar standing h + 11 above
+and below its axis (as `brand::paint_mark` draws it).
 
-    python3 packaging/icon/make_icon.py        # writes assets/icon/*
+128 px and up come from the vector, usdr-icon.svg. 16 to 64 px are laid out
+on their own pixel grid (usdr-icon-NN.svg, every edge on a whole pixel) so
+the bars stay separate instead of smearing into a block; both go through
+rsvg-convert. The 32 px grid is also the server page's favicon.
+
+    python3 crates/desktop/packaging/icon/make_icon.py   # writes assets/icon/*
+
+Needs rsvg-convert and ImageMagick (`magick`) for the .ico.
 """
 
-import math
 import subprocess
 import sys
+import urllib.parse
 from pathlib import Path
-
-from PIL import Image
 
 HERE = Path(__file__).resolve().parent
 OUT = HERE.parent.parent / "assets" / "icon"
+SERVER_PAGE = HERE.parents[2] / "server" / "web" / "index.html"
 
 HEIGHTS = [12.0, 76.74, 56.21, 42.0, 82.16, 12.0]
 PITCH = 36.8
 BAR_W = 22.0
-TUNED = 4  # the tallest carrier
+CORNER = 4.0
 
-CARBON_TOP = (0x17, 0x1a, 0x1f)
-CARBON = (0x0b, 0x0d, 0x10)
-EMBER = (0xf4, 0x3a, 0x2a)
-AMBER = (0xff, 0xb3, 0x47)
-STEEL = (0x8f, 0x94, 0x9b)
+CARBON_TOP = "#171a1f"
+CARBON = "#0b0d10"
+EMBER = "#f43a2a"  # theme::EMBER
+# The waterfall, from Colormap::Midnight: navy floor, blue, the yellow and
+# orange of a strong signal, and the warm white it burns to.
+NAVY = "#05207e"  # the oldest lines
+BLUE = "#0a40d0"
+DEEP = "#0a2fa4"  # between navy and blue: the older half of a strip
+AZURE = "#1a80f8"
+YELLOW = "#ffe050"
+ORANGE = "#ffa020"
+HOT = "#fff0e6"
 
-# Colormap::Midnight, as in src/colormap.rs.
-MIDNIGHT = [
-    (0.00, (0x00, 0x00, 0x00)),
-    (0.34, (0x00, 0x03, 0x10)),
-    (0.46, (0x00, 0x18, 0x5A)),
-    (0.56, (0x0A, 0x3C, 0xC0)),
-    (0.64, (0x2A, 0x7C, 0xF0)),
-    (0.71, (0x8A, 0xC8, 0xFF)),
-    (0.78, (0xFF, 0xE8, 0x5A)),
-    (0.87, (0xFF, 0xA0, 0x20)),
-    (0.94, (0xFF, 0x3A, 0x18)),
-    (1.00, (0xFF, 0xF0, 0xE6)),
+# Morse on each bar, as (start, length) in dot units down from the axis.
+DIT, DAH = 1, 3
+
+
+def morse(code, start):
+    out, t = [], start
+    for c in code:
+        n = DIT if c == "." else DAH
+        out.append((t, n))
+        t += n + 1
+    return out
+
+
+KEYING = [
+    morse(".", 1),
+    morse("..-", 1),  # U
+    morse("...", 2),  # S
+    morse("-..", 1),  # D
+    morse(".-.", 2),  # R
+    morse(".", 2),
 ]
-
-
-def ramp(t):
-    t = min(max(t, 0.0), 1.0)
-    for (t0, a), (t1, b) in zip(MIDNIGHT, MIDNIGHT[1:]):
-        if t <= t1:
-            u = (t - t0) / (t1 - t0)
-            return tuple(round(x + (y - x) * u) for x, y in zip(a, b))
-    return MIDNIGHT[-1][1]
-
-
-def hexc(c):
-    return "#%02x%02x%02x" % c
+# The two tall bars also carry a weaker carrier just up the band.
+SECOND = {1, 4}
 
 
 def noise(i, j):
-    """Deterministic grain in 0..1 for waterfall cell (i, j)."""
+    """Deterministic grain in 0..1."""
     n = (i * 374761393 + j * 668265263) & 0xFFFFFFFF
     n = ((n ^ (n >> 13)) * 1274126177) & 0xFFFFFFFF
     return ((n ^ (n >> 16)) & 0xFFFF) / 0xFFFF
 
 
-def level(x, age, i, j):
-    """Waterfall level at mark-x `x` (−110…110), `age` 0 (newest) … 1.
-
-    Each carrier's strength breathes a little line to line, so the columns
-    read as received signals rather than painted stripes."""
-    v = 0.22 + 0.16 * noise(i, j) ** 2
-    for k, h in enumerate(HEIGHTS):
-        cx = -92.0 + PITCH * k
-        d = (x - cx) / 6.0
-        swell = 0.86 + 0.14 * math.sin(age * 9.0 + k * 1.7)
-        v += (h / 82.16) * 0.78 * swell * math.exp(-d * d)
-    return v * (1.0 - 0.18 * age)
+def f(v):
+    return f"{v:.2f}".rstrip("0").rstrip(".")
 
 
 # ---------- the vector (128 px and up) ----------
 
-K = 0.68  # mark scale: pitch 25u, the snapped icons' 0.125 of the tile
-CY = -20.0  # mark center
-BASE = 50.0  # the frequency scale
+K = 0.74  # mark scale in the 200u tile: the mark spans 76% of it
+DOT = 4.2  # one Morse unit, in mark units
 
 
 def vector_svg():
-    cx_t = (-92.0 + PITCH * TUNED) * K
-    out = [
-        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="-100 -100 200 200" width="1024" height="1024" role="img" aria-label="uSDR">',
-        "<defs>",
-        f'<linearGradient id="tile" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="{hexc(CARBON_TOP)}"/><stop offset=".55" stop-color="{hexc(CARBON)}"/></linearGradient>',
+    bw, r = BAR_W * K, CORNER * K
+    defs = [
+        f'<linearGradient id="tile" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="{CARBON_TOP}"/><stop offset=".55" stop-color="{CARBON}"/></linearGradient>',
         '<linearGradient id="rim" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#e3e6e9" stop-opacity=".30"/><stop offset=".35" stop-color="#e3e6e9" stop-opacity=".06"/><stop offset="1" stop-color="#e3e6e9" stop-opacity=".03"/></linearGradient>',
-        f'<linearGradient id="pass" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="{hexc(AMBER)}" stop-opacity=".04"/><stop offset="1" stop-color="{hexc(AMBER)}" stop-opacity=".16"/></linearGradient>',
-        f'<linearGradient id="fade" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="{hexc(CARBON)}" stop-opacity="0"/><stop offset="1" stop-color="{hexc(CARBON)}" stop-opacity=".92"/></linearGradient>',
-        '<clipPath id="clip"><rect x="-100" y="-100" width="200" height="200" rx="45"/></clipPath>',
-        "</defs>",
-        '<rect x="-100" y="-100" width="200" height="200" rx="45" fill="url(#tile)"/>',
-        '<g clip-path="url(#clip)">',
+        # Newest line at the top, a touch brighter; older lines sink to navy.
+        f'<linearGradient id="wf" x1="0" y1="0" x2="0" y2="70" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="{BLUE}"/><stop offset=".5" stop-color="{DEEP}"/><stop offset="1" stop-color="{NAVY}"/></linearGradient>',
+        # A keyed burst: orange at the skirts, yellow toward the carrier.
+        f'<linearGradient id="burst" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="{ORANGE}" stop-opacity="0"/><stop offset=".22" stop-color="{ORANGE}" stop-opacity=".9"/><stop offset=".5" stop-color="{YELLOW}"/><stop offset=".78" stop-color="{ORANGE}" stop-opacity=".9"/><stop offset="1" stop-color="{ORANGE}" stop-opacity="0"/></linearGradient>',
+        f'<linearGradient id="glow" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="{YELLOW}" stop-opacity="0"/><stop offset=".5" stop-color="{YELLOW}" stop-opacity=".45"/><stop offset="1" stop-color="{YELLOW}" stop-opacity="0"/></linearGradient>',
     ]
-    # Graticule: three faint divisions over the panadapter.
-    for y in (-70.0, -40.0, -10.0, 20.0):
-        out.append(f'<rect x="-100" y="{y - 0.3:.2f}" width="200" height=".6" fill="#e3e6e9" opacity=".05"/>')
-    # The waterfall, newest line at the top.
-    cell_w, cell_h = 2.5, 3.0
-    rows = int((100 - BASE - 1.5) / cell_h) + 1
-    cols = int(200 / cell_w)
-    for j in range(rows):
-        y = BASE + 1.5 + j * cell_h
-        age = j / max(rows - 1, 1)
-        for i in range(cols):
-            x = -100 + i * cell_w
-            c = ramp(level((x + cell_w / 2) / K, age, i, j))
-            if c != (0, 0, 0):
-                out.append(f'<rect x="{x:.2f}" y="{y:.2f}" width="{cell_w + 0.05:.2f}" height="{cell_h + 0.05:.2f}" fill="{hexc(c)}"/>')
-    out.append(f'<rect x="-100" y="{BASE}" width="200" height="{100 - BASE}" fill="url(#fade)"/>')
-    # The passband and the VFO line behind the tuned carrier.
-    out.append(f'<rect x="{cx_t - 15:.2f}" y="-100" width="30" height="{BASE + 100:.2f}" fill="url(#pass)"/>')
-    out.append(f'<rect x="{cx_t - 15:.2f}" y="-100" width=".8" height="{BASE + 100:.2f}" fill="{hexc(AMBER)}" opacity=".35"/>')
-    out.append(f'<rect x="{cx_t + 14.2:.2f}" y="-100" width=".8" height="{BASE + 100:.2f}" fill="{hexc(AMBER)}" opacity=".35"/>')
-    out.append(f'<rect x="{cx_t - 0.9:.2f}" y="-100" width="1.8" height="{BASE + 100:.2f}" fill="{hexc(AMBER)}"/>')
-    # The frequency scale and its ticks.
-    out.append(f'<rect x="-100" y="{BASE - 0.6}" width="200" height="1.2" fill="{hexc(STEEL)}" opacity=".7"/>')
-    for k in range(-3, 4):
-        x = k * PITCH * K - 0.6
-        out.append(f'<rect x="{x:.2f}" y="{BASE - 5}" width="1.2" height="4.4" fill="{hexc(STEEL)}" opacity=".7"/>')
-    out.append("</g>")
-    # The mark.
-    out.append(f'<g fill="{hexc(EMBER)}">')
+    bars = []
     for k, h in enumerate(HEIGHTS):
-        x = (-92.0 + PITCH * k - BAR_W / 2) * K
+        cx = (-92.0 + PITCH * k) * K
         half = (h + 11.0) * K
-        out.append(f'<rect x="{x:.2f}" y="{CY - half:.2f}" width="{BAR_W * K:.2f}" height="{2 * half:.2f}" rx="{4 * K:.2f}"/>')
-    out.append("</g>")
-    out.append('<rect x="-99.25" y="-99.25" width="198.5" height="198.5" rx="44.25" fill="none" stroke="url(#rim)" stroke-width="1.5"/>')
+        x0 = cx - bw / 2
+        defs.append(f'<clipPath id="b{k}"><rect x="{f(x0)}" y="{f(-half)}" width="{f(bw)}" height="{f(2 * half)}" rx="{f(r)}"/></clipPath>')
+        g = [f'<g clip-path="url(#b{k})">']
+        g.append(f'<rect x="{f(x0)}" y="{f(-half)}" width="{f(bw)}" height="{f(half)}" fill="{EMBER}"/>')
+        g.append(f'<rect x="{f(x0)}" y="0" width="{f(bw)}" height="{f(half)}" fill="url(#wf)"/>')
+        # Line-to-line grain: the strip reads as received, not painted.
+        y, j = 0.0, 0
+        while y < half:
+            a = 0.04 + 0.16 * noise(k, j) ** 2
+            g.append(f'<rect x="{f(x0)}" y="{f(y)}" width="{f(bw)}" height=".7" fill="{AZURE}" opacity="{a:.2f}"/>')
+            y += 1.4
+            j += 1
+        if k in SECOND:
+            g.append(f'<rect x="{f(cx + 4.9)}" y="0" width=".6" height="{f(half)}" fill="{ORANGE}" opacity=".55"/>')
+        g.append(f'<rect x="{f(cx - 2.4)}" y="0" width="4.8" height="{f(half)}" fill="url(#glow)"/>')
+        g.append(f'<rect x="{f(cx - 0.55)}" y="0" width="1.1" height="{f(half)}" fill="{YELLOW}"/>')
+        for t, n in KEYING[k]:
+            by, bh = t * DOT, n * DOT * 0.86
+            g.append(f'<rect x="{f(cx - 7.2)}" y="{f(by)}" width="14.4" height="{f(bh)}" rx="{f(min(bh, 2.4) / 2)}" fill="url(#burst)"/>')
+            g.append(f'<rect x="{f(cx - 0.75)}" y="{f(by)}" width="1.5" height="{f(bh)}" fill="{HOT}"/>')
+        g.append("</g>")
+        bars.append("".join(g))
+    return "\n".join(
+        [
+            '<svg xmlns="http://www.w3.org/2000/svg" viewBox="-100 -100 200 200" width="1024" height="1024" role="img" aria-label="uSDR">',
+            "<defs>",
+            *defs,
+            "</defs>",
+            '<rect x="-100" y="-100" width="200" height="200" rx="45" fill="url(#tile)"/>',
+            *bars,
+            '<rect x="-99.25" y="-99.25" width="198.5" height="198.5" rx="44.25" fill="none" stroke="url(#rim)" stroke-width="1.5"/>',
+            "</svg>",
+        ]
+    ) + "\n"
+
+
+# ---------- the pixel grids (16 to 64 px) ----------
+
+# size: (pitch, bar width) in pixels. Odd widths from 48 up leave a center
+# column for the carrier.
+GRID = {16: (2, 1), 24: (3, 2), 32: (4, 2), 48: (6, 3), 64: (8, 5)}
+
+
+def grid_svg(n):
+    pitch, w = GRID[n]
+    unit = pitch / PITCH
+    axis = n // 2
+    x_first = (n - (5 * pitch + w)) // 2
+    rx = 0.15 * n if n <= 24 else 0.225 * n
+    out = [
+        f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {n} {n}" width="{n}" height="{n}" role="img" aria-label="uSDR">',
+        f'<defs><linearGradient id="tile" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="{CARBON_TOP}"/><stop offset=".55" stop-color="{CARBON}"/></linearGradient></defs>',
+        f'<rect width="{n}" height="{n}" rx="{f(rx)}" fill="url(#tile)"/>',
+    ]
+    if n >= 48:
+        out.append(f'<rect x=".5" y=".5" width="{n - 1}" height="{n - 1}" rx="{f(rx - 0.5)}" fill="none" stroke="#e3e6e9" stroke-opacity=".10"/>')
+    for k, h in enumerate(HEIGHTS):
+        x = x_first + pitch * k
+        half = max(1, round((h + 11.0) * unit))
+        out.append(f'<rect x="{x}" y="{axis - half}" width="{w}" height="{half}" fill="{EMBER}"/>')
+        # The strip: brighter blue at small sizes, where navy would vanish
+        # into the tile.
+        for j in range(half):
+            age = j / max(half - 1, 1)
+            c = BLUE if n <= 48 or age < 0.5 else DEEP
+            out.append(f'<rect x="{x}" y="{axis + j}" width="{w}" height="1" fill="{c}"/>')
+        keyed = set()
+        for t, m in KEYING[k]:
+            keyed.update(range(t, t + m))
+        if n <= 24:
+            # Too narrow for a carrier: the newest line glows across each
+            # strip, and that seam is the whole waterfall at this size.
+            out.append(f'<rect x="{x}" y="{axis}" width="{w}" height="1" fill="{YELLOW}"/>')
+            continue
+        if n <= 32:
+            # Two pixels: the seam, then each bar's first keyed element.
+            out.append(f'<rect x="{x}" y="{axis}" width="{w}" height="1" fill="{YELLOW}"/>')
+            t, m = KEYING[k][0]
+            t = max(t, 2)
+            for j in range(t, min(t + m, half - 1)):
+                out.append(f'<rect x="{x}" y="{axis + j}" width="{w}" height="1" fill="{ORANGE}"/>')
+            continue
+        mid = x + w // 2
+        out.append(f'<rect x="{mid}" y="{axis}" width="1" height="{half}" fill="{YELLOW}"/>')
+        for j in range(half):
+            if j in keyed:
+                out.append(f'<rect x="{mid - 1}" y="{axis + j}" width="3" height="1" fill="{ORANGE}"/>')
+                out.append(f'<rect x="{mid}" y="{axis + j}" width="1" height="1" fill="{HOT}"/>')
     out.append("</svg>")
     return "\n".join(out) + "\n"
 
 
-# ---------- whole-pixel icons (16 to 64 px) ----------
+def render(svg_path, size, png_path):
+    subprocess.run(["rsvg-convert", "-w", str(size), "-h", str(size), str(svg_path), "-o", str(png_path)], check=True)
 
 
-def tile_mask(size, radius):
-    """The rounded tile's coverage, supersampled, as a list of rows."""
-    ss = 8
-    big = size * ss
-    r = radius * ss
-    cov = []
-    for y in range(size):
-        row = []
-        for x in range(size):
-            hit = 0
-            for sy in range(ss):
-                py = y * ss + sy + 0.5
-                for sx in range(ss):
-                    px = x * ss + sx + 0.5
-                    dx = max(r - px, px - (big - r), 0)
-                    dy = max(r - py, py - (big - r), 0)
-                    hit += dx * dx + dy * dy <= r * r
-            row.append(hit / (ss * ss))
-        cov.append(row)
-    return cov
-
-
-def snapped(size):
-    tiny = size <= 24
-    radius = size * (0.15 if tiny else 0.225)
-    cov = tile_mask(size, radius)
-    px = [[None] * size for _ in range(size)]
-
-    def put(x, y, c, a=1.0):
-        if 0 <= x < size and 0 <= y < size:
-            base = px[y][x]
-            px[y][x] = tuple(round(b + (cc - b) * a) for b, cc in zip(base, c))
-
-    for y in range(size):
-        t = min(y / (size * 0.55), 1.0)
-        bg = tuple(round(a + (b - a) * t) for a, b in zip(CARBON_TOP, CARBON))
-        for x in range(size):
-            px[y][x] = bg
-
-    if tiny:
-        # The brand kit's tray layout: the mark centered, a wider pitch at 24.
-        pitch = math.floor(size * 0.19) if size == 24 else max(2, math.floor(size * 0.147))
-        cy, base = size / 2, None
-    else:
-        pitch = math.floor(size * 0.125)
-        cy, base = round(size * 0.41), round(size * 0.765)
-    w = math.ceil(pitch / 2)
-    unit = pitch / PITCH
-    first = size / 2 - pitch * 5 / 2
-    centers = [round(first + pitch * k - w / 2) for k in range(6)]
-    bottom = base if base else size
-
-    # Passband: the tuned carrier's column, faint amber, its center line full.
-    tx = centers[TUNED]
-    side = 1 if tiny else w // 2 + max(1, pitch // 3)
-    for y in range(bottom):
-        for x in range(tx - side, tx + w + side):
-            put(x, y, AMBER, (0.20 if tiny else 0.16) + 0.08 * y / bottom)
-    if not tiny:
-        line_x = tx + w // 2 if w % 2 else tx + w // 2 - 1
-        for y in range(bottom):
-            put(line_x, y, AMBER, 0.9)
-
-    if base:
-        rows = size - base - 1
-        for j in range(rows):
-            age = j / max(rows - 1, 1)
-            for x in range(size):
-                mx = (x + 0.5 - size / 2) / (unit * 1.0)
-                c = ramp(level(mx, age, x, j))
-                put(x, base + 1 + j, c)
-                # fade into the tile at the bottom
-                put(x, base + 1 + j, CARBON, 0.75 * age)
-        for x in range(size):
-            put(x, base, STEEL, 0.75)
-
-    for k, h in enumerate(HEIGHTS):
-        half = max(w, round(h * unit + w / 2))
-        top = round(cy - half)
-        for y in range(top, top + 2 * half):
-            for x in range(centers[k], centers[k] + w):
-                put(x, y, EMBER)
-
-    img = Image.new("RGBA", (size, size))
-    img.putdata([(*px[y][x], round(255 * cov[y][x])) for y in range(size) for x in range(size)])
-    return img
+def favicon_href():
+    """The 32 px grid as a data URI for the server's page."""
+    svg = " ".join(grid_svg(32).split("\n")).replace('"', "'")
+    return "data:image/svg+xml," + urllib.parse.quote(svg, safe=" '=:/,.-")
 
 
 def main():
@@ -241,12 +213,19 @@ def main():
     svg = OUT / "usdr-icon.svg"
     svg.write_text(vector_svg())
     for n in (128, 256, 512, 1024):
-        subprocess.run(["rsvg-convert", "-w", str(n), "-h", str(n), str(svg), "-o", str(OUT / f"usdr-{n}.png")], check=True)
-    for n in (16, 24, 32, 48, 64):
-        snapped(n).save(OUT / f"usdr-{n}.png")
+        render(svg, n, OUT / f"usdr-{n}.png")
+    for n in GRID:
+        small = OUT / f"usdr-icon-{n}.svg"
+        small.write_text(grid_svg(n))
+        render(small, n, OUT / f"usdr-{n}.png")
     frames = [str(OUT / f"usdr-{n}.png") for n in (16, 24, 32, 48, 64, 128, 256)]
     subprocess.run(["magick", *frames, str(OUT / "usdr.ico")], check=True)
-    print("wrote", OUT)
+
+    page = SERVER_PAGE.read_text()
+    start = page.index('<link rel="icon" href="') + len('<link rel="icon" href="')
+    end = page.index('"', start)
+    SERVER_PAGE.write_text(page[:start] + favicon_href() + page[end:])
+    print("wrote", OUT, "and the favicon in", SERVER_PAGE)
 
 
 if __name__ == "__main__":
