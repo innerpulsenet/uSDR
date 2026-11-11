@@ -418,7 +418,12 @@ visit is passed over while a channel is receiving a chart. The log keeps each me
 id with its text (up to 4000 characters); the site lists each message once from its best
 copy. The first two visits on 2026-11-10 copied nothing: a manual one 22:38–22:52
 (Sydney NS and San Juan slots), noise -81 dBFS, and the schedule's Yarmouth visit
-23:19–23:31, noise -84 dBFS. 518 kHz reception on this antenna is not yet shown.
+23:19–23:31, noise -84 dBFS. Boston's 00:50 visit, the nearest station, copied nothing either
+(-84 dBFS), so the visits came out of the schedule on 2026-11-11: the receiver's reach below
+1 MHz is unproven, and an hour a day of dark channels bought nothing. The log and the site
+still take NAVTEX, so a message copied by hand is kept and listed; the site's section stays
+hidden until one is. Bringing the visits back is a revert of the schedule part of 479a74d,
+once something has shown 518 kHz arriving.
 
 **What has to change.**
 

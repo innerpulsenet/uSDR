@@ -246,10 +246,12 @@ async function showActivity() {
 // Each message once, its text behind its heading: a station repeats a message
 // at every broadcast until it is canceled.
 function navtexSection(list = []) {
+  // Shown only once a message is logged: the station does not visit 518 kHz on its own.
+  if (!list.length) return "";
   const from = (m) => (m.name ? `${m.name} (${m.station})` : m.station ? `Station ${m.station}` : "");
   const head = (m) => [from(m), m.subject, fmtTime(m.t), m.n > 1 ? `heard ${num(m.n)} times` : "", m.complete ? "" : "cut off"].filter(Boolean).map(esc).join(" · ");
   return `<section aria-labelledby="h6"><h2 id="h6" data-rail="NAVTEX">NAVTEX messages</h2><p class="note">Maritime safety broadcasts on 518 kHz: navigational warnings, weather and search and rescue. Each message is listed once, from its best copy.</p>
-      ${list.length ? `<div class="navtex">${list.map((m) => `<details><summary><span class="id">${esc(m.id)}</span><span>${head(m)}</span></summary><pre>${esc(m.text)}</pre></details>`).join("")}</div>` : `<p class="empty">No NAVTEX messages logged.</p>`}
+      <div class="navtex">${list.map((m) => `<details><summary><span class="id">${esc(m.id)}</span><span>${head(m)}</span></summary><pre>${esc(m.text)}</pre></details>`).join("")}</div>
     </section>`;
 }
 
@@ -831,7 +833,7 @@ async function showStation() {
     <section aria-labelledby="hnotes" class="notes-sec">
       <h2 id="hnotes" data-rail="Notes">Reading the log</h2>
       <div class="notes">
-        <article><h3>What it listens to</h3><p>Amateur digital modes (FT8 and WSPR), HFDL aircraft datalink, DSC ship calls, SELCAL, radiofax weather charts, NAVTEX maritime safety messages and SSTV, all below 30 MHz.</p></article>
+        <article><h3>What it listens to</h3><p>Amateur digital modes (FT8 and WSPR), HFDL aircraft datalink, DSC ship calls, SELCAL, radiofax weather charts and SSTV, all below 30 MHz.</p></article>
         <article><h3>How reception is checked</h3><p>Once an hour the receiver checks itself against a time-signal station. A stretch that failed the check or overloaded the receiver is left out of the figures.</p></article>
         <article><h3>What stays private</h3><p>The content of aircraft messages is not published. The station itself stays anonymous, and its position is given only as a four-character grid square. Radio amateurs heard on the air appear by their callsigns and locators, as they do on any public spotting network.</p></article>
         <article class="wide"><h3>What an empty map means</h3><div class="two"><p>Most frequencies are unattended at any given moment. Every stretch of listening is logged, pages divide counts by that time, and hours with none are hatched: an empty cell and a hatched cell mean different things.</p><p>A wire loop this long has a lobed pattern on the higher bands, strong in some directions and weak in others, so a region with no spots does not show the band was closed to it.</p></div></article>
