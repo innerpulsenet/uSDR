@@ -123,6 +123,28 @@ class Ingest(unittest.TestCase):
         self.assertEqual(len(m), 1)
         self.assertEqual((m[0]["id"], m[0]["name"], m[0]["n"], m[0]["text"], m[0]["complete"]), ("FA12", "Boston", 2, "WHOLE", True))
 
+    def test_beacons_heard_fill_their_cells_and_the_hours(self):
+        now = int(time.time())
+        def heard(rid, age_s, call, freq, snr, steps):
+            return self.recent(rid, age_s, dial_hz=freq - 700, freq_hz=freq, mode="BEACON", kind="heard", ident=call, grid="KP20eh", loc_kind="grid6",
+                               snr_db=snr, details={"steps": str(steps), "dash1": "12"})
+        stay = {**STAY, "start_utc": now - 1800, "end_utc": now - 60, "dial_hz": 14_099_300, "mode": "BEACON", "cause": "wideband"}
+        rows = [heard(1, 900, "OH2B", 14_100_000, 8.0, 2), heard(2, 300, "OH2B", 14_100_000, 14.0, 3), heard(3, 7200, "4X6TU", 14_100_000, 3.0, 1)]
+        self.assertEqual(self.send(batch(observations=rows, listening=[stay]))[0], 200)
+        hf_warm.main()
+        b = self.data("activity.json")["beacons"]
+        oh2b = next(x for x in b["beacons"] if x["call"] == "OH2B")["heard"]["14100000"]
+        self.assertEqual((oh2b["n"], oh2b["snr"], oh2b["steps"]), (2, 14.0, 3))
+        self.assertEqual(next(x for x in b["beacons"] if x["call"] == "4X6TU")["heard"], {}, "heard two hours ago, not in the last hour")
+        self.assertEqual(b["listened"]["14100000"], 1740)
+        self.assertEqual(b["listened"]["28200000"], 0)
+        self.assertEqual(sum(n for n, _ in b["hours"][0]), 2, "OH2B and 4X6TU, each in its own hour")
+        self.assertEqual(sum(s for _, s in b["hours"][0]), 1740)
+
+    def test_without_a_beacon_channel_there_is_no_beacon_grid(self):
+        self.warm_with([self.recent(1, 90)])
+        self.assertIsNone(self.data("activity.json")["beacons"])
+
     def test_a_gzip_bomb_is_refused(self):
         bomb = gzip.compress(b" " * (hf_api.MAX_JSON + 1024))
         self.assertLess(len(bomb), hf_api.MAX_BODY)

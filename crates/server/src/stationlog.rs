@@ -147,7 +147,7 @@ CREATE TABLE uplink (
 /// stays home until someone decides otherwise.
 /// The site backend refuses a whole batch with a mode it does not know, which would
 /// stall the uplink: a mode joins here only after the site that accepts it is live.
-const UPLINK_MODES: [&str; 10] = ["FT8", "FT4", "WSPR", "JS8", "HFDL", "DSC", "SELCAL", "WEFAX", "SSTV", "NAVTEX"];
+const UPLINK_MODES: [&str; 11] = ["FT8", "FT4", "WSPR", "JS8", "HFDL", "DSC", "SELCAL", "WEFAX", "SSTV", "NAVTEX", "BEACON"];
 const UPLINK_LIMIT_HZ: i64 = 30_000_000;
 /// A stay's health is settled by the next radio check, or by this long passing.
 const UPLINK_SETTLE_S: u64 = 3 * 3_600;
@@ -239,6 +239,7 @@ pub fn observe(dial_hz: f64, ev: &DecodeEvent, own_call: &str, now: u64) -> Opti
         "HFDL" => hfdl(dial_hz, ev, now)?,
         "DSC" => dsc(dial_hz, ev, now)?,
         "SELCAL" => selcal(dial_hz, ev, now)?,
+        "BEACON" => beacon(dial_hz, ev)?,
         "NAVTEX" if ev.kind.starts_with("message") => navtex(dial_hz, ev, now)?,
         "WEFAX" if ev.kind == "picture" => picture("WEFAX", dial_hz, ev, now, &["lines", "width"]),
         "SSTV" if ev.kind == "end" => picture("SSTV", dial_hz, ev, now, &["lines", "complete"]),
@@ -370,6 +371,18 @@ fn selcal(dial_hz: f64, ev: &DecodeEvent, now: u64) -> Option<Observation> {
     Some(o)
 }
 
+/// An NCDXF/IARU beacon heard in its slot, at the beacon's own locator.
+fn beacon(dial_hz: f64, ev: &DecodeEvent) -> Option<Observation> {
+    let mut o = base(dial_hz, "BEACON", ev, number(ev, "slot")? as u64);
+    o.freq_hz = number(ev, "freqHz")? as u64;
+    o.ident = Some(field(ev, "call")?.to_string());
+    o.grid = Some(field(ev, "grid")?.to_string());
+    o.loc_kind = LocKind::Grid6;
+    o.snr_db = number(ev, "snr");
+    o.public = pick(ev, &["steps", "dash1", "dash2", "dash3", "dash4"]);
+    Some(o)
+}
+
 /// The longest NAVTEX text kept. Messages run to a couple of thousand
 /// characters; anything longer is a decoder that never saw the end.
 const NAVTEX_TEXT_MAX: usize = 4_000;
@@ -405,6 +418,7 @@ pub fn monitored_mode(mode: SdrMode) -> Option<&'static str> {
         SdrMode::Wefax => "WEFAX",
         SdrMode::Sstv => "SSTV",
         SdrMode::Navtex => "NAVTEX",
+        SdrMode::Beacon => "BEACON",
         _ => return None,
     })
 }

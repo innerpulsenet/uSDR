@@ -427,6 +427,12 @@ const MORSE: &[(&str, &str)] = &[
     ("...-.", "<SN>"), ("-.-.-", "<KA>"), ("........", "<HH>"), ("...---...", "<SOS>"),
 ];
 
+/// The Morse for a letter or digit, as dots and dashes.
+pub(crate) fn pattern_of(ch: char) -> Option<&'static str> {
+    let ch = ch.to_ascii_uppercase();
+    MORSE.iter().find(|(_, s)| s.len() == 1 && s.starts_with(ch)).map(|(p, _)| *p)
+}
+
 /// The longest group in the table.
 const MAX_ELEMS: usize = 9;
 

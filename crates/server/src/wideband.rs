@@ -30,6 +30,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use num_complex::Complex32;
 use scannerd_dsp::{HalfbandChain, Nco};
 use scannerd_engine::DecodeEvent;
+use scannerd_engine::beacon::{BEACONS, BANDS_HZ, BeaconDetector, Heard};
 use scannerd_engine::ft8::SlotDecoder;
 use scannerd_engine::ssb::{Sideband, SsbDemod};
 use serde::Serialize;
@@ -158,6 +159,7 @@ fn parse_mode(name: &str) -> Option<SdrMode> {
         "SELCAL" => SdrMode::Selcal,
         "SSTV" => SdrMode::Sstv,
         "WEFAX" => SdrMode::Wefax,
+        "BEACON" => SdrMode::Beacon,
         _ => return None,
     })
 }
@@ -281,6 +283,44 @@ fn process_block(fronts: &mut [Front], channels: &mut [Channel], iq: &[Complex32
 enum Decoder {
     Slots(Box<SlotDecoder>),
     Hf(Box<HfDecoder>),
+    Beacon(Box<BeaconDetector>),
+}
+
+/// A beacon channel's dial sits this far below the beacon frequency, so the
+/// carrier is a Morse pitch in the middle of Morse's passband.
+pub const BEACON_PITCH_HZ: u64 = 700;
+
+/// A beacon heard, as the log and the site take it.
+fn beacon_event(h: &Heard) -> DecodeEvent {
+    let b = &BEACONS[h.beacon];
+    let mhz = BANDS_HZ[h.band] as f64 / 1e6;
+    let power = ["callsign only", "100 W", "down to 10 W", "down to 1 W", "down to 100 mW"][usize::from(h.steps.min(4))];
+    let mut fields = std::collections::BTreeMap::new();
+    let mut put = |k: &str, v: String| {
+        fields.insert(k.to_string(), v);
+    };
+    put("call", b.call.into());
+    put("place", b.place.into());
+    put("grid", b.grid.into());
+    put("freqHz", BANDS_HZ[h.band].to_string());
+    put("slot", h.slot_utc.to_string());
+    put("snr", format!("{:.0}", h.snr_db));
+    put("steps", h.steps.to_string());
+    for (i, d) in h.dashes_db.iter().enumerate() {
+        if let Some(d) = d {
+            put(&format!("dash{}", i + 1), format!("{d:.0}"));
+        }
+    }
+    put("df", format!("{:.1}", h.offset_hz));
+    put("lateMs", h.late_ms.to_string());
+    put("score", format!("{:.0}", h.score));
+    DecodeEvent {
+        protocol: "BEACON".into(),
+        kind: "heard".into(),
+        summary: format!("{} · {mhz:.3} MHz · {:+.0} dB · {power}", b.call, h.snr_db),
+        valid: true,
+        fields,
+    }
 }
 
 struct Channel {
@@ -317,6 +357,10 @@ impl Channel {
         let (low, high) = (low.abs().min(high.abs()), low.abs().max(high.abs()));
         let demod = SsbDemod::with_shape(fs, spec.sideband(), low, high, spec.mode.filter_shape());
         let decoder = match spec.mode.ft8_protocol() {
+            None if spec.mode == SdrMode::Beacon => {
+                let band = scannerd_engine::beacon::band_of(spec.dial_hz + BEACON_PITCH_HZ)?;
+                Decoder::Beacon(Box::new(BeaconDetector::new(fs as f32, band, BEACON_PITCH_HZ as f32)))
+            }
             Some(protocol) => {
                 let mut slots = SlotDecoder::new(protocol, fs);
                 slots.set_band(low, high);
@@ -365,14 +409,19 @@ impl Channel {
         match &mut self.decoder {
             Decoder::Slots(slots) => slots.push(&self.linear, ms),
             Decoder::Hf(hf) => hf.push(&self.linear, self.spec.dial_hz as f64, sink, status),
+            Decoder::Beacon(b) => b.push(&self.linear, ms),
         }
         self.baseband.clear();
     }
 
     /// Finished FT8 or FT4 slots, each decode as the log carries it.
     fn slots_done(&mut self) -> Vec<(u64, Vec<DecodeEvent>)> {
-        let Decoder::Slots(slots) = &mut self.decoder else { return Vec::new() };
-        slots.take().into_iter().map(|(slot_ms, decodes)| (slot_ms, decodes.iter().map(|d| ft8_event(slot_ms, d)).collect())).collect()
+        match &mut self.decoder {
+            Decoder::Slots(slots) => slots.take().into_iter().map(|(slot_ms, decodes)| (slot_ms, decodes.iter().map(|d| ft8_event(slot_ms, d)).collect())).collect(),
+            // Beacons heard, each as its slot's one decode.
+            Decoder::Beacon(b) => b.take().into_iter().map(|h| (h.slot_utc * 1_000, vec![beacon_event(&h)])).collect(),
+            Decoder::Hf(_) => Vec::new(),
+        }
     }
 
     fn busy(&self) -> bool {
@@ -581,6 +630,26 @@ mod tests {
         // The dial just inside the low edge: its audio falls off the bottom.
         let center = 7_171_000.0 + rate * USABLE - top / 2.0;
         assert!(!spec(SdrMode::Sstv, 7_171_000).heard_in(center, rate), "the audio is past the span's low edge");
+    }
+
+    #[test]
+    fn a_beacon_channel_sits_its_pitch_below_a_beacon_frequency() {
+        assert_eq!(parse_specs("BEACON+14099300"), vec![Spec::new(SdrMode::Beacon, 14_099_300, true)]);
+        let rate = 8e6;
+        assert!(Channel::new(spec(SdrMode::Beacon, 14_099_300), 17_607_000.0, rate).is_some());
+        assert!(Channel::new(spec(SdrMode::Beacon, 14_100_000), 17_607_000.0, rate).is_none(), "not a beacon's pitch");
+        // The day slices hold all five between them.
+        for f in BANDS_HZ {
+            let s = spec(SdrMode::Beacon, f - BEACON_PITCH_HZ);
+            assert!(s.heard_in(17_607_000.0, rate) || s.heard_in(24_620_000.0, rate), "{f}");
+        }
+        let h = Heard { band: 1, beacon: 13, slot_utc: 1_794_360_130, snr_db: 12.4, dashes_db: [Some(12.0), Some(2.0), None, None], steps: 2, offset_hz: -3.0, late_ms: 180, score: 40.0 };
+        let ev = beacon_event(&h);
+        assert_eq!(ev.summary, "OH2B · 18.110 MHz · +12 dB · down to 10 W");
+        let o = observe(18_109_300.0, &ev, "", 0).unwrap();
+        assert_eq!((o.mode, o.ident.as_deref(), o.grid.as_deref(), o.freq_hz, o.at_utc), ("BEACON", Some("OH2B"), Some("KP20eh"), 18_110_000, 1_794_360_130));
+        assert_eq!(o.public["steps"], "2");
+        assert!(!o.public.contains_key("dash3"));
     }
 
     /// The night spans hold 40 m's calling frequency and the day spans 20 m's.

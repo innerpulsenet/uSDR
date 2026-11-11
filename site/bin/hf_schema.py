@@ -6,7 +6,7 @@ here because this is the side the public can reach.
 import os
 import sqlite3
 
-MODES = {"FT8", "FT4", "WSPR", "JS8", "HFDL", "DSC", "SELCAL", "WEFAX", "SSTV", "NAVTEX"}
+MODES = {"FT8", "FT4", "WSPR", "JS8", "HFDL", "DSC", "SELCAL", "WEFAX", "SSTV", "NAVTEX", "BEACON"}
 HF_LIMIT_HZ = 30_000_000
 LOC_KINDS = {"reported", "grid4", "grid6", "ground_station", "none"}
 
@@ -21,6 +21,7 @@ DETAILS = {
     "WEFAX": {"lines", "width"},
     "SSTV": {"lines", "complete"},
     "NAVTEX": {"station", "subject", "subjectName", "serial", "complete", "text"},
+    "BEACON": {"steps", "dash1", "dash2", "dash3", "dash4"},
 }
 
 # Details allowed past the usual 64 characters, and how far. A NAVTEX message is

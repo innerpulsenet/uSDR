@@ -181,7 +181,68 @@ def build_activity(conn, now, station_grid):
         f"SELECT substr(grid,1,4) AS g, MIN(at_utc) AS t FROM observations WHERE mode IN ({AMATEUR_SQL}) AND grid IS NOT NULL GROUP BY g HAVING t >= ? ORDER BY t DESC LIMIT 100", (now - 86400,))]
     selcal = [dict(r) for r in conn.execute("SELECT at_utc AS t, ident AS code, dial_hz FROM observations WHERE mode='SELCAL' ORDER BY id DESC LIMIT 100")]
     return {"generated_utc": now, "first_listening_utc": first, "days": days, "bands": heat_rows(labels, b_counts, b_secs), "modes": heat_rows(mode_labels, m_counts, m_secs),
-            "daily": daily, "farthest": farthest, "new_squares": new_squares, "selcal": selcal, "navtex": navtex_messages(conn, now)}
+            "daily": daily, "farthest": farthest, "new_squares": new_squares, "selcal": selcal, "navtex": navtex_messages(conn, now),
+            "beacons": beacon_grid(conn, now)}
+
+
+# The NCDXF/IARU beacons in transmit order, and their five frequencies. A beacon
+# channel's dial sits 700 Hz below the frequency.
+BEACONS = [("4U1UN", "United Nations, New York"), ("VE8AT", "Inuvik, Canada"), ("W6WX", "Mt. Umunhum, California"), ("KH6RS", "Maui, Hawaii"),
+           ("ZL6B", "Masterton, New Zealand"), ("VK6RBP", "Rolystone, Australia"), ("JA2IGY", "Mt. Asama, Japan"), ("RR9O", "Novosibirsk, Russia"),
+           ("VR2B", "Hong Kong"), ("4S7B", "Colombo, Sri Lanka"), ("ZS6DN", "Pretoria, South Africa"), ("5Z4B", "Kikuyu, Kenya"),
+           ("4X6TU", "Tel Aviv, Israel"), ("OH2B", "Lohja, Finland"), ("CS3B", "São Jorge, Madeira"), ("LU4AA", "Buenos Aires, Argentina"),
+           ("OA4B", "Lima, Peru"), ("YV5B", "Caracas, Venezuela")]
+BEACON_FREQS = [14_100_000, 18_110_000, 21_150_000, 24_930_000, 28_200_000]
+BEACON_PITCH_HZ = 700
+
+
+def beacon_grid(conn, now):
+    """Which beacons each frequency heard in the last hour, and how many of the 18
+    in each of the last 24 hours, beside the time the receiver listened there.
+    None until a beacon channel has listened at all in the last day."""
+    day = now - 86400
+    hour = now - 3600
+    first_hour = now // 3600 * 3600 - 23 * 3600
+    listened, by_hour = {}, {}
+    for r in conn.execute("""SELECT dial_hz, start_utc, end_utc FROM listening
+                             WHERE mode='BEACON' AND end_utc >= ? AND healthy IS NOT 0""", (day,)):
+        f = r["dial_hz"] + BEACON_PITCH_HZ
+        if f not in BEACON_FREQS:
+            continue
+        a, b = max(r["start_utc"], hour), min(r["end_utc"], now)
+        if b > a:
+            listened[f] = listened.get(f, 0) + b - a
+        # Spread over the clock hours it covers.
+        t = max(r["start_utc"], first_hour)
+        while t < r["end_utc"]:
+            h = t // 3600 * 3600
+            e = min(r["end_utc"], h + 3600)
+            by_hour[(f, h)] = by_hour.get((f, h), [set(), 0])
+            by_hour[(f, h)][1] += e - t
+            t = e
+    if not by_hour:
+        return None
+    heard = {}
+    for r in conn.execute("SELECT at_utc, ident, freq_hz, snr_db, details FROM observations WHERE mode='BEACON' AND at_utc >= ?", (first_hour,)):
+        f = r["freq_hz"]
+        h = r["at_utc"] // 3600 * 3600
+        by_hour.setdefault((f, h), [set(), 0])[0].add(r["ident"])
+        if r["at_utc"] < hour:
+            continue
+        steps = int(json.loads(r["details"] or "{}").get("steps", 0) or 0)
+        cell = heard.setdefault((r["ident"], f), {"n": 0, "snr": None, "steps": 0, "t": 0})
+        cell["n"] += 1
+        if r["snr_db"] is not None and (cell["snr"] is None or r["snr_db"] > cell["snr"]):
+            cell["snr"] = r["snr_db"]
+        cell["steps"] = max(cell["steps"], steps)
+        cell["t"] = max(cell["t"], r["at_utc"])
+    return {
+        "freqs": BEACON_FREQS,
+        "listened": {str(f): listened.get(f, 0) for f in BEACON_FREQS},
+        "beacons": [{"call": call, "place": place, "heard": {str(f): heard[(call, f)] for f in BEACON_FREQS if (call, f) in heard}} for call, place in BEACONS],
+        "first_hour": first_hour,
+        "hours": [[[len(by_hour.get((f, first_hour + k * 3600), [set(), 0])[0]), by_hour.get((f, first_hour + k * 3600), [set(), 0])[1]] for k in range(24)] for f in BEACON_FREQS],
+    }
 
 
 # The stations whose slots the receiver visits, and any others a slot catches.

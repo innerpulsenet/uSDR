@@ -239,8 +239,52 @@ async function showActivity() {
     <section aria-labelledby="h5"><h2 id="h5" data-rail="SELCAL">SELCAL calls</h2><p class="note">A SELCAL call is a two-pair code sent to wake one aircraft's radio. It carries no position.</p>
       ${a.selcal.length ? `<div class="scroll"><table><thead><tr><th>Time</th><th>Code</th><th>kHz</th></tr></thead><tbody>${a.selcal.map((c) => `<tr><td>${fmtTime(c.t)}</td><td class="id">${esc(c.code)}</td><td>${khz(c.dial_hz)}</td></tr>`).join("")}</tbody></table></div>` : `<p class="empty">No SELCAL calls logged.</p>`}
     </section>
-    ${navtexSection(a.navtex)}`;
+    ${navtexSection(a.navtex)}
+    ${beaconSection(a.beacons)}`;
   wireSpectrum(spectrum);
+}
+
+// The NCDXF/IARU beacons: which of the 18 each frequency heard in the last hour,
+// at what strength and down to which power step, then how many of them each
+// hour of the last day. Shown once a beacon channel has listened.
+const BEACON_POWER = ["the callsign only", "the 100 W dash", "down to 10 W", "down to 1 W", "down to 100 mW"];
+function beaconSection(b) {
+  if (!b) return "";
+  const mhz = (f) => (f / 1e6).toFixed(3);
+  const signed = (x) => `${x > 0 ? "+" : x < 0 ? "−" : ""}${Math.abs(Math.round(x))}`;
+  // −20 dB is a beacon just heard, +30 dB a loud one.
+  const shadeStep = (snr) => Math.max(0, Math.min(STEPS.length - 1, Math.floor(((snr + 20) / 50) * STEPS.length)));
+  const pips = (k) => `<span class="pips" aria-hidden="true">${[1, 2, 3, 4].map((i) => `<i${i <= k ? ' class="lit"' : ""}></i>`).join("")}</span>`;
+  const cell = (row, f) => {
+    const at = `${row.call} on ${mhz(f)} MHz`;
+    const listened = b.listened[f] || 0;
+    const h = row.heard[f];
+    if (h) {
+      const tip = `${at}: heard ${num(h.n)} ${h.n === 1 ? "time" : "times"} in the last hour, best ${signed(h.snr)} dB, ${BEACON_POWER[h.steps]}, last ${fmtTime(h.t)}`;
+      const step = shadeStep(h.snr ?? -20);
+      return `<td class="bc hit${step < 2 ? " dim" : ""}" data-tip="${esc(tip)}" style="--c:${STEPS[step]}"><span class="v">${signed(h.snr ?? 0)}</span>${pips(h.steps)}<span class="sr">${esc(tip)}</span></td>`;
+    }
+    if (listened < 60) return `<td class="bc out" data-tip="${esc(at)}: not listened to in the last hour"><span class="sr">not listened to</span></td>`;
+    return `<td class="bc q" data-tip="${esc(`${at}: listened ${hours(listened)}, not heard`)}"><span class="sr">not heard</span></td>`;
+  };
+  const heardOn = (f) => b.beacons.filter((r) => r.heard[f]).length;
+  const hourCell = ([n, s], f, k) => {
+    const at = `${mhz(f)} MHz, ${utcClock((b.first_hour + k * 3600) / 60)}Z`;
+    if (!s) return `<i class="out" style="--h:${k}" data-tip="${esc(at)}: not listened to"></i>`;
+    if (!n) return `<i class="q" style="--h:${k}" data-tip="${esc(at)}: listened ${hours(s)}, no beacon heard"></i>`;
+    return `<i style="--h:${k};background:${STEPS[Math.min(STEPS.length - 1, Math.floor((n / 18) * STEPS.length))]}" data-tip="${esc(at)}: ${n} of 18 beacons heard, ${hours(s)} listened"></i>`;
+  };
+  return `<section aria-labelledby="h7"><h2 id="h7" data-rail="Beacons">Beacons around the world</h2>
+      <p class="note">Eighteen beacons on six continents take turns on five frequencies, ten seconds each, every three minutes: a callsign, then dashes at 100 W, 10 W, 1 W and 100 mW. A beacon heard down to its last dash is an open path; one heard at 100 W only, a path just open. Strength is over the noise in 2500 Hz, as FT8 reports it.</p>
+      <div class="scroll"><table class="beacons"><thead><tr><th>Beacon</th>${b.freqs.map((f) => `<th><span class="mhz">${mhz(f)}</span><span class="cnt">${heardOn(f)} heard</span></th>`).join("")}</tr></thead>
+      <tbody>${b.beacons.map((r) => `<tr><th scope="row"><span class="id">${esc(r.call)}</span><span class="place">${esc(r.place)}</span></th>${b.freqs.map((f) => cell(r, f)).join("")}</tr>`).join("")}</tbody></table></div>
+      <p class="fig-read heat-read" aria-live="off">Point at a cell for a reading. The last hour; dots are the dashes heard.</p>
+      <h3 class="sub">Beacons heard each hour, last 24 hours</h3>
+      <div class="scroll"><div class="heat">
+        ${b.freqs.map((f, i) => `<div class="rowlabel">${mhz(f)}</div><div class="cells24">${b.hours[i].map((c, k) => hourCell(c, f, k)).join("")}</div>`).join("")}
+        <div class="hours">${Array.from({ length: 24 }, (_, k) => { const h = new Date((b.first_hour + k * 3600) * 1000).getUTCHours(); return `<span>${h % 3 === 0 ? String(h).padStart(2, "0") : ""}</span>`; }).join("")}</div>
+      </div></div><p class="fig-read heat-read" aria-live="off">Point at a cell for a reading. Hours are UTC.</p>
+    </section>`;
 }
 
 // Each message once, its text behind its heading: a station repeats a message
@@ -833,7 +877,7 @@ async function showStation() {
     <section aria-labelledby="hnotes" class="notes-sec">
       <h2 id="hnotes" data-rail="Notes">Reading the log</h2>
       <div class="notes">
-        <article><h3>What it listens to</h3><p>Amateur digital modes (FT8 and WSPR), HFDL aircraft datalink, DSC ship calls, SELCAL, radiofax weather charts and SSTV, all below 30 MHz.</p></article>
+        <article><h3>What it listens to</h3><p>Amateur digital modes (FT8, FT4, JS8 and WSPR), HFDL aircraft datalink, DSC ship calls, SELCAL, radiofax weather charts, SSTV and the NCDXF/IARU beacons, all below 30 MHz.</p></article>
         <article><h3>How reception is checked</h3><p>Once an hour the receiver checks itself against a time-signal station. A stretch that failed the check or overloaded the receiver is left out of the figures.</p></article>
         <article><h3>What stays private</h3><p>The content of aircraft messages is not published. The station itself stays anonymous, and its position is given only as a four-character grid square. Radio amateurs heard on the air appear by their callsigns and locators, as they do on any public spotting network.</p></article>
         <article class="wide"><h3>What an empty map means</h3><div class="two"><p>Most frequencies are unattended at any given moment. Every stretch of listening is logged, pages divide counts by that time, and hours with none are hatched: an empty cell and a hatched cell mean different things.</p><p>A wire loop this long has a lobed pattern on the higher bands, strong in some directions and weak in others, so a region with no spots does not show the band was closed to it.</p></div></article>

@@ -66,6 +66,26 @@ td.id a:hover { text-decoration-color: var(--innerpulse-pulse); }
 .navtex summary { display: flex; gap: 14px; align-items: baseline; padding: 9px 0; cursor: pointer; font: 400 13px/1.4 var(--innerpulse-mono); color: var(--innerpulse-text-2); }
 .navtex summary .id { color: var(--innerpulse-text); flex: none; }
 .navtex summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.beacons { border-collapse: collapse; width: 100%; min-width: 520px; font: 400 12px/1.2 var(--innerpulse-mono); }
+.beacons th, .beacons td { padding: 3px 4px; text-align: center; position: relative; }
+.beacons thead th { font-weight: 500; color: var(--innerpulse-text-2); vertical-align: bottom; }
+.beacons thead .mhz, .beacons thead .cnt { display: block; }
+.beacons thead .cnt { color: var(--innerpulse-text-3); font-weight: 400; margin-top: 2px; }
+.beacons tbody th { text-align: left; font-weight: 400; min-width: 9em; max-width: 14em; text-transform: none; letter-spacing: 0; }
+.beacons tbody th .place { display: block; color: var(--innerpulse-text-3); font-size: 11px; }
+/* The names stay put while a phone scrolls the frequencies past them. */
+.beacons tbody th, .beacons thead th:first-child { position: sticky; left: 0; z-index: 2; background: var(--innerpulse-ground); }
+.beacons td.bc { height: 34px; min-width: 64px; border: 2px solid var(--innerpulse-ground); border-radius: 3px; cursor: crosshair; }
+.beacons td.q { background: var(--innerpulse-surface-3); }
+.beacons td.out { background: repeating-linear-gradient(135deg, var(--innerpulse-surface-2) 0 3px, var(--innerpulse-ground) 3px 6px); }
+.beacons td.hit { --t: #1a1206; background: var(--c); color: var(--t); font-weight: 600; }
+.beacons td.hit.dim { --t: #f3e3cf; }
+.beacons td.hit .v { display: block; }
+.beacons .pips { display: inline-flex; gap: 3px; margin-top: 2px; }
+.beacons .pips i { width: 5px; height: 5px; border-radius: 50%; border: 1px solid var(--t); opacity: .7; }
+.beacons .pips i.lit { background: var(--t); opacity: 1; }
+.beacons td.bc.on, .beacons td.bc:hover { outline: 1.5px solid var(--innerpulse-text); outline-offset: -1px; }
+.sub { font: 500 var(--innerpulse-text-sm, 14px)/1.3 var(--innerpulse-sans, inherit); margin: 22px 0 0; color: var(--innerpulse-text-2); }
 .navtex pre { margin: 0 0 14px; padding: 12px 14px; border-left: 2px solid var(--innerpulse-line-2); font: 400 12.5px/1.5 var(--innerpulse-mono); color: var(--innerpulse-text-2); white-space: pre-wrap; overflow-wrap: anywhere; }
 tbody tr:hover { background: var(--innerpulse-surface-1); }
 

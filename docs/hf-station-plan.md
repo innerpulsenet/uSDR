@@ -425,6 +425,31 @@ still take NAVTEX, so a message copied by hand is kept and listed; the site's se
 hidden until one is. Bringing the visits back is a revert of the schedule part of 479a74d,
 once something has shown 518 kHz arriving.
 
+**JS8, 2026-11-11.** JS8 channels on 1842, 3578, 7078, 10130, 14078, 18104, 21078, 24922
+and 28078 kHz, the JS8Call defaults; a slice holds three of them. On the 5.4 MHz night slice,
+180 s each, back to back, with the main decoder on DSC 2185.8 kHz: the wideband workers
+stayed at 0.39 to 0.40 of a core and the FT8/FT4 slot pool at 0.29 to 0.30, and the JS8
+decoder's own thread added 0.13 for its three channels. No dropped blocks. In the first
+14 minutes the 7078 kHz channel logged 348 frames and 3578 kHz 23. A 10-minute side-by-side
+on 7078 kHz had the main receiver copy 62 frames, mostly Normal speed, some Fast.
+
+**NCDXF/IARU beacons, 2026-11-11.** Eighteen beacons take turns on 14.100, 18.110, 21.150,
+24.930 and 28.200 MHz, ten seconds each, so the clock alone says which one is on. A
+`BEACON` channel's dial sits 700 Hz below the frequency (`crates/engine/src/beacon.rs`,
+`wideband.rs`). Per slot the detector finds the carrier within ±60 Hz, matches its
+envelope against the scheduled callsign's Morse at 22 WPM over starts up to 1.5 s late,
+and counts the call only when the match stands 6 standard deviations clear of the same
+match in the noise 250 Hz either side and fits better than the other seventeen calls.
+It then measures the dashes in turn (100 W, 10 W, 1 W, 100 mW); the steps heard are the
+dashes heard in a row. Strength is over the noise in 2500 Hz, as FT8 reports it. Each
+heard slot is one `BEACON` row at the beacon's locator. The Activity page shows the 18
+by 5 grid for the last hour and how many of the 18 each frequency heard each hour of the
+last day. The project's pages give no timing inside a slot, so the detector finds the
+callsign's start and each dash's itself; `lateMs` in each row says where the call began.
+Only the day slices hold the five frequencies (14.1 to 21.15 MHz in the 17.6 MHz slice,
+21.15 to 28.2 MHz in the 24.6 MHz one), so the beacons are heard by day only. A 14.100 MHz
+recording at 02:40 UTC heard nothing: 20 m was closed.
+
 **What has to change.**
 
 - **Channels from the span.** A narrow channel filter per decoder, one `HfDecoder` per
