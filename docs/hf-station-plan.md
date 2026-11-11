@@ -217,8 +217,16 @@ anything above 30 MHz.
 Static HTML, CSS and JS on the innerpulse brand kit in Carbon, copied into `site/brand`,
 linked with `dx.innerpulse.net`.
 
-**Pages:** Now, Map, Activity, Traffic (aircraft and ship calls), Pictures, Log with
-station lookup, and Station (how it works, what was monitored, and noise by band).
+**Pages:** Now, Map, Activity, Pictures, Log with station lookup, and Station (how it
+works, what was monitored, and noise by band).
+
+**Rework, 2026-11-10.** Traffic folded into the Map: amateur squares, aircraft, HFDL ground
+stations, ships and the night side are layers of one map, each switched on alone or together,
+with its own filters, a count in view, and a sortable list under the map of what the view holds
+(`#/traffic` links forward to the map with aircraft and ships on). The Log is one row per
+station, aircraft, ship and SELCAL code instead of the latest 500 decodes, with distance, bearing
+and bands. Pictures group by UTC day with older days folded, filter by kind and station, keep the
+newest of each chart at the top, and load older months from `pictures-YYYY-MM.json`.
 
 **Map.**
 
