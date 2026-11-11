@@ -1744,6 +1744,15 @@ mod tests {
             }
         }
 
+        /// The same transmission sampled at `fs` instead of 48 kHz, with the
+        /// noise scaled to keep the SNR in 3 kHz. Before `with_fading`.
+        fn at_rate(mut self, fs: f64) -> Self {
+            let k = fs / 48_000.0;
+            self.fs *= k;
+            self.sigma *= k.sqrt();
+            self
+        }
+
         fn with_fading(mut self, spread_hz: f64, delay_s: f64) -> Self {
             let fd = Fading::new(&mut self.rng, spread_hz, delay_s, self.fs, 400.0);
             self.hist = vec![Complex64::new(0.0, 0.0); fd.delay.max(1)];
@@ -1962,6 +1971,41 @@ mod tests {
         assert!(dc.abs() <= 3);
         assert!(mae < 30.0, "mae {mae}");
         assert!(corr > 0.9, "corr {corr}");
+    }
+
+    /// A change of baseband band costs no time. At the wideband channels'
+    /// 62.5 kHz the input filter runs by overlap-save, whose redesign once
+    /// swallowed a filter length of samples: each band change slipped the
+    /// line clock ten pixels, and on fading signals, where the band moves
+    /// often, the phasing fit took the slips for a 200 ppm clock error and
+    /// leaned the chart. Here the band is knocked down every 1.5 s through
+    /// phasing and picture (the SNR brings it back, a second change), on a
+    /// perfect clock.
+    #[test]
+    fn wefax_band_changes_keep_the_line_clock() {
+        const ROWS: usize = 60;
+        for fs in [62_500.0, 47_904.191_616_766_47] {
+            let mut syn = Synth::new(31, 0.1, 30.0, 1900.0, 0.0).at_rate(fs);
+            syn.fax(300.0, ROWS, 1809);
+            let mut dec = WefaxDecoder::new(fs as f32);
+            let (mut events, mut next_knock) = (Vec::new(), 0.0);
+            for (i, chunk) in syn.out.chunks(2_000).enumerate() {
+                let t = (i * 2_000) as f64 / fs;
+                if t >= next_knock {
+                    dec.pick_band(f32::MIN);
+                    next_knock = t + 1.5;
+                }
+                dec.push(chunk);
+                events.extend(dec.take_events());
+            }
+            assert_eq!(kinds(&events), "SPLE", "{fs} Hz: events {:?}", kinds(&events));
+            let got = rows(&events);
+            let (mae, dr, dc) = align(&got, ROWS, 1809, 8);
+            println!("{fs} Hz: auto slant {:+.1} ppm, mae {mae:.2}, row offset {dr}, col offset {dc}", dec.auto_slant_ppm());
+            assert!(dec.auto_slant_ppm().abs() < 20.0, "{fs} Hz: auto slant {} ppm on a perfect clock", dec.auto_slant_ppm());
+            assert!(dc.abs() <= 3, "{fs} Hz: column offset {dc}");
+            assert!(mae < 12.0, "{fs} Hz: mae {mae}");
+        }
     }
 
     #[test]

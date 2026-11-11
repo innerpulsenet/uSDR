@@ -138,3 +138,55 @@ fn reset_severs_buffered_history() {
          chain by {maxdiff} — pre-reset samples leaked into the post-reset run"
     );
 }
+
+// A redesign mid-stream on the overlap-save path loses nothing. From the
+// moment a filter is redesigned from 1200 Hz to 1000 Hz at the same length,
+// it gives the same samples as one built at 1000 Hz; at a new length, it
+// gives as many samples as one never changed. (The radiofax decoder's line
+// clock once slipped 33 samples at each such change.)
+#[test]
+fn redesign_keeps_the_stream_in_step() {
+    use scannerd_dsp::DecimFir;
+    // 165 taps decimating by 5 at 62.5 kHz takes the overlap-save path.
+    let (fs, decim, taps) = (62_500.0f32, 5usize, 165usize);
+    let n = 200_000usize;
+    let mut seed = 0x2545_F491_4F6C_DD1Du64;
+    let iq: Vec<num_complex::Complex32> = (0..n)
+        .map(|_| {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            let a = (seed >> 40) as f32 / (1u64 << 24) as f32 - 0.5;
+            let b = (seed & 0xFF_FFFF) as f32 / (1u64 << 24) as f32 - 0.5;
+            num_complex::Complex32::new(a, b)
+        })
+        .collect();
+    let switch_at = 9;
+    let filter = |redesign: Option<(f32, usize)>, cutoff: f32| {
+        let mut fir = DecimFir::new(cutoff, fs, decim, taps);
+        let (mut out, mut tmp) = (Vec::new(), Vec::new());
+        for (i, chunk) in iq.chunks(4_096).enumerate() {
+            if i == switch_at
+                && let Some((cut, len)) = redesign
+            {
+                fir.set_taps(cut, fs, len);
+            }
+            fir.process(chunk, &mut tmp);
+            out.extend_from_slice(&tmp);
+        }
+        out
+    };
+    let unchanged = filter(None, 1_200.0);
+    // 161 taps is the shortest that stays on this path; a change of path starts over.
+    for len in [taps, 201, 161] {
+        let changed = filter(Some((1_000.0, len)), 1_200.0);
+        assert_eq!(changed.len(), unchanged.len(), "{taps} -> {len} taps: as many samples out");
+    }
+    // Same length: past one filter length after the change, the same filter
+    // on the same samples.
+    let changed = filter(Some((1_000.0, taps)), 1_200.0);
+    let built = filter(None, 1_000.0);
+    let from = (switch_at * 4_096 + taps) / decim + 1;
+    let worst = changed[from..].iter().zip(&built[from..]).map(|(x, y)| (x - y).norm()).fold(0.0f32, f32::max);
+    assert!(worst < 1e-5, "differs by {worst} after the change");
+}

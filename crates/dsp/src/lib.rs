@@ -789,7 +789,8 @@ pub struct DecimFir {
     /// Absolute filtered-sample count since startup, against `warmup`.
     g: u64,
     /// Samples of startup transient the FIR swallows before emitting:
-    /// taps - 1, re-armed on every tap redesign. (Was the `fft_warm` counter.)
+    /// taps - 1, armed at the start and on a reset, not on a redesign.
+    /// (Was the `fft_warm` counter.)
     warmup: u64,
 }
 
@@ -906,6 +907,10 @@ impl DecimFir {
         // what overlap-save costs, so a longer hop spreads them over more
         // samples. At 2047 taps an 8192-point transform costs about 30% less
         // per sample than the 4096 one, for 1 ms more latency at 6 MS/s.
+        // A filter already running on this path is redesigned in place: its
+        // stream carries on with no samples lost. One that has not yet seen
+        // a sample starts as if it had been built this way.
+        let running = self.fft.is_some() && self.g > 0;
         let fft_len = (self.taps.len() * 4).next_power_of_two();
         // A new cutoff at the same length (every step of a filter drag)
         // keeps the plans: planning cost a millisecond or two on the radio
@@ -928,22 +933,28 @@ impl DecimFir {
             fft.get_inplace_scratch_len().max(ifft.get_inplace_scratch_len()),
             Complex32::new(0.0, 0.0),
         );
-        self.overlap
-            .resize(self.taps.len() - 1, Complex32::new(0.0, 0.0));
-        // The overlap is state of the OLD tap count: after a redesign its
-        // length meaning changed, so zero it rather than feed a stale tail
-        // into the first new frame. The buffered INPUT in `buf`, though, is
-        // raw samples that are valid under any tap set — keep it. Clearing it
-        // here used to drop up to one hop of real audio mid-stream, an audible
-        // gap on every `set_cutoff`/`set_taps`; the redesign's transient is
-        // already handled by re-arming `warmup`, and `process_fft` happily
-        // drains a `buf` longer than the new hop.
-        self.overlap.fill(Complex32::new(0.0, 0.0));
+        // The overlap and `buf` are raw input, valid under any tap set, so a
+        // redesign keeps both, and keeps the kept-sample grid (`g`, `warmup`)
+        // where it was. A longer filter takes zeros before the oldest sample
+        // held, a brief transient but no shift in time. Zeroing the overlap
+        // and re-arming the warm-up here, as this once did, swallowed
+        // `taps - 1` input samples on every `set_cutoff`: the radiofax
+        // decoder's line clock slipped about 10 pixels at each change of its
+        // SNR band and fitted the slips as a clock error of 200 ppm.
+        let discard = self.taps.len() - 1;
+        if running {
+            let mut kept = vec![Complex32::new(0.0, 0.0); discard];
+            let n = self.overlap.len().min(discard);
+            kept[discard - n..].copy_from_slice(&self.overlap[self.overlap.len() - n..]);
+            self.overlap = kept;
+        } else {
+            self.overlap = vec![Complex32::new(0.0, 0.0); discard];
+            self.phase = 0;
+            self.g = 0;
+            self.warmup = discard as u64;
+        }
         self.fft = Some(fft);
         self.ifft = Some(ifft);
-        self.phase = 0;
-        self.g = 0;
-        self.warmup = (self.taps.len() - 1) as u64;
     }
 
     fn process_fft(&mut self, input: &[Complex32], out: &mut Vec<Complex32>) {
