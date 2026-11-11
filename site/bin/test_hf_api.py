@@ -138,7 +138,9 @@ class Ingest(unittest.TestCase):
         self.assertEqual(next(x for x in b["beacons"] if x["call"] == "4X6TU")["heard"], {}, "heard two hours ago, not in the last hour")
         self.assertEqual(b["listened"]["14100000"], 1740)
         self.assertEqual(b["listened"]["28200000"], 0)
-        self.assertEqual(sum(n for n, _ in b["hours"][0]), 2, "OH2B and 4X6TU, each in its own hour")
+        # One per beacon per clock hour it was heard in.
+        expect = len({(r["ident"], r["at_utc"] // 3600) for r in rows})
+        self.assertEqual(sum(n for n, _ in b["hours"][0]), expect)
         self.assertEqual(sum(s for _, s in b["hours"][0]), 1740)
 
     def test_without_a_beacon_channel_there_is_no_beacon_grid(self):
