@@ -590,11 +590,13 @@ cargo build --release -p usdr-desktop
 `crates/desktop/packaging/linux/install.sh` installs it for the current user
 with a launcher and icons (the launcher is what gives the window its icon
 under Wayland); `install.sh --uninstall` removes them again. The icon is the
-innerpulse mark split at its axis, ember above and a strip of waterfall below
-each bar. The set (the SVG, PNGs from 16 to 1024 px, the Windows `.ico` and
-the server page's favicon) is drawn by
-`python3 crates/desktop/packaging/icon/make_icon.py`; 16 to 64 px are laid
-out on their own pixel grid (`usdr-icon-NN.svg`). `usdr-desktop --probe host:port` connects without a window,
+innerpulse kit's product icon: a steel plate, one strike and the letters
+uSDR ("u" alone at 32 px and below), with the strike split at its axis, ember above and a strip of
+waterfall below. The set (the flat and machined SVGs, PNGs from 16 to
+1024 px, the Windows `.ico` and the server page's favicon) is drawn by
+`python3 crates/desktop/packaging/icon/make_icon.py`; 16 to 48 px are the
+flat icon on their own pixel grids (`usdr-icon-NN.svg`), 64 px and up the
+machined one. `usdr-desktop --probe host:port` connects without a window,
 decodes four seconds of the stream and prints what it saw.
 
 The window is laid out by what each control acts on:

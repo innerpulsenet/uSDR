@@ -1,44 +1,9 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" role="img" aria-label="uSDR">
-<defs><linearGradient id="tile" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#171a1f"/><stop offset=".55" stop-color="#0b0d10"/></linearGradient></defs>
-<rect width="24" height="24" rx="3.6" fill="url(#tile)"/>
-<rect x="3" y="10" width="2" height="2" fill="#f43a2a"/>
-<rect x="3" y="12" width="2" height="1" fill="#0a40d0"/>
-<rect x="3" y="13" width="2" height="1" fill="#0a40d0"/>
-<rect x="3" y="12" width="2" height="1" fill="#ffe050"/>
-<rect x="6" y="5" width="2" height="7" fill="#f43a2a"/>
-<rect x="6" y="12" width="2" height="1" fill="#0a40d0"/>
-<rect x="6" y="13" width="2" height="1" fill="#0a40d0"/>
-<rect x="6" y="14" width="2" height="1" fill="#0a40d0"/>
-<rect x="6" y="15" width="2" height="1" fill="#0a40d0"/>
-<rect x="6" y="16" width="2" height="1" fill="#0a40d0"/>
-<rect x="6" y="17" width="2" height="1" fill="#0a40d0"/>
-<rect x="6" y="18" width="2" height="1" fill="#0a40d0"/>
-<rect x="6" y="12" width="2" height="1" fill="#ffe050"/>
-<rect x="9" y="7" width="2" height="5" fill="#f43a2a"/>
-<rect x="9" y="12" width="2" height="1" fill="#0a40d0"/>
-<rect x="9" y="13" width="2" height="1" fill="#0a40d0"/>
-<rect x="9" y="14" width="2" height="1" fill="#0a40d0"/>
-<rect x="9" y="15" width="2" height="1" fill="#0a40d0"/>
-<rect x="9" y="16" width="2" height="1" fill="#0a40d0"/>
-<rect x="9" y="12" width="2" height="1" fill="#ffe050"/>
-<rect x="12" y="8" width="2" height="4" fill="#f43a2a"/>
-<rect x="12" y="12" width="2" height="1" fill="#0a40d0"/>
-<rect x="12" y="13" width="2" height="1" fill="#0a40d0"/>
-<rect x="12" y="14" width="2" height="1" fill="#0a40d0"/>
-<rect x="12" y="15" width="2" height="1" fill="#0a40d0"/>
-<rect x="12" y="12" width="2" height="1" fill="#ffe050"/>
-<rect x="15" y="4" width="2" height="8" fill="#f43a2a"/>
-<rect x="15" y="12" width="2" height="1" fill="#0a40d0"/>
-<rect x="15" y="13" width="2" height="1" fill="#0a40d0"/>
-<rect x="15" y="14" width="2" height="1" fill="#0a40d0"/>
-<rect x="15" y="15" width="2" height="1" fill="#0a40d0"/>
-<rect x="15" y="16" width="2" height="1" fill="#0a40d0"/>
-<rect x="15" y="17" width="2" height="1" fill="#0a40d0"/>
-<rect x="15" y="18" width="2" height="1" fill="#0a40d0"/>
-<rect x="15" y="19" width="2" height="1" fill="#0a40d0"/>
-<rect x="15" y="12" width="2" height="1" fill="#ffe050"/>
-<rect x="18" y="10" width="2" height="2" fill="#f43a2a"/>
-<rect x="18" y="12" width="2" height="1" fill="#0a40d0"/>
-<rect x="18" y="13" width="2" height="1" fill="#0a40d0"/>
-<rect x="18" y="12" width="2" height="1" fill="#ffe050"/>
+<rect width="24" height="24" rx="3" fill="#171a1f"/>
+<clipPath id="ss"><rect x="4" y="5" width="3" height="14" rx="0"/></clipPath><g clip-path="url(#ss)">
+<rect x="4" y="5" width="3" height="7" fill="#f43a2a"/>
+<rect x="4" y="12" width="3" height="7" fill="#0a40d0"/>
+<rect x="5" y="12" width="1" height="7" fill="#ffe050"/>
+</g>
+<g transform="scale(0.12000) translate(100 100)"><path transform="translate(-37.88 29.45) scale(1.2400)" d="M95.30000000000001 0.0H71.3V-49.0H95.30000000000001ZM72.3 -25.3 72.5 -20.5Q72.2 -18.400000000000002 70.55000000000001 -15.600000000000001Q68.9 -12.8 66.0 -9.8Q63.1 -6.800000000000001 58.900000000000006 -4.25Q54.7 -1.7000000000000002 49.300000000000004 -0.10000000000000009Q43.900000000000006 1.5 37.300000000000004 1.5Q30.700000000000003 1.5 24.800000000000004 0.1499999999999999Q18.900000000000002 -1.2000000000000002 14.3 -4.300000000000001Q9.700000000000001 -7.4 7.1000000000000005 -12.650000000000002Q4.5 -17.900000000000002 4.5 -25.8V-49.0H28.5V-28.3Q28.5 -22.8 30.35 -19.8Q32.2 -16.8 36.2 -15.65Q40.2 -14.5 46.5 -14.5Q52.400000000000006 -14.5 57.45 -16.25Q62.5 -18.0 66.35 -20.5Q70.2 -23.0 72.3 -25.3Z" fill="#e3e6e9"/></g>
 </svg>
