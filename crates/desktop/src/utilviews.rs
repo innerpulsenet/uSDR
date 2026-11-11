@@ -62,6 +62,8 @@ fn rows<'a>(app: &'a App, protocol: &'a str) -> impl Iterator<Item = (usize, &'a
 /// Messages a row each, newest first: when, what kind, the summary, and a
 /// few of its fields as columns; click one to see every field.
 fn message_list(app: &mut App, ui: &mut Ui, protocol: &str, columns: &[(&str, &str, f32)], empty: &str) {
+    let fit = fit(ui, columns);
+    list_head(ui, &fit);
     let idx: Vec<usize> = rows(app, protocol).map(|(i, _)| i).take(500).collect();
     if idx.is_empty() {
         ui.add_space(4.0);
@@ -76,11 +78,11 @@ fn message_list(app: &mut App, ui: &mut Ui, protocol: &str, columns: &[(&str, &s
             let resp = ui
                 .horizontal(|ui| {
                     ui.set_min_height(18.0);
-                    ui.label(mono(local_hms(d.at), theme::text_3()));
-                    ui.add_sized(vec2(86.0, 16.0), egui::Label::new(RichText::new(d.ev.kind.to_uppercase()).font(theme::mono_bold(crate::theme::ty::MICRO)).color(if d.ev.valid { tally } else { theme::WARN })).truncate());
-                    for (key, _, w) in columns {
+                    cell(ui, fit.utc, mono(local_hms(d.at), theme::text_3()));
+                    cell(ui, fit.kind, RichText::new(d.ev.kind.to_uppercase()).font(theme::mono_bold(crate::theme::ty::MICRO)).color(if d.ev.valid { tally } else { theme::WARN }));
+                    for (key, _, w) in &fit.columns {
                         let v = derived(&d.ev, key).unwrap_or_else(|| d.ev.fields.get(*key).cloned().unwrap_or_default());
-                        ui.add_sized(vec2(*w, 16.0), egui::Label::new(mono(v, theme::text_2())).truncate());
+                        cell(ui, *w, mono(v, theme::text_2()));
                     }
                     ui.add(egui::Label::new(RichText::new(d.ev.summary.lines().next().unwrap_or("")).font(theme::mono(crate::theme::ty::VALUE)).color(theme::text())).truncate());
                 })
@@ -201,16 +203,56 @@ fn translations(ev: &usdr_proto::DecodeEvent) -> Vec<(&'static str, String, Opti
     out
 }
 
-/// The column heads over a message list, lined up with its columns.
-fn list_head(ui: &mut Ui, columns: &[(&str, &str, f32)]) {
-    ui.horizontal(|ui| {
-        let head = |t: &str| RichText::new(t).font(theme::mono(crate::theme::ty::MICRO)).color(theme::text_3()).extra_letter_spacing(0.6);
-        ui.add_sized(vec2(ui.painter().layout_no_wrap("00:00:00".into(), theme::mono(crate::theme::ty::SMALL), theme::text()).size().x, 14.0), egui::Label::new(head("UTC")));
-        ui.add_sized(vec2(86.0, 14.0), egui::Label::new(head("KIND")));
-        for (_, title, w) in columns {
-            ui.add_sized(vec2(*w, 14.0), egui::Label::new(head(title)));
+/// A message list's columns that fit beside a readable message: the
+/// widths of the time and kind cells, then the view's own columns in the
+/// order they are given, the later ones left out first where the room runs
+/// short. Every field is still there when a row is opened.
+struct Fit<'a> {
+    utc: f32,
+    kind: f32,
+    columns: Vec<&'a (&'a str, &'a str, f32)>,
+}
+
+/// The room a message keeps at the least before a column gives way.
+const MESSAGE_MIN: f32 = 160.0;
+const KIND_W: f32 = 86.0;
+
+fn fit<'a>(ui: &Ui, columns: &'a [(&'a str, &'a str, f32)]) -> Fit<'a> {
+    let utc = ui.painter().layout_no_wrap("00:00:00".into(), theme::mono(crate::theme::ty::SMALL), theme::text()).size().x + 2.0;
+    let gap = ui.spacing().item_spacing.x;
+    let mut used = utc + gap + KIND_W + gap;
+    let room = ui.available_width();
+    let mut kept = Vec::new();
+    for c in columns {
+        if used + c.2 + gap + MESSAGE_MIN > room {
+            break;
         }
-        ui.label(head("MESSAGE"));
+        used += c.2 + gap;
+        kept.push(c);
+    }
+    Fit { utc, kind: KIND_W, columns: kept }
+}
+
+/// A cell of a fixed width, its text from the left and cut short with an
+/// ellipsis, so a column's words start under its head.
+fn cell(ui: &mut Ui, w: f32, t: RichText) {
+    ui.allocate_ui_with_layout(vec2(w, 16.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+        ui.set_min_width(w);
+        ui.set_max_width(w);
+        ui.add(egui::Label::new(t).truncate());
+    });
+}
+
+/// The column heads over a message list, lined up with its columns.
+fn list_head(ui: &mut Ui, fit: &Fit) {
+    let head = |t: &str| RichText::new(t).font(theme::mono(crate::theme::ty::MICRO)).color(theme::text_3()).extra_letter_spacing(0.6);
+    ui.horizontal(|ui| {
+        cell(ui, fit.utc, head("UTC"));
+        cell(ui, fit.kind, head("KIND"));
+        for (_, title, w) in &fit.columns {
+            cell(ui, *w, head(title));
+        }
+        ui.add(egui::Label::new(head("MESSAGE")).truncate());
     });
 }
 
@@ -231,7 +273,7 @@ fn teleprinter(app: &App, ui: &mut Ui, protocol: &str, side_field: Option<&str>,
                     let text = d.ev.summary.as_str();
                     let event = d.ev.kind != "text";
                     if let Some(side) = side_field.and_then(|k| d.ev.fields.get(k)) {
-                        ui.add_sized(vec2(70.0, 16.0), egui::Label::new(RichText::new(side).font(theme::mono_bold(crate::theme::ty::LABEL)).color(widgets::protocol_color(protocol))).truncate());
+                        cell(ui, 70.0, RichText::new(side).font(theme::mono_bold(crate::theme::ty::LABEL)).color(widgets::protocol_color(protocol)));
                     }
                     let c = if event { theme::text_2() } else { theme::text() };
                     ui.add(egui::Label::new(RichText::new(text).font(if event { theme::mono(crate::theme::ty::SMALL) } else { theme::mono(crate::theme::ty::BODY) }).color(c)).wrap());
@@ -310,7 +352,6 @@ pub fn dsc(app: &mut App, ui: &mut Ui) {
         });
     }
     ui.add_space(4.0);
-    list_head(ui, cols);
     message_list(app, ui, "DSC", cols, "Digital selective calls appear here: distress and urgency alerts, safety and routine calls between ships and coast stations, each with its MMSIs, category and what it asks. HF DSC keeps 2187.5, 4207.5, 6312, 8414.5, 12577 and 16804.5 kHz; STATIONS tunes them.");
 }
 
@@ -320,18 +361,37 @@ pub fn hfdl(app: &mut App, ui: &mut Ui) {
         reading_strip(app, ui, Mode::Hfdl, "LISTENING FOR BURSTS");
     });
     ui.add_space(4.0);
-    // Two columns, so a squitter arriving never moves the messages being
-    // read: the ground stations heard on the left, the traffic beside.
+    // The ground stations and the traffic apart, each in a space of its
+    // own, so a squitter arriving never moves the messages being read:
+    // side by side where the log is wide, the stations in a short band
+    // above it where it is not, so the messages keep their width.
+    let empty = "HFDL appears here: the aircraft logged on to each ground station, their ACARS messages and positions. The station list above tunes the ground stations; most are busiest at night on the lower frequencies.";
     let w = ui.available_width();
     let h = ui.available_height();
-    let left = (w * 0.34).clamp(250.0, 380.0);
-    ui.horizontal_top(|ui| {
-        ui.allocate_ui_with_layout(vec2(left, h), egui::Layout::top_down(egui::Align::Min), |ui| {
+    let gutter = 16.0;
+    if w < 640.0 {
+        let top = (h * 0.38).clamp(60.0, 160.0);
+        ui.allocate_ui_with_layout(vec2(w, top), egui::Layout::top_down(egui::Align::Min), |ui| {
+            ui.set_height(top);
             egui::ScrollArea::vertical().id_salt("hfdl-gs").auto_shrink([false, false]).show(ui, |ui| ground_stations(app, ui));
         });
-        ui.allocate_ui_with_layout(vec2(w - left - 8.0, h), egui::Layout::top_down(egui::Align::Min), |ui| {
-            list_head(ui, cols);
-            message_list(app, ui, "HFDL", cols, "HFDL appears here: the aircraft logged on to each ground station, their ACARS messages and positions. The station list above tunes the ground stations; most are busiest at night on the lower frequencies.");
+        let (g, _) = ui.allocate_exact_size(vec2(w, 9.0), Sense::hover());
+        ui.painter().line_segment([pos2(g.left(), g.center().y), pos2(g.right(), g.center().y)], Stroke::new(1.0, theme::line()));
+        message_list(app, ui, "HFDL", cols, empty);
+        return;
+    }
+    let left = (w * 0.34).clamp(220.0, 380.0);
+    ui.horizontal_top(|ui| {
+        let gap = ui.spacing().item_spacing.x;
+        ui.allocate_ui_with_layout(vec2(left, h), egui::Layout::top_down(egui::Align::Min), |ui| {
+            ui.set_width(left);
+            egui::ScrollArea::vertical().id_salt("hfdl-gs").auto_shrink([false, false]).show(ui, |ui| ground_stations(app, ui));
+        });
+        // A rule down the gutter between the stations and the traffic.
+        let (g, _) = ui.allocate_exact_size(vec2(gutter, h), Sense::hover());
+        ui.painter().line_segment([pos2(g.center().x, g.top() + 2.0), pos2(g.center().x, g.bottom() - 2.0)], Stroke::new(1.0, theme::line()));
+        ui.allocate_ui_with_layout(vec2(w - left - gutter - 2.0 * gap, h), egui::Layout::top_down(egui::Align::Min), |ui| {
+            message_list(app, ui, "HFDL", cols, empty);
         });
     });
 }
@@ -410,7 +470,6 @@ pub fn stanag(app: &mut App, ui: &mut Ui) {
     ui.add_space(2.0);
     ui.add(egui::Label::new(RichText::new("Identifies STANAG 4285 and MIL-STD-188-110 serial tones, demodulates them and reads STANAG 5066 headers where the data is sent in the clear. Most military traffic is encrypted: its waveform, rate and addresses are what can be read. The constellation is in the Scope panel.").font(theme::sans(crate::theme::ty::SMALL)).color(theme::text_3())).wrap());
     ui.add_space(4.0);
-    list_head(ui, cols);
     message_list(app, ui, "STANAG", cols, "Waveforms and decoded headers appear here as they are found.");
 
 }
@@ -421,7 +480,6 @@ pub fn ale(app: &mut App, ui: &mut Ui) {
     let cols: &[(&str, &str, f32)] = &[("caller", "FROM", 90.0), ("called", "TO", 90.0), ("conclusion", "END", 44.0)];
     ui.horizontal_wrapped(|ui| reading_strip(app, ui, Mode::Ale, "LISTENING FOR ALE"));
     ui.add_space(4.0);
-    list_head(ui, cols);
     message_list(app, ui, "2G ALE", cols, "ALE soundings and calls appear here: a station's sounding names it (TIS or TWAS), a call names both ends. The amateur HFN channels in the station list sound around the clock; 14109 kHz is the busiest by day.");
 }
 
@@ -431,7 +489,6 @@ pub fn js8(app: &mut App, ui: &mut Ui) {
     let cols: &[(&str, &str, f32)] = &[("speed", "SPEED", 50.0), ("df", "Hz", 40.0), ("snr", "dB", 30.0), ("from", "FROM", 70.0), ("to", "TO", 70.0)];
     ui.horizontal_wrapped(|ui| reading_strip(app, ui, Mode::Js8, "LISTENING"));
     ui.add_space(4.0);
-    list_head(ui, cols);
     message_list(app, ui, "JS8", cols, "JS8Call messages appear here a whole transmission at a time: heartbeats, CQs, directed queries and replies, and free text. The band keys above tune JS8Call's dials; 7.078 and 14.078 MHz are the busiest.");
 }
 
@@ -444,9 +501,23 @@ pub fn wspr(app: &mut App, ui: &mut Ui) {
     let idx: Vec<usize> = rows(app, "WSPR").map(|(i, _)| i).take(400).collect();
     let head = |t: &str| RichText::new(t).font(theme::mono(crate::theme::ty::MICRO)).color(theme::text_3()).extra_letter_spacing(0.6);
     let cols = [("UTC", 64.0), ("dB", 34.0), ("Hz", 44.0), ("DRIFT", 50.0), ("CALL", 90.0), ("GRID", 56.0), ("POWER", 76.0), ("KM", 56.0), ("KM/W", 70.0)];
+    // Where the window is narrower than the table, the columns least read
+    // give way, in this order, so the rest are never cut at the edge.
+    let gap = ui.spacing().item_spacing.x;
+    let mut shown = [true; 9];
+    let mut need: f32 = cols.iter().map(|c| c.1 + gap).sum();
+    for k in [3, 8, 2, 7] {
+        if need <= ui.available_width() {
+            break;
+        }
+        shown[k] = false;
+        need -= cols[k].1 + gap;
+    }
     ui.horizontal(|ui| {
-        for (t, w) in cols {
-            ui.add_sized(vec2(w, 14.0), egui::Label::new(head(t)));
+        for ((t, w), on) in cols.into_iter().zip(shown) {
+            if on {
+                cell(ui, w, head(t));
+            }
         }
     });
     if idx.is_empty() {
@@ -473,8 +544,10 @@ pub fn wspr(app: &mut App, ui: &mut Ui) {
                     (path.map_or(String::new(), |k| format!("{k:.0}")), theme::text_2()),
                     (path.filter(|_| watts > 0.0).map_or(String::new(), |k| format!("{:.0}", k / watts)), theme::OK),
                 ];
-                for ((t, c), (_, w)) in cells.into_iter().zip(cols) {
-                    ui.add_sized(vec2(w, 16.0), egui::Label::new(mono(t, c)).truncate());
+                for (((t, c), (_, w)), on) in cells.into_iter().zip(cols).zip(shown) {
+                    if on {
+                        cell(ui, w, mono(t, c));
+                    }
                 }
             });
         }
@@ -498,7 +571,6 @@ pub fn fst4w(app: &mut App, ui: &mut Ui) {
     let cols: &[(&str, &str, f32)] = &[("tag", "PERIOD", 56.0), ("snr", "dB", 34.0), ("df", "Hz", 44.0), ("call", "CALL", 90.0), ("grid", "GRID", 56.0), ("dbm", "dBm", 40.0)];
     ui.horizontal_wrapped(|ui| reading_strip(app, ui, Mode::Fst4w, "WAITING FOR THE SLOT"));
     ui.add_space(4.0);
-    list_head(ui, cols);
     message_list(app, ui, "FST4W", cols, "FST4W beacons appear here at the end of their slots: 120, 300, 900 and 1800 seconds, all decoded at once within 110 Hz of 1500 Hz. The band keys use the WSPR dials; the mode has no published dial list of its own.");
 }
 
@@ -514,7 +586,6 @@ pub fn selcal(app: &mut App, ui: &mut Ui) {
     let cols: &[(&str, &str, f32)] = &[("code", "CODE", 70.0), ("offsetHz", "Hz", 40.0), ("snrDb", "dB", 40.0), ("repeat", "REPEAT", 56.0)];
     ui.horizontal_wrapped(|ui| reading_strip(app, ui, Mode::Selcal, "LISTENING FOR TONE PAIRS"));
     ui.add_space(4.0);
-    list_head(ui, cols);
     message_list(app, ui, "SELCAL", cols, "SELCAL calls appear here with their four-letter code while the voice channel plays. A controller calls a flight before speaking to it.");
 }
 
@@ -761,7 +832,6 @@ pub fn drm(app: &mut App, ui: &mut Ui) {
     });
     ui.add_space(4.0);
     let cols: &[(&str, &str, f32)] = &[];
-    list_head(ui, cols);
     message_list(app, ui, "DRM", cols, "DRM's signal events, services and text messages appear here. DRM needs a clean signal: about 15 dB for 16-QAM, more for 64-QAM. STATIONS lists broadcasts aimed at or heard in North America.");
 }
 

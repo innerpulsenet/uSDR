@@ -274,6 +274,8 @@ pub fn glass<R>(ui: &mut Ui, id: egui::Id, tint: Color32, add: impl FnOnce(&mut 
     let (rect, _) = ui.allocate_exact_size(vec2(w, h + 12.0), Sense::hover());
     crate::vfo::lcd_back(ui.painter(), rect, tint);
     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect.shrink2(vec2(9.0, 6.0))).layout(egui::Layout::top_down(egui::Align::Min)));
+    // What runs long is cut at the glass rather than drawn over the plate.
+    child.shrink_clip_rect(rect.shrink(1.0));
     let r = add(&mut child);
     let used = child.min_rect().height();
     if (used - h).abs() > 0.5 {
@@ -285,11 +287,13 @@ pub fn glass<R>(ui: &mut Ui, id: egui::Id, tint: Color32, add: impl FnOnce(&mut 
 }
 
 /// A window let into the plate over the room left in `ui`, `add` laid out
-/// in it.
+/// in it. Nothing in it draws or takes a click past its edge: a row wider
+/// than the window is cut there, not laid over the panel beside it.
 pub fn window<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
     let r = ui.available_rect_before_wrap();
     theme::well(ui.painter(), r, None);
     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(r.shrink2(vec2(8.0, 6.0))).layout(egui::Layout::top_down(egui::Align::Min)));
+    child.shrink_clip_rect(r.shrink(1.0));
     let out = add(&mut child);
     ui.advance_cursor_after_rect(r);
     out

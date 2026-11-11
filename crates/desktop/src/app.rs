@@ -3761,4 +3761,77 @@ mod tests {
         }
         save(&mut h, "dock-psk31.png");
     }
+
+    /// HFDL traffic in the dock with the scope beside it, as wide as an
+    /// operator leaves it, at each window size.
+    fn hfdl_dock(w: f32, ht: f32, scope_width: f32) -> Harness<'static, T> {
+        let mut h = harness_with(Prefs { auto_connect: false, scope_width, hinted_shortcuts: true, ..Default::default() }, w, ht);
+        {
+            let app = &mut h.state_mut().app;
+            app.status.mode = Mode::Hfdl;
+            app.status.freq_hz = 15_025_000.0;
+            app.status.inspect_hz = 15_025_000.0;
+            app.status.digital = Some(proto::DigitalReading { locked: true, ..Default::default() });
+            app.decode_family = Some(crate::decoders::Family::HfData);
+            app.dock_tab = DockTab::Decodes;
+        }
+        for (kind, flight, reg, summary) in [
+            ("acars", "KC0222", ".EI-KGE", "ACARS H1 from EI-KGE flight KC0222: a long message body that runs well past any column"),
+            ("acars", "", "A6-EUC", "ACARS _d from A6-EUC"),
+            ("acars", "QR0703", "A7-ALL", "ACARS 5Z from A7-ALL flight QR0703 to the ground"),
+            ("logon", "", "9V-SMJ", "Logoff confirm for 9V-SMJ, slot 12"),
+            ("squitter", "", "", "Squitter from Reykjavik"),
+        ] {
+            let mut fields = std::collections::BTreeMap::new();
+            fields.insert("gsId".to_string(), "7".to_string());
+            for (k, v) in [("flight", flight), ("reg", reg)] {
+                if !v.is_empty() {
+                    fields.insert(k.to_string(), v.to_string());
+                }
+            }
+            if kind == "squitter" {
+                fields.insert("freqIds".to_string(), "0,1,2".to_string());
+            }
+            let ev = proto::DecodeEvent { protocol: "HFDL".into(), kind: kind.into(), summary: summary.into(), valid: true, fields };
+            h.state().wire.events.send(NetEvent::Decode { inspect_hz: 15_025_000.0, event: ev, at: std::time::SystemTime::now() }).unwrap();
+        }
+        h.run_steps(6);
+        h
+    }
+
+    #[test]
+    fn the_utility_tables_stay_inside_their_window() {
+        // HFDL's columns beside the ground stations, with the scope as wide
+        // as it goes: every head and cell ends before the scope begins, and
+        // the message keeps a readable width with the columns that fit.
+        use egui::accesskit::Role;
+        for (w, ht, scope) in [(1100.0, 700.0, 420.0), (1600.0, 980.0, 420.0), (1600.0, 980.0, 700.0), (1900.0, 1080.0, 800.0)] {
+            let h = hfdl_dock(w, ht, scope);
+            let edge = h.get_by_label("HFDL audio").rect().left();
+            let labels: Vec<(String, egui::Rect)> = h
+                .query_all(egui_kittest::kittest::By::new().predicate(|n| n.role() == Role::Label))
+                .map(|n| {
+                    let node = egui_kittest::kittest::NodeT::accesskit_node(&n);
+                    (node.label().or(node.value()).unwrap_or_default().to_string(), n.rect())
+                })
+                .collect();
+            let head = labels.iter().find(|(l, _)| l == "MESSAGE").expect("the message head").1;
+            for (l, r) in labels.iter().filter(|(_, r)| (r.top() - head.top()).abs() < 1.0 || r.top() > head.top()).filter(|(_, r)| r.left() < edge && r.width() > 0.0) {
+                assert!(r.right() <= edge, "{w}x{ht} scope {scope}: {l:?} at {r:?} runs under the scope at {edge}");
+            }
+            let message = labels.iter().filter(|(l, r)| l.starts_with("Logoff") && r.top() > head.top()).map(|(_, r)| r.width()).next().expect("a message");
+            assert!(message >= 100.0, "{w}x{ht} scope {scope}: the message has {message} px");
+        }
+    }
+
+    /// `USDR_QA_DIR=<dir> cargo test -p usdr-desktop qa_renders_the_utility_tables -- --ignored`.
+    #[test]
+    #[ignore]
+    fn qa_renders_the_utility_tables() {
+        let Some(dir) = std::env::var_os("USDR_QA_DIR").map(std::path::PathBuf::from) else { return };
+        for (w, ht, scope) in [(1100.0, 700.0, 420.0), (1600.0, 980.0, 420.0), (1600.0, 980.0, 700.0)] {
+            let mut h = hfdl_dock(w, ht, scope);
+            h.render().expect("render").save(dir.join(format!("hfdl-{w}-{scope}.png"))).expect("save");
+        }
+    }
 }
