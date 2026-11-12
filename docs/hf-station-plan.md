@@ -366,6 +366,42 @@ records the wideband channels too):
   wsprnet, and there is no reference decoder here to check new ones against), and JS8
   subtraction (off the channel list).
 
+**Slice-first schedule, 2026-11-12.** A day of Stage 4 still had the main decoder
+hopping every 2 to 10 minutes. The time-share planner kept running inside the slice,
+and the channels' decodes outnumbered it 572,196 to 5,589. It had parked on SSTV
+21340 kHz, which had no channel, for 278 minutes with nothing heard, and had taken
+radiofax charts on 12.7 MHz, which fits no slice. Now:
+
+- `catalog` in `USDR_WIDE` stands for every dial the schedule knows, chart
+  frequencies included, so every target inside a slice has a channel. Entries the
+  server cannot run are named in the journal at start (the `BEACON` ones never ran).
+- WEFAX is a channel mode. Each radiofax decoder keeps its own picture, and a channel
+  leaves a picture to the main receiver when that receiver was on the dial throughout,
+  as SSTV already did.
+- With channels running, the shares are not used. The main decoder sits on the slice's
+  best FT8 dial until the slice is chosen again, and the same hop is never sent twice,
+  because even onto the same dial a hop rebuilds the decoder and loses its slot.
+- A chart takes a frequency inside the slice first, then one inside another slice, and
+  only then one in none. The radio check takes WWV inside the slice first, including
+  20 and 25 MHz, so the high slice checks on 25.
+- A station sends each chart on several frequencies at once, and the low slices hold
+  two or three of NMF's, NMG's and DDH3's. The picture writer holds a radiofax picture
+  for 90 seconds and keeps only the cleanest copy. The others are logged as `copy`.
+- 110 channels in all. Measured on CT 216 by day: in the high slice the two channel
+  workers used about 20% of a core between them. In the low slice (6.855 MHz, about 50
+  channels) they used 36 to 42% each, plus 17% for the slot decoders, with no dropped
+  blocks. That is about 1.3 of CT 216's two cores. Busy evening slots on the low slice
+  have not been measured yet. If they drop blocks, give CT 216 a third core.
+- A chart outside the slice moves the span to the slice holding the most of that
+  station's frequencies, not the first one holding the chosen frequency. Otherwise
+  NMF on 6340.5 kHz left 9110 out of the span, and no channel could hear a copy.
+- Blocks drop only while channels are rebuilt after a retune: 29 over five retunes,
+  then none in steady state. Live on the afternoon of 2026-11-12, the tuner moved once at
+  a slice change and once for a chart in 47 minutes, and the main decoder never hopped
+  in between. Two NMF charts were each filed once, but no channel has yet received a
+  chart that the main receiver was not also taking, so the copy rule is tested only
+  offline.
+
 **What has to change.**
 
 - **Channels from the span.** A narrow channel filter per decoder, one `HfDecoder` per

@@ -2,13 +2,18 @@
 //! being open. The decoder hands over each picture as it ends. A thread of its
 //! own judges it, writes the PNG and files a row in the station log, so neither
 //! the encoding nor the disk can hold up the radio.
+//!
+//! A station sends each chart on several frequencies at once, and wideband
+//! channels can be on more than one of them. A radiofax picture waits a little
+//! for its copies, and only the best of them is kept.
 
 use std::fs;
 use std::io::BufWriter;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::mpsc::{Receiver, SyncSender, TrySendError, sync_channel};
+use std::sync::mpsc::{Receiver, RecvTimeoutError, SyncSender, TrySendError, sync_channel};
 use std::sync::{Arc, OnceLock};
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 
@@ -20,6 +25,11 @@ const QUEUE: usize = 8;
 /// Below this a radiofax "picture" is a false start or a fragment. A chart at
 /// 120 lines a minute runs to over a thousand.
 const WEFAX_MIN_LINES: u32 = 500;
+/// How long a radiofax picture waits for copies of itself from the station's
+/// other frequencies. Copies end within seconds of each other.
+const COPY_WAIT: Duration = Duration::from_secs(90);
+/// Copies of one broadcast begin no further apart than this.
+const COPY_START_S: u64 = 120;
 /// How much of an SSTV frame has to have arrived.
 const SSTV_MIN_SHARE: f32 = 0.9;
 /// Below this the picture has no contrast at all: a carrier or dead air.
@@ -195,9 +205,24 @@ fn write_png(p: &Finished, path: &Path) -> Result<u64> {
 /// Judge a picture, write it if it is kept, and say what happened.
 pub fn file(p: &Finished, catalog: &Catalog, dir: &Path) -> Result<PictureRow> {
     let quality = measure(p);
+    let mut row = row_for(p, catalog, quality);
+    if let Some(why) = rejected(p, quality) {
+        row.why = why;
+        return Ok(row);
+    }
+    (row.decision, row.why) = decide(p.kind);
+    fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
+    let name = format!("{}-{}-{}.png", p.kind.name().to_ascii_lowercase(), p.started_utc, p.dial_hz);
+    row.bytes = write_png(p, &dir.join(&name))?;
+    row.file = Some(name);
+    Ok(row)
+}
+
+/// The log's row for a picture, rejected until something says otherwise.
+fn row_for(p: &Finished, catalog: &Catalog, quality: Quality) -> PictureRow {
     let chart = (p.kind == Kind::Wefax).then(|| catalog.chart_at(p.dial_hz, p.started_utc)).flatten();
     let station = chart.map(|(s, _)| s.to_string());
-    let mut row = PictureRow {
+    PictureRow {
         start_utc: p.started_utc,
         end_utc: p.ended_utc,
         mode: p.kind.name(),
@@ -212,17 +237,52 @@ pub fn file(p: &Finished, catalog: &Catalog, dir: &Path) -> Result<PictureRow> {
         spread: quality.spread,
         decision: "reject",
         why: "",
-    };
-    if let Some(why) = rejected(p, quality) {
-        row.why = why;
-        return Ok(row);
     }
-    (row.decision, row.why) = decide(p.kind);
-    fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
-    let name = format!("{}-{}-{}.png", p.kind.name().to_ascii_lowercase(), p.started_utc, p.dial_hz);
-    row.bytes = write_png(p, &dir.join(&name))?;
-    row.file = Some(name);
-    Ok(row)
+}
+
+/// Whether two radiofax pictures are one broadcast heard on two of the
+/// station's frequencies.
+fn same_broadcast(a: &Finished, b: &Finished, catalog: &Catalog) -> bool {
+    a.kind == Kind::Wefax
+        && b.kind == Kind::Wefax
+        && a.dial_hz != b.dial_hz
+        && a.started_utc.abs_diff(b.started_utc) <= COPY_START_S
+        && catalog.station_of(a.dial_hz).is_some_and(|s| catalog.station_of(b.dial_hz) == Some(s))
+}
+
+/// The copy to keep: one that passes before one that does not, then the
+/// cleanest rows, then the most of them.
+fn best_copy(copies: &[Finished]) -> usize {
+    let score = |p: &Finished| {
+        let q = measure(p);
+        (rejected(p, q).is_none(), q.row_corr, p.rows)
+    };
+    let scores: Vec<_> = copies.iter().map(score).collect();
+    (0..copies.len())
+        .max_by(|&a, &b| {
+            let (x, y) = (scores[a], scores[b]);
+            x.0.cmp(&y.0).then(x.1.total_cmp(&y.1)).then(x.2.cmp(&y.2))
+        })
+        .unwrap_or(0)
+}
+
+/// File the best of a broadcast's copies, and the rest as copies.
+fn settle(copies: Vec<Finished>, catalog: &Catalog, dir: &Path, log: &StationLog) {
+    let best = best_copy(&copies);
+    for (i, p) in copies.iter().enumerate() {
+        let row = if i == best {
+            match file(p, catalog, dir) {
+                Ok(row) => row,
+                Err(e) => {
+                    eprintln!("pictures: filing a {} picture: {e:#}", p.kind.name());
+                    continue;
+                }
+            }
+        } else {
+            PictureRow { why: "copy", ..row_for(p, catalog, measure(p)) }
+        };
+        log.add_picture(row);
+    }
 }
 
 static SINK: OnceLock<SyncSender<Finished>> = OnceLock::new();
@@ -240,10 +300,29 @@ pub fn submit(picture: Finished) {
 
 fn write_loop(rx: Receiver<Finished>, log: Arc<StationLog>, catalog: Catalog) {
     let dir = log.pictures_dir();
-    while let Ok(p) = rx.recv() {
-        match file(&p, &catalog, &dir) {
-            Ok(row) => log.add_picture(row),
-            Err(e) => eprintln!("pictures: filing a {} picture: {e:#}", p.kind.name()),
+    let mut waiting: Vec<(Instant, Finished)> = Vec::new();
+    loop {
+        let closed = match rx.recv_timeout(Duration::from_secs(5)) {
+            Ok(p) if p.kind == Kind::Wefax && catalog.station_of(p.dial_hz).is_some() => {
+                waiting.push((Instant::now(), p));
+                false
+            }
+            Ok(p) => {
+                settle(vec![p], &catalog, &dir, &log);
+                false
+            }
+            Err(RecvTimeoutError::Timeout) => false,
+            Err(RecvTimeoutError::Disconnected) => true,
+        };
+        // The longest waiting settles with whatever copies of it have come.
+        while let Some(i) = waiting.iter().position(|(at, _)| closed || at.elapsed() >= COPY_WAIT) {
+            let first = waiting.remove(i).1;
+            let (copies, rest): (Vec<_>, Vec<_>) = waiting.drain(..).partition(|(_, p)| same_broadcast(&first, p, &catalog));
+            waiting = rest;
+            settle(std::iter::once(first).chain(copies.into_iter().map(|(_, p)| p)).collect(), &catalog, &dir, &log);
+        }
+        if closed {
+            return;
         }
     }
 }
@@ -287,6 +366,20 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("usdr-pictures-{name}-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         dir
+    }
+
+    #[test]
+    fn of_one_broadcast_on_several_frequencies_the_cleanest_copy_is_kept() {
+        let catalog = Catalog::builtin();
+        let at = |dial_hz: u64, f: fn(u32, u32) -> u8, rows: u32| Finished { dial_hz, ..gray(rows, f) };
+        // NMF on 6340.5 and 9110 kHz, NMG on 8503.9.
+        let (clean, noisy, other) = (at(9_108_100, chart_like, 900), at(6_338_600, noise, 900), at(8_502_000, chart_like, 900));
+        assert!(same_broadcast(&clean, &noisy, &catalog));
+        assert!(!same_broadcast(&clean, &other, &catalog), "another station");
+        assert!(!same_broadcast(&clean, &Finished { started_utc: AT + 600, ..at(6_338_600, chart_like, 900) }, &catalog), "a later chart");
+        assert!(!same_broadcast(&clean, &at(9_108_100, chart_like, 900), &catalog), "the same dial is not a copy");
+        assert_eq!(best_copy(&[noisy.clone(), clean.clone()]), 1);
+        assert_eq!(best_copy(&[at(9_108_100, chart_like, 600), at(6_338_600, chart_like, 1_100)]), 1, "equal rows: the longer");
     }
 
     #[test]

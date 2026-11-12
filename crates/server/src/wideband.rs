@@ -7,7 +7,9 @@
 //! hands over a shared block through a bounded queue and never waits. A channel
 //! runs whenever the tuner happens to cover its dial.
 //!
-//! `USDR_WIDE` lists the channels, for example `FT8+7074000,WSPR?7038600`. A `+`
+//! `USDR_WIDE` lists the channels, for example `FT8+7074000,WSPR?7038600`, and
+//! `catalog` stands for every dial the monitoring schedule knows, radiofax charts
+//! included, as logging channels. Only the ones the span holds run. A `+`
 //! channel logs its decodes where the main decoder's go, except while the main
 //! decoder is on the same mode and dial, which then speaks for it. A `?` channel
 //! is a shadow, whose decodes are kept only for comparing with the main decoder.
@@ -152,21 +154,51 @@ fn parse_mode(name: &str) -> Option<SdrMode> {
         "HFDL" => SdrMode::Hfdl,
         "SELCAL" => SdrMode::Selcal,
         "SSTV" => SdrMode::Sstv,
+        "WEFAX" => SdrMode::Wefax,
         _ => return None,
     })
 }
 
-/// `FT8+7074000,WSPR?7038600`. Anything unreadable, or above HF, is left out.
-fn parse_specs(text: &str) -> Vec<Spec> {
-    text.split(',')
-        .filter_map(|item| {
-            let item = item.trim();
-            let at = item.find(['+', '?'])?;
-            let mode = parse_mode(&item[..at])?;
+/// `FT8+7074000,WSPR?7038600,catalog`, with `catalog` standing for `catalog`'s
+/// specs. A dial named twice keeps its first spec. Anything unreadable, or above
+/// HF, is left out and returned beside the specs.
+fn parse_specs(text: &str, catalog: &[Spec]) -> (Vec<Spec>, Vec<String>) {
+    let (mut specs, mut ignored): (Vec<Spec>, Vec<String>) = (Vec::new(), Vec::new());
+    fn add(spec: Spec, specs: &mut Vec<Spec>) {
+        if !specs.iter().any(|s| s.mode == spec.mode && s.dial_hz == spec.dial_hz) {
+            specs.push(spec);
+        }
+    }
+    let items: Vec<&str> = text.split(',').map(str::trim).filter(|i| !i.is_empty()).collect();
+    // Named channels first, so a shadow named on a catalog dial stays a shadow.
+    for item in items.iter().filter(|i| !i.eq_ignore_ascii_case("catalog")) {
+        let spec = item.find(['+', '?']).and_then(|at| {
             let dial_hz: u64 = item[at + 1..].parse().ok()?;
-            (dial_hz < 30_000_000).then_some(Spec::new(mode, dial_hz, item.as_bytes()[at] == b'+'))
-        })
-        .collect()
+            (dial_hz < 30_000_000).then_some(Spec::new(parse_mode(&item[..at])?, dial_hz, item.as_bytes()[at] == b'+'))
+        });
+        match spec {
+            Some(spec) => add(spec, &mut specs),
+            None => ignored.push((*item).to_string()),
+        }
+    }
+    if items.iter().any(|i| i.eq_ignore_ascii_case("catalog")) {
+        for spec in catalog {
+            add(*spec, &mut specs);
+        }
+    }
+    (specs, ignored)
+}
+
+/// Every dial the schedule knows, as logging channels.
+fn catalog_specs() -> Vec<Spec> {
+    crate::schedule::Catalog::builtin().channel_targets().into_iter().map(|t| Spec::new(t.mode, t.dial_hz, true)).collect()
+}
+
+/// The channels `USDR_WIDE` asks for, and what in it could not be read.
+fn specs_from_env() -> Option<(Vec<Spec>, Vec<String>)> {
+    let text = std::env::var("USDR_WIDE").ok()?;
+    let catalog = if text.split(',').any(|i| i.trim().eq_ignore_ascii_case("catalog")) { catalog_specs() } else { Vec::new() };
+    Some(parse_specs(&text, &catalog))
 }
 
 /// The specs in dial order, cut into runs no wider than [`GROUP_SPREAD_HZ`].
@@ -327,6 +359,7 @@ impl Channel {
             None => {
                 let mut hf = HfDecoder::new(spec.mode, fs)?;
                 hf.set_band(low, high);
+                hf.set_channel();
                 Decoder::Hf(Box::new(hf))
             }
         };
@@ -436,7 +469,8 @@ fn run(rx: Receiver<Arc<Block>>, specs: Vec<Spec>, events: Sender<SdrEvent>, seq
         loop {
             match drained.try_recv() {
                 Ok(SdrEvent::Decode { inspect_hz, event }) => {
-                    if let Some(channel) = channels.iter().find(|c| c.spec.dial_hz == inspect_hz as u64) {
+                    // Only audio-driven decoders report here; a slot channel may share the dial.
+                    if let Some(channel) = channels.iter().find(|c| c.spec.dial_hz == inspect_hz as u64 && matches!(c.decoder, Decoder::Hf(_))) {
                         deliver(channel.spec, channel.center_hz, block.ms, vec![event], block.main, &events, &mut records);
                     }
                 }
@@ -490,7 +524,10 @@ impl Feed {
 /// Start the channels named in `USDR_WIDE`. Unset, nothing runs and the radio
 /// loop does no extra work.
 pub fn from_env(events: Sender<SdrEvent>) -> Option<Feed> {
-    let specs = parse_specs(&std::env::var("USDR_WIDE").ok()?);
+    let (specs, ignored) = specs_from_env()?;
+    if !ignored.is_empty() {
+        eprintln!("wideband: no channel for {}", ignored.join(", "));
+    }
     if specs.is_empty() {
         return None;
     }
@@ -514,8 +551,7 @@ pub fn from_env(events: Sender<SdrEvent>) -> Option<Feed> {
 
 /// The channels that log, by mode and dial, for the schedule to plan around.
 pub fn logging_channels() -> std::collections::BTreeSet<(SdrMode, u64)> {
-    let text = std::env::var("USDR_WIDE").unwrap_or_default();
-    parse_specs(&text).into_iter().filter(|s| s.logs).map(|s| (s.mode, s.dial_hz)).collect()
+    specs_from_env().map(|(specs, _)| specs).unwrap_or_default().into_iter().filter(|s| s.logs).map(|s| (s.mode, s.dial_hz)).collect()
 }
 
 /// What the channels have decoded, for comparing with the main decoder.
@@ -542,9 +578,26 @@ mod tests {
 
     #[test]
     fn the_channel_list_reads_as_written_and_skips_the_rest() {
-        let got = parse_specs("FT8+7074000, WSPR?7038600,NOPE+1,FT4?not,DSC+50000000");
+        let (got, ignored) = parse_specs("FT8+7074000, WSPR?7038600,NOPE+1,FT4?not,DSC+50000000", &[]);
         assert_eq!(got, vec![Spec::new(SdrMode::Ft8, 7_074_000, true), Spec::new(SdrMode::Wspr, 7_038_600, false)]);
-        assert_eq!(parse_specs("SSTV+14230000,SSTV?7171000"), vec![Spec::new(SdrMode::Sstv, 14_230_000, true), Spec::new(SdrMode::Sstv, 7_171_000, false)]);
+        assert_eq!(ignored, ["NOPE+1", "FT4?not", "DSC+50000000"], "what it cannot run, it says");
+        let (got, _) = parse_specs("SSTV+14230000,SSTV?7171000,WEFAX+8502000", &[]);
+        assert_eq!(got, vec![Spec::new(SdrMode::Sstv, 14_230_000, true), Spec::new(SdrMode::Sstv, 7_171_000, false), Spec::new(SdrMode::Wefax, 8_502_000, true)]);
+    }
+
+    #[test]
+    fn catalog_stands_for_every_dial_the_schedule_knows() {
+        let catalog = catalog_specs();
+        assert!(catalog.contains(&Spec::new(SdrMode::Wefax, 12_788_000, true)), "the chart dials are in it");
+        assert!(catalog.contains(&Spec::new(SdrMode::Hfdl, 15_025_000, true)));
+        assert!(catalog.contains(&Spec::new(SdrMode::Sstv, 21_340_000, true)));
+        // A named shadow stays a shadow, and a dial is never run twice.
+        let (got, _) = parse_specs("FT8?7074000,catalog,FT8+5357000", &catalog);
+        assert_eq!(got.iter().filter(|s| s.mode == SdrMode::Ft8 && s.dial_hz == 7_074_000).count(), 1);
+        assert!(got.contains(&Spec::new(SdrMode::Ft8, 7_074_000, false)));
+        assert!(got.contains(&Spec::new(SdrMode::Ft8, 5_357_000, true)));
+        assert_eq!(got.len(), catalog.len() + 1);
+        assert!(parse_specs("FT8+7074000", &catalog).0.len() == 1, "no catalog unless asked for");
     }
 
     #[test]

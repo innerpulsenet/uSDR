@@ -459,10 +459,7 @@ async fn main() -> Result<()> {
             None
         }
     };
-    let catalog = schedule::Catalog::from_directory(include_str!("../../desktop/data/hf-directory.json")).unwrap_or_else(|e| {
-        eprintln!("monitoring schedule has no frequencies: {e:#}");
-        schedule::Catalog::default()
-    });
+    let catalog = schedule::Catalog::builtin();
     if let Some(log) = &station_log
         && let Err(e) = pictures::start(Arc::clone(log), catalog.clone())
     {
