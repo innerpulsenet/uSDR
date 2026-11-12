@@ -145,7 +145,9 @@ CREATE TABLE uplink (
 
 /// The modes that may leave this host. Default deny, so a decoder added later
 /// stays home until someone decides otherwise.
-const UPLINK_MODES: [&str; 9] = ["FT8", "FT4", "WSPR", "JS8", "HFDL", "DSC", "SELCAL", "WEFAX", "SSTV"];
+/// The site backend refuses a whole batch with a mode it does not know, which would
+/// stall the uplink: a mode joins here only after the site that accepts it is live.
+const UPLINK_MODES: [&str; 11] = ["FT8", "FT4", "WSPR", "JS8", "HFDL", "DSC", "SELCAL", "WEFAX", "SSTV", "NAVTEX", "BEACON"];
 const UPLINK_LIMIT_HZ: i64 = 30_000_000;
 /// A stay's health is settled by the next radio check, or by this long passing.
 const UPLINK_SETTLE_S: u64 = 3 * 3_600;
@@ -237,6 +239,8 @@ pub fn observe(dial_hz: f64, ev: &DecodeEvent, own_call: &str, now: u64) -> Opti
         "HFDL" => hfdl(dial_hz, ev, now)?,
         "DSC" => dsc(dial_hz, ev, now)?,
         "SELCAL" => selcal(dial_hz, ev, now)?,
+        "BEACON" => beacon(dial_hz, ev)?,
+        "NAVTEX" if ev.kind.starts_with("message") => navtex(dial_hz, ev, now)?,
         "WEFAX" if ev.kind == "picture" => picture("WEFAX", dial_hz, ev, now, &["lines", "width"]),
         "SSTV" if ev.kind == "end" => picture("SSTV", dial_hz, ev, now, &["lines", "complete"]),
         _ => return None,
@@ -367,6 +371,34 @@ fn selcal(dial_hz: f64, ev: &DecodeEvent, now: u64) -> Option<Observation> {
     Some(o)
 }
 
+/// An NCDXF/IARU beacon heard in its slot, at the beacon's own locator.
+fn beacon(dial_hz: f64, ev: &DecodeEvent) -> Option<Observation> {
+    let mut o = base(dial_hz, "BEACON", ev, number(ev, "slot")? as u64);
+    o.freq_hz = number(ev, "freqHz")? as u64;
+    o.ident = Some(field(ev, "call")?.to_string());
+    o.grid = Some(field(ev, "grid")?.to_string());
+    o.loc_kind = LocKind::Grid6;
+    o.snr_db = number(ev, "snr");
+    o.public = pick(ev, &["steps", "dash1", "dash2", "dash3", "dash4"]);
+    Some(o)
+}
+
+/// The longest NAVTEX text kept. Messages run to a couple of thousand
+/// characters; anything longer is a decoder that never saw the end.
+const NAVTEX_TEXT_MAX: usize = 4_000;
+
+/// A NAVTEX message, by its four-character id: station, subject, serial.
+fn navtex(dial_hz: f64, ev: &DecodeEvent, now: u64) -> Option<Observation> {
+    let mut o = base(dial_hz, "NAVTEX", ev, now);
+    o.kind = "message".into();
+    o.ident = Some(field(ev, "id")?.to_string());
+    o.snr_db = number(ev, "snr");
+    o.public = pick(ev, &["station", "subject", "subjectName", "serial", "complete"]);
+    let text: String = ev.summary.trim().chars().take(NAVTEX_TEXT_MAX).collect();
+    o.public.insert("text".into(), Value::from(text));
+    Some(o)
+}
+
 fn picture(mode: &'static str, dial_hz: f64, ev: &DecodeEvent, now: u64, keys: &[&str]) -> Observation {
     let mut o = base(dial_hz, mode, ev, now);
     o.public = pick(ev, keys);
@@ -385,6 +417,8 @@ pub fn monitored_mode(mode: SdrMode) -> Option<&'static str> {
         SdrMode::Selcal => "SELCAL",
         SdrMode::Wefax => "WEFAX",
         SdrMode::Sstv => "SSTV",
+        SdrMode::Navtex => "NAVTEX",
+        SdrMode::Beacon => "BEACON",
         _ => return None,
     })
 }
@@ -1372,6 +1406,21 @@ mod tests {
     fn selcal_has_a_code_and_no_location() {
         let o = observe(5_598_000.0, &event("SELCAL", "call", &[("code", "AB-CD"), ("snrDb", "9.5"), ("repeat", "false")]), OWN, NOW).unwrap();
         assert_eq!((o.ident.as_deref(), o.loc_kind, o.snr_db), (Some("AB-CD"), LocKind::None, Some(9.5)));
+    }
+
+    #[test]
+    fn a_navtex_message_keeps_its_id_and_text() {
+        let fields = [("id", "FA12"), ("station", "F"), ("subject", "A"), ("subjectName", "Navigational warning"), ("serial", "12"), ("complete", "yes"), ("snr", "14")];
+        let mut ev = event("NAVTEX", "message", &fields);
+        ev.summary = "ZCZC FA12\nBOSTON\nNNNN".into();
+        let o = observe(517_000.0, &ev, OWN, NOW).unwrap();
+        assert_eq!((o.ident.as_deref(), o.kind.as_str(), o.snr_db), (Some("FA12"), "message", Some(14.0)));
+        assert_eq!(o.public["text"], "ZCZC FA12\nBOSTON\nNNNN");
+        ev.kind = "message (cut off)".into();
+        let cut = observe(517_000.0, &ev, OWN, NOW).unwrap();
+        assert_eq!(cut.kind, "message", "the site takes no spaces in a kind; `complete` says it");
+        ev.kind = "text".into();
+        assert!(observe(517_000.0, &ev, OWN, NOW).is_none(), "loose text is not a message");
     }
 
     #[test]

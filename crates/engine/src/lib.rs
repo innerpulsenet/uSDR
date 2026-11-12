@@ -32,6 +32,7 @@ pub mod ft8;
 pub mod legacy_digital;
 pub mod leveler;
 pub mod autonotch;
+pub mod beacon;
 pub mod ltr;
 pub mod mdc;
 pub mod mfsk;

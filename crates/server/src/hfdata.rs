@@ -142,8 +142,9 @@ impl SstvFrame {
 }
 
 enum Kind {
-    /// `pixels`: the picture in progress, kept here so channels receiving
-    /// at once never share a buffer. `elsewhere` as for SSTV.
+    /// `pixels` is the picture so far, kept here so that a wideband channel's
+    /// chart and the main receiver's never write into each other. `elsewhere`
+    /// as for SSTV.
     Wefax { dec: Box<WefaxDecoder>, picture: Option<u32>, rows: u32, started_hz: f64, started_utc: u64, pixels: Vec<u8>, elsewhere: bool },
     Rtty(Box<RttyDecoder>),
     Navtex(Box<NavtexDecoder>),
@@ -449,10 +450,14 @@ impl HfDecoder {
         self.kept_elsewhere = on;
     }
 
-    /// This decoder is a wideband channel's: its radiofax rows never replace
-    /// the picture the main receiver shows.
+    /// This decoder is a wideband channel's, not the main receiver's: the
+    /// radiofax picture clients fetch stays the main receiver's, and a chart
+    /// starts on its own tone, as nobody can press START for a channel.
     pub fn set_channel(&mut self) {
         self.channel = true;
+        if let Kind::Wefax { dec, .. } = &mut self.kind {
+            dec.set_auto_start(true);
+        }
     }
 
     /// New settings, applied without rebuilding: a decoder keeps its lock.
@@ -478,6 +483,15 @@ impl HfDecoder {
                     audio.reset();
                 }
             }
+        }
+    }
+
+    /// Whether a picture is coming in: a radiofax chart between its start and
+    /// stop tones, or an SSTV picture after its VIS.
+    pub fn picture_busy(&self) -> bool {
+        match &self.kind {
+            Kind::Wefax { picture, .. } | Kind::Sstv { picture, .. } => picture.is_some(),
+            _ => false,
         }
     }
 
@@ -623,10 +637,11 @@ impl HfDecoder {
         let send = |ev: DecodeEvent| {
             let _ = events.send(SdrEvent::Decode { inspect_hz: dial_hz, event: ev });
         };
-        let (kept_elsewhere, shown) = (self.kept_elsewhere, !self.channel);
+        let kept_elsewhere = self.kept_elsewhere;
         match &mut self.kind {
             Kind::Wefax { dec, picture, rows, started_hz, started_utc, pixels, elsewhere } => {
                 *elsewhere &= kept_elsewhere;
+                let shown = !self.channel;
                 dec.push(audio);
                 for e in dec.take_events() {
                     match e {
@@ -655,22 +670,19 @@ impl HfDecoder {
                             let _ = events.send(SdrEvent::FaxRow { frame: frame.into() });
                             if px.len() == dec.width() && pixels.len() < FAX_MAX_ROWS * px.len() {
                                 pixels.extend_from_slice(&px);
-                            }
-                            if shown
-                                && let Ok(mut f) = FAX.lock()
-                                && f.id == id
-                                && f.width == px.len()
-                                && f.pixels.len() < FAX_MAX_ROWS * f.width
-                            {
-                                f.pixels.extend_from_slice(&px);
+                                if shown
+                                    && let Ok(mut f) = FAX.lock()
+                                    && f.id == id
+                                {
+                                    f.pixels.extend_from_slice(&px);
+                                }
                             }
                             *rows += 1;
                         }
                         WefaxEvent::Stop { .. } => {
                             if let Some(id) = picture.take() {
-                                if !*elsewhere {
-                                    let pixels = std::mem::take(pixels);
-                                    let width = dec.width() as u32;
+                                let width = dec.width() as u32;
+                                if !*elsewhere && !pixels.is_empty() {
                                     crate::pictures::submit(crate::pictures::Finished {
                                         kind: crate::pictures::Kind::Wefax,
                                         started_utc: *started_utc,
@@ -679,14 +691,14 @@ impl HfDecoder {
                                         width,
                                         rows: (pixels.len() / width.max(1) as usize) as u32,
                                         full_rows: None,
-                                        pixels,
+                                        pixels: std::mem::take(pixels),
                                     });
                                 }
                                 send(event(
                                     "WEFAX",
                                     "picture",
                                     format!("Radiofax picture · {} rows · {:.1} kHz", *rows, (*started_hz + 1_900.0) / 1e3),
-                                    fields([("image", id.to_string()), ("lines", rows.to_string()), ("width", dec.width().to_string())]),
+                                    fields([("image", id.to_string()), ("lines", rows.to_string()), ("width", width.to_string())]),
                                 ));
                             }
                         }

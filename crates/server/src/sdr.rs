@@ -553,6 +553,9 @@ pub enum SdrMode {
     /// Digital Radio Mondiale: the OFDM multiplex decoded from the channel
     /// I/Q, the audio its AAC frames decoded.
     Drm,
+    /// The NCDXF/IARU beacons, heard on a wideband channel only: the dial
+    /// sits a Morse pitch below a beacon frequency (see `wideband`).
+    Beacon,
 }
 
 /// The audio the FT8/FT4 decoder searches, above the dial: the whole of a
@@ -608,7 +611,7 @@ pub struct FilterRange {
 impl SdrMode {
     /// Demodulated as single sideband, so there is no carrier to measure.
     pub fn is_sideband(self) -> bool {
-        matches!(self, SdrMode::Usb | SdrMode::Lsb | SdrMode::Ft8 | SdrMode::Ft4 | SdrMode::Wefax | SdrMode::Rtty | SdrMode::Navtex | SdrMode::Psk31 | SdrMode::Sitor | SdrMode::Dsc | SdrMode::Hfdl | SdrMode::Pactor | SdrMode::Stanag | SdrMode::Ale | SdrMode::Cw | SdrMode::Js8 | SdrMode::Sstv | SdrMode::Wspr | SdrMode::Olivia | SdrMode::Mfsk | SdrMode::Hell | SdrMode::Contestia | SdrMode::Selcal | SdrMode::Dominoex | SdrMode::Thor | SdrMode::Mt63 | SdrMode::Fst4w)
+        matches!(self, SdrMode::Usb | SdrMode::Lsb | SdrMode::Ft8 | SdrMode::Ft4 | SdrMode::Wefax | SdrMode::Rtty | SdrMode::Navtex | SdrMode::Psk31 | SdrMode::Sitor | SdrMode::Dsc | SdrMode::Hfdl | SdrMode::Pactor | SdrMode::Stanag | SdrMode::Ale | SdrMode::Cw | SdrMode::Beacon | SdrMode::Js8 | SdrMode::Sstv | SdrMode::Wspr | SdrMode::Olivia | SdrMode::Mfsk | SdrMode::Hell | SdrMode::Contestia | SdrMode::Selcal | SdrMode::Dominoex | SdrMode::Thor | SdrMode::Mt63 | SdrMode::Fst4w)
     }
 
     /// The slot decoder a data mode runs on its sideband audio.
@@ -653,7 +656,7 @@ impl SdrMode {
         } else {
             let (lo, hi) = (low.clamp(-r.max_edge_hz, r.max_edge_hz), high.clamp(-r.max_edge_hz, r.max_edge_hz));
             match self {
-                SdrMode::Usb | SdrMode::Ft8 | SdrMode::Ft4 | SdrMode::Cw | SdrMode::Js8 if lo < 0.0 => return Err("upper sideband edges sit above the carrier".into()),
+                SdrMode::Usb | SdrMode::Ft8 | SdrMode::Ft4 | SdrMode::Cw | SdrMode::Beacon | SdrMode::Js8 if lo < 0.0 => return Err("upper sideband edges sit above the carrier".into()),
                 SdrMode::Lsb if hi > 0.0 => return Err("lower sideband edges sit below the carrier".into()),
                 _ => {}
             }
@@ -730,7 +733,7 @@ impl SdrMode {
             // sidebands either side.
             SdrMode::Wefax => WEFAX_HIGH_HZ - WEFAX_LOW_HZ,
             // Morse: the skimmer's band, 200–1200 Hz above the dial.
-            SdrMode::Cw => CW_HIGH_HZ - CW_LOW_HZ,
+            SdrMode::Cw | SdrMode::Beacon => CW_HIGH_HZ - CW_LOW_HZ,
             SdrMode::Rtty | SdrMode::Navtex | SdrMode::Psk31 | SdrMode::Sitor | SdrMode::Dsc | SdrMode::Hfdl | SdrMode::Pactor | SdrMode::Stanag | SdrMode::Ale | SdrMode::Js8 | SdrMode::Sstv | SdrMode::Wspr | SdrMode::Olivia | SdrMode::Mfsk | SdrMode::Hell | SdrMode::Contestia | SdrMode::Selcal | SdrMode::Dominoex | SdrMode::Thor | SdrMode::Mt63 | SdrMode::Fst4w => FT8_HIGH_HZ - FT8_LOW_HZ,
             SdrMode::Wwv => AM_BANDWIDTH_HZ,
             // The widest DRM channel, 20 kHz (spectrum occupancy 5): the
@@ -823,7 +826,7 @@ impl SdrMode {
         match self {
             SdrMode::Usb => center,
             SdrMode::Lsb => -center,
-            SdrMode::Cw => (CW_LOW_HZ + CW_HIGH_HZ) / 2.0,
+            SdrMode::Cw | SdrMode::Beacon => (CW_LOW_HZ + CW_HIGH_HZ) / 2.0,
             SdrMode::Ft8 | SdrMode::Ft4 | SdrMode::Rtty | SdrMode::Navtex | SdrMode::Psk31 | SdrMode::Sitor | SdrMode::Dsc | SdrMode::Hfdl | SdrMode::Pactor | SdrMode::Stanag | SdrMode::Ale | SdrMode::Js8 | SdrMode::Sstv | SdrMode::Wspr | SdrMode::Olivia | SdrMode::Mfsk | SdrMode::Hell | SdrMode::Contestia | SdrMode::Selcal | SdrMode::Dominoex | SdrMode::Thor | SdrMode::Mt63 | SdrMode::Fst4w => (FT8_LOW_HZ + FT8_HIGH_HZ) / 2.0,
             SdrMode::Wefax => (WEFAX_LOW_HZ + WEFAX_HIGH_HZ) / 2.0,
             _ => 0.0,
@@ -839,7 +842,7 @@ impl SdrMode {
 
     fn chain_bandwidth_hz(self) -> f32 {
         match self {
-            SdrMode::Usb | SdrMode::Lsb | SdrMode::Ft8 | SdrMode::Ft4 | SdrMode::Wefax | SdrMode::Rtty | SdrMode::Navtex | SdrMode::Psk31 | SdrMode::Sitor | SdrMode::Dsc | SdrMode::Hfdl | SdrMode::Pactor | SdrMode::Stanag | SdrMode::Ale | SdrMode::Cw | SdrMode::Js8 | SdrMode::Sstv | SdrMode::Wspr | SdrMode::Olivia | SdrMode::Mfsk | SdrMode::Hell | SdrMode::Contestia | SdrMode::Selcal | SdrMode::Dominoex | SdrMode::Thor | SdrMode::Mt63 | SdrMode::Fst4w => {
+            SdrMode::Usb | SdrMode::Lsb | SdrMode::Ft8 | SdrMode::Ft4 | SdrMode::Wefax | SdrMode::Rtty | SdrMode::Navtex | SdrMode::Psk31 | SdrMode::Sitor | SdrMode::Dsc | SdrMode::Hfdl | SdrMode::Pactor | SdrMode::Stanag | SdrMode::Ale | SdrMode::Cw | SdrMode::Beacon | SdrMode::Js8 | SdrMode::Sstv | SdrMode::Wspr | SdrMode::Olivia | SdrMode::Mfsk | SdrMode::Hell | SdrMode::Contestia | SdrMode::Selcal | SdrMode::Dominoex | SdrMode::Thor | SdrMode::Mt63 | SdrMode::Fst4w => {
                 // Both sides of the carrier out to the far edge, and the
                 // widest skirt past it, so the channel filter never shapes
                 // the band before the demodulator's own filter does.
@@ -901,6 +904,7 @@ impl SdrMode {
             SdrMode::Stanag => ("STANAG", "data", "NATO HF serial-tone modems: STANAG 4285 and MIL-STD-188-110 identified and demodulated, STANAG 5066 headers read when the data is clear"),
             SdrMode::Ale => ("ALE", "data", "2G ALE (MIL-STD-188-141): 8-FSK at 125 baud, soundings and calls with their callsigns; STANAG serial tones heard alongside are named too"),
             SdrMode::Cw => ("CW", "data", "Morse on upper sideband: every signal in the filter's passband decoded at once, each at its own pitch and speed (8–50 WPM)"),
+            SdrMode::Beacon => ("BEACON", "data", "The NCDXF/IARU beacons: which of the 18 is heard on each of the five frequencies, and down to which power step"),
             SdrMode::Js8 => ("JS8", "data", "JS8Call on upper sideband: free text, heartbeats and directed messages, at all four speeds (normal, fast, turbo, slow)"),
             SdrMode::Fst4w => ("FST4W", "data", "FST4W beacons on upper sideband: 120, 300, 900 and 1800 second slots at once, within 110 Hz of 1500 Hz above the dial"),
             SdrMode::Wspr => ("WSPR", "data", "WSPR on upper sideband: every beacon in 1400–1600 Hz above the dial, decoded at the end of each even-minute 2-minute slot, down to about −28 dB"),
@@ -943,7 +947,7 @@ impl SdrMode {
                 // between locks): the channel I/Q only.
                 // Sideband audio comes out at the channel rate, so the ring
                 // keeps it with the I/Q.
-                SdrMode::Usb | SdrMode::Lsb | SdrMode::Ft8 | SdrMode::Ft4 | SdrMode::Wefax | SdrMode::Rtty | SdrMode::Navtex | SdrMode::Psk31 | SdrMode::Sitor | SdrMode::Dsc | SdrMode::Hfdl | SdrMode::Pactor | SdrMode::Stanag | SdrMode::Ale | SdrMode::Cw | SdrMode::Js8 | SdrMode::Sstv | SdrMode::Wspr | SdrMode::Olivia | SdrMode::Mfsk | SdrMode::Hell | SdrMode::Contestia | SdrMode::Selcal | SdrMode::Dominoex | SdrMode::Thor | SdrMode::Mt63 | SdrMode::Fst4w => &["iq", "voice"],
+                SdrMode::Usb | SdrMode::Lsb | SdrMode::Ft8 | SdrMode::Ft4 | SdrMode::Wefax | SdrMode::Rtty | SdrMode::Navtex | SdrMode::Psk31 | SdrMode::Sitor | SdrMode::Dsc | SdrMode::Hfdl | SdrMode::Pactor | SdrMode::Stanag | SdrMode::Ale | SdrMode::Cw | SdrMode::Beacon | SdrMode::Js8 | SdrMode::Sstv | SdrMode::Wspr | SdrMode::Olivia | SdrMode::Mfsk | SdrMode::Hell | SdrMode::Contestia | SdrMode::Selcal | SdrMode::Dominoex | SdrMode::Thor | SdrMode::Mt63 | SdrMode::Fst4w => &["iq", "voice"],
                 SdrMode::Am | SdrMode::Wwv | SdrMode::Drm | SdrMode::P25 | SdrMode::Dmr | SdrMode::Nxdn | SdrMode::Scan => &["iq"],
                 // WFM's I/Q is 256 kHz and unreplayable; PAGER walks a bank.
                 SdrMode::Wfm | SdrMode::Pager | SdrMode::Ais => &[],
@@ -2752,7 +2756,7 @@ impl Demod {
                 audio: Vec::new(),
                 hf: crate::hfdata::HfDecoder::new(mode, fs_out).map(Box::new),
             },
-            SdrMode::Usb | SdrMode::Lsb | SdrMode::Ft8 | SdrMode::Ft4 | SdrMode::Wefax | SdrMode::Rtty | SdrMode::Navtex | SdrMode::Psk31 | SdrMode::Sitor | SdrMode::Dsc | SdrMode::Hfdl | SdrMode::Pactor | SdrMode::Stanag | SdrMode::Ale | SdrMode::Cw | SdrMode::Js8 | SdrMode::Sstv | SdrMode::Wspr | SdrMode::Olivia | SdrMode::Mfsk | SdrMode::Hell | SdrMode::Contestia | SdrMode::Selcal | SdrMode::Dominoex | SdrMode::Thor | SdrMode::Mt63 | SdrMode::Fst4w => Demod::Ssb {
+            SdrMode::Usb | SdrMode::Lsb | SdrMode::Ft8 | SdrMode::Ft4 | SdrMode::Wefax | SdrMode::Rtty | SdrMode::Navtex | SdrMode::Psk31 | SdrMode::Sitor | SdrMode::Dsc | SdrMode::Hfdl | SdrMode::Pactor | SdrMode::Stanag | SdrMode::Ale | SdrMode::Cw | SdrMode::Beacon | SdrMode::Js8 | SdrMode::Sstv | SdrMode::Wspr | SdrMode::Olivia | SdrMode::Mfsk | SdrMode::Hell | SdrMode::Contestia | SdrMode::Selcal | SdrMode::Dominoex | SdrMode::Thor | SdrMode::Mt63 | SdrMode::Fst4w => Demod::Ssb {
                 demod: {
                     let (lo, hi) = mode.filter_edges();
                     SsbDemod::with_shape(
@@ -5853,7 +5857,7 @@ fn run_sdr(
                     ..Default::default()
                 }
             }
-            SdrMode::Usb | SdrMode::Lsb | SdrMode::Ft8 | SdrMode::Ft4 | SdrMode::Wefax | SdrMode::Rtty | SdrMode::Navtex | SdrMode::Psk31 | SdrMode::Sitor | SdrMode::Dsc | SdrMode::Hfdl | SdrMode::Pactor | SdrMode::Stanag | SdrMode::Ale | SdrMode::Cw | SdrMode::Js8 | SdrMode::Sstv | SdrMode::Wspr | SdrMode::Olivia | SdrMode::Mfsk | SdrMode::Hell | SdrMode::Contestia | SdrMode::Selcal | SdrMode::Dominoex | SdrMode::Thor | SdrMode::Mt63 | SdrMode::Fst4w => {
+            SdrMode::Usb | SdrMode::Lsb | SdrMode::Ft8 | SdrMode::Ft4 | SdrMode::Wefax | SdrMode::Rtty | SdrMode::Navtex | SdrMode::Psk31 | SdrMode::Sitor | SdrMode::Dsc | SdrMode::Hfdl | SdrMode::Pactor | SdrMode::Stanag | SdrMode::Ale | SdrMode::Cw | SdrMode::Beacon | SdrMode::Js8 | SdrMode::Sstv | SdrMode::Wspr | SdrMode::Olivia | SdrMode::Mfsk | SdrMode::Hell | SdrMode::Contestia | SdrMode::Selcal | SdrMode::Dominoex | SdrMode::Thor | SdrMode::Mt63 | SdrMode::Fst4w => {
                 // No classifier either: sideband has no carrier to measure
                 // and no FM to discriminate. The demodulator picks the side
                 // and runs its own speech AGC; the audio leaves at the
@@ -5917,6 +5921,7 @@ fn run_sdr(
                         SdrMode::Stanag => "STANAG",
                         SdrMode::Ale => "ALE",
                         SdrMode::Cw => "CW",
+                        SdrMode::Beacon => "BEACON",
                         SdrMode::Js8 => "JS8",
                         SdrMode::Sstv => "SSTV",
                         SdrMode::Wspr => "WSPR",

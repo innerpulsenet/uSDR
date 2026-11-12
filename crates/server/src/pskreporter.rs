@@ -443,6 +443,9 @@ pub(crate) fn spot_of(inspect_hz: f64, ev: &scannerd_engine::DecodeEvent) -> Opt
         "FT8" => ("FT8", ev.fields.get("de")?.as_str()),
         "FT4" => ("FT4", ev.fields.get("de")?.as_str()),
         "WSPR" => ("WSPR", unbracket(ev.fields.get("call")?)?),
+        // Each frame once: the heartbeat, reply or message read from it
+        // names the same sender in the same slot.
+        "JS8" if ev.kind != "frame" => return None,
         "JS8" => {
             // A heartbeat, a directed frame or a message gives "from"; a
             // compound frame gives the sender's full call as "call".
@@ -925,6 +928,8 @@ mod tests {
         assert_eq!((s.call.as_str(), s.mode, s.freq_hz, s.at), ("K1ABC", "JS8", 7_079_200, 1_700_000_015));
         assert!(spot_of(7_078_000.0, &ev("JS8", "frame", &[("from", "Q0QQ"), ("implausibleCall", "Q0QQ"), ("df", "1200")])).is_none());
         assert!(spot_of(7_078_000.0, &ev("JS8", "frame", &[("to", "@ALLCALL"), ("df", "1200")])).is_none(), "no sender");
+        let hb = ev("JS8", "heartbeat", &[("from", "K1ABC"), ("grid", "FN31"), ("df", "1200.0"), ("snr", "-5"), ("slot", "1700000015000")]);
+        assert!(spot_of(7_078_000.0, &hb).is_none(), "its frame has already been counted");
     }
 
     #[test]

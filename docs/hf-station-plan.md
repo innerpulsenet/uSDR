@@ -366,41 +366,127 @@ records the wideband channels too):
   wsprnet, and there is no reference decoder here to check new ones against), and JS8
   subtraction (off the channel list).
 
-**Slice-first schedule, 2026-11-12.** A day of Stage 4 still had the main decoder
-hopping every 2 to 10 minutes. The time-share planner kept running inside the slice,
-and the channels' decodes outnumbered it 572,196 to 5,589. It had parked on SSTV
-21340 kHz, which had no channel, for 278 minutes with nothing heard, and had taken
-radiofax charts on 12.7 MHz, which fits no slice. Now:
+**Stage 5: more channels, 2026-11-10.** Added to `USDR_WIDE` on CT 216, cheapest first, 50
+channels in all, every one logging:
 
-- `catalog` in `USDR_WIDE` stands for every dial the schedule knows, chart
-  frequencies included, so every target inside a slice has a channel. Entries the
-  server cannot run are named in the journal at start (the `BEACON` ones never ran).
-- WEFAX is a channel mode. Each radiofax decoder keeps its own picture, and a channel
-  leaves a picture to the main receiver when that receiver was on the dial throughout,
-  as SSTV already did.
+- **SELCAL** on 5598, 6628, 8825 and 8906 kHz, inside both night slices. 11396 and 13306 kHz
+  are in no slice (the night slices reach up to 10.54 MHz, the day slice starts at 13.93) and
+  stay on hops. In its first 15 minutes the 8825 channel heard three aircraft (DE-LQ, PS-AJ,
+  FS-JL) while the main decoder on 8906 heard none, and the codes were on the site's SELCAL
+  list with the next batch.
+- **FT4** on 80, 40, 30, 20, 17, 15, 12 and 10 m. As shadows against the main decoder on
+  14.080 MHz for 76 slots: all 76 of its stations and one more, 881 of 902 messages in the
+  same slot, most of the rest a slot apart on one side or the other. Logging since. A logging
+  channel's FT4 decodes go to PSKReporter as FT8's do.
+- **60 and 160 m:** FT8 and WSPR on 5357 and 5364.7 kHz, and WSPR on 1836.6 kHz, which only
+  the 5.4 MHz slice reaches.
+- **Radiofax**, one frequency per station a slice holds: NMF 6340.5, DDK3 7880 and NMG
+  8503.9 kHz at night, NMG 17146.4 kHz by day. The stations send on several frequencies at
+  once; with a channel on each of them the first afternoon filed NMF's 16:00 chart twice.
+
+CPU on the 6.855 MHz slice, 180 s each, back to back, the main decoder on SELCAL:
+
+| Channels | Wideband workers | Slot decoder pool | Dropped blocks |
+|---|---|---|---|
+| The 31 from Stage 4 | 0.25 core | 0.08 | 0 |
+| + SELCAL, FT4, 60 m and 160 m (46) | 0.34 | 0.17 | 0 |
+| + radiofax (50, three of them in this slice) | 0.38 | 0.18 | 0 |
+
+A radiofax channel costs about 0.015 of a core. On the 24.62 MHz day slice the workers went
+from 0.125 to 0.16 of a core and the slot pool from 0.23 to 0.41: FT4 decodes every 7.5 s.
+
+**Charts on channels.** WEFAX is a channel mode (`WEFAX+9108100`, the dial 1.9 kHz below the
+listed frequency). A channel starts a chart on its own tone and files it like the main
+receiver's. When a timetabled chart's frequency is a channel inside the held slice, the
+schedule leaves the chart to it: the main decoder carries on, and the slice stays until the
+chart's time is up, or longer while the picture is still coming in, up to the picture overrun.
+A radio check or another chart that would move the span waits. A slice chosen in the 15
+minutes before such a chart is the one that holds it, and when the chart comes due in
+another slice on the same side of the split, the slice moves to it rather than the main
+decoder going to the chart, unless that would cut off a picture or a radio check. The
+receiver's own radiofax path was checked after the change on DWD's 16:36 surface analysis,
+1296 rows, filed against its timetable entry. The first chart a channel received
+was NMF's 16:00 iceberg analysis, 920 rows, untimetabled, which the picture check passed
+(row correlation 0.70). The first evening showed a gap: DWD's 18:00 chart on 13880.6 kHz,
+outside every slice, held the main receiver until 18:19:38, and NMG's 18:20 chart, due a
+second later with a channel on 17144.5 kHz, went to the main receiver on 8502.0 kHz instead,
+which heard no start tone. The finished chart still counted as the slot in progress. A chart
+whose picture is over, or never began, no longer holds a chart back from its channel.
+After the fix, DWD's 22:00 surface analysis went to the 7878.1 kHz channel and was filed
+against its timetable entry (1296 rows), and the 6338.6 kHz channel filed two NMF charts
+the same evening.
+
+**NAVTEX.** The directory lists only 518 kHz, which no slice reaches, so NAVTEX is a
+timetabled main-receiver visit rather than a channel: dial 517.0 kHz, 30 s before the
+station's slot to 11 minutes after it, with all channels dark meanwhile. Boston, Chesapeake
+and Yarmouth take turns, one per 4-hour cycle (Boston 00:50 and 12:50 UTC, Chesapeake 06:10
+and 18:10, Yarmouth 11:20 and 23:20), so six visits, about an hour a day. Charts win: a
+chart on the main receiver goes first, a channel chart in the slice ends a visit, and a
+visit is passed over while a channel is receiving a chart. The log keeps each message by its
+id with its text (up to 4000 characters); the site lists each message once from its best
+copy. The first two visits on 2026-11-10 copied nothing: a manual one 22:38–22:52
+(Sydney NS and San Juan slots), noise -81 dBFS, and the schedule's Yarmouth visit
+23:19–23:31, noise -84 dBFS. Boston's 00:50 visit, the nearest station, copied nothing either
+(-84 dBFS), so the visits came out of the schedule on 2026-11-11: the receiver's reach below
+1 MHz is unproven, and an hour a day of dark channels bought nothing. The log and the site
+still take NAVTEX, so a message copied by hand is kept and listed; the site's section stays
+hidden until one is. Bringing the visits back is a revert of the schedule part of 479a74d,
+once something has shown 518 kHz arriving.
+
+**JS8, 2026-11-11.** JS8 channels on 1842, 3578, 7078, 10130, 14078, 18104, 21078, 24922
+and 28078 kHz, the JS8Call defaults; a slice holds three of them. On the 5.4 MHz night slice,
+180 s each, back to back, with the main decoder on DSC 2185.8 kHz: the wideband workers
+stayed at 0.39 to 0.40 of a core and the FT8/FT4 slot pool at 0.29 to 0.30, and the JS8
+decoder's own thread added 0.13 for its three channels. No dropped blocks. In the first
+14 minutes the 7078 kHz channel logged 348 frames and 3578 kHz 23. A 10-minute side-by-side
+on 7078 kHz had the main receiver copy 62 frames, mostly Normal speed, some Fast.
+
+**NCDXF/IARU beacons, 2026-11-11.** Eighteen beacons take turns on 14.100, 18.110, 21.150,
+24.930 and 28.200 MHz, ten seconds each, so the clock alone says which one is on. A
+`BEACON` channel's dial sits 700 Hz below the frequency (`crates/engine/src/beacon.rs`,
+`wideband.rs`). Per slot the detector finds the carrier within ±60 Hz, matches its
+envelope against the scheduled callsign's Morse at 22 WPM over starts up to 1.5 s late,
+and counts the call only when the match stands 6 standard deviations clear of the same
+match in the noise 250 Hz either side and fits better than the other seventeen calls.
+It then measures the dashes in turn (100 W, 10 W, 1 W, 100 mW); the steps heard are the
+dashes heard in a row. Strength is over the noise in 2500 Hz, as FT8 reports it. Each
+heard slot is one `BEACON` row at the beacon's locator. The Activity page shows the 18
+by 5 grid for the last hour and how many of the 18 each frequency heard each hour of the
+last day. The project's pages give no timing inside a slot, so the detector finds the
+callsign's start and each dash's itself; `lateMs` in each row says where the call began.
+Only the day slices hold the five frequencies (14.1 to 21.15 MHz in the 17.6 MHz slice,
+21.15 to 28.2 MHz in the 24.6 MHz one), so the beacons are heard by day only. A 14.100 MHz
+recording at 02:40 UTC heard nothing: 20 m was closed.
+
+**Slice-first schedule, 2026-11-12.** The station branch had been deployed over `main` on
+2026-11-11 at 18:09, which took away radiofax and beacon channels until this merge.
+A day of that build still had the main decoder hopping every 2 to 10 minutes. The
+time-share planner kept running inside the slice, and the channels' decodes outnumbered
+it 572,196 to 5,589. It had parked on SSTV 21340 kHz, which had no channel, for 278 minutes
+with nothing heard, and had taken radiofax charts on 12.7 MHz, which fits no slice. Now:
+
+- `catalog` in `USDR_WIDE` stands for every dial the schedule knows, chart frequencies
+  included, so every target inside a slice has a channel. Named channels (60 m, the
+  extra FT4 and JS8 dials, beacons) are listed beside it. Entries the server cannot run
+  are named in the journal at start.
 - With channels running, the shares are not used. The main decoder sits on the slice's
   best FT8 dial until the slice is chosen again, and the same hop is never sent twice,
   because even onto the same dial a hop rebuilds the decoder and loses its slot.
-- A chart takes a frequency inside the slice first, then one inside another slice, and
-  only then one in none. The radio check takes WWV inside the slice first, including
-  20 and 25 MHz, so the high slice checks on 25.
-- A station sends each chart on several frequencies at once, and the low slices hold
-  two or three of NMF's, NMG's and DDH3's. The picture writer holds a radiofax picture
-  for 90 seconds and keeps only the cleanest copy. The others are logged as `copy`.
-- 110 channels in all. Measured on CT 216 by day: in the high slice the two channel
-  workers used about 20% of a core between them. In the low slice (6.855 MHz, about 50
-  channels) they used 36 to 42% each, plus 17% for the slot decoders, with no dropped
-  blocks. That is about 1.3 of CT 216's two cores. Busy evening slots on the low slice
-  have not been measured yet. If they drop blocks, give CT 216 a third core.
-- A chart outside the slice moves the span to the slice holding the most of that
-  station's frequencies, not the first one holding the chosen frequency. Otherwise
-  NMF on 6340.5 kHz left 9110 out of the span, and no channel could hear a copy.
-- Blocks drop only while channels are rebuilt after a retune: 29 over five retunes,
-  then none in steady state. Live on the afternoon of 2026-11-12, the tuner moved once at
-  a slice change and once for a chart in 47 minutes, and the main decoder never hopped
-  in between. Two NMF charts were each filed once, but no channel has yet received a
-  chart that the main receiver was not also taking, so the copy rule is tested only
-  offline.
+- A chart no channel can take goes to the main receiver on a frequency in another slice
+  before one in none, and the span moves to the slice holding the most of that
+  station's frequencies, so channels there hear copies. The radio check takes WWV
+  inside the slice first, including 20 and 25 MHz, so the high slice checks on 25.
+- With a channel on every frequency a station sends a chart on, the low slices hold two
+  or three copies of each. The picture writer holds a radiofax picture for 90 seconds and
+  keeps only the cleanest copy. The others are logged as `copy`.
+- Measured on CT 216 by day before the merge, at 110 channels: in the high slice the two
+  channel workers used about 20% of a core between them. In the low slice (6.855 MHz,
+  about 50 channels) they used 36 to 42% each, plus 17% for the slot decoders, with no
+  dropped blocks in steady state. About six blocks drop while channels are rebuilt after
+  each retune. Busy evening slots on the low slice have not been measured. If they drop
+  blocks, give CT 216 a third core.
+- Live on the afternoon of 2026-11-12, the tuner moved once at a slice change and once
+  for a chart in 47 minutes, and the main decoder never hopped in between.
 
 **What has to change.**
 

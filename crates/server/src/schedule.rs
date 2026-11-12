@@ -24,8 +24,13 @@
 //! With wideband channels running, the shares are not used. The tuner holds a
 //! slice of spectrum for a while, chosen by what those channels have measured at
 //! this hour, and the channels decode every dial inside it. The main decoder is
-//! left on the slice's best FT8 dial and only moves for a radio check or a chart,
-//! each taken inside the slice when one of its frequencies is there.
+//! left on the slice's best FT8 dial. It moves only for a radio check, which
+//! takes WWV inside the slice when it can, or for a chart no channel can take.
+//!
+//! A timetabled chart whose frequency a radiofax channel covers inside the held
+//! slice does not take the radio: the channel receives it, and the slice is kept
+//! until the chart is over, so nothing moves the span under it. A slice choice
+//! made shortly before such a chart takes the slice that holds it.
 //!
 //! Everything is clock-injected, like the scanner, so all of it is testable
 //! without hardware or real time.
@@ -297,6 +302,8 @@ pub struct Inputs {
     pub picture_busy: bool,
     /// The WWV decoder is locked.
     pub wwv_locked: bool,
+    /// A wideband radiofax channel is in the middle of a chart.
+    pub channel_chart_busy: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -346,6 +353,12 @@ pub struct Scheduler {
     /// The last hop sent, so the same one is not sent again: even onto the
     /// dial it is already on, a hop rebuilds the decoder and loses its slot.
     last_hop: Option<Action>,
+    /// A chart a channel is receiving: the slice stays until then, or while
+    /// the picture is still coming in.
+    chart_pin_until: u64,
+    /// Whether that holds now, and what the chart is.
+    pinned: bool,
+    channel_chart: Option<String>,
 }
 
 /// The middle of a Maidenhead square, latitude then longitude.
@@ -449,6 +462,12 @@ impl Scheduler {
             self.slot = None;
             return out;
         }
+        let overrun = n.channel_chart_busy && n.utc < self.chart_pin_until + PICTURE_OVERRUN_S;
+        self.pinned = self.chart_pin_until > 0 && (n.utc < self.chart_pin_until || overrun);
+        if !self.pinned {
+            self.channel_chart = None;
+        }
+        self.chart_to_channel(n);
         if self.slot.is_some() && self.keep_slot(n, &mut out) {
             return out;
         }
@@ -471,7 +490,14 @@ impl Scheduler {
                 if now < slot.end {
                     return true;
                 }
-                if step + 1 < health_dials(now, self.slice).len() {
+                let dials = health_dials(now, self.slice);
+                if step + 1 < dials.len() {
+                    // Another WWV frequency outside the slice would move the
+                    // span from under a chart: try again once the chart is over.
+                    if self.pinned && !self.slice.is_some_and(|c| in_slice(c, dials[step + 1])) {
+                        self.next_health = self.chart_pin_until;
+                        return false;
+                    }
                     self.begin_health(now, step + 1, out);
                     return true;
                 }
@@ -509,7 +535,7 @@ impl Scheduler {
         }
         if let Some((index, at_utc)) = self.chart_due(now) {
             self.begin_chart(index, at_utc, now, out);
-        } else if now >= self.next_health {
+        } else if now >= self.next_health && !self.pinned {
             self.begin_health(now, 0, out);
         } else {
             self.begin_planned(now, out);
@@ -529,11 +555,82 @@ impl Scheduler {
         })
     }
 
+    /// A chart's frequencies on the air at its time.
+    fn chart_options(&self, index: usize) -> Vec<u64> {
+        let chart = &self.catalog.charts[index];
+        chart.freqs.iter().filter(|f| in_window(f.window, chart.minute)).map(|f| f.dial_hz).collect()
+    }
+
+    /// The best of a chart's frequencies that a radiofax channel covers inside
+    /// the slice at `center_hz`.
+    fn chart_channel(&self, index: usize, center_hz: u64, hour: u8) -> Option<u64> {
+        let covered: Vec<u64> =
+            self.chart_options(index).into_iter().filter(|d| in_slice(center_hz, *d) && self.channels.contains(&(SdrMode::Wefax, *d))).collect();
+        self.best("WEFAX", &covered, SdrMode::Wefax, hour)
+    }
+
+    /// A chart due now that a channel in the held slice covers is left to the
+    /// channel, and the slice kept for it. A channel in another slice will do
+    /// too: the span would have moved for the chart anyway, and this way the
+    /// main decoder stays free. While a channel has a chart, one that would
+    /// move the span waits its turn: it is passed over.
+    fn chart_to_channel(&mut self, n: Inputs) {
+        let now = n.utc;
+        let Some((index, at_utc)) = self.chart_due(now) else { return };
+        let chart = &self.catalog.charts[index];
+        let label = format!("{} · {}", chart.station, chart.title);
+        let hour = hour_of(now);
+        // A chart on the main receiver whose picture is over, or never began,
+        // ends on this tick: it holds nothing back. (Charts back to back, the
+        // second one's lead minute falls just as the first one's picture ends.)
+        let over = |s: &Slot| matches!(s.kind, Kind::Chart { at_utc, started } if !n.picture_busy && (started || now >= at_utc + CHART_NO_START_S));
+        // The span is on the slice unless the radio check or a chart has taken
+        // it elsewhere.
+        let here = self.slice.filter(|c| self.slot.as_ref().is_none_or(|s| over(s) || in_slice(*c, s.dial_hz)));
+        // Moving is for a slice the planner holds, never from under a picture,
+        // a radio check or another chart, and only to a slice on this side of
+        // the split with planned work in it: the decoder's hop there is what
+        // moves the span.
+        let movable = self.slice.is_some() && !self.pinned && !n.picture_busy && self.slot.as_ref().is_none_or(|s| s.kind == Kind::Planned || over(s));
+        let side = if self.is_night(now) { NIGHT_SLICES } else { DAY_SLICES };
+        let found = here.and_then(|c| self.chart_channel(index, c, hour).map(|d| (c, d))).or_else(|| {
+            movable
+                .then(|| {
+                    side.iter()
+                        .copied()
+                        .filter(|c| self.catalog.targets.iter().any(|t| in_slice(*c, t.dial_hz)))
+                        .find_map(|c| self.chart_channel(index, c, hour).map(|d| (c, d)))
+                })
+                .flatten()
+        });
+        match found {
+            Some((center_hz, dial_hz)) => {
+                if self.slice != Some(center_hz) {
+                    // The planned slot ends, and the next starts in the new slice.
+                    self.slice = Some(center_hz);
+                    self.slice_visited.insert(center_hz, now);
+                    self.slot = None;
+                }
+                self.last_chart = at_utc;
+                self.visited.insert((SdrMode::Wefax, dial_hz), now);
+                self.chart_pin_until = at_utc + CHART_MAX_S;
+                self.slice_until = self.slice_until.max(self.chart_pin_until);
+                self.pinned = true;
+                eprintln!("schedule: {label} on the radiofax channel at {:.1} kHz", dial_hz as f64 / 1e3);
+                self.channel_chart = Some(format!("chart on a channel: {label}"));
+            }
+            None if self.pinned => {
+                self.last_chart = at_utc;
+                eprintln!("schedule: {label} passed over, a channel is receiving a chart");
+            }
+            None => {}
+        }
+    }
+
     fn begin_chart(&mut self, index: usize, at_utc: u64, now: u64, out: &mut Vec<Action>) {
         let chart = self.catalog.charts[index].clone();
         self.last_chart = at_utc;
-        let minute = chart.minute;
-        let options: Vec<u64> = chart.freqs.iter().filter(|f| in_window(f.window, minute)).map(|f| f.dial_hz).collect();
+        let options = self.chart_options(index);
         let hour = hour_of(now);
         // A frequency the span already holds costs the channels nothing, and one
         // in another slice still leaves them most of theirs.
@@ -585,13 +682,16 @@ impl Scheduler {
         if self.channels.is_empty() {
             return None;
         }
-        if self.slice.is_some() && now < self.slice_until {
+        if self.slice.is_some() && (now < self.slice_until || self.pinned) {
             return self.slice;
         }
         self.slice_picks += 1;
         let hour = hour_of(now);
         let side = if self.is_night(now) { NIGHT_SLICES } else { DAY_SLICES };
-        let chosen = if self.slice_picks.is_multiple_of(SLICE_EXPLORE_EVERY) {
+        let charted = side.iter().copied().find(|c| self.chart_soon_in(*c, now));
+        let chosen = if charted.is_some() {
+            charted
+        } else if self.slice_picks.is_multiple_of(SLICE_EXPLORE_EVERY) {
             side.iter().copied().min_by_key(|c| self.slice_visited.get(c).copied().unwrap_or(0))
         } else {
             side.iter().copied().max_by(|a, b| {
@@ -604,6 +704,18 @@ impl Scheduler {
             self.slice_visited.insert(c, now);
         }
         chosen
+    }
+
+    /// Whether a chart starts while a slice chosen now would be held, on a
+    /// frequency a channel in that slice covers.
+    fn chart_soon_in(&self, center_hz: u64, now: u64) -> bool {
+        let day_start = now - now % 86_400;
+        self.catalog.charts.iter().enumerate().any(|(i, c)| {
+            [day_start, day_start + 86_400].into_iter().any(|day| {
+                let lead = (day + u64::from(c.minute) * 60).saturating_sub(CHART_LEAD_S as u64);
+                (now..now + SLICE_HOLD_S).contains(&lead) && self.chart_channel(i, center_hz, hour_of(now)).is_some()
+            })
+        })
     }
 
     /// Decodes per second a slice's channels have managed around this hour of the day.
@@ -754,10 +866,15 @@ impl Scheduler {
             .min_by_key(|c| (c.minute + 1_440 - day_minute - 1) % 1_440)
             .map(|c| format!("{:02}{:02} UTC · {} · {}", c.minute / 60, c.minute % 60, c.station, c.title))
             .unwrap_or_default();
+        let label = slot.map(|s| s.label.clone()).unwrap_or_default();
         ScheduleStatus {
             enabled: self.enabled,
             state: self.state(now).into(),
-            label: slot.map(|s| s.label.clone()).unwrap_or_default(),
+            label: match (&self.channel_chart, self.pinned && self.enabled && now >= self.hold_until) {
+                (Some(chart), true) if label.is_empty() => chart.clone(),
+                (Some(chart), true) => format!("{label} · {chart}"),
+                _ => label,
+            },
             ends_utc: slot.map_or(0, |s| s.end),
             hold_until_utc: if self.enabled && now < self.hold_until { self.hold_until } else { 0 },
             health: match self.health {
@@ -1094,6 +1211,109 @@ mod tests {
         let mut plain = running(catalog(vec![Target { mode: SdrMode::Ft8, dial_hz: 7_074_000 }], vec![]), NOON);
         plain.next_health = u64::MAX;
         assert_eq!(center_of(&plain.tick(at(NOON))), None);
+    }
+
+    /// NMG's 17146.4 kHz, as a channel in the day slice.
+    const NMG_17: u64 = 17_144_500;
+
+    #[test]
+    fn a_chart_a_channel_covers_in_the_slice_leaves_the_radio_alone() {
+        let targets = vec![ft8(14074), Target { mode: SdrMode::Selcal, dial_hz: 15_000_000 }];
+        let mut s = with_channels(targets, &[(SdrMode::Ft8, 14_074_000), (SdrMode::Wefax, NMG_17)]);
+        s.catalog.charts = vec![chart(12 * 60 + 30, NMG_17), chart(12 * 60 + 34, 9_108_100)];
+        assert_eq!(center_of(&s.tick(at(NOON))), Some(17_607_000));
+        s.slot = None;
+        // The chart's lead minute: the decoder carries on in the slice.
+        let lead = NOON + 29 * 60;
+        let a = s.tick(at(lead));
+        assert!(hops(&a).is_empty(), "the decoder is already parked in the slice: {a:?}");
+        assert_eq!(s.slice, Some(17_607_000));
+        assert_eq!(s.status(lead).state, "monitoring");
+        assert!(s.status(lead).label.contains("chart on a channel: NMF"), "{}", s.status(lead).label);
+        // Past the slice's own hold, a radio check due, and another chart off
+        // the slice: none of them moves the span while the chart runs.
+        s.next_health = lead;
+        s.slot = None;
+        let a = s.tick(at(NOON + 34 * 60 - 60));
+        assert!(hops(&a).is_empty(), "{a:?}");
+        assert_eq!(s.slice, Some(17_607_000));
+        // The picture outlasting the timetable keeps the slice too.
+        s.slot = None;
+        let late = NOON + 30 * 60 + CHART_MAX_S + 60;
+        let busy = Inputs { utc: late, channel_chart_busy: true, ..Default::default() };
+        let a = s.tick(busy);
+        assert!(hops(&a).iter().all(|h| h.0 != SdrMode::Wwv), "{a:?}");
+        // Over: the radio check goes ahead.
+        s.slot = None;
+        assert_eq!(hops(&s.tick(at(late + 1)))[0].0, SdrMode::Wwv);
+        assert!(!s.status(late + 1).label.contains("chart"));
+    }
+
+    #[test]
+    fn a_chart_a_channel_in_another_slice_covers_moves_the_slice_not_the_decoder() {
+        let targets = vec![ft8(14074), ft8(24915)];
+        let mut s = with_channels(targets, &[(SdrMode::Ft8, 14_074_000), (SdrMode::Ft8, 24_915_000), (SdrMode::Wefax, NMG_17)]);
+        s.catalog.charts = vec![chart(12 * 60 + 30, NMG_17)];
+        s.tick(at(NOON));
+        s.slice = Some(24_620_000);
+        s.slice_until = NOON + 3_600;
+        // A picture on the main receiver is not cut off for it.
+        let lead = NOON + 29 * 60;
+        s.slot = None;
+        assert_eq!(center_of(&s.tick(at(lead - 30))), Some(24_620_000));
+        let busy = s.tick(Inputs { utc: lead, picture_busy: true, ..Default::default() });
+        assert!(hops(&busy).is_empty(), "{busy:?}");
+        assert_eq!(s.slice, Some(24_620_000));
+        // Otherwise the slice moves to the channel and the decoder works there.
+        s.last_chart = 0;
+        let a = s.tick(at(lead + 1));
+        assert_eq!(center_of(&a), Some(17_607_000), "{a:?}");
+        assert!(hops(&a).iter().all(|h| h.0 == SdrMode::Ft8), "{a:?}");
+        assert!(s.status(lead + 1).label.contains("chart on a channel"));
+    }
+
+    #[test]
+    fn a_chart_right_after_one_on_the_radio_still_goes_to_its_channel() {
+        // DDH3 at 1800 on 13880.6 kHz, outside every slice, then NMG at 1820
+        // with a channel in the day slice: the evening of 2026-11-10.
+        let mut s = with_channels(vec![ft8(14074)], &[(SdrMode::Ft8, 14_074_000), (SdrMode::Wefax, NMG_17)]);
+        s.catalog.charts = vec![chart(12 * 60, 13_880_600), chart(12 * 60 + 20, NMG_17)];
+        s.tick(at(NOON - 20 * 60));
+        s.slot = None;
+        assert_eq!(hops(&s.tick(at(NOON - 60))), vec![(SdrMode::Wefax, 13_880_600)]);
+        let busy = |t| Inputs { utc: t, picture_busy: true, ..Default::default() };
+        assert!(hops(&s.tick(busy(NOON + 60))).is_empty());
+        assert!(hops(&s.tick(busy(NOON + 19 * 60 + 38))).is_empty(), "the second chart waits for the first picture");
+        // The first picture ends in the second chart's lead minute.
+        let a = s.tick(at(NOON + 19 * 60 + 39));
+        assert!(hops(&a).iter().all(|h| h.0 == SdrMode::Ft8), "{a:?}");
+        assert_eq!(center_of(&a), Some(17_607_000), "{a:?}");
+        assert!(s.status(NOON + 19 * 60 + 39).label.contains("chart on a channel"));
+    }
+
+    #[test]
+    fn a_chart_no_channel_in_the_slice_covers_takes_the_radio() {
+        let mut s = with_channels(vec![ft8(14074)], &[(SdrMode::Ft8, 14_074_000), (SdrMode::Wefax, 9_108_100)]);
+        s.catalog.charts = vec![chart(12 * 60 + 30, 9_108_100)];
+        s.tick(at(NOON));
+        s.slot = None;
+        let a = s.tick(at(NOON + 29 * 60));
+        assert_eq!(hops(&a), vec![(SdrMode::Wefax, 9_108_100)], "the channel is below the split, the slice above");
+        assert_eq!(s.status(NOON + 29 * 60).state, "chart");
+    }
+
+    #[test]
+    fn a_slice_chosen_just_before_a_chart_is_the_one_holding_it() {
+        let night = DAY + 3 * 3_600;
+        let channels = [(SdrMode::Ft8, 1_840_000), (SdrMode::Ft8, 7_074_000), (SdrMode::Wefax, 9_108_100)];
+        let mut s = with_channels(vec![ft8(1840), ft8(7074)], &channels);
+        s.yields.insert(("FT8".to_string(), 1_840_000, 3), Yield { monitored_s: 100, observations: 5_000 });
+        assert_eq!(s.choose_slice(night), Some(5_400_000), "160 m has been busy");
+        s.slice_until = 0;
+        s.catalog.charts = vec![chart(3 * 60 + 20, 9_108_100)];
+        assert_eq!(s.choose_slice(night), Some(5_400_000), "the chart is past this hold");
+        s.slice_until = 0;
+        assert_eq!(s.choose_slice(night + 10 * 60), Some(6_855_000), "9110 kHz is only in the upper night slice");
     }
 
     #[test]
