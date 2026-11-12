@@ -125,12 +125,27 @@ fn deliver(agent: &ureq::Agent, config: &Config, path: &str, content_type: &str,
     for (name, value) in headers {
         request = request.header(*name, value.as_str());
     }
-    request.send(&body[..]).map(drop).map_err(|e| anyhow::anyhow!("{e}"))
+    let mut response = request.send(&body[..]).map_err(|e| anyhow::anyhow!("{e}"))?;
+    let status = response.status();
+    if status.is_success() {
+        return Ok(());
+    }
+    // The backend says why it refused a batch; without that a 422 is a guess.
+    let reason = response.body_mut().with_config().limit(4_096).read_to_string().unwrap_or_default();
+    bail!("http status {}: {}", status.as_u16(), refusal(&reason));
+}
+
+/// The backend's reason from its `{"error": ...}` reply, or the start of whatever
+/// else came back (a proxy's page, say), on one line.
+fn refusal(body: &str) -> String {
+    let said = serde_json::from_str::<Value>(body).ok().and_then(|v| v.get("error").and_then(Value::as_str).map(String::from));
+    let text = said.unwrap_or_else(|| body.chars().filter(|c| !c.is_control()).take(200).collect());
+    if text.trim().is_empty() { "no reason given".into() } else { text }
 }
 
 /// Send until the daemon stops, slowing down while the backend is unreachable.
 pub async fn run(log: Arc<StationLog>, config: Config, grid: impl Fn() -> String + Send + Sync + 'static, status: impl Fn(u64) -> Value + Send + Sync + 'static) {
-    let agent: ureq::Agent = ureq::Agent::config_builder().timeout_global(Some(HTTP_TIMEOUT)).build().into();
+    let agent: ureq::Agent = ureq::Agent::config_builder().timeout_global(Some(HTTP_TIMEOUT)).http_status_as_error(false).build().into();
     let grid = Arc::new(grid);
     let status = Arc::new(status);
     let mut wait = EVERY;
@@ -169,6 +184,13 @@ mod tests {
         assert_eq!(public_grid("FN2"), None);
         assert_eq!(public_grid("ZZ99"), None);
         assert_eq!(public_grid(""), None);
+    }
+
+    #[test]
+    fn a_refusal_says_what_the_backend_said() {
+        assert_eq!(refusal(r#"{"error": "bad grid"}"#), "bad grid");
+        assert_eq!(refusal("<html>\n522</html>"), "<html>522</html>");
+        assert_eq!(refusal(""), "no reason given");
     }
 
     #[test]

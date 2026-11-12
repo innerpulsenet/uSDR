@@ -149,6 +149,26 @@ CREATE TABLE uplink (
 /// stall the uplink: a mode joins here only after the site that accepts it is live.
 const UPLINK_MODES: [&str; 11] = ["FT8", "FT4", "WSPR", "JS8", "HFDL", "DSC", "SELCAL", "WEFAX", "SSTV", "NAVTEX", "BEACON"];
 const UPLINK_LIMIT_HZ: i64 = 30_000_000;
+
+/// A locator as the backend takes it: four or six characters. JS8 and some FT8
+/// senders give eight (`DM64pp37`), and one such row once held every batch back
+/// for nine hours, so the extra precision stays in the local log. Anything that
+/// is not a locator goes as none, and a grid kind follows what is left.
+fn wire_grid(grid: Option<String>, loc_kind: String) -> (Option<String>, String) {
+    let field = |c: u8| (b'A'..=b'R').contains(&c.to_ascii_uppercase());
+    let square = |c: u8| (b'A'..=b'X').contains(&c.to_ascii_uppercase());
+    let g = grid.as_deref().map(str::trim).unwrap_or("").as_bytes();
+    let four = g.len() >= 4 && field(g[0]) && field(g[1]) && g[2].is_ascii_digit() && g[3].is_ascii_digit();
+    let keep = if !four { 0 } else if g.len() >= 6 && square(g[4]) && square(g[5]) { 6 } else { 4 };
+    let grid = (keep > 0).then(|| String::from_utf8_lossy(&g[..keep]).into_owned());
+    let loc_kind = match (loc_kind.as_str(), keep) {
+        ("grid4" | "grid6", 0) => "none".to_string(),
+        ("grid4" | "grid6", 4) => "grid4".to_string(),
+        ("grid4" | "grid6", _) => "grid6".to_string(),
+        _ => loc_kind,
+    };
+    (grid, loc_kind)
+}
 /// A stay's health is settled by the next radio check, or by this long passing.
 const UPLINK_SETTLE_S: u64 = 3 * 3_600;
 /// A stay this recent may still be running.
@@ -999,10 +1019,11 @@ impl StationLog {
                 continue;
             }
             let details = r.get::<_, Option<String>>(12)?.and_then(|t| serde_json::from_str::<Value>(&t).ok());
+            let (grid, loc_kind) = wire_grid(r.get(7)?, r.get(10)?);
             b.observations.push(json!({
                 "id": b.cursors.observations, "at_utc": r.get::<_, i64>(1)?, "dial_hz": dial, "freq_hz": freq, "mode": mode,
-                "kind": r.get::<_, String>(5)?, "ident": r.get::<_, Option<String>>(6)?, "grid": r.get::<_, Option<String>>(7)?,
-                "lat": r.get::<_, Option<f64>>(8)?, "lon": r.get::<_, Option<f64>>(9)?, "loc_kind": r.get::<_, String>(10)?,
+                "kind": r.get::<_, String>(5)?, "ident": r.get::<_, Option<String>>(6)?, "grid": grid,
+                "lat": r.get::<_, Option<f64>>(8)?, "lon": r.get::<_, Option<f64>>(9)?, "loc_kind": loc_kind,
                 "snr_db": r.get::<_, Option<f64>>(11)?, "details": details,
             }));
         }
@@ -1602,6 +1623,21 @@ mod tests {
         assert_eq!(b.cursors.observations, 4, "what stays home is still passed over");
         let text = serde_json::to_string(&b.observations).unwrap();
         assert!(!text.contains("CREW"), "{text}");
+    }
+
+    #[test]
+    fn a_long_locator_goes_up_at_six_characters() {
+        let (mut store, log) = uplink_fixture("uplink-grid");
+        let mut long = row("JS8", 7_078_000, Some("KI5MFF"));
+        (long.grid, long.loc_kind) = (Some("DM64pp37".into()), LocKind::Grid6);
+        let mut odd = row("FT8", 14_074_000, Some("Z"));
+        (odd.grid, odd.loc_kind) = (Some("FN3".into()), LocKind::Grid4);
+        store.apply(&[Cmd::Observe(Box::new(long)), Cmd::Observe(Box::new(odd))]).unwrap();
+        let b = log.uplink_batch(NOW, 100).unwrap();
+        assert_eq!((&b.observations[0]["grid"], &b.observations[0]["loc_kind"]), (&json!("DM64pp"), &json!("grid6")));
+        assert_eq!((&b.observations[1]["grid"], &b.observations[1]["loc_kind"]), (&Value::Null, &json!("none")));
+        assert_eq!(wire_grid(Some("FN20xk".into()), "reported".into()), (Some("FN20xk".into()), "reported".into()));
+        assert_eq!(wire_grid(Some("FN20zz".into()), "grid6".into()), (Some("FN20".into()), "grid4".into()));
     }
 
     #[test]
