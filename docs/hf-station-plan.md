@@ -488,6 +488,13 @@ with nothing heard, and had taken radiofax charts on 12.7 MHz, which fits no sli
   blocks, give CT 216 a third core.
 - Live on the afternoon of 2026-11-12, the tuner moved once at a slice change and once
   for a chart in 47 minutes, and the main decoder never hopped in between.
+- Two more slices, 2026-11-12: 8.3 MHz at night (4.62 to 11.98 MHz) and 15.7 MHz by day
+  (12.02 to 19.38 MHz), each reaching to the 12 MHz split. Before them 14 of the 115
+  channel dials sat in no slice and were never heard: HFDL on 11.2 to 11.4 and 13.3 MHz
+  (Riverhead's 11387 among them), SELCAL 11396 and 13306, DSC 12575.3, and the radiofax
+  frequencies 12748.1, 12788.0 and 13880.6 kHz. Only SSTV on 28680 kHz is still out of
+  reach. The slices are chosen like the others, by what their channels have heard at
+  the hour, and every fifth choice goes to the one visited longest ago.
 
 **What has to change.**
 

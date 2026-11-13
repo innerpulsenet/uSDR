@@ -63,10 +63,12 @@ const PICTURE_OVERRUN_S: u64 = 20 * 60;
 const EXPLORE_EVERY: u32 = 5;
 /// Where the span can sit: 160 to 40 m, 80 to 30 m, 20 to 15 m, 15 to 10 m. The
 /// receiver's filters part at 12 MHz, so no slice crosses it.
-const SLICE_CENTERS: [u64; 4] = [5_400_000, 6_855_000, 17_607_000, 24_620_000];
+/// 8.3 and 15.7 MHz reach up to the split and down from it, for the HFDL,
+/// SELCAL, DSC and radiofax dials around 11 to 14 MHz that the others miss.
+const SLICE_CENTERS: [u64; 6] = [5_400_000, 6_855_000, 8_300_000, 15_700_000, 17_607_000, 24_620_000];
 /// Below the filter split carries the night, above it the day.
-const NIGHT_SLICES: [u64; 2] = [SLICE_CENTERS[0], SLICE_CENTERS[1]];
-const DAY_SLICES: [u64; 2] = [SLICE_CENTERS[2], SLICE_CENTERS[3]];
+const NIGHT_SLICES: [u64; 3] = [SLICE_CENTERS[0], SLICE_CENTERS[1], SLICE_CENTERS[2]];
+const DAY_SLICES: [u64; 3] = [SLICE_CENTERS[3], SLICE_CENTERS[4], SLICE_CENTERS[5]];
 /// How far from center a channel still decodes well, with the 8 MHz span.
 const SLICE_REACH_HZ: f64 = 3_680_000.0;
 /// The highest audio a channel listens to, above its dial.
@@ -1118,7 +1120,7 @@ mod tests {
         s.yields.insert(("FT8".to_string(), 14_074_000, hour_of(NOON)), Yield { monitored_s: 100, observations: 500 });
         let first = s.tick(at(NOON));
         assert_eq!(hops(&first), vec![(SdrMode::Ft8, 14_074_000)]);
-        assert_eq!(center_of(&first), Some(17_607_000));
+        assert_eq!(center_of(&first), Some(15_700_000));
         // Nothing moves for the rest of the slice's time.
         for t in (NOON + 1..NOON + SLICE_HOLD_S).step_by(30) {
             assert!(s.tick(at(t)).is_empty(), "moved at {}", t - NOON);
@@ -1133,7 +1135,7 @@ mod tests {
         }
         assert_eq!(hops(&s.tick(at(NOON))).len(), 1);
         assert!(s.tick(at(NOON + SLICE_HOLD_S)).is_empty(), "same slice, same dial: the decoder keeps its slot");
-        assert_eq!(s.slice, Some(17_607_000));
+        assert_eq!(s.slice, Some(15_700_000));
         // After the operator has had the radio, it is put back.
         s.operator(NOON + SLICE_HOLD_S + 1);
         s.resume();
@@ -1142,21 +1144,21 @@ mod tests {
 
     #[test]
     fn a_chart_takes_a_frequency_inside_the_slice_when_it_has_one() {
-        let freqs = vec![ChartFreq { dial_hz: 12_788_000, window: None }, ChartFreq { dial_hz: 17_144_500, window: None }, ChartFreq { dial_hz: 8_502_000, window: None }];
+        let freqs = vec![ChartFreq { dial_hz: NO_SLICE, window: None }, ChartFreq { dial_hz: 17_144_500, window: None }, ChartFreq { dial_hz: 8_502_000, window: None }];
         let c = Chart { minute: 12 * 60 + 10, station: "NMG".into(), title: "SURFACE ANALYSIS".into(), freqs };
         let mut s = running(catalog(vec![ft8(14074)], vec![c]), NOON);
         s.next_health = u64::MAX;
         s.set_channels([(SdrMode::Ft8, 14_074_000)].into_iter().collect());
-        // 12788 has been the best heard, but it is in no slice.
-        s.yields.insert(("WEFAX".to_string(), 12_788_000, 12), Yield { monitored_s: 100, observations: 50 });
+        // The frequency in no slice has been the best heard.
+        s.yields.insert(("WEFAX".to_string(), NO_SLICE, 12), Yield { monitored_s: 100, observations: 50 });
         s.slot = None;
         s.tick(at(NOON));
-        assert_eq!(s.slice, Some(17_607_000));
+        assert_eq!(s.slice, Some(15_700_000));
         let chart = s.tick(at(NOON + 9 * 60));
         assert_eq!(hops(&chart), vec![(SdrMode::Wefax, 17_144_500)]);
-        assert_eq!(center_of(&chart), Some(17_607_000), "the span stays where it is");
+        assert_eq!(center_of(&chart), Some(15_700_000), "the span stays where it is");
         // Without the slice's frequency it goes to one in the other slice before one in none.
-        let freqs = vec![ChartFreq { dial_hz: 12_788_000, window: None }, ChartFreq { dial_hz: 8_502_000, window: None }];
+        let freqs = vec![ChartFreq { dial_hz: NO_SLICE, window: None }, ChartFreq { dial_hz: 8_502_000, window: None }];
         let c = Chart { minute: 12 * 60 + 40, station: "NMG".into(), title: "SURFACE ANALYSIS".into(), freqs };
         s.catalog.charts = vec![c];
         s.slot = None;
@@ -1206,21 +1208,24 @@ mod tests {
             centers.push(s.slice.unwrap());
             now += SLICE_HOLD_S;
         }
-        assert_eq!(centers[0], 17_607_000);
-        assert_eq!(*centers.last().unwrap(), 24_620_000, "the fifth choice goes looking");
+        assert!(centers[..4].iter().all(|c| *c == 15_700_000), "{centers:?}");
+        assert_ne!(*centers.last().unwrap(), 15_700_000, "the fifth choice goes looking");
     }
 
     #[test]
     fn a_chart_outside_the_slice_moves_the_span_and_without_channels_nothing_changes() {
         let mut s = with_channels(vec![Target { mode: SdrMode::Ft8, dial_hz: 14_074_000 }], &[(SdrMode::Ft8, 14_074_000)]);
         s.tick(at(NOON));
-        assert_eq!(s.center_for(15_000_000), Some(17_607_000), "in the slice already");
+        assert_eq!(s.center_for(15_000_000), Some(15_700_000), "in the slice already");
         assert_eq!(s.center_for(9_108_100), Some(6_855_000), "moves for a chart below the split");
-        assert_eq!(s.center_for(12_750_000), Some(12_750_000), "in no slice at all");
+        assert_eq!(s.center_for(NO_SLICE), Some(NO_SLICE), "in no slice at all");
         let mut plain = running(catalog(vec![Target { mode: SdrMode::Ft8, dial_hz: 7_074_000 }], vec![]), NOON);
         plain.next_health = u64::MAX;
         assert_eq!(center_of(&plain.tick(at(NOON))), None);
     }
+
+    /// Between the 8.3 and 15.7 MHz slices, the only gap below 28 MHz.
+    const NO_SLICE: u64 = 11_995_000;
 
     /// NMG's 17146.4 kHz, as a channel in the day slice.
     const NMG_17: u64 = 17_144_500;
@@ -1230,13 +1235,13 @@ mod tests {
         let targets = vec![ft8(14074), Target { mode: SdrMode::Selcal, dial_hz: 15_000_000 }];
         let mut s = with_channels(targets, &[(SdrMode::Ft8, 14_074_000), (SdrMode::Wefax, NMG_17)]);
         s.catalog.charts = vec![chart(12 * 60 + 30, NMG_17), chart(12 * 60 + 34, 9_108_100)];
-        assert_eq!(center_of(&s.tick(at(NOON))), Some(17_607_000));
+        assert_eq!(center_of(&s.tick(at(NOON))), Some(15_700_000));
         s.slot = None;
         // The chart's lead minute: the decoder carries on in the slice.
         let lead = NOON + 29 * 60;
         let a = s.tick(at(lead));
         assert!(hops(&a).is_empty(), "the decoder is already parked in the slice: {a:?}");
-        assert_eq!(s.slice, Some(17_607_000));
+        assert_eq!(s.slice, Some(15_700_000));
         assert_eq!(s.status(lead).state, "monitoring");
         assert!(s.status(lead).label.contains("chart on a channel: NMF"), "{}", s.status(lead).label);
         // Past the slice's own hold, a radio check due, and another chart off
@@ -1245,7 +1250,7 @@ mod tests {
         s.slot = None;
         let a = s.tick(at(NOON + 34 * 60 - 60));
         assert!(hops(&a).is_empty(), "{a:?}");
-        assert_eq!(s.slice, Some(17_607_000));
+        assert_eq!(s.slice, Some(15_700_000));
         // The picture outlasting the timetable keeps the slice too.
         s.slot = None;
         let late = NOON + 30 * 60 + CHART_MAX_S + 60;
@@ -1276,15 +1281,16 @@ mod tests {
         // Otherwise the slice moves to the channel and the decoder works there.
         s.last_chart = 0;
         let a = s.tick(at(lead + 1));
-        assert_eq!(center_of(&a), Some(17_607_000), "{a:?}");
+        assert_eq!(center_of(&a), Some(15_700_000), "{a:?}");
         assert!(hops(&a).iter().all(|h| h.0 == SdrMode::Ft8), "{a:?}");
         assert!(s.status(lead + 1).label.contains("chart on a channel"));
     }
 
     #[test]
     fn a_chart_right_after_one_on_the_radio_still_goes_to_its_channel() {
-        // DDH3 at 1800 on 13880.6 kHz, outside every slice, then NMG at 1820
-        // with a channel in the day slice: the evening of 2026-11-10.
+        // DDH3 at 1800 on 13880.6 kHz with no channel, so on the main receiver,
+        // then NMG at 1820 with a channel in the day slice: the evening of
+        // 2026-11-10.
         let mut s = with_channels(vec![ft8(14074)], &[(SdrMode::Ft8, 14_074_000), (SdrMode::Wefax, NMG_17)]);
         s.catalog.charts = vec![chart(12 * 60, 13_880_600), chart(12 * 60 + 20, NMG_17)];
         s.tick(at(NOON - 20 * 60));
@@ -1296,7 +1302,7 @@ mod tests {
         // The first picture ends in the second chart's lead minute.
         let a = s.tick(at(NOON + 19 * 60 + 39));
         assert!(hops(&a).iter().all(|h| h.0 == SdrMode::Ft8), "{a:?}");
-        assert_eq!(center_of(&a), Some(17_607_000), "{a:?}");
+        assert_eq!(center_of(&a), Some(15_700_000), "{a:?}");
         assert!(s.status(NOON + 19 * 60 + 39).label.contains("chart on a channel"));
     }
 
@@ -1340,6 +1346,13 @@ mod tests {
         assert_eq!(s.choose_slice(december + 5 * 3_600).map(|c| c < 12_000_000), Some(true));
         s.slice_until = 0;
         assert_eq!(s.choose_slice(december + 17 * 3_600).map(|c| c > 12_000_000), Some(true));
+    }
+
+    #[test]
+    fn every_channel_dial_but_one_has_a_slice() {
+        let missing: Vec<_> =
+            Catalog::builtin().channel_targets().into_iter().filter(|t| !SLICE_CENTERS.iter().any(|c| in_slice(*c, t.dial_hz))).map(|t| (t.mode, t.dial_hz)).collect();
+        assert_eq!(missing, [(SdrMode::Sstv, 28_680_000)], "above the high slice");
     }
 
     #[test]
