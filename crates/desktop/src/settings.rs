@@ -339,7 +339,7 @@ fn station_page(app: &mut App, ui: &mut Ui) {
     ui.add(
         egui::Label::new(
             RichText::new(
-                "FT8, FT4, WSPR and JS8 decodes name their sender. In PSK31/63, RTTY, CW, Olivia and MFSK a station is reported only when it signs, as \"DE K1ABC K1ABC\" or \"CQ K1ABC K1ABC\". The server keeps one spot per station, band and mode and uploads every five minutes; a station is reported again within the hour only when its locator becomes known. WSPR decodes also go to WSPRnet as they are heard. Decodes the receiver hears while this app is closed are reported too.",
+                "FT8, FT4, WSPR, FST4W and JS8 decodes name their sender. In PSK31/63, RTTY, CW, Olivia and MFSK a station is reported only when it signs, as \"DE K1ABC K1ABC\" or \"CQ K1ABC K1ABC\". The server keeps one spot per station, band and mode, uploads every five minutes, and reports a station again once five minutes have passed since its last report. WSPR decodes also go to WSPRnet as they are heard. Decodes the receiver hears while this app is closed are reported too.",
             )
             .font(theme::sans(crate::theme::ty::VALUE))
             .color(theme::text_3()),

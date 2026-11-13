@@ -8,8 +8,9 @@
 //! as IPFIX over UDP to `report.pskreporter.info:4739`, the format and the
 //! etiquette set out at pskreporter.info/pskdev.html: no more than one
 //! datagram every five minutes unless one fills, timers not aligned to the
-//! clock, a station reported at most once in five minutes and, unless what
-//! is known of it changes, once an hour, the record templates in the first
+//! clock, a station reported at most once in five minutes (the page's
+//! floor, and what WSJT-X does; it prefers once an hour, which loses most of
+//! the repeat spots other reporters send), the record templates in the first
 //! three datagrams and then hourly, and one source port throughout.
 //!
 //! Nothing is sent until the operator turns reporting on with a callsign
@@ -28,9 +29,11 @@ const HOST: &str = "report.pskreporter.info:4739";
 const INTERVAL: Duration = Duration::from_secs(300);
 const JITTER_S: u64 = 30;
 /// A station is not reported again sooner than this on the same band and
-/// mode, and not within the hour unless its locator became known.
+/// mode.
 const REPEAT_MIN: Duration = Duration::from_secs(300);
-const REPEAT_SAME: Duration = Duration::from_secs(3600);
+/// How long a report is remembered: the status counts the stations
+/// reported in this span.
+const HEARD_KEEP: Duration = Duration::from_secs(3600);
 /// A datagram this full goes at once. The page puts a datagram at 80 to
 /// 90 records; 1400 bytes keeps it inside one Ethernet frame.
 const FULL_SPOTS: usize = 80;
@@ -69,8 +72,8 @@ struct Inner {
     /// when it last printed.
     streams: HashMap<StreamKey, (String, Instant)>,
     queue: HashMap<Key, Spot>,
-    /// When each station was last reported, and whether its locator was.
-    reported: HashMap<Key, (Instant, bool)>,
+    /// When each station was last reported.
+    reported: HashMap<Key, Instant>,
     status: ReporterStatus,
     seq: u32,
     domain: u32,
@@ -157,8 +160,8 @@ impl Reporter {
         let g = self.inner.lock().expect("reporter");
         let mut s = g.status.clone();
         s.queued = g.queue.len();
-        let hour = Instant::now().checked_sub(REPEAT_SAME);
-        s.heard_hour = g.reported.values().filter(|(t, _)| hour.is_none_or(|h| *t > h)).count();
+        let hour = Instant::now().checked_sub(HEARD_KEEP);
+        s.heard_hour = g.reported.values().filter(|t| hour.is_none_or(|h| **t > h)).count();
         if s.state == ReporterState::Waiting || s.state == ReporterState::Error {
             let left = g.due.saturating_duration_since(Instant::now()).as_secs();
             s.next_send = Some(unix_now() + left);
@@ -203,6 +206,10 @@ impl Reporter {
     /// or keyboard text in which a station signs, become spots, and
     /// everything else is ignored.
     pub fn offer(&self, inspect_hz: f64, ev: &scannerd_engine::DecodeEvent) {
+        self.offer_at(Instant::now(), inspect_hz, ev);
+    }
+
+    fn offer_at(&self, now: Instant, inspect_hz: f64, ev: &scannerd_engine::DecodeEvent) {
         let mut g = self.inner.lock().expect("reporter");
         if !(g.station.report_spots && g.station.complete()) {
             return;
@@ -212,24 +219,22 @@ impl Reporter {
             None => spot_of(inspect_hz, ev).into_iter().collect(),
         };
         for spot in spots {
-            g.queue_spot(spot);
+            g.queue_spot(spot, now);
         }
     }
 }
 
 impl Inner {
-    fn queue_spot(&mut self, spot: Spot) {
+    fn queue_spot(&mut self, spot: Spot, now: Instant) {
         let g = self;
         if spot.call == g.station.callsign {
             return;
         }
         let key: Key = (spot.call.clone(), band_of(spot.freq_hz), spot.mode);
-        if let Some((at, had_grid)) = g.reported.get(&key) {
-            let since = at.elapsed();
-            let news = spot.grid.is_some() && !had_grid;
-            if since < REPEAT_MIN || (since < REPEAT_SAME && !news) {
-                return;
-            }
+        if let Some(at) = g.reported.get(&key)
+            && now.saturating_duration_since(*at) < REPEAT_MIN
+        {
+            return;
         }
         match g.queue.get_mut(&key) {
             Some(q) => {
@@ -313,11 +318,10 @@ impl Reporter {
         }
         for s in &spots {
             let key: Key = (s.call.clone(), band_of(s.freq_hz), s.mode);
-            let had = s.grid.is_some() || g.reported.get(&key).is_some_and(|r| r.1);
-            g.reported.insert(key, (now, had));
+            g.reported.insert(key, now);
         }
-        // Stations not heard for the hour need no memory.
-        g.reported.retain(|_, (t, _)| now.duration_since(*t) < REPEAT_SAME);
+        // Stations not reported for the hour need no memory.
+        g.reported.retain(|_, t| now.duration_since(*t) < HEARD_KEEP);
         g.status.spots_sent += spots.len() as u64;
         g.due = now + jittered_interval();
         g.dirty = true;
@@ -875,10 +879,16 @@ mod tests {
         assert!(templates);
         let k20 = tx.iter().find(|t| t.1 > 14_000_000).unwrap();
         assert_eq!((k20.2, k20.5.as_str()), (-3, "FN31"), "the strongest copy, and the locator from any");
-        // Heard again at once: not reported again within the hour.
+        // Heard again at once: not reported again within five minutes, and
+        // reported again once they are up.
         r.offer(14_074_000.0, &ft8("K1ABC", "1200", "-1", Some("FN31")));
         assert_eq!(r.status().queued, 0);
         assert_eq!(r.status().spots_sent, 2);
+        r.offer_at(later + REPEAT_MIN - Duration::from_secs(1), 14_074_000.0, &ft8("K1ABC", "1200", "-1", None));
+        assert_eq!(r.status().queued, 0, "four minutes fifty-nine seconds is too soon");
+        r.offer_at(later + REPEAT_MIN, 14_074_000.0, &ft8("K1ABC", "1200", "-1", None));
+        assert_eq!(r.status().queued, 1, "five minutes later it is a new spot");
+        r.inner.lock().unwrap().queue.clear();
         // The first three datagrams carry the templates, then not.
         for _ in 0..2 {
             r.offer(14_074_000.0, &ft8(&format!("W{}AA", r.status().spots_sent), "1000", "0", None));
