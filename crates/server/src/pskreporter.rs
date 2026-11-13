@@ -1,5 +1,5 @@
-//! Spots sent to PSKReporter, as the operator's station: FT8, FT4, WSPR
-//! and JS8 decodes name their sender; the keyboard modes (PSK31/63, RTTY,
+//! Spots sent to PSKReporter, as the operator's station: FT8, FT4, WSPR,
+//! FST4W and JS8 decodes name their sender; the keyboard modes (PSK31/63, RTTY,
 //! CW, Olivia, MFSK) give a station only when it signs (see
 //! [`signed_calls`]). WSPR decodes go to WSPRnet as well (`wsprnet.rs`).
 //!
@@ -434,15 +434,19 @@ pub fn unbracket(call: &str) -> Option<&str> {
 }
 
 /// The spot a decode makes when it names its sender as a real callsign
-/// (not a hash the decoder could not resolve): FT8, FT4, WSPR and JS8.
+/// (not a hash the decoder could not resolve): FT8, FT4, WSPR, FST4W and
+/// JS8. A hash the decoder did resolve arrives as `<K1ABC>` and is the
+/// sender all the same.
 pub(crate) fn spot_of(inspect_hz: f64, ev: &scannerd_engine::DecodeEvent) -> Option<Spot> {
     if !ev.valid {
         return None;
     }
     let (mode, sender) = match ev.protocol.as_str() {
-        "FT8" => ("FT8", ev.fields.get("de")?.as_str()),
-        "FT4" => ("FT4", ev.fields.get("de")?.as_str()),
+        "FT8" => ("FT8", unbracket(ev.fields.get("de")?)?),
+        "FT4" => ("FT4", unbracket(ev.fields.get("de")?)?),
         "WSPR" => ("WSPR", unbracket(ev.fields.get("call")?)?),
+        // PSKReporter takes FST4W as its own mode; WSPRnet does not.
+        "FST4W" => ("FST4W", unbracket(ev.fields.get("call")?)?),
         // Each frame once: the heartbeat, reply or message read from it
         // names the same sender in the same slot.
         "JS8" if ev.kind != "frame" => return None,
@@ -841,6 +845,12 @@ mod tests {
         let s = spot_of(14_074_000.0, &ft8("k1abc", "1234", "-7", Some("FN31"))).unwrap();
         assert_eq!((s.call.as_str(), s.freq_hz, s.snr_db, s.grid.as_deref(), s.at), ("K1ABC", 14_075_234, -7, Some("FN31"), 1_700_000_010));
         assert!(spot_of(14_074_000.0, &ft8("<...>", "1234", "-7", None)).is_none(), "an unresolved hash");
+        let s = spot_of(14_074_000.0, &ft8("<W1AW/7>", "1234", "-7", None)).unwrap();
+        assert_eq!(s.call, "W1AW/7", "a hash the decoder resolved is the sender");
+        let mut ft4 = ft8("<K6VHF/HR9>", "1234", "-7", None);
+        ft4.protocol = "FT4".into();
+        assert_eq!(spot_of(14_080_000.0, &ft4).unwrap().mode, "FT4");
+        assert!(spot_of(14_074_000.0, &ft8("<W1AW", "1234", "-7", None)).is_none(), "a stray bracket");
         assert!(spot_of(14_074_000.0, &ft8("CQ", "1234", "-7", None)).is_none(), "not a callsign");
         let mut rtty = ft8("K1ABC", "1234", "0", None);
         rtty.protocol = "RTTY".into();
@@ -926,6 +936,10 @@ mod tests {
         let j = ev("JS8", "frame", &[("from", "K1ABC"), ("grid", "FN31"), ("df", "1200.0"), ("snr", "-5"), ("slot", "1700000015000")]);
         let s = spot_of(7_078_000.0, &j).unwrap();
         assert_eq!((s.call.as_str(), s.mode, s.freq_hz, s.at), ("K1ABC", "JS8", 7_079_200, 1_700_000_015));
+        let f = ev("FST4W", "type1", &[("call", "K1ABC"), ("grid", "FN42"), ("df", "1502"), ("snr", "-24"), ("slotMs", "1700000100000")]);
+        let s = spot_of(14_095_600.0, &f).unwrap();
+        assert_eq!((s.call.as_str(), s.mode, s.freq_hz, s.snr_db, s.grid.as_deref(), s.at), ("K1ABC", "FST4W", 14_097_102, -24, Some("FN42"), 1_700_000_100));
+        assert!(spot_of(14_095_600.0, &ev("FST4W", "type3", &[("call", "<...>"), ("df", "1502")])).is_none(), "an unresolved hash");
         assert!(spot_of(7_078_000.0, &ev("JS8", "frame", &[("from", "Q0QQ"), ("implausibleCall", "Q0QQ"), ("df", "1200")])).is_none());
         assert!(spot_of(7_078_000.0, &ev("JS8", "frame", &[("to", "@ALLCALL"), ("df", "1200")])).is_none(), "no sender");
         let hb = ev("JS8", "heartbeat", &[("from", "K1ABC"), ("grid", "FN31"), ("df", "1200.0"), ("snr", "-5"), ("slot", "1700000015000")]);

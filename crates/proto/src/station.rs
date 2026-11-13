@@ -16,7 +16,7 @@ pub struct Station {
     /// The receiving antenna, free text, shown on the reporter's map.
     pub antenna: String,
     /// Decodes that name their sender go to PSKReporter (FT8, FT4, WSPR,
-    /// JS8, and the text modes when a station signs), and WSPR decodes to
+    /// FST4W, JS8, and the text modes when a station signs), and WSPR decodes to
     /// WSPRnet as well.
     pub report_spots: bool,
 }
