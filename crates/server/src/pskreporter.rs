@@ -34,10 +34,12 @@ const REPEAT_MIN: Duration = Duration::from_secs(300);
 /// How long a report is remembered: the status counts the stations
 /// reported in this span.
 const HEARD_KEEP: Duration = Duration::from_secs(3600);
-/// A datagram this full goes at once. The page puts a datagram at 80 to
-/// 90 records; 1400 bytes keeps it inside one Ethernet frame.
-const FULL_SPOTS: usize = 80;
+/// A datagram holds as many records as fit in 1400 bytes, which keeps it
+/// inside one Ethernet frame; one that is full goes at once, without
+/// waiting for the timer.
 const MAX_DATAGRAM: usize = 1400;
+/// Too few queued spots to fill a datagram, so nothing is packed to look.
+const EARLY_MIN: usize = 20;
 /// The templates go in this many datagrams after a start or a change of
 /// station, and then once an hour.
 const TEMPLATE_SENDS: u32 = 3;
@@ -298,15 +300,27 @@ impl Reporter {
             }
             return None;
         }
-        if now < g.due && g.queue.len() < FULL_SPOTS {
+        let timed = now >= g.due;
+        if !timed && g.queue.len() < EARLY_MIN {
             return None;
         }
-        let mut spots: Vec<Spot> = g.queue.drain().map(|(_, s)| s).collect();
+        let mut spots: Vec<Spot> = g.queue.values().cloned().collect();
         spots.sort_by_key(|s| (s.at, s.freq_hz));
+        let mut chunks = pack_spots(&g.station, &spots);
+        if !timed {
+            // Ahead of the timer only datagrams that are full go: every
+            // group but the last was closed because the next record did not
+            // fit. The last may still be filling and waits.
+            chunks.pop();
+            if chunks.is_empty() {
+                return None;
+            }
+        }
+        let sent: Vec<&Spot> = chunks.iter().flat_map(|c| c.iter()).collect();
         let hourly = g.templates_at.is_none_or(|t| now.duration_since(t) >= TEMPLATE_EVERY);
         let mut out = Vec::new();
         let unix = unix_now() as u32;
-        for chunk in pack_spots(&g.station, &spots) {
+        for chunk in chunks.iter().copied() {
             let templates = g.templates_left > 0 || hourly;
             let (dg, records) = encode_datagram(&g.station, chunk, g.seq, g.domain, unix, templates);
             if templates {
@@ -316,14 +330,19 @@ impl Reporter {
             g.seq = g.seq.wrapping_add(records);
             out.push(dg);
         }
-        for s in &spots {
+        for s in &sent {
             let key: Key = (s.call.clone(), band_of(s.freq_hz), s.mode);
+            g.queue.remove(&key);
             g.reported.insert(key, now);
         }
         // Stations not reported for the hour need no memory.
         g.reported.retain(|_, t| now.duration_since(*t) < HEARD_KEEP);
-        g.status.spots_sent += spots.len() as u64;
-        g.due = now + jittered_interval();
+        g.status.spots_sent += sent.len() as u64;
+        // A full datagram sent early leaves the timer as it was; only a
+        // timed send starts the next five minutes.
+        if timed {
+            g.due = now + jittered_interval();
+        }
         g.dirty = true;
         Some(out)
     }
@@ -899,6 +918,38 @@ mod tests {
         r.offer(14_074_000.0, &ft8("W9ZZ", "1000", "0", None));
         let next = r.inner.lock().unwrap().due;
         assert!(!parse(&r.due_datagrams(next).unwrap()[0]).2);
+    }
+
+    #[test]
+    fn only_full_datagrams_go_ahead_of_the_timer() {
+        let r = Reporter::new(station());
+        let call = |i: usize| format!("W1{}{}{}", (b'A' + (i / 676 % 26) as u8) as char, (b'A' + (i / 26 % 26) as u8) as char, (b'A' + (i % 26) as u8) as char);
+        for i in 0..30 {
+            r.offer(14_074_000.0, &ft8(&call(i), &format!("{}", 300 + i), "-10", Some("FN31")));
+        }
+        assert!(r.due_datagrams(Instant::now()).is_none(), "30 spots do not fill a datagram");
+        assert_eq!(r.status().queued, 30);
+        for i in 30..200 {
+            r.offer(14_074_000.0, &ft8(&call(i), &format!("{}", 300 + i), "-10", Some("FN31")));
+        }
+        let due_before = r.inner.lock().unwrap().due;
+        let early = r.due_datagrams(Instant::now()).expect("200 spots fill several datagrams");
+        let (mut n, mut queued) = (0, r.status().queued);
+        for d in &early {
+            // Full by the packer's reckoning: within the template allowance
+            // it keeps back and one record of the cap.
+            assert!(d.len() <= MAX_DATAGRAM && d.len() > MAX_DATAGRAM - 160, "{}", d.len());
+            n += parse(d).1.len();
+        }
+        assert!(queued > 0 && queued < 200, "the group still filling stays queued: {queued}");
+        assert_eq!(n + queued, 200, "nothing lost, nothing sent twice");
+        assert_eq!(r.status().spots_sent as usize, n);
+        assert_eq!(r.inner.lock().unwrap().due, due_before, "an early send leaves the timer alone");
+        // The timer sends what is left, partial or not.
+        let rest = r.due_datagrams(due_before).expect("the timer flushes");
+        let m: usize = rest.iter().map(|d| parse(d).1.len()).sum();
+        queued = r.status().queued;
+        assert_eq!((m, queued), (200 - n, 0));
     }
 
     #[test]
