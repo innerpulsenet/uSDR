@@ -650,6 +650,18 @@ mod tests {
         assert_eq!(got, vec![Spec::new(SdrMode::Sstv, 14_230_000, true), Spec::new(SdrMode::Sstv, 7_171_000, false), Spec::new(SdrMode::Wefax, 8_502_000, true)]);
     }
 
+    /// Every channel the radio host's drop-in named by hand on 2026-11-12, so
+    /// `USDR_WIDE=catalog` alone loses none of them.
+    #[test]
+    fn catalog_alone_holds_every_channel_the_station_named() {
+        const NAMED: &str = "FT8+1840000,FT8+3573000,FT8+7074000,FT8+10136000,FT8+14074000,FT8+18100000,FT8+21074000,FT8+24915000,FT8+28074000,WSPR+3568600,WSPR+7038600,WSPR+10138700,WSPR+14095600,WSPR+18104600,WSPR+21094600,WSPR+24924600,WSPR+28124600,DSC+4205800,DSC+6310300,DSC+8412800,DSC+12575300,DSC+16802800,HFDL+5652000,HFDL+6661000,HFDL+8912000,HFDL+11387000,HFDL+13276000,HFDL+17919000,HFDL+21931000,SSTV+7171000,SSTV+14230000,FT8+5357000,WSPR+5364700,WSPR+1836600,SELCAL+5598000,SELCAL+6628000,SELCAL+8825000,SELCAL+8906000,FT4+3575500,FT4+7047500,FT4+10140000,FT4+14080000,FT4+18104000,FT4+21140000,FT4+24919000,FT4+28180000,WEFAX+6338600,WEFAX+7878100,WEFAX+8502000,WEFAX+17144500,JS8+1842000,JS8+3578000,JS8+7078000,JS8+10130000,JS8+14078000,JS8+18104000,JS8+21078000,JS8+24922000,JS8+28078000,BEACON+14099300,BEACON+18109300,BEACON+21149300,BEACON+24929300,BEACON+28199300";
+        let (named, ignored) = parse_specs(NAMED, &[]);
+        assert!(ignored.is_empty(), "{ignored:?}");
+        let (catalog, _) = parse_specs("catalog", &catalog_specs());
+        let missing: Vec<_> = named.iter().filter(|n| !catalog.contains(n)).collect();
+        assert!(missing.is_empty(), "{missing:?}");
+    }
+
     #[test]
     fn catalog_stands_for_every_dial_the_schedule_knows() {
         let catalog = catalog_specs();
@@ -657,10 +669,10 @@ mod tests {
         assert!(catalog.contains(&Spec::new(SdrMode::Hfdl, 15_025_000, true)));
         assert!(catalog.contains(&Spec::new(SdrMode::Sstv, 21_340_000, true)));
         // A named shadow stays a shadow, and a dial is never run twice.
-        let (got, _) = parse_specs("FT8?7074000,catalog,FT8+5357000", &catalog);
+        let (got, _) = parse_specs("FT8?7074000,catalog,FT8+3570000", &catalog);
         assert_eq!(got.iter().filter(|s| s.mode == SdrMode::Ft8 && s.dial_hz == 7_074_000).count(), 1);
         assert!(got.contains(&Spec::new(SdrMode::Ft8, 7_074_000, false)));
-        assert!(got.contains(&Spec::new(SdrMode::Ft8, 5_357_000, true)));
+        assert!(got.contains(&Spec::new(SdrMode::Ft8, 3_570_000, true)));
         assert_eq!(got.len(), catalog.len() + 1);
         assert!(parse_specs("FT8+7074000", &catalog).0.len() == 1, "no catalog unless asked for");
     }

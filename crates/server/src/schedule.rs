@@ -87,10 +87,11 @@ const DSC_OFFSET_HZ: f64 = 1_700.0;
 /// HFDL ground stations on this side of the world.
 const HFDL_STATIONS: [u64; 5] = [3, 4, 7, 11, 17];
 
-const FT8_KHZ: [f64; 9] = [1840.0, 3573.0, 7074.0, 10136.0, 14074.0, 18100.0, 21074.0, 24915.0, 28074.0];
-const FT4_KHZ: [f64; 3] = [7047.5, 14080.0, 21140.0];
-const WSPR_KHZ: [f64; 9] = [1836.6, 3568.6, 7038.6, 10138.7, 14095.6, 18104.6, 21094.6, 24924.6, 28124.6];
-const JS8_KHZ: [f64; 7] = [3578.0, 7078.0, 10130.0, 14078.0, 18104.0, 21078.0, 28078.0];
+const FT8_KHZ: [f64; 10] = [1840.0, 3573.0, 5357.0, 7074.0, 10136.0, 14074.0, 18100.0, 21074.0, 24915.0, 28074.0];
+const FT4_KHZ: [f64; 8] = [3575.5, 7047.5, 10140.0, 14080.0, 18104.0, 21140.0, 24919.0, 28180.0];
+const WSPR_KHZ: [f64; 10] = [1836.6, 3568.6, 5364.7, 7038.6, 10138.7, 14095.6, 18104.6, 21094.6, 24924.6, 28124.6];
+/// The JS8Call defaults.
+const JS8_KHZ: [f64; 9] = [1842.0, 3578.0, 7078.0, 10130.0, 14078.0, 18104.0, 21078.0, 24922.0, 28078.0];
 const DSC_KHZ: [f64; 6] = [2187.5, 4207.5, 6312.0, 8414.5, 12577.0, 16804.5];
 /// The North Atlantic and Caribbean voice families, as the desktop lists them.
 const SELCAL_KHZ: [f64; 18] = [
@@ -98,6 +99,9 @@ const SELCAL_KHZ: [f64; 18] = [
 ];
 /// Sideband picture modes run upper sideband, so only the bands that use it.
 const SSTV_KHZ: [f64; 3] = [14230.0, 21340.0, 28680.0];
+/// SSTV's 40 m calling frequency, on the lower sideband: a channel demodulates
+/// that, the main receiver's SSTV does not, so it is a channel's only.
+const SSTV_LSB_KHZ: [f64; 1] = [7171.0];
 
 struct Plan {
     mode: SdrMode,
@@ -195,11 +199,14 @@ impl Catalog {
         })
     }
 
-    /// Every dial worth a wideband channel: the targets, and each chart frequency.
+    /// Every dial worth a wideband channel: the targets, each chart frequency,
+    /// the NCDXF/IARU beacons and lower-sideband SSTV, which only channels run.
     pub fn channel_targets(&self) -> Vec<Target> {
         let mut out = self.targets.clone();
-        for f in self.charts.iter().flat_map(|c| &c.freqs) {
-            let t = Target { mode: SdrMode::Wefax, dial_hz: f.dial_hz };
+        let charts = self.charts.iter().flat_map(|c| &c.freqs).map(|f| Target { mode: SdrMode::Wefax, dial_hz: f.dial_hz });
+        let beacons = scannerd_engine::beacon::BANDS_HZ.iter().map(|f| Target { mode: SdrMode::Beacon, dial_hz: f - crate::wideband::BEACON_PITCH_HZ });
+        let sstv = SSTV_LSB_KHZ.iter().map(|k| Target { mode: SdrMode::Sstv, dial_hz: (k * 1e3).round() as u64 });
+        for t in charts.chain(beacons).chain(sstv) {
             if !out.contains(&t) {
                 out.push(t);
             }
@@ -1173,7 +1180,9 @@ mod tests {
         assert!(t.contains(&Target { mode: SdrMode::Wefax, dial_hz: 12_788_000 }));
         assert!(t.contains(&Target { mode: SdrMode::Wefax, dial_hz: 13_880_600 }));
         assert_eq!(t.iter().filter(|x| x.mode == SdrMode::Wefax).count(), 11);
-        assert_eq!(t.len(), c.targets.len() + 11);
+        assert!(t.contains(&Target { mode: SdrMode::Beacon, dial_hz: 14_099_300 }));
+        assert!(t.contains(&Target { mode: SdrMode::Sstv, dial_hz: 7_171_000 }));
+        assert_eq!(t.len(), c.targets.len() + 11 + 5 + 1);
     }
 
     #[test]

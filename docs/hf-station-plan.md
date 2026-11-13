@@ -465,10 +465,11 @@ time-share planner kept running inside the slice, and the channels' decodes outn
 it 572,196 to 5,589. It had parked on SSTV 21340 kHz, which had no channel, for 278 minutes
 with nothing heard, and had taken radiofax charts on 12.7 MHz, which fits no slice. Now:
 
-- `catalog` in `USDR_WIDE` stands for every dial the schedule knows, chart frequencies
-  included, so every target inside a slice has a channel. Named channels (60 m, the
-  extra FT4 and JS8 dials, beacons) are listed beside it. Entries the server cannot run
-  are named in the journal at start.
+- `catalog` in `USDR_WIDE` stands for every dial the schedule knows: its targets (60 m,
+  every FT4 dial and the JS8Call defaults now among them), the chart frequencies, the
+  five NCDXF/IARU beacon frequencies and SSTV on 7171 kHz. The drop-in on CT 216 is
+  `USDR_WIDE=catalog` alone, and a test checks the catalog holds every channel the
+  drop-in used to name. Entries the server cannot run are named in the journal at start.
 - With channels running, the shares are not used. The main decoder sits on the slice's
   best FT8 dial until the slice is chosen again, and the same hop is never sent twice,
   because even onto the same dial a hop rebuilds the decoder and loses its slot.
