@@ -867,6 +867,10 @@ pub enum Position {
 impl Position {
     fn from_symbols(s: &[Option<u8>]) -> Option<Position> {
         let d = digits(s)?;
+        // A call cut off or damaged gives fewer symbols than a position has.
+        if d.len() != 10 {
+            return None;
+        }
         if d.iter().all(|&x| x == 9) {
             return Some(Position::Unavailable);
         }
@@ -966,6 +970,10 @@ pub struct Area {
 impl Area {
     fn from_symbols(s: &[Option<u8>]) -> Option<Area> {
         let d = digits(s)?;
+        // A call cut off or damaged gives fewer symbols than an area has.
+        if d.len() != 10 {
+            return None;
+        }
         let lat_deg = 10 * d[1] + d[2];
         let lon_deg = 100 * d[3] as u16 + 10 * d[4] as u16 + d[5] as u16;
         if d[0] > 3 || lat_deg > 90 || lon_deg > 180 {
@@ -2328,6 +2336,39 @@ mod tests {
 
     /// What the live server delivers.
     const FS: f32 = 47_904.0;
+
+    /// A call cut off in its address, as a damaged frame gives, once killed
+    /// a wideband worker: the address had no symbols, and the area and
+    /// position readers indexed the digits they expected.
+    #[test]
+    fn a_call_cut_off_in_a_field_is_not_a_panic() {
+        let sym = |n: usize| -> Vec<Option<u8>> { (0..n).map(|i| Some(((i * 7) % 90) as u8)).collect() };
+        for n in 0..=11 {
+            let s = sym(n);
+            assert!(Area::from_symbols(&s).is_none(), "{n} symbols are not an area");
+            if n != 5 {
+                assert!(Position::from_symbols(&s).is_none(), "{n} symbols are not a position");
+            }
+        }
+        // Five symbols are ten digits, a whole area: 12N 045E, 6 by 7 degrees.
+        let area = Area::from_symbols(&[Some(1), Some(20), Some(45), Some(6), Some(7)]).expect("a whole area");
+        assert_eq!((area.north, area.east, area.lat_deg, area.lon_deg, area.dlat, area.dlon), (true, true, 12, 45, 6, 7));
+        // Whole calls, cut off at every length, of every format that reads a
+        // position or an area, with and without an EOS.
+        for fmt in [FMT_AREA, FMT_DISTRESS, FMT_GROUP, FMT_ALL_SHIPS, FMT_INDIVIDUAL, FMT_AUTOMATIC] {
+            for n in 1..40 {
+                let mut s: Vec<Option<u8>> = sym(n);
+                s[0] = Some(fmt);
+                for eos in [None, Some(n - 1)] {
+                    let _ = parse(&s, eos);
+                }
+                if n > 1 {
+                    s[1] = Some(fmt);
+                    let _ = parse(&s, None);
+                }
+            }
+        }
+    }
 
     #[test]
     fn dsc_code_table_matches_m493() {

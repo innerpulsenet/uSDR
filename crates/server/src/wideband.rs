@@ -95,6 +95,8 @@ pub struct ChannelResult {
 
 static RESULTS: OnceLock<Mutex<VecDeque<ChannelResult>>> = OnceLock::new();
 static DROPPED: AtomicU64 = AtomicU64::new(0);
+/// Blocks on which a decoder panicked; the worker went on without it.
+static PANICS: AtomicU64 = AtomicU64::new(0);
 /// Per worker, whether one of its radiofax channels is in the middle of a chart.
 static CHARTING: [AtomicBool; WORKERS] = [const { AtomicBool::new(false) }; WORKERS];
 static LOG: OnceLock<Arc<StationLog>> = OnceLock::new();
@@ -510,47 +512,60 @@ fn run(rx: Receiver<Arc<Block>>, specs: Vec<Spec>, events: Sender<SdrEvent>, seq
     let (sink, mut drained) = broadcast::channel::<SdrEvent>(4_096);
     let status = Arc::new(Mutex::new(SdrStatus::default()));
     while let Ok(block) = rx.recv() {
-        if key != Some((block.rate, block.center_hz)) {
-            key = Some((block.rate, block.center_hz));
-            retired.append(&mut channels);
-            (fronts, channels) = build(&specs, block.center_hz, block.rate);
-        }
-        for channel in &mut channels {
-            channel.follow_main(block.main);
-        }
-        process_block(&mut fronts, &mut channels, &block.iq, block.ms, &sink, &status);
-        for channel in channels.iter_mut().chain(retired.iter_mut()) {
-            for (slot_ms, group) in channel.slots_done() {
-                deliver(channel.spec, channel.center_hz, slot_ms, group, block.main, &events, &mut records);
-            }
-        }
-        retired.retain(Channel::busy);
-        CHARTING[worker].store(channels.iter().any(Channel::charting), Ordering::Relaxed);
-        loop {
-            match drained.try_recv() {
-                Ok(SdrEvent::Decode { inspect_hz, event }) => {
-                    // Only audio-driven decoders report here; a slot channel may share the dial.
-                    if let Some(channel) = channels.iter().find(|c| c.spec.dial_hz == inspect_hz as u64 && matches!(c.decoder, Decoder::Hf(_))) {
-                        deliver(channel.spec, channel.center_hz, block.ms, vec![event], block.main, &events, &mut records);
+        // A decoder that panics on a frame it cannot read must cost that
+        // frame, not the worker: the thread ends with the panic, and with it
+        // every channel it ran, for good.
+        let step = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                if key != Some((block.rate, block.center_hz)) {
+                    key = Some((block.rate, block.center_hz));
+                    retired.append(&mut channels);
+                    (fronts, channels) = build(&specs, block.center_hz, block.rate);
+                }
+                for channel in &mut channels {
+                    channel.follow_main(block.main);
+                }
+                process_block(&mut fronts, &mut channels, &block.iq, block.ms, &sink, &status);
+                for channel in channels.iter_mut().chain(retired.iter_mut()) {
+                    for (slot_ms, group) in channel.slots_done() {
+                        deliver(channel.spec, channel.center_hz, slot_ms, group, block.main, &events, &mut records);
                     }
                 }
-                Ok(_) => {}
-                Err(broadcast::error::TryRecvError::Lagged(_)) => {}
-                Err(_) => break,
-            }
-        }
-        let now = unix_now();
-        if now != last_second {
-            last_second = now;
-            for (spec, record) in &mut records {
-                let listening = block.main != Some((spec.mode, spec.dial_hz)) && channels.iter().any(|c| c.spec == *spec) && now % RECORD_S != 0;
-                let radio = listening.then_some(RadioNow { dial_hz: spec.dial_hz as f64, mode: spec.mode, rfgr_db: None, cause: "wideband" });
-                for segment in record.tick(now, radio, true) {
-                    if let Some(log) = LOG.get() {
-                        log.add_segment(segment);
+                retired.retain(Channel::busy);
+                CHARTING[worker].store(channels.iter().any(Channel::charting), Ordering::Relaxed);
+                loop {
+                    match drained.try_recv() {
+                        Ok(SdrEvent::Decode { inspect_hz, event }) => {
+                            // Only audio-driven decoders report here; a slot channel may share the dial.
+                            if let Some(channel) = channels.iter().find(|c| c.spec.dial_hz == inspect_hz as u64 && matches!(c.decoder, Decoder::Hf(_))) {
+                                deliver(channel.spec, channel.center_hz, block.ms, vec![event], block.main, &events, &mut records);
+                            }
+                        }
+                        Ok(_) => {}
+                        Err(broadcast::error::TryRecvError::Lagged(_)) => {}
+                        Err(_) => break,
                     }
                 }
-            }
+                let now = unix_now();
+                if now != last_second {
+                    last_second = now;
+                    for (spec, record) in &mut records {
+                        let listening = block.main != Some((spec.mode, spec.dial_hz)) && channels.iter().any(|c| c.spec == *spec) && now % RECORD_S != 0;
+                        let radio = listening.then_some(RadioNow { dial_hz: spec.dial_hz as f64, mode: spec.mode, rfgr_db: None, cause: "wideband" });
+                        for segment in record.tick(now, radio, true) {
+                            if let Some(log) = LOG.get() {
+                                log.add_segment(segment);
+                            }
+                        }
+                    }
+                }
+        }));
+        if step.is_err() {
+            PANICS.fetch_add(1, Ordering::Relaxed);
+            eprintln!("wideband-{worker}: a decoder panicked; the worker's channels are built again");
+            // Decoder state after a panic is not to be trusted.
+            key = None;
+            retired.clear();
+            CHARTING[worker].store(false, Ordering::Relaxed);
         }
     }
 }
@@ -622,7 +637,7 @@ pub fn chart_busy() -> bool {
 /// What the channels have decoded, for comparing with the main decoder.
 pub fn snapshot() -> Value {
     let kept = results().lock().expect("wideband results");
-    json!({ "dropped_blocks": DROPPED.load(Ordering::Relaxed), "results": kept.iter().collect::<Vec<_>>() })
+    json!({ "dropped_blocks": DROPPED.load(Ordering::Relaxed), "worker_panics": PANICS.load(Ordering::Relaxed), "results": kept.iter().collect::<Vec<_>>() })
 }
 
 #[cfg(test)]
