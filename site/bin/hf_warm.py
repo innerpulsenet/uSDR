@@ -27,6 +27,9 @@ PICTURES = os.environ.get("HF_PICTURES", "/home/patrickh/www/hf/pictures")
 AMATEUR = ("FT8", "FT4", "WSPR", "JS8")
 AMATEUR_SQL = ",".join(f"'{m}'" for m in AMATEUR)
 KEEP_RAW_S = 365 * 86400
+# FT8 and the other amateur modes are nine rows in ten. Nothing reads them past 30 days:
+# per-station totals live in `heard` and first-heard squares in `squares`, both kept.
+KEEP_AMATEUR_RAW_S = 90 * 86400
 KEEP_SPECTRUM_S = 15 * 86400
 LOW_DISK_BYTES = 8 << 30
 HAM_BANDS = [(1.8, 2.0, "160 m"), (3.5, 4.0, "80 m"), (5.25, 5.45, "60 m"), (7.0, 7.3, "40 m"), (10.1, 10.15, "30 m"),
@@ -177,8 +180,8 @@ def build_activity(conn, now, station_grid):
             if r["g"] not in seen or d > seen[r["g"]]["km"]:
                 seen[r["g"]] = {"grid": r["g"].upper(), "ident": r["ident"], "mode": r["mode"], "band": band(r["dial_hz"]), "t": r["t"], "snr": r["best"], "km": round(d)}
         farthest = sorted(seen.values(), key=lambda x: -x["km"])[:15]
-    new_squares = [{"grid": r["g"].upper(), "t": r["t"]} for r in conn.execute(
-        f"SELECT substr(grid,1,4) AS g, MIN(at_utc) AS t FROM observations WHERE mode IN ({AMATEUR_SQL}) AND grid IS NOT NULL GROUP BY g HAVING t >= ? ORDER BY t DESC LIMIT 100", (now - 86400,))]
+    new_squares = [{"grid": r["grid"], "t": r["first_utc"]} for r in conn.execute(
+        "SELECT grid, first_utc FROM squares WHERE first_utc >= ? ORDER BY first_utc DESC LIMIT 100", (now - 86400,))]
     selcal = [dict(r) for r in conn.execute("SELECT at_utc AS t, ident AS code, dial_hz FROM observations WHERE mode='SELCAL' ORDER BY id DESC LIMIT 100")]
     return {"generated_utc": now, "first_listening_utc": first, "days": days, "bands": heat_rows(labels, b_counts, b_secs), "modes": heat_rows(mode_labels, m_counts, m_secs),
             "daily": daily, "farthest": farthest, "new_squares": new_squares, "selcal": selcal, "navtex": navtex_messages(conn, now),
@@ -336,6 +339,19 @@ def roll_heard(conn):
                          [(i, m, b, shard_of(i), t["first"], t["last"], t["n"], t["best"], t["grid"]) for (i, m, b), t in totals.items()])
         conn.execute("INSERT OR REPLACE INTO meta (name, value) VALUES ('heard_id', ?)", (str(top),))
     return {shard_of(i) for i, _, _ in totals}
+
+
+def roll_squares(conn):
+    """Adds the grid squares in rows that arrived since the last run to the first-heard
+    list, so finding a new square never needs rows the prune has taken."""
+    done = int(meta(conn, "squares_id") or 0)
+    top = conn.execute("SELECT COALESCE(MAX(id), 0) FROM observations").fetchone()[0]
+    with conn:
+        conn.execute(f"""INSERT INTO squares (grid, first_utc)
+                         SELECT upper(substr(grid,1,4)), MIN(at_utc) FROM observations
+                         WHERE id > ? AND id <= ? AND mode IN ({AMATEUR_SQL}) AND grid IS NOT NULL GROUP BY 1
+                         ON CONFLICT (grid) DO UPDATE SET first_utc = min(first_utc, excluded.first_utc)""", (done, top))
+        conn.execute("INSERT OR REPLACE INTO meta (name, value) VALUES ('squares_id', ?)", (str(top),))
 
 
 def write_lookups(conn, now, shards):
@@ -688,7 +704,7 @@ THUMBS_PER_RUN = 5
 
 
 def png_rows(path):
-    """The rows of an 8-bit grayscale PNG, or None for any other kind."""
+    """The rows of a 4- or 8-bit grayscale PNG as 8-bit levels, or None for any other kind."""
     with open(path, "rb") as f:
         data = f.read()
     if data[:8] != b"\x89PNG\r\n\x1a\n":
@@ -700,34 +716,35 @@ def png_rows(path):
         pos += 12 + size
         if kind == b"IHDR":
             width, height, depth, color, _, _, interlace = struct.unpack(">IIBBBBB", body)
-            if depth != 8 or color != 0 or interlace:
+            if depth not in (4, 8) or color != 0 or interlace:
                 return None
         elif kind == b"IDAT":
             idat.append(body)
     raw = zlib.decompress(b"".join(idat))
-    stride = width + 1
+    n = (width * depth + 7) // 8
+    stride = n + 1
     if len(raw) < stride * height:
         return None
-    rows, prev = [], bytes(width)
+    rows, prev = [], bytes(n)
     for y in range(height):
         kind = raw[y * stride]
         line = bytearray(raw[y * stride + 1:(y + 1) * stride])
         if kind == 1:
-            for x in range(1, width):
+            for x in range(1, n):
                 line[x] = (line[x] + line[x - 1]) & 255
         elif kind == 2:
-            for x in range(width):
+            for x in range(n):
                 line[x] = (line[x] + prev[x]) & 255
         elif kind == 3:
-            for x in range(width):
+            for x in range(n):
                 line[x] = (line[x] + ((line[x - 1] if x else 0) + prev[x]) // 2) & 255
         elif kind == 4:
-            for x in range(width):
+            for x in range(n):
                 a, b, c = line[x - 1] if x else 0, prev[x], prev[x - 1] if x else 0
                 p = a + b - c
                 pa, pb, pc = abs(p - a), abs(p - b), abs(p - c)
                 line[x] = (line[x] + (a if pa <= pb and pa <= pc else b if pb <= pc else c)) & 255
-        rows.append(bytes(line))
+        rows.append(bytes(line) if depth == 8 else bytes(v * 17 for b in line for v in (b >> 4, b & 15))[:width])
         prev = line
     return width, rows
 
@@ -793,6 +810,7 @@ def prune(conn, now):
     gone = [r[0] for r in conn.execute("SELECT file FROM pictures WHERE start_utc < ?", (cutoff,))]
     with conn:
         conn.execute("DELETE FROM observations WHERE at_utc < ?", (cutoff,))
+        conn.execute(f"DELETE FROM observations WHERE mode IN ({AMATEUR_SQL}) AND at_utc < ?", (now - KEEP_AMATEUR_RAW_S,))
         conn.execute("DELETE FROM listening WHERE end_utc < ?", (cutoff,))
         conn.execute("DELETE FROM pictures WHERE start_utc < ?", (cutoff,))
         conn.execute("DELETE FROM spectrum WHERE minute < ?", ((now - KEEP_SPECTRUM_S) // 60,))
@@ -809,6 +827,7 @@ def main():
     conn = connect(DB)
     rollup(conn, now)
     write_lookups(conn, now, roll_heard(conn))
+    roll_squares(conn)
     prune(conn, now)
     station_grid = meta(conn, "grid")
     write("status.json", build_status(conn, now, station_grid))

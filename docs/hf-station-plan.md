@@ -184,8 +184,9 @@ Batches identify the station by a generic id, never a callsign.
 - SQLite in WAL mode outside the document root.
 - A timer every few minutes, at low priority, writes JSON slices by time window
   and mode. Pages never query SQLite.
-- Raw rows for a year, hourly rollups indefinitely, full pictures for a year and
-  thumbnails indefinitely.
+- Raw rows for a year (FT8, FT4, WSPR and JS8 for 90 days), hourly rollups, per-station
+  totals and first-heard squares indefinitely, full pictures for a year and thumbnails
+  indefinitely.
 
 **Storage.** Measured on the live log: about 134 bytes a row, and 159 FT8 rows a minute
 on 40 m at night. That is about 30 MB a day if FT8 ran around the clock, so real use
@@ -193,6 +194,13 @@ will be well below it. Pictures are a guess of up to 25 MB
 a day. Against 25 GB free, SQLite on arm2 is enough. Oracle Autonomous Database and
 MySQL HeatWave are available but not used, because they add a network dependency
 and credentials, and pictures, the larger share, wouldn't go in them anyway.
+
+**Measured, 2026-11-18,** after nine days live: about 540,000 rows a day, 90% of them
+FT8 and FT4, at about 100 bytes each with their indexes (55 MB a day), and 70 to 90 MB of
+pictures a day, nearly 90% of it radiofax. At those rates a year of everything would have filled
+arm2 by about May 2027. So the amateur modes keep 90 days of raw rows (nothing reads them
+past 30), and charts are written with 16 gray levels, which look the same and take about a
+quarter of the space. That makes it about 6 GB of rows and 11 GB of pictures a year.
 
 Alert when arm2 falls below 8 GB free. Then, in order: shorten full-size picture
 retention, move pictures to R2, and only if rows are still the problem, archive raw

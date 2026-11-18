@@ -47,7 +47,7 @@ class Ingest(unittest.TestCase):
 
     def setUp(self):
         with self.server.conn as c:
-            for t in ("observations", "listening", "gaps", "pictures", "meta", "heard", "spectrum"):
+            for t in ("observations", "listening", "gaps", "pictures", "meta", "heard", "squares", "spectrum"):
                 c.execute(f"DELETE FROM {t}")
         shutil.rmtree(hf_warm.OUT, ignore_errors=True)
         shutil.rmtree(hf_api.PICTURES, ignore_errors=True)
@@ -166,6 +166,28 @@ class Ingest(unittest.TestCase):
 
     def recent(self, rid, age_s, **kw):
         return {**OBS, "id": rid, "at_utc": int(time.time()) - age_s, **kw}
+
+    def test_amateur_rows_go_after_90_days_but_their_squares_stay_heard(self):
+        day = 86400
+        self.warm_with([self.recent(1, 100 * day), self.recent(2, 100 * day, mode="HFDL", kind="position", ident="UAL971", grid=None),
+                        self.recent(3, 60), self.recent(4, 50, grid="EM12")])
+        left = [r[0] for r in hf_warm.connect(hf_warm.DB).execute("SELECT id FROM observations ORDER BY id")]
+        self.assertEqual(left, [2, 3, 4], "the old FT8 row is pruned, the old HFDL row is not")
+        self.assertEqual([n["grid"] for n in self.data("activity.json")["new_squares"]], ["EM12"], "FN42 was first heard 100 days ago")
+
+    def test_a_sixteen_level_chart_gets_a_thumbnail(self):
+        import zlib
+        w, h = 1809, 400
+        row = lambda y: b"\0" + (bytes([0x00]) if y < 60 else bytes([0xF7])) * ((w + 1) // 2)
+        def chunk(k, b):
+            return struct.pack(">I", len(b)) + k + b + struct.pack(">I", zlib.crc32(k + b))
+        png = hf_api.PNG_MAGIC + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 4, 0, 0, 0, 0)) + chunk(b"IDAT", zlib.compress(b"".join(row(y) for y in range(h)))) + chunk(b"IEND", b"")
+        path = os.path.join(TMP, "four.png")
+        with open(path, "wb") as f:
+            f.write(png)
+        width, rows = hf_warm.png_rows(path)
+        self.assertEqual((width, len(rows), len(rows[0])), (w, h, w))
+        self.assertEqual((rows[0][0], rows[100][0], rows[100][1]), (0, 255, 7 * 17))
 
     def test_the_map_counts_stations_not_decodes(self):
         self.warm_with([self.recent(1, 90), self.recent(2, 75), self.recent(3, 60, ident="W2XYZ")])

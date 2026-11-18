@@ -57,6 +57,8 @@ CREATE TABLE IF NOT EXISTS heard (
     last_utc INTEGER NOT NULL, n INTEGER NOT NULL, best REAL, grid TEXT, PRIMARY KEY (ident, mode, band)
 ) WITHOUT ROWID;
 CREATE INDEX IF NOT EXISTS heard_shard ON heard (shard);
+-- When each 4-character square was first heard, kept after its rows are pruned.
+CREATE TABLE IF NOT EXISTS squares (grid TEXT PRIMARY KEY, first_utc INTEGER NOT NULL) WITHOUT ROWID;
 """
 
 

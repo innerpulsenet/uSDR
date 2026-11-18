@@ -186,6 +186,21 @@ fn decide(kind: Kind) -> (&'static str, &'static str) {
     }
 }
 
+/// A chart's pixels as sixteen gray levels, two to a byte, each row padded to
+/// a whole byte. A chart is black on white, and the other levels of an 8-bit
+/// copy are mostly noise: sixteen look the same and take about a quarter of
+/// the disk.
+fn sixteen_levels(pixels: &[u8], width: usize, rows: usize) -> Vec<u8> {
+    let level = |v: u8| ((u32::from(v) * 15 + 127) / 255) as u8;
+    let mut out = Vec::with_capacity(width.div_ceil(2) * rows);
+    for row in pixels[..width * rows].chunks_exact(width) {
+        for pair in row.chunks(2) {
+            out.push(level(pair[0]) << 4 | pair.get(1).map_or(0, |&v| level(v)));
+        }
+    }
+    out
+}
+
 fn write_png(p: &Finished, path: &Path) -> Result<u64> {
     let temporary = path.with_extension("tmp");
     let file = fs::File::create(&temporary).with_context(|| format!("creating {}", temporary.display()))?;
@@ -194,10 +209,18 @@ fn write_png(p: &Finished, path: &Path) -> Result<u64> {
         Kind::Wefax => png::ColorType::Grayscale,
         Kind::Sstv => png::ColorType::Rgb,
     });
-    encoder.set_depth(png::BitDepth::Eight);
+    encoder.set_depth(match p.kind {
+        Kind::Wefax => png::BitDepth::Four,
+        Kind::Sstv => png::BitDepth::Eight,
+    });
+    encoder.set_compression(png::Compression::High);
     let mut writer = encoder.write_header().context("writing the PNG header")?;
-    let len = p.width as usize * p.rows as usize * p.kind.channels();
-    writer.write_image_data(&p.pixels[..len]).context("writing the PNG rows")?;
+    let (w, rows) = (p.width as usize, p.rows as usize);
+    match p.kind {
+        Kind::Wefax => writer.write_image_data(&sixteen_levels(&p.pixels, w, rows)),
+        Kind::Sstv => writer.write_image_data(&p.pixels[..w * rows * 3]),
+    }
+    .context("writing the PNG rows")?;
     writer.finish().context("finishing the PNG")?;
     fs::rename(&temporary, path).with_context(|| format!("moving {}", path.display()))?;
     Ok(fs::metadata(path)?.len())
@@ -415,6 +438,18 @@ mod tests {
     }
 
     #[test]
+    fn a_chart_keeps_sixteen_levels_packed_two_to_a_byte() {
+        // Three pixels a row: the last byte of each row carries one and padding.
+        let packed = sixteen_levels(&[0, 255, 128, 8, 9, 247], 3, 2);
+        assert_eq!(packed, [0x0F, 0x80, 0x01, 0xF0]);
+        // Every level decodes (as v * 17) to within half a step of the original.
+        for v in 0..=255_u8 {
+            let level = sixteen_levels(&[v, 0], 2, 1)[0] >> 4;
+            assert!((u32::from(level) * 17).abs_diff(u32::from(v)) <= 8, "{v} -> {level}");
+        }
+    }
+
+    #[test]
     fn charts_and_sstv_both_publish_unseen() {
         assert_eq!(decide(Kind::Wefax).0, "publish");
         assert_eq!(decide(Kind::Sstv).0, "publish");
@@ -427,11 +462,14 @@ mod tests {
         assert_eq!(row.decision, "publish", "a chart needs no timetable to go out");
         let name = row.file.expect("a file");
         assert_eq!(name, format!("wefax-{AT}-8501100.png"));
-        let mut reader = png::Decoder::new(std::io::BufReader::new(fs::File::open(dir.join(&name)).unwrap())).read_info().unwrap();
+        let mut decoder = png::Decoder::new(std::io::BufReader::new(fs::File::open(dir.join(&name)).unwrap()));
+        decoder.set_transformations(png::Transformations::EXPAND);
+        let mut reader = decoder.read_info().unwrap();
         let mut out = vec![0; reader.output_buffer_size().unwrap()];
         let info = reader.next_frame(&mut out).unwrap();
-        assert_eq!((info.width, info.height, info.color_type), (640, 900, png::ColorType::Grayscale));
-        assert_eq!(out[..640], gray(1, chart_like).pixels[..640]);
+        assert_eq!((info.width, info.height, info.color_type, info.bit_depth), (640, 900, png::ColorType::Grayscale, png::BitDepth::Eight));
+        let first = &gray(1, chart_like).pixels[..640];
+        assert!(out[..640].iter().zip(first).all(|(&a, &b)| a.abs_diff(b) <= 8), "sixteen levels, each within half a step");
         assert_eq!(fs::read_dir(&dir).unwrap().count(), 1, "no temporary left behind");
 
         let row = file(&gray(900, noise), &Catalog::default(), &dir).unwrap();
