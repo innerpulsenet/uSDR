@@ -523,7 +523,7 @@ async function showPictures(params) {
     <header class="page-head ip-atmos">${atmosphere(index.pictures.map((p) => p.lines))}
     <p class="eyebrow">Pictures</p>
     <h1>Pictures off the air.</h1>
-    <p class="lede">Weather charts sent by radiofax, and SSTV pictures sent by radio amateurs, kept as they arrived, noise included. A chart's title comes from the station's timetable, because a chart does not state its own. SSTV pictures are checked by hand before they appear.</p>
+    <p class="lede">Weather charts sent by radiofax, and SSTV pictures sent by radio amateurs, kept as they arrived, noise included. A chart's title comes from the station's timetable, because a chart does not state its own. SSTV pictures appear as they are received, once they pass the same check.</p>
     </header>
     <div id="latest-charts"></div>
     <div class="tools pic-tools" id="pictools"></div>
@@ -578,7 +578,7 @@ async function showPictures(params) {
     const where = state.month ? `in ${monthLabel(state.month)}` : "in the last 30 days";
     view.querySelector("#picn").textContent = list.length ? `${num(list.length)} picture${list.length === 1 ? "" : "s"} ${where}${all > index.pictures.length && !state.month ? `, ${num(all)} in all; older months are under Month` : ""}.` : "";
     if (!pictures.length) {
-      box.innerHTML = `<p class="empty">No pictures ${where} yet. Charts appear once they pass a quality check, and SSTV pictures once they are approved.</p>`;
+      box.innerHTML = `<p class="empty">No pictures ${where} yet. Pictures appear once they pass a quality check.</p>`;
       return;
     }
     if (!list.length) {

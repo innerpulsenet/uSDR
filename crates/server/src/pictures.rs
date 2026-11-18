@@ -177,10 +177,11 @@ fn rejected(p: &Finished, q: Quality) -> Option<&'static str> {
     }
 }
 
-/// Whether a kept picture may go out unseen.
+/// Every kept picture goes out unseen. SSTV was held for review until
+/// 2026-11-18: 225 approved and none declined, so the review step went.
 fn decide(kind: Kind) -> (&'static str, &'static str) {
     match kind {
-        Kind::Sstv => ("hold", "anyone can send any image"),
+        Kind::Sstv => ("publish", "SSTV picture"),
         Kind::Wefax => ("publish", "weather chart"),
     }
 }
@@ -414,9 +415,9 @@ mod tests {
     }
 
     #[test]
-    fn charts_publish_unseen_and_only_sstv_waits_for_review() {
+    fn charts_and_sstv_both_publish_unseen() {
         assert_eq!(decide(Kind::Wefax).0, "publish");
-        assert_eq!(decide(Kind::Sstv).0, "hold");
+        assert_eq!(decide(Kind::Sstv).0, "publish");
     }
 
     #[test]
