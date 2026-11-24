@@ -105,9 +105,9 @@ pub fn window(app: &mut App, ctx: &egui::Context) {
     let mut open = true;
     let screen = ctx.content_rect();
     let size = vec2((screen.width() - 80.0).clamp(560.0, 760.0), (screen.height() - 120.0).clamp(380.0, 560.0));
-    egui::Window::new(RichText::new("Settings").font(theme::headline(16.0)))
+    egui::Window::new("Settings")
         .id(egui::Id::new("settings-window"))
-        .open(&mut open)
+        .title_bar(false)
         .collapsible(false)
         .resizable(true)
         .default_size(size)
@@ -115,6 +115,19 @@ pub fn window(app: &mut App, ctx: &egui::Context) {
         .anchor(Align2::CENTER_CENTER, vec2(0.0, 0.0))
         .show(ctx, |ui| {
             ui.set_min_size(ui.available_size());
+            // The window's own head on its plate, as the side column's cards
+            // are headed: the name in the sans, the close key at the right.
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("Settings").font(theme::headline(16.0)).color(theme::text()));
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if crate::app::icon_button(ui, "×", "Close (Esc)").clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                        open = false;
+                    }
+                });
+            });
+            let y = ui.cursor().top() + 2.0;
+            theme::groove_h(ui.painter(), ui.max_rect().left(), ui.max_rect().right(), y);
+            ui.add_space(8.0);
             ui.horizontal_top(|ui| {
                 rail(app, ui);
                 ui.add_space(14.0);
@@ -324,8 +337,7 @@ fn station_page(app: &mut App, ui: &mut Ui) {
     section(ui, "Spot reporting");
     let mut on = st.report_spots;
     let complete = parsed.as_ref().is_ok_and(|s| s.complete());
-    if ui
-        .checkbox(&mut on, RichText::new("Report spots to PSKReporter, and WSPR to WSPRnet").font(theme::sans(crate::theme::ty::LEDE)))
+    if widgets::menu_check(ui, &mut on, "Report spots to PSKReporter, and WSPR to WSPRnet")
         .on_hover_text("Each station heard goes on the map at pskreporter.info, with its signal report, under your callsign.")
         .changed()
     {
@@ -503,19 +515,20 @@ fn interface_page(app: &mut App, ui: &mut Ui, ctx: &egui::Context) {
     use crate::theme::Ground;
     section(ui, "Look");
     row(ui, "Ground", |ui| {
-        let labels: Vec<&str> = Ground::ALL.iter().map(|g| g.label()).collect();
+        let labels: Vec<&str> = Ground::ALL.iter().map(|g| g.name()).collect();
         let cur = Ground::ALL.iter().position(|g| *g == app.prefs.ground);
-        if let Some(i) = widgets::segmented(ui, "ground", &labels, cur, theme::AMBER) {
+        if let Some(i) = widgets::segmented(ui, "ground", &labels, cur, theme::LIT) {
             app.prefs.ground = Ground::ALL[i];
             crate::theme::set_ground(ctx, Ground::ALL[i]);
         }
+        ui.label(RichText::new(app.prefs.ground.label()).font(theme::sans(crate::theme::ty::BODY)).color(theme::text_3()));
     });
     ui.add_space(4.0);
     row(ui, "LCD", |ui| {
         use crate::lcd::LcdStyle;
         let labels: Vec<&str> = LcdStyle::ALL.iter().map(|s| s.label()).collect();
         let cur = LcdStyle::ALL.iter().position(|s| *s == app.prefs.lcd);
-        if let Some(i) = widgets::segmented(ui, "lcd", &labels, cur, theme::AMBER) {
+        if let Some(i) = widgets::segmented(ui, "lcd", &labels, cur, theme::LIT) {
             app.prefs.lcd = LcdStyle::ALL[i];
         }
     });
@@ -524,7 +537,7 @@ fn interface_page(app: &mut App, ui: &mut Ui, ctx: &egui::Context) {
         use crate::prefs::Motion;
         let all = [Motion::System, Motion::Full, Motion::Reduced];
         let cur = all.iter().position(|m| *m == app.prefs.motion);
-        if let Some(i) = widgets::segmented(ui, "motion", &["FOLLOW THE DESKTOP", "FULL", "REDUCED"], cur, theme::AMBER) {
+        if let Some(i) = widgets::segmented(ui, "motion", &["FOLLOW THE DESKTOP", "FULL", "REDUCED"], cur, theme::LIT) {
             app.prefs.motion = all[i];
         }
     });

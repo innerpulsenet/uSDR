@@ -236,30 +236,32 @@ fn tuning(app: &mut App, lcd: &mut Ui, keys: &mut Ui, look: crate::lcd::Look, ba
     let hz = app.active_hz();
     let lit = look.value;
     let auto = crate::tuning::mode_raster_hz(app.status.mode, hz);
-    let (word, value) = match app.prefs.step_hz {
-        None => ("AUTO", crate::tuning::fmt_short_hz(auto)),
-        Some(s) => ("SET", crate::tuning::fmt_short_hz(s)),
+    let (word, (value, unit)) = match app.prefs.step_hz {
+        None => ("AUTO", crate::tuning::split_hz(auto)),
+        Some(s) => ("SET", crate::tuning::split_hz(s)),
     };
     let width = lcd.available_width();
     lcd.spacing_mut().item_spacing.y = 2.0;
-    lcd.horizontal(|ui| {
+    // Top-aligned, as every zone's caption is: a caption sharing its row
+    // with something taller would otherwise sit lower than its neighbors.
+    lcd.horizontal_top(|ui| {
         ui.label(caption("STEP", &look));
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
             ui.label(RichText::new(word).font(theme::mono(crate::theme::ty::MICRO)).color(lit));
         });
     });
     let font = theme::mono_bold(if band_h > 100.0 { 34.0 } else { 26.0 });
     let (rect, resp) = lcd.allocate_exact_size(vec2(width, font.size + 8.0), Sense::click());
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, true, format!("{word} {value}")));
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, true, format!("{word} {value} {unit}")));
     let p = lcd.painter();
     let shown = p.text(rect.left_center(), egui::Align2::LEFT_CENTER, &value, font, lit);
-    let unit = p.text(egui::pos2(shown.right() + 5.0, rect.center().y + 6.0), egui::Align2::LEFT_CENTER, "Hz", theme::mono(crate::theme::ty::MICRO), alpha(lit, 0.66));
+    let unit = p.text(egui::pos2(shown.right() + 5.0, rect.center().y + 6.0), egui::Align2::LEFT_CENTER, unit, theme::mono(crate::theme::ty::MICRO), alpha(lit, 0.66));
     p.text(egui::pos2(unit.right() + 5.0, unit.center().y), egui::Align2::LEFT_CENTER, "▾", theme::mono(crate::theme::ty::SMALL), alpha(lit, if resp.hovered() { 1.0 } else { 0.66 }));
     if resp.hovered() {
         lcd.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
     }
     egui::Popup::menu(&resp).id(egui::Id::new("step-menu")).width(width.max(180.0)).show(|ui| {
-        if ui.selectable_label(app.prefs.step_hz.is_none(), format!("Auto · mode raster ({})", crate::tuning::fmt_short_hz(auto))).clicked() {
+        if ui.selectable_label(app.prefs.step_hz.is_none(), format!("Auto · mode raster ({})", crate::tuning::fmt_hz(auto))).clicked() {
             app.prefs.step_hz = None;
             ui.close();
         }
@@ -312,7 +314,7 @@ fn tuning(app: &mut App, lcd: &mut Ui, keys: &mut Ui, look: crate::lcd::Look, ba
         jog(keys, app, "»", 10.0);
     }
     if has_lock
-        && widgets::chip_key_named(keys, "LOCK", "SPAN LOCK", lock, theme::AMBER, lock_w)
+        && widgets::chip_key_named(keys, "LOCK", "SPAN LOCK", lock, theme::LIT, lock_w)
             .on_hover_text("Keep the span where it is: tuning moves only the receiver (L)")
             .clicked()
     {
@@ -462,15 +464,11 @@ fn modes(app: &mut App, lcd: &mut Ui, keys: &mut Ui, look: crate::lcd::Look, ban
     });
     if b.is_some() {
         lcd.add(egui::Label::new(RichText::new(B_NOTE).font(theme::mono(crate::theme::ty::MICRO)).color(alpha(lit, 0.66))).truncate());
-    } else if width >= 170.0 {
-        // Printed on the glass, the family lit; the keys under it are what
-        // a screen reader finds.
-        let (row, _) = lcd.allocate_exact_size(vec2(width, 13.0), Sense::hover());
-        let p = lcd.painter();
-        let mut x = row.left();
-        for (name, on) in VOICE.iter().map(|m| (m.label(), *m == cur)).chain([("DATA", data)]) {
-            x = p.text(egui::pos2(x, row.center().y), egui::Align2::LEFT_CENTER, name, theme::mono(crate::theme::ty::MICRO), alpha(lit, if on { 1.0 } else { 0.3 })).right() + 8.0;
-        }
+    } else if let Some(d) = app.modes.iter().find(|c| c.mode == cur).map(|c| c.description.clone()).filter(|d| !d.is_empty()) {
+        // What the mode is, in the server's words cut to their first clause:
+        // the keys under the zone already say which modes there are.
+        let short = mode_gist(&d);
+        lcd.add(egui::Label::new(RichText::new(short).font(theme::mono(crate::theme::ty::MICRO)).color(alpha(lit, 0.66))).truncate()).on_hover_text(d);
     }
     let board = keys.available_width();
     keys.spacing_mut().item_spacing.x = 0.0;
@@ -495,6 +493,13 @@ fn modes(app: &mut App, lcd: &mut Ui, keys: &mut Ui, look: crate::lcd::Look, ban
             }
         }
     }
+}
+
+/// A mode's description to its first clause: "Narrowband FM plus the full
+/// digital classifier (…)" reads "Narrowband FM".
+fn mode_gist(d: &str) -> String {
+    let cut = [" (", " plus ", ", ", "; ", " — ", ": "].iter().filter_map(|sep| d.find(sep)).min().unwrap_or(d.len());
+    d[..cut].trim_end_matches('.').to_string()
 }
 
 /// Draw a mode board `width` wide and return the key clicked (a mode,
@@ -749,7 +754,7 @@ fn shape_key(ui: &mut Ui, shape: FilterShape, height: f32) -> Option<FilterShape
     let (rect, resp) = ui.allocate_exact_size(vec2(18.0 + 5.0 + tw + 8.0, height), Sense::click());
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, true, format!("Filter shape {}", shape.label())));
     let open = egui::Popup::is_id_open(ui.ctx(), egui::Popup::default_response_id(&resp));
-    let (press, c) = widgets::paint_key(ui, &resp, rect, egui::CornerRadius::same(crate::theme::R_KEY), open, theme::AMBER);
+    let (press, c) = widgets::paint_key(ui, &resp, rect, egui::CornerRadius::same(crate::theme::R_KEY), open, theme::LIT);
     let p = ui.painter();
     let g = egui::Rect::from_center_size(egui::pos2(rect.left() + 12.0, rect.center().y + press), vec2(16.0, (height - 5.0).max(6.0)));
     shape_glyph(p, g, shape, theme::AMBER);
@@ -865,12 +870,12 @@ fn filter(app: &mut App, lcd: &mut Ui, keys: &mut Ui, look: crate::lcd::Look) {
     lcd.spacing_mut().item_spacing.y = 2.0;
     let mut new_shape = None;
     let named = !shaped || lcd.available_width() >= 130.0;
-    lcd.horizontal(|ui| {
+    lcd.horizontal_top(|ui| {
         if named {
             ui.label(caption("FILTER", &look));
         }
         if shaped {
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
                 new_shape = shape_key(ui, shape, 16.0);
             });
         }
@@ -954,7 +959,7 @@ fn filter(app: &mut App, lcd: &mut Ui, keys: &mut Ui, look: crate::lcd::Look) {
                 set = Some(edges_of(p));
             }
             for p in &presets[first..=last] {
-                let mut r = widgets::chip_key(ui, &p.label, is_on(p), theme::AMBER);
+                let mut r = widgets::radio_chip(ui, &p.label, is_on(p), theme::AMBER);
                 if is_home(p) {
                     // A green pip marks the mode's own filter.
                     let c = r.rect.right_top() + vec2(-4.0, 4.0);
@@ -1067,7 +1072,7 @@ fn audio(app: &mut App, lcd: &mut Ui, keys: &mut Ui, look: crate::lcd::Look) {
     // A narrow zone keeps the fader long: the LCD says it is muted.
     let word = if muted { "MUTED" } else { "MUTE" };
     let shown = if keys.available_width() >= 130.0 { word } else { "M" };
-    if widgets::chip_key_named(keys, shown, word, muted, theme::AMBER, 0.0).on_hover_text("M").clicked() {
+    if widgets::chip_key_named(keys, shown, word, muted, theme::LIT, 0.0).on_hover_text("M").clicked() {
         if is_b {
             app.prefs.muted_b = !muted;
             app.player_b.set_muted(app.prefs.muted_b);
@@ -1221,13 +1226,16 @@ fn signal(app: &mut App, ui: &mut Ui, look: crate::lcd::Look) {
     let dim = look.caption;
     let reading = theme::mono_bold(if ui.available_width() >= 320.0 { 22.0 } else { 16.0 });
     ui.spacing_mut().item_spacing.y = 3.0;
-    ui.horizontal(|ui| {
+    // The caption at the top of the zone like every other; the reading and
+    // its dBFS share a foot line beside it.
+    ui.horizontal_top(|ui| {
         ui.spacing_mut().item_spacing.x = 8.0;
         ui.label(caption(label, &look));
+        let reading_h = ui.painter().layout_no_wrap("S9".into(), reading.clone(), lit).size().y;
         fixed(ui, &s_txt, reading.clone(), lit, "S9+60");
-        fixed(ui, &db_txt, theme::mono(crate::theme::ty::SMALL), if db_col == theme::ERR { theme::ERR } else { lit }, "-100.0 dBFS");
+        fixed_foot(ui, &db_txt, theme::mono(crate::theme::ty::SMALL), if db_col == theme::ERR { theme::ERR } else { lit }, "-100.0 dBFS", reading_h);
         if let Some(e) = err {
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
                 let t = if e.abs() >= 1_000.0 { format!("CAL {:+.1}k", e / 1000.0) } else { format!("CAL {e:+.0}") };
                 let r = widgets::lcd_tag_in(ui, &t, &look, err_warn)
                     .on_hover_text("The carrier is this far from where the receiver put it: click to calibrate the ppm from it");
@@ -1534,6 +1542,18 @@ pub fn rds_clock(r: &usdr_proto::Rds) -> Option<String> {
 }
 
 /// `text` in a box as wide as `widest` would be, so what follows holds still.
+/// Text at a fixed width, set on the foot of a line `h` tall, so a smaller
+/// unit beside a large reading sits on the reading's foot.
+fn fixed_foot(ui: &mut Ui, text: &str, font: egui::FontId, color: egui::Color32, widest: &str, h: f32) {
+    let w = ui.painter().layout_no_wrap(widest.into(), font.clone(), color).size().x;
+    let g = ui.painter().layout_no_wrap(text.into(), font, color);
+    let (r, _) = ui.allocate_exact_size(vec2(w, h), Sense::hover());
+    // The galleys' descent differs by size: lift the small one by a share of
+    // the difference so the two bases meet.
+    let lift = (h - g.size().y) * 0.18;
+    ui.painter().galley(egui::pos2(r.left(), r.bottom() - g.size().y - lift), g, color);
+}
+
 fn fixed(ui: &mut Ui, text: &str, font: egui::FontId, color: egui::Color32, widest: &str) {
     let w = ui.painter().layout_no_wrap(widest.into(), font.clone(), color).size().x;
     let g = ui.painter().layout_no_wrap(text.into(), font, color);
@@ -1641,7 +1661,7 @@ pub fn memory_chips(app: &mut App, ui: &mut Ui, room: f32) {
     }
     if list.len() > fits {
         let hidden = list.len() - fits;
-        let picked = widgets::menu_chip(ui, &format!("+{hidden}"), theme::AMBER, |ui| {
+        let picked = widgets::menu_chip(ui, &format!("+{hidden}"), theme::LIT, |ui| {
             let mut out = None;
             for (i, m) in list.iter().enumerate().skip(fits) {
                 if crate::widgets::menu_item(ui, format!("{}  {} MHz  {}", i + 1, crate::tuning::fmt_mhz(m.freq_hz, 4), m.name)).clicked() {

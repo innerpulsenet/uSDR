@@ -30,11 +30,21 @@ pub enum Ground {
 impl Ground {
     pub const ALL: [Ground; 3] = [Ground::Carbon, Ground::Ink, Ground::Night];
 
+    /// Its name, as a key says it.
+    pub fn name(self) -> &'static str {
+        match self {
+            Ground::Carbon => "CARBON",
+            Ground::Ink => "INK",
+            Ground::Night => "NIGHT",
+        }
+    }
+
+    /// What it looks like, in a line under the choice.
     pub fn label(self) -> &'static str {
         match self {
-            Ground::Carbon => "Carbon — brushed steel on cool blacks",
-            Ground::Ink => "Ink — warm product ground",
-            Ground::Night => "Night — red only, for dark-adapted eyes",
+            Ground::Carbon => "Brushed steel on cool blacks.",
+            Ground::Ink => "Warm umber surfaces, the product ground.",
+            Ground::Night => "Red only, dimmed, for eyes adapted to the dark.",
         }
     }
 }
@@ -80,9 +90,19 @@ const INK_P: Palette = Palette {
     key: [rgb(0x221c15), rgb(0x13100b), rgb(0x110d09), rgb(0x1a150f)],
 };
 
-// Night is Carbon's palette, its ground a hair off Carbon's so whatever
-// caches colors by the ground (the waterfall) redraws on the switch.
-const NIGHT_P: Palette = Palette { ground: rgb(0x0b0c10), ..CARBON };
+// Night is Carbon's materials, drawn darker under brighter text: a red-only
+// display has about a third of the contrast range of a full-color one, so
+// the ground and surfaces sink toward black and the three text levels rise
+// apart, or the third one drops out. Its ground is a hair off black so
+// whatever caches colors by the ground (the waterfall) redraws on the switch.
+const NIGHT_P: Palette = Palette {
+    ground: rgb(0x020203),
+    s: [rgb(0x08090b), rgb(0x0d0e11), rgb(0x131519), rgb(0x1c1f24)],
+    text: [rgb(0xffffff), rgb(0xd6d9dc), rgb(0xb0b4b9)],
+    line: [hairline(227, 230, 233, 0.12), hairline(227, 230, 233, 0.20)],
+    plate: rgb(0x16181c),
+    key: [rgb(0x111316), rgb(0x08090b), rgb(0x060708), rgb(0x0c0d10)],
+};
 
 static GROUND: AtomicU8 = AtomicU8::new(0);
 
@@ -144,8 +164,13 @@ pub fn line_2() -> Color32 {
 pub const EMBER: Color32 = rgb(0xf43a2a);
 pub const ACTION: Color32 = rgb(0xd12c1e);
 
-/// uSDR's family accent: the VFO, the passband, the live trace.
+/// uSDR's family accent and receiver A's own color: the VFO, the passband,
+/// the live trace, and the keys that set what A receives (its mode, filter,
+/// memory). A key that only switches something on is lit in [`LIT`].
 pub const AMBER: Color32 = rgb(0xffb347);
+/// A plain switch that is on: the key's glass backlit in steel, not in the
+/// receiver's color.
+pub const LIT: Color32 = rgb(0xc9d7e6);
 /// A primary key's amber under the pointer.
 pub const AMBER_HOVER: Color32 = rgb(0xffc56e);
 /// Secondary data color: peak hold, the second series.
@@ -313,9 +338,9 @@ pub fn set_ground(ctx: &egui::Context, g: Ground) {
         v.menu_corner_radius = egui::CornerRadius::same(RADIUS);
         v.window_shadow = shadow(Depth::Floating);
         v.popup_shadow = egui::Shadow { blur: 18, offset: [0, 6], ..shadow(Depth::Floating) };
-        // What is chosen is amber, in a menu as on a key.
-        v.selection.bg_fill = alpha(AMBER, 0.28);
-        v.selection.stroke = Stroke::new(1.0, AMBER);
+        // What is chosen is lit steel, in a menu as on a key.
+        v.selection.bg_fill = alpha(LIT, 0.22);
+        v.selection.stroke = Stroke::new(1.0, LIT);
         v.hyperlink_color = AMBER;
         v.warn_fg_color = WARN;
         v.error_fg_color = ERR;
@@ -352,7 +377,7 @@ pub fn set_ground(ctx: &egui::Context, g: Ground) {
         w.hovered.expansion = 0.0;
         w.active.bg_fill = held;
         w.active.weak_bg_fill = held;
-        w.active.bg_stroke = Stroke::new(1.0, AMBER);
+        w.active.bg_stroke = Stroke::new(1.0, LIT);
         w.active.fg_stroke = Stroke::new(1.0, text());
         w.active.corner_radius = r;
         w.active.expansion = 0.0;
@@ -671,11 +696,12 @@ pub fn key_face(painter: &egui::Painter, r: egui::Rect, radius: u8, press: f32) 
     }
 }
 
-/// The color a key is lit in, whatever its caller asked for: amber is "on"
-/// across the app. Violet stays receiver B's, lemon a caution's (DC on the
-/// feed) and ember the live state's, because those say something amber can't.
+/// The color a key is lit in, whatever its caller asked for: steel is "on"
+/// across the app. Amber stays receiver A's and violet B's, lemon a
+/// caution's (DC on the feed) and ember the live state's, because those say
+/// something a plain switch can't.
 pub fn on_color(asked: Color32) -> Color32 {
-    if asked == VIOLET || asked == WARN || asked == EMBER { asked } else { AMBER }
+    if asked == AMBER || asked == VIOLET || asked == WARN || asked == EMBER { asked } else { LIT }
 }
 
 /// What is lit on the LCD: the receiver's color, a little toward white.
@@ -751,6 +777,18 @@ pub fn key_body(painter: &egui::Painter, r: egui::Rect, radius: egui::CornerRadi
     if k.focus {
         painter.rect_stroke(r.expand(1.5), egui::CornerRadius::same(RADIUS + 1), Stroke::new(1.0, EMBER), egui::StrokeKind::Outside);
     }
+}
+
+/// The lamp along a key's foot that marks the chosen place in a row of
+/// tabs or a pick-one block: a short bar in `color` and its glow up into
+/// the glass, `t` from dark to lit.
+pub fn foot_lamp(painter: &egui::Painter, r: egui::Rect, color: Color32, t: f32) {
+    let t = t.clamp(0.0, 1.0);
+    let inset = (r.width() * 0.18).clamp(4.0, 10.0);
+    let bar = egui::Rect::from_min_max(egui::pos2(r.left() + inset, r.bottom() - 3.5), egui::pos2(r.right() - inset, r.bottom() - 1.5));
+    let glow = egui::Rect::from_min_max(egui::pos2(bar.left(), r.bottom() - 9.0), egui::pos2(bar.right(), bar.top()));
+    vgrad(painter, glow, alpha(color, 0.0), alpha(color, 0.16 * t));
+    painter.rect_filled(bar, egui::CornerRadius::same(1), alpha(color, 0.95 * t));
 }
 
 /// A key's label, in step with its [`KeyState`].
@@ -946,11 +984,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_key_is_lit_amber_unless_its_color_says_more() {
-        for asked in [AMBER, CYAN, OK, ERR, Color32::from_rgb(1, 2, 3)] {
-            assert_eq!(on_color(asked), AMBER);
+    fn a_key_is_lit_steel_unless_its_color_says_more() {
+        for asked in [LIT, CYAN, OK, ERR, Color32::from_rgb(1, 2, 3)] {
+            assert_eq!(on_color(asked), LIT);
         }
-        for kept in [VIOLET, WARN, EMBER] {
+        for kept in [AMBER, VIOLET, WARN, EMBER] {
             assert_eq!(on_color(kept), kept);
         }
     }

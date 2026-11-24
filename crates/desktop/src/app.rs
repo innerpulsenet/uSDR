@@ -198,6 +198,11 @@ pub struct App {
     pub schedule: Option<proto::ScheduleStatus>,
     /// The Scan tab is showing the schedule rather than the voice scanner.
     pub watch_view: bool,
+    /// The text size last set to follow the window, to tell a change by hand.
+    pub auto_zoom: Option<f32>,
+    /// Whether the display toolbar sits in the masthead this frame (a wide
+    /// enough window), or in its own row over the display.
+    pub toolbar_up: bool,
     pub station_form: crate::settings::StationForm,
     pub help_open: bool,
     pub connect_input: String,
@@ -345,6 +350,8 @@ impl App {
             station: None,
             schedule: None,
             watch_view: std::env::var("USDR_QA_TAB").as_deref() == Ok("watch"),
+            auto_zoom: None,
+            toolbar_up: false,
             station_form: Default::default(),
             help_open: false,
             connect_input,
@@ -1293,7 +1300,7 @@ impl App {
         } else {
             "HF watch runs the radio. Click to lock it for yourself: the schedule stays off until you unlock it, even after this window closes."
         };
-        if widgets::chip_key_named(ui, label, "RADIO LOCK", locked, theme::AMBER, width).on_hover_text(tip).clicked() {
+        if widgets::chip_key_named(ui, label, "RADIO LOCK", locked, theme::LIT, width).on_hover_text(tip).clicked() {
             self.post("/api/station/schedule", serde_json::json!({ "enabled": locked }));
         }
         if s.state == "held" && s.hold_until_utc > 0 {
@@ -1315,7 +1322,9 @@ impl App {
             ui.add_space(6.0);
             let s = &self.status;
             if self.have_status {
-                ui.label(egui::RichText::new(s.radio_label()).font(theme::mono(crate::theme::ty::VALUE)).color(theme::text_2()));
+                // The radio by name; where it is reached is the connection
+                // chip's to say, at the other end of the bar.
+                ui.label(egui::RichText::new(&s.tuner).font(theme::mono(crate::theme::ty::VALUE)).color(theme::text_2())).on_hover_text(s.radio_label());
                 sep(ui);
                 // The radio's own state only: span, channel width, span lock and
                 // the protocol heard all show in the receiver bar and toolbar.
@@ -1323,25 +1332,14 @@ impl App {
                 if s.lo_offset {
                     annunciator(ui, "LO", &format!("{:+}", crate::tuning::fmt_short_hz(s.lo_offset_hz)), theme::text());
                 }
-                sep(ui);
-                let streaming = self.pan.last_frame.is_some_and(|t| t.elapsed() < Duration::from_secs(2));
-                if !streaming {
-                    widgets::lamp_label(ui, Tone::Idle, "ADC —");
-                } else if now < self.clip_until {
-                    widgets::lamp_label(ui, Tone::Err, "ADC CLIP");
-                } else {
-                    widgets::lamp_label(ui, Tone::Ok, "ADC OK");
-                }
-                let drops = s.dropped_blocks + s.lagged_blocks;
+                // A fault is said up here, where it is seen; the steady OK
+                // lamps live with the other health readouts on the status bar.
                 if let Some(e) = &s.error {
+                    sep(ui);
                     widgets::lamp_label(ui, Tone::Err, "NO RADIO").on_hover_text(e.clone());
-                } else if !streaming {
-                    widgets::lamp_label(ui, Tone::Idle, "STREAM —");
-                } else if drops > 0 || s.lost_samples > 0 {
-                    widgets::lamp_label(ui, Tone::Warn, &format!("STREAM {drops} drop · {} gap", s.gap_events))
-                        .on_hover_text(format!("{} lost samples since start", s.lost_samples));
-                } else {
-                    widgets::lamp_label(ui, Tone::Ok, "STREAM OK");
+                } else if now < self.clip_until {
+                    sep(ui);
+                    widgets::lamp_label(ui, Tone::Err, "ADC CLIP");
                 }
                 let rec = match (self.player.reading().recording.is_some(), self.player_b.reading().recording.is_some()) {
                     (true, true) => Some("REC A B"),
@@ -1375,11 +1373,18 @@ impl App {
                 widgets::lcd_text(ui, &format!("{utc} UTC"), look.value, &look, wide);
                 self.connection_chip(ui);
                 self.presence_badge(ui);
-                // The dial scale takes the middle the two ends leave.
+                // The display's toolbar takes the middle the two ends leave,
+                // when there is room for it, so the waterfall gets back the
+                // row it would take over the display.
                 let room = ui.available_width() - 28.0;
-                if self.have_status && room >= crate::dialscale::MIN_W {
-                    ui.add_space(14.0);
-                    crate::dialscale::show(self, ui, room);
+                self.toolbar_up = self.have_status && room >= crate::toolbar::MIN_W;
+                if self.toolbar_up {
+                    let mut r = ui.available_rect_before_wrap();
+                    r.max.x -= 14.0;
+                    r.min.x += 10.0;
+                    theme::groove_v(ui.painter(), r.left() - 8.0, r.center().y - 9.0, r.center().y + 9.0);
+                    let mut child = ui.new_child(egui::UiBuilder::new().id_salt("masthead-toolbar").max_rect(r).layout(egui::Layout::left_to_right(egui::Align::Center)));
+                    crate::toolbar::toolbar(self, &mut child);
                 }
             });
         });
@@ -1429,6 +1434,33 @@ impl App {
         });
     }
 
+    /// The text size a window this wide takes when it is left to follow the
+    /// window: 1 up to about 2200 px at the normal size, then in twentieths
+    /// up to 1.3, which a 2560 px window reaches.
+    pub fn auto_text_factor(width_at_1: f32) -> f32 {
+        if width_at_1 < 2200.0 { 1.0 } else { ((width_at_1 / 1900.0) * 20.0).round().clamp(20.0, 26.0) / 20.0 }
+    }
+
+    /// Follow the window with the text size while that is asked for; a size
+    /// changed by hand (the View menu, Ctrl+=) stops it.
+    fn auto_text_size(&mut self, ctx: &egui::Context) {
+        let z = ctx.zoom_factor();
+        if let Some(applied) = self.auto_zoom
+            && (applied - z).abs() > 0.001
+        {
+            self.prefs.text_auto = false;
+        }
+        if !self.prefs.text_auto {
+            self.auto_zoom = None;
+            return;
+        }
+        let want = Self::auto_text_factor(ctx.content_rect().width() * z);
+        if (want - z).abs() > 0.001 {
+            ctx.set_zoom_factor(want);
+        }
+        self.auto_zoom = Some(want);
+    }
+
     fn view_menu(&mut self, ui: &mut Ui) {
         widgets::menu_chip(ui, "VIEW", theme::text_2(), |ui| {
             ui.set_min_width(220.0);
@@ -1463,14 +1495,18 @@ impl App {
                 ui.label("Text size");
                 let z = ui.ctx().zoom_factor();
                 if crate::widgets::action_small(ui, "−").clicked() {
+                    self.prefs.text_auto = false;
                     ui.ctx().set_zoom_factor((z - 0.1).max(0.6));
                 }
-                ui.label(egui::RichText::new(format!("{:.0}%", z * 100.0)).font(theme::mono(crate::theme::ty::SMALL)));
+                let auto = if self.prefs.text_auto { " auto" } else { "" };
+                ui.label(egui::RichText::new(format!("{:.0}%{auto}", z * 100.0)).font(theme::mono(crate::theme::ty::SMALL)));
                 if crate::widgets::action_small(ui, "+").clicked() {
+                    self.prefs.text_auto = false;
                     ui.ctx().set_zoom_factor((z + 0.1).min(2.0));
                 }
-                if crate::widgets::action_small(ui, "reset").clicked() {
-                    ui.ctx().set_zoom_factor(1.0);
+                if crate::widgets::action_small(ui, "auto").on_hover_text("Follow the window: larger on a wide screen").clicked() {
+                    self.prefs.text_auto = true;
+                    self.auto_zoom = None;
                 }
             });
             ui.horizontal(|ui| {
@@ -1525,6 +1561,29 @@ impl App {
             // Each number is padded to a fixed width in the mono face, so a
             // change in its digit count (the audio queue crosses 100 ms many
             // times a second) moves nothing after it, its own unit included.
+            if self.have_status {
+                let s = &self.status;
+                let now = ui.input(|i| i.time);
+                let streaming = self.pan.last_frame.is_some_and(|t| t.elapsed() < Duration::from_secs(2));
+                if !streaming {
+                    widgets::lamp_label(ui, Tone::Idle, "ADC —");
+                } else if now < self.clip_until {
+                    widgets::lamp_label(ui, Tone::Err, "ADC CLIP");
+                } else {
+                    widgets::lamp_label(ui, Tone::Ok, "ADC OK");
+                }
+                let drops = s.dropped_blocks + s.lagged_blocks;
+                if s.error.is_some() {
+                    widgets::lamp_label(ui, Tone::Err, "NO RADIO");
+                } else if !streaming {
+                    widgets::lamp_label(ui, Tone::Idle, "STREAM —");
+                } else if drops > 0 || s.lost_samples > 0 {
+                    widgets::lamp_label(ui, Tone::Warn, &format!("STREAM {drops} drop · {} gap", s.gap_events))
+                        .on_hover_text(format!("{} lost samples since start", s.lost_samples));
+                } else {
+                    widgets::lamp_label(ui, Tone::Ok, "STREAM OK");
+                }
+            }
             if let Some(l) = &self.link {
                 small(ui, format!("{:>3.0} fps", self.fps), theme::text_2());
                 small(ui, format!("{:>5.0} KiB/s", self.kbps), theme::text_3());
@@ -1559,6 +1618,13 @@ impl App {
                 self.reporter_readout(ui);
                 if let Some((path, secs)) = &a.recording {
                     small(ui, format!("● recording {secs:.1} s → {}", path.file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or_default()), theme::EMBER);
+                }
+                // The dial scale along the foot of the window, like the band
+                // dial under a set's controls, in the room the readouts leave.
+                let room = (ui.available_width() - 24.0).min(980.0);
+                if self.have_status && room >= crate::dialscale::MIN_W {
+                    ui.add_space(10.0);
+                    crate::dialscale::show(self, ui, room);
                 }
             });
         });
@@ -1662,13 +1728,21 @@ impl App {
         // Each toast is its own area, stacked up from the corner, so a new
         // one can rise into place while the others hold still.
         let mut stack = 0.0;
+        // Over the foot of the waterfall when there is one, the one place on
+        // the window that never holds a control; the window's corner before.
+        let well = self.pan.regions.map(|[_, wf, _, _]| wf).filter(|wf| wf.height() > 80.0 && wf.width() > 480.0);
         for (i, t) in self.toasts.iter_mut().enumerate() {
             let fade_out = ((t.until - now) as f32 / 0.4).clamp(0.0, 1.0);
             let born = if rm { 1.0 } else { ((now - t.born) as f32 / 0.18).clamp(0.0, 1.0) };
             let rise = 1.0 - (1.0 - born).powi(3);
             let fade = fade_out.min(rise);
-            let r = egui::Area::new(egui::Id::new(("toast", i)))
-                .anchor(Align2::RIGHT_BOTTOM, vec2(-16.0, -40.0 - stack - 8.0 * (1.0 - rise)))
+            let lift = stack + 8.0 * (1.0 - rise);
+            let area = egui::Area::new(egui::Id::new(("toast", i)));
+            let area = match well {
+                Some(wf) => area.pivot(Align2::RIGHT_BOTTOM).fixed_pos(pos2(wf.right() - 12.0, wf.bottom() - 12.0 - lift)),
+                None => area.anchor(Align2::RIGHT_BOTTOM, vec2(-16.0, -40.0 - lift)),
+            };
+            let r = area
                 .order(egui::Order::Foreground)
                 .interactable(false)
                 .show(ctx, |ui| {
@@ -2033,6 +2107,7 @@ impl App {
     pub fn draw(&mut self, ui: &mut Ui) {
         crate::anim::frame_begin();
         let ctx = ui.ctx().clone();
+        self.auto_text_size(&ctx);
         self.prefs.ui_scale = ctx.zoom_factor();
         static QA_FPS: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
         if *QA_FPS.get_or_init(|| std::env::var_os("USDR_QA_FPS").is_some()) {
@@ -2134,7 +2209,7 @@ impl App {
             .rect;
         theme::groove_h(ui.painter(), r.left(), r.right(), r.bottom() - 2.0);
         let r = egui::Panel::bottom("statusbar")
-            .exact_size(26.0)
+            .exact_size(30.0)
             .show_separator_line(false)
             .frame(egui::Frame::new().inner_margin(egui::Margin::symmetric(EDGE, 0)))
             .show(ui, |ui| self.status_bar(ui))
@@ -2194,13 +2269,19 @@ impl App {
         egui::CentralPanel::default()
             .frame(egui::Frame::new().inner_margin(egui::Margin::same(0)))
             .show(ui, |ui| {
-                egui::Frame::new()
-                    .inner_margin(egui::Margin::symmetric(EDGE, 2))
-                    .show(ui, |ui| {
-                        ui.set_width(ui.available_width());
-                        ui.set_height(28.0);
-                        crate::toolbar::toolbar(self, ui);
-                    });
+                // The toolbar over the display only when the masthead had no
+                // room for it.
+                if !self.toolbar_up {
+                    egui::Frame::new()
+                        .inner_margin(egui::Margin::symmetric(EDGE, 2))
+                        .show(ui, |ui| {
+                            ui.set_width(ui.available_width());
+                            ui.set_height(28.0);
+                            crate::toolbar::toolbar(self, ui);
+                        });
+                } else {
+                    ui.add_space(6.0);
+                }
                 // The display let into the plate behind a bezel, its edges
                 // on the same line as the keys above and the windows below.
                 let plate = ui.available_rect_before_wrap();
@@ -2291,6 +2372,14 @@ mod tests {
     }
 
     #[test]
+    fn the_text_grows_only_on_a_wide_window() {
+        assert_eq!(App::auto_text_factor(1600.0), 1.0);
+        assert_eq!(App::auto_text_factor(2190.0), 1.0);
+        assert!((App::auto_text_factor(2560.0) - 1.35).abs() < 0.01 || (App::auto_text_factor(2560.0) - 1.3).abs() < 0.01);
+        assert_eq!(App::auto_text_factor(5000.0), 1.3);
+    }
+
+    #[test]
     fn the_dock_fits_its_panel_in_the_smallest_window() {
         // A family with its own decoders, a filter and the scope, all in a
         // 1100 x 700 window: content taller than the dock slid it down
@@ -2300,7 +2389,7 @@ mod tests {
         h.state_mut().app.status.mode = Mode::Wfm;
         h.state_mut().app.decode_family = Some(crate::decoders::Family::Broadcast);
         h.run_steps(4);
-        let dock_top = 700.0 - 26.0 - h.state().app.prefs.dock_height;
+        let dock_top = 700.0 - 30.0 - h.state().app.prefs.dock_height;
         let tab = h.get_by_label("Decodes").rect();
         assert!(tab.top() >= dock_top && tab.top() <= dock_top + 12.0, "tab at {tab:?}, dock from {dock_top}");
         // The display ends where the dock begins.
@@ -2561,7 +2650,9 @@ mod tests {
 
     fn harness_with(prefs: Prefs, w: f32, ht: f32) -> Harness<'static, T> {
         let ctx = egui::Context::default();
-        let mut app = App::build(&ctx, prefs, Player::silent(), Player::silent(), None);
+        // At the size asked for: the text size following the window would
+        // make a 2560 px test a 1900 px one.
+        let mut app = App::build(&ctx, Prefs { text_auto: false, ..prefs }, Player::silent(), Player::silent(), None);
         let (link, wire) = Link::wire();
         app.link = Some(link);
         let info = proto::ServerInfo { name: "usdr".into(), version: "test".into(), api: 2, features: vec!["filter".into(), "rx2".into()] };
@@ -2836,7 +2927,8 @@ mod tests {
         let range = proto::FilterRange { min_width_hz: 2_500.0, max_width_hz: 25_000.0, max_edge_hz: 12_500.0, symmetric: true, shaped: false };
         h.state_mut().app.modes = vec![ModeCaps { mode: Mode::Nfm, filter: Some(range), ..Default::default() }];
         h.run_steps(2);
-        let role = egui::accesskit::Role::CheckBox;
+        // Presets pick one width, so they are radio buttons.
+        let role = egui::accesskit::Role::RadioButton;
         h.get_by_role_and_label(role, "12.5k").scroll_to_me();
         h.run_steps(3);
         h.get_by_role_and_label(role, "12.5k").click();
@@ -2957,7 +3049,7 @@ mod tests {
         h.state_mut().app.status.rx2.as_mut().unwrap().mode = Mode::Am;
         h.run_steps(2);
         // (A narrow bar keeps the presets beside B's 25 kHz: 12k, 16k.)
-        h.get_by_role_and_label(role, "12k").click();
+        h.get_by_role_and_label(radio, "12k").click();
         h.run_steps(2);
         assert!(drain(&h).contains(&("/api/sdr/filter".into(), json!({ "low_hz": -6000.0, "high_hz": 6000.0, "mode": "am" }))));
         // AM's own 10k, a step narrower, is B's reset.
@@ -3005,7 +3097,7 @@ mod tests {
         let mut tops = Vec::new();
         for rds in states {
             h.state_mut().app.status.rds = rds;
-            tops.push(card_top(&mut h, "GAIN"));
+            tops.push(card_top(&mut h, "Gain"));
         }
         assert!(tops.windows(2).all(|w| w[0] == w[1]), "the Gain card moved: {tops:?}");
     }
@@ -3019,7 +3111,7 @@ mod tests {
             app.recorder_busy = busy.map(String::from);
             app.replay_note = note.map(String::from);
             app.status.error = err.map(String::from);
-            tops.push(card_top(&mut h, "RADIO"));
+            tops.push(card_top(&mut h, "Radio"));
         }
         assert!(tops.windows(2).all(|w| w[0] == w[1]), "the Radio card moved: {tops:?}");
     }
@@ -3805,7 +3897,7 @@ mod tests {
         use egui::accesskit::Role;
         for (w, ht, scope) in [(1100.0, 700.0, 420.0), (1600.0, 980.0, 420.0), (1600.0, 980.0, 700.0), (1900.0, 1080.0, 800.0)] {
             let h = hfdl_dock(w, ht, scope);
-            let edge = h.get_by_label("HFDL audio").rect().left();
+            let edge = h.get_by_role_and_label(Role::RadioButton, "PASSBAND").rect().left();
             let labels: Vec<(String, egui::Rect)> = h
                 .query_all(egui_kittest::kittest::By::new().predicate(|n| n.role() == Role::Label))
                 .map(|n| {

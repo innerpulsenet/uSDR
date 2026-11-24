@@ -406,7 +406,7 @@ fn gain(app: &mut App, ui: &mut Ui) {
         step: 1.0,
         fine: 1.0,
         label: "RF GAIN",
-        text: |v| if auto { format!("auto · {shown:.0} dB") } else { format!("{v:.0} dB") },
+        text: |v| if auto { format!("AGC sets · {shown:.0} dB") } else { format!("{v:.0} dB") },
         color: theme::AMBER,
         enabled: !auto,
         reset: None,
@@ -449,7 +449,7 @@ fn gain(app: &mut App, ui: &mut Ui) {
         if widgets::key(ui, agc_name, s.tuner_agc, theme::CYAN).on_hover_text("With AGC: hand gain to the radio's own loop").clicked() {
             app.post("/api/sdr/frontend", json!({ "tuner_agc": !s.tuner_agc }));
         }
-        if widgets::key(ui, "CLIP GUARD", s.clip_guard, theme::AMBER).on_hover_text("Let the guard back gain off when the ADC clips").clicked() {
+        if widgets::key(ui, "CLIP GUARD", s.clip_guard, theme::LIT).on_hover_text("Let the guard back gain off when the ADC clips").clicked() {
             app.post("/api/sdr/frontend", json!({ "clip_guard": !s.clip_guard }));
         }
     });
@@ -574,10 +574,10 @@ fn front_end(app: &mut App, ui: &mut Ui) {
     // edges line up whatever the labels.
     let mut keys: Vec<(String, bool, egui::Color32, &str, FrontKey)> = Vec::new();
     if let Some(on) = s.rf_notch {
-        keys.push(("AM/FM NOTCH".into(), on, theme::AMBER, "The tuner's broadcast-band notch", FrontKey::RfNotch));
+        keys.push(("AM/FM NOTCH".into(), on, theme::LIT, "The tuner's broadcast-band notch", FrontKey::RfNotch));
     }
     if let Some(on) = s.dab_notch {
-        keys.push(("DAB NOTCH".into(), on, theme::AMBER, "The tuner's DAB-band notch", FrontKey::DabNotch));
+        keys.push(("DAB NOTCH".into(), on, theme::LIT, "The tuner's DAB-band notch", FrontKey::DabNotch));
     }
     keys.push((lo, s.lo_offset, theme::CYAN, "Park the tuner off-center so its DC spur stays out of the channel", FrontKey::LoOffset));
     if let Some(on) = s.iq_correction {
@@ -586,7 +586,7 @@ fn front_end(app: &mut App, ui: &mut Ui) {
     if let Some(on) = s.bias_t {
         keys.push(("BIAS-T".into(), on, theme::WARN, "DC on the antenna feed, for an inline preamp; saved per radio", FrontKey::BiasT));
     }
-    keys.push((spur, spur_on || checking, theme::AMBER, "Find the receiver's own spurs by moving the span an eighth and back, then notch them. Click again to clear.", FrontKey::Spur));
+    keys.push((spur, spur_on || checking, theme::LIT, "Find the receiver's own spurs by moving the span an eighth and back, then notch them. Click again to clear.", FrontKey::Spur));
     let mut hit = None;
     let col_w = ((ui.available_width() - 6.0) / 2.0).floor();
     for pair in keys.chunks(2) {
@@ -614,8 +614,7 @@ fn front_end(app: &mut App, ui: &mut Ui) {
     if !s.if_bandwidths_hz.is_empty() {
         let cur = s.if_bandwidth_hz.unwrap_or(0.0);
         let label = if s.if_bandwidth_manual { crate::tuning::fmt_hz(cur) } else { format!("AUTO · {}", crate::tuning::fmt_hz(cur)) };
-        ui.horizontal(|ui| {
-            ui.label(small("IF FILTER"));
+        field(ui, "IF filter", None, |ui| {
             let w = (ui.painter().layout_no_wrap(label.clone(), theme::mono_bold(crate::theme::ty::BODY), egui::Color32::PLACEHOLDER).size().x + 32.0).max(90.0);
             widgets::lcd_selector(ui, "iffilter", "", &label, theme::AMBER, w, |ui| {
                 if ui.selectable_label(!s.if_bandwidth_manual, "Auto · follow the span").clicked() {
@@ -633,23 +632,37 @@ fn front_end(app: &mut App, ui: &mut Ui) {
     }
 }
 
+/// How wide the side column's row labels are, so every control in a card
+/// starts on the same line whatever its label.
+const FIELD_W: f32 = 104.0;
+
+/// A row of the side column: its name in the sans, as a name is set, in a
+/// column of one width, then the control.
+fn field<R>(ui: &mut Ui, label: &str, hint: Option<&str>, add: impl FnOnce(&mut Ui) -> R) -> R {
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 3.0;
+        let (r, resp) = ui.allocate_exact_size(egui::vec2(FIELD_W, 22.0), egui::Sense::hover());
+        let enabled = ui.is_enabled();
+        ui.painter().text(egui::pos2(r.left(), r.center().y), egui::Align2::LEFT_CENTER, label, theme::sans(crate::theme::ty::BODY), if enabled { theme::text_2() } else { theme::text_3() });
+        resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, enabled, label));
+        if let Some(h) = hint {
+            resp.on_hover_text(h);
+        }
+        add(ui)
+    })
+    .inner
+}
+
 fn processing(app: &mut App, ui: &mut Ui) {
     let Some(p) = app.status.processing.clone() else { return };
     let mode = app.status.mode;
     let voice = matches!(mode, Mode::Nfm | Mode::Am | Mode::Usb | Mode::Lsb);
-    let row = |ui: &mut Ui, label: &str, hint: &str, add: &mut dyn FnMut(&mut Ui)| {
-        ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = 3.0;
-            let r = ui.label(small(label)).on_hover_text(hint);
-            ui.add_space((78.0 - r.rect.width()).max(0.0));
-            add(ui);
-        });
-    };
+    let row = |ui: &mut Ui, label: &str, hint: &str, add: &mut dyn FnMut(&mut Ui)| field(ui, label, Some(hint), |ui| add(ui));
     let mut post = None;
     // Keys for processing the mode's audio never passes through are dimmed,
     // not hidden: the setting holds for when a voice mode comes back.
     let agc = matches!(mode, Mode::Am | Mode::Usb | Mode::Lsb);
-    row(ui, "NOISE RED.", "Spectral noise reduction on voice: NFM, AM, USB and LSB. Higher cuts more hiss and adds about 16 ms of delay.", &mut |ui| {
+    row(ui, "Noise reduction", "Spectral noise reduction on voice: NFM, AM, USB and LSB. Higher cuts more hiss and adds about 16 ms of delay.", &mut |ui| {
         crate::widgets::enabled_or(ui, voice, "Noise reduction works on voice: NFM, AM, USB and LSB", |ui| {
             let vals = ["off", "low", "medium", "high"];
             if let Some(i) = widgets::segmented(ui, "nr", &["OFF", "LOW", "MED", "HIGH"], vals.iter().position(|v| *v == p.nr), theme::CYAN) {
@@ -657,15 +670,15 @@ fn processing(app: &mut App, ui: &mut Ui) {
             }
         });
     });
-    row(ui, "BLANKER", "Wideband impulse blanker, for ignition and power-line clicks. It also clips the start of strong packet bursts, so leave it off for APRS.", &mut |ui| {
-        if let Some(i) = widgets::segmented(ui, "blanker", &["OFF", "LOW", "MED", "HIGH"], Some(p.blanker.min(3) as usize), theme::AMBER) {
+    row(ui, "Blanker", "Wideband impulse blanker, for ignition and power-line clicks. It also clips the start of strong packet bursts, so leave it off for APRS.", &mut |ui| {
+        if let Some(i) = widgets::segmented(ui, "blanker", &["OFF", "LOW", "MED", "HIGH"], Some(p.blanker.min(3) as usize), theme::LIT) {
             post = Some(json!({ "blanker": i }));
         }
     });
-    row(ui, "VOICE AGC", "AM and sideband AGC speed: fast follows flutter, slow rides through pauses and fades.", &mut |ui| {
+    row(ui, "Voice AGC", "AM and sideband AGC speed: fast follows flutter, slow rides through pauses and fades.", &mut |ui| {
         crate::widgets::enabled_or(ui, agc, "Voice AGC applies to AM, USB and LSB", |ui| {
             let vals = ["fast", "medium", "slow"];
-            if let Some(i) = widgets::segmented(ui, "agc", &["FAST", "MED", "SLOW"], vals.iter().position(|v| *v == p.agc), theme::AMBER) {
+            if let Some(i) = widgets::segmented(ui, "agc", &["FAST", "MED", "SLOW"], vals.iter().position(|v| *v == p.agc), theme::LIT) {
                 post = Some(json!({ "agc": vals[i] }));
             }
         });
@@ -712,12 +725,11 @@ fn recorder(app: &mut App, ui: &mut Ui) {
     widgets::glass(ui, egui::Id::new("recorder-glass"), theme::AMBER, |ui| {
         ui.horizontal(|ui| {
             widgets::lcd_tag(ui, if receiving { "FILLING" } else { "OFF" }, theme::AMBER, receiving);
-            let head = if !receiving {
-                format!("{} keeps no buffer", app.status.mode.label())
-            } else {
-                format!("{} · {}S/s", crate::tuning::fmt_mhz(app.inspect_hz(), 3), crate::tuning::fmt_short_hz(app.status.inspect_rate_hz))
-            };
-            ui.label(small(head));
+            // Off, the tag says so and the plot says why; the head is the
+            // channel only while there is one.
+            if receiving {
+                ui.label(small(format!("{} · {}S/s", crate::tuning::fmt_mhz(app.inspect_hz(), 3), crate::tuning::fmt_short_hz(app.status.inspect_rate_hz))));
+            }
         });
         // Drawn whether or not this mode keeps a buffer, so the card keeps
         // its height when the mode or the radio's state changes it.
@@ -789,8 +801,7 @@ fn recorder(app: &mut App, ui: &mut Ui) {
 
 fn radio(app: &mut App, ui: &mut Ui) {
     let s = app.status.clone();
-    ui.horizontal(|ui| {
-        ui.label(small("DEVICE"));
+    field(ui, "Device", None, |ui| {
         let cur = app.devices.iter().find(|d| d.serial == s.serial).map(device_label).unwrap_or_else(|| format!("{} · {}", s.serial, s.radio_label()));
         // The selector gets what the label and the refresh key leave, in a
         // space of its own: a truncating combo box fills whatever room its
@@ -814,8 +825,7 @@ fn radio(app: &mut App, ui: &mut Ui) {
     });
     // Sideband has no carrier, so there is nothing to calibrate from.
     let sideband = s.mode.is_sideband();
-    ui.horizontal(|ui| {
-        ui.label(small("PPM"));
+    field(ui, "Frequency ppm", None, |ui| {
         let mut ppm = s.ppm;
         let r = widgets::numeric(ui, &mut ppm, -200.0..=200.0, 0.05, 2, 76.0);
         if r.changed() {

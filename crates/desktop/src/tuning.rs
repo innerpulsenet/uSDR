@@ -170,6 +170,19 @@ pub fn fmt_short_hz(hz: f64) -> String {
     }
 }
 
+/// A frequency step as its figure and its unit apart, for a readout that
+/// sets the unit smaller: `("6.25", "kHz")`, `("100", "Hz")`.
+pub fn split_hz(hz: f64) -> (String, &'static str) {
+    let trim = |s: String| s.trim_end_matches('0').trim_end_matches('.').to_string();
+    if hz >= 1e6 {
+        (trim(format!("{:.3}", hz / 1e6)), "MHz")
+    } else if hz >= 1e3 {
+        (trim(format!("{:.2}", hz / 1e3)), "kHz")
+    } else {
+        (format!("{}", hz.round()), "Hz")
+    }
+}
+
 /// `12.5 kHz`, `2.048 MHz`, `300 Hz`.
 pub fn fmt_hz(hz: f64) -> String {
     let trim = |s: String| s.trim_end_matches('0').trim_end_matches('.').to_string();
@@ -188,6 +201,14 @@ pub fn fmt_hz(hz: f64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_step_reads_with_one_unit() {
+        assert_eq!(split_hz(6250.0), ("6.25".to_string(), "kHz"));
+        assert_eq!(split_hz(100e3), ("100".to_string(), "kHz"));
+        assert_eq!(split_hz(100.0), ("100".to_string(), "Hz"));
+        assert_eq!(split_hz(1.5e6), ("1.5".to_string(), "MHz"));
+    }
 
     #[test]
     fn rasters() {

@@ -15,8 +15,10 @@ fn mono(t: impl Into<String>, c: egui::Color32) -> RichText {
 }
 
 pub fn dock(app: &mut App, ui: &mut Ui) {
-    // The scope: always in view beside the logs.
-    if app.prefs.show_scope {
+    // The scope: in view beside the logs, but not beside the map, which
+    // needs the dock's whole width for an ocean and has nothing to say
+    // about the audio.
+    if app.prefs.show_scope && app.dock_tab != DockTab::Map {
         // The logs keep the measured width of their tab row (and the
         // decode keys at its end) beside the scope, so a tab never runs
         // under the scope's title however many tabs there are.
@@ -96,7 +98,7 @@ fn tab(ui: &mut Ui, label: &str, count: Option<usize>, on: bool) -> egui::Respon
     let count_w = if badge.is_some() { ui.painter().layout_no_wrap("999".into(), widgets::key_font(), egui::Color32::PLACEHOLDER).size().x + 6.0 } else { 0.0 };
     let (rect, resp) = ui.allocate_exact_size(vec2(g.size().x + count_w + 16.0, 26.0), egui::Sense::click());
     resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, on, label));
-    let (press, c) = widgets::paint_key(ui, &resp, rect, egui::CornerRadius::same(theme::RADIUS), on, theme::AMBER);
+    let (press, c) = widgets::paint_mark(ui, &resp, rect, egui::CornerRadius::same(theme::RADIUS), on, theme::LIT);
     let p = ui.painter();
     let y = rect.center().y + press;
     p.galley(egui::pos2(rect.left() + 8.0, y - g.size().y / 2.0), g.clone(), c);
@@ -154,14 +156,14 @@ fn decodes(app: &mut App, ui: &mut Ui) {
                     }
                 });
             } else {
-            if widgets::chip_key(ui, &format!("ALL {}", app.decodes.len()), app.decode_family.is_none(), theme::AMBER).clicked() {
+            if widgets::mark_chip(ui, &format!("ALL {}", app.decodes.len()), app.decode_family.is_none(), theme::LIT).clicked() {
                 app.decode_family = None;
                 app.decode_chip = None;
             }
             for f in Family::ALL {
                 let n = counts.get(&Some(f)).copied().unwrap_or(0);
                 let label = if n > 0 { format!("{} {n}", f.label()) } else { f.label().to_string() };
-                if widgets::chip_key(ui, &label, app.decode_family == Some(f), family_color(f)).clicked() {
+                if widgets::mark_chip(ui, &label, app.decode_family == Some(f), theme::LIT).clicked() {
                     app.decode_family = Some(f);
                     app.decode_chip = None;
                     app.selected_decode = None;
@@ -188,19 +190,19 @@ fn decodes(app: &mut App, ui: &mut Ui) {
                     let mode = app.status.mode;
                     if mode.is_hf_data() {
                         let lit = app.decode_chip.is_none();
-                        if widgets::chip_key(ui, &format!("{} ▸", mode.label()), lit, widgets::protocol_color(mode.label())).on_hover_text("The mode's own view, with its controls and stations").clicked() {
+                        if widgets::mark_chip(ui, &format!("{} ▸", mode.label()), lit, widgets::protocol_color(mode.label())).on_hover_text("The mode's own view, with its controls and stations").clicked() {
                             app.decode_chip = None;
                             app.selected_decode = None;
                         }
                     }
                     let all = app.decode_chip == Some(ALL_HF) || (app.decode_chip.is_none() && !mode.is_hf_data());
-                    if widgets::chip_key(ui, "ALL", all, family_color(f)).on_hover_text("Every HF decode in one log, each opened beside it").clicked() {
+                    if widgets::mark_chip(ui, "ALL", all, family_color(f)).on_hover_text("Every HF decode in one log, each opened beside it").clicked() {
                         app.decode_chip = Some(ALL_HF);
                     }
                     // The mode's own decodes are its workspace; the other
                     // protocols in the log, a key each.
                     for d in list.into_iter().filter(|d| !(mode.is_hf_data() && d.chip == mode.label())) {
-                        if widgets::chip_key(ui, d.chip, app.decode_chip == Some(d.chip), widgets::protocol_color(d.chip)).on_hover_text(format!("{} decodes in the log", d.chip)).clicked() {
+                        if widgets::mark_chip(ui, d.chip, app.decode_chip == Some(d.chip), widgets::protocol_color(d.chip)).on_hover_text(format!("{} decodes in the log", d.chip)).clicked() {
                             app.decode_chip = if app.decode_chip == Some(d.chip) { Some(ALL_HF) } else { Some(d.chip) };
                         }
                     }
@@ -208,11 +210,11 @@ fn decodes(app: &mut App, ui: &mut Ui) {
                     let room = view_w - (ui.cursor().left() - ui.max_rect().left());
                     crate::tunestrip::strip(app, ui, room);
                 } else if list.len() > 1 {
-                    if widgets::chip_key(ui, "ANY", app.decode_chip.is_none(), family_color(f)).clicked() {
+                    if widgets::mark_chip(ui, "ANY", app.decode_chip.is_none(), family_color(f)).clicked() {
                         app.decode_chip = None;
                     }
                     for d in list {
-                        if widgets::chip_key(ui, d.chip, app.decode_chip == Some(d.chip), widgets::protocol_color(d.chip)).clicked() {
+                        if widgets::mark_chip(ui, d.chip, app.decode_chip == Some(d.chip), widgets::protocol_color(d.chip)).clicked() {
                             app.decode_chip = if app.decode_chip == Some(d.chip) { None } else { Some(d.chip) };
                         }
                     }
@@ -302,6 +304,7 @@ fn decode_log(app: &mut App, ui: &mut Ui) {
             let empty = if family_empty { family.map(|f| f.empty_text()) } else { (total == 0).then_some(match app.status.mode {
                 Mode::Auto => "Frames decoded on receiver A appear here, newest first. AUTO is running every decoder on this channel.",
                 Mode::P25 | Mode::Dmr | Mode::Nxdn | Mode::Pager | Mode::Flex | Mode::Packet => "Frames decoded on receiver A appear here, newest first. Click a frame's frequency to tune to it; expand one for its fields.",
+                m if m.is_hf_data() || m == Mode::Ais => "This log holds frames from the VHF decoders. The receiver's own decodes are under HF DATA.",
                 _ => "Frames decoded on receiver A appear here. This mode has no decoder: pick a digital mode, or AUTO to run every decoder on the channel.",
             }) };
             // Scrolled into the log, new frames arriving on top push it down
@@ -539,9 +542,13 @@ fn scope(app: &mut App, ui: &mut Ui) {
         .then(|| format!("{:.0}–{:.0} Hz", app.status.filter_low_hz.abs().min(app.status.filter_high_hz.abs()), app.status.filter_low_hz.abs().max(app.status.filter_high_hz.abs())));
     let note = note.map(str::to_string).or(edges);
     ui.horizontal(|ui| {
-        ui.label(RichText::new(title).font(theme::sans_semibold(crate::theme::ty::BODY)).color(theme::text()));
         // Every view the mode offers, named, rather than a click that cycles.
+        // With views, their keys are the title (the name on hover); a scope
+        // with one view says what it is.
         let views = crate::scope::Scope::views(mode, kind);
+        if views.is_empty() {
+            ui.label(RichText::new(title).font(theme::sans_semibold(crate::theme::ty::BODY)).color(theme::text()));
+        }
         if views.is_empty() {
             if let Some(n) = note {
                 ui.label(RichText::new(n).font(theme::mono(crate::theme::ty::MICRO)).color(theme::text_3()));
@@ -551,7 +558,7 @@ fn scope(app: &mut App, ui: &mut Ui) {
             ui.spacing_mut().item_spacing.x = 3.0;
             let cur = app.scope.sub_for(mode);
             let labels: Vec<&str> = views.iter().map(|v| v.label()).collect();
-            if let Some(i) = widgets::segmented(ui, "scope-view", &labels, views.iter().position(|v| *v == cur), theme::AMBER) {
+            if let Some(i) = widgets::segmented(ui, "scope-view", &labels, views.iter().position(|v| *v == cur), theme::LIT) {
                 app.scope.set_view(mode, views[i]);
             }
         }
@@ -567,7 +574,7 @@ fn scope(app: &mut App, ui: &mut Ui) {
             } else {
                 // A narrow scope keeps the rate as one menu, clear of the views.
                 let shown = cur.map_or("RATE", |i| labels[i]);
-                widgets::menu_chip(ui, shown, theme::AMBER, |ui| {
+                widgets::menu_chip(ui, shown, theme::LIT, |ui| {
                     for (hz, l) in rates.iter().zip(labels) {
                         if ui.selectable_label((app.prefs.scope_rate_hz - hz).abs() < 0.1, l).clicked() {
                             app.prefs.scope_rate_hz = *hz;
@@ -851,10 +858,10 @@ fn calls(app: &mut App, ui: &mut Ui) {
 fn scan_or_watch(app: &mut App, ui: &mut Ui) {
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 4.0;
-        if widgets::chip_key(ui, "VOICE", !app.watch_view, theme::AMBER).clicked() {
+        if widgets::mark_chip(ui, "VOICE", !app.watch_view, theme::LIT).clicked() {
             app.watch_view = false;
         }
-        if widgets::chip_key(ui, "HF WATCH", app.watch_view, theme::AMBER).clicked() {
+        if widgets::mark_chip(ui, "HF WATCH", app.watch_view, theme::LIT).clicked() {
             app.watch_view = true;
         }
     });

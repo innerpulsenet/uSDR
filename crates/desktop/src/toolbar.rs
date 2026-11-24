@@ -18,10 +18,21 @@ fn divider(ui: &mut Ui) {
     theme::groove_v(ui.painter(), r.left(), r.top(), r.bottom());
 }
 
+/// The least room the toolbar folds into: span and zoom, averaging as a
+/// menu, and the rest behind DISPLAY.
+pub const MIN_W: f32 = 450.0;
+/// Room for every control inline.
+const FULL_W: f32 = 910.0;
+/// Room for the switches inline, the menus folded into DISPLAY.
+const NARROW_W: f32 = 690.0;
+
 pub fn toolbar(app: &mut App, ui: &mut Ui) {
-    // Under about 900 px the range, style and waterfall menus fold into
-    // one, so the bar never runs wider than the display it sits over.
-    let narrow = ui.available_width() < 900.0;
+    // It folds as the room shrinks, so it never runs wider than the place
+    // it is given: first the range, style and waterfall menus into one,
+    // then averaging and the overlay switches too.
+    let room = ui.available_width();
+    let narrow = room < FULL_W;
+    let compact = room < NARROW_W;
     ui.horizontal_centered(|ui| {
         ui.spacing_mut().item_spacing.x = 4.0;
         // Span and zoom.
@@ -31,53 +42,82 @@ pub fn toolbar(app: &mut App, ui: &mut Ui) {
         // does not move the keys after it.
         let spans: Vec<String> = s.rates_hz.iter().map(|r| format!("SPAN {}", crate::tuning::fmt_short_hz(*r))).collect();
         let spans: Vec<&str> = spans.iter().map(String::as_str).collect();
-        widgets::menu_chip_fit(ui, &format!("SPAN {}", crate::tuning::fmt_short_hz(span)), &spans, theme::CYAN, |ui| {
+        widgets::menu_chip_fit(ui, &format!("SPAN {}", crate::tuning::fmt_short_hz(span)), &spans, theme::LIT, |ui| {
             ui.set_min_width(300.0);
             span_zoom(app, ui);
         });
-        if widgets::chip_key(ui, "−", false, theme::CYAN).on_hover_text("Zoom out (−)").clicked() {
+        if widgets::chip_key(ui, "−", false, theme::LIT).on_hover_text("Zoom out (−)").clicked() {
             app.set_zoom(app.zoom_ui / 2.0);
         }
         // Padded to the widest zoom (32.0×), so + does not move under the
         // pointer as the zoom grows.
         ui.label(RichText::new(format!("{:>5.1}×", app.zoom_ui.max(1.0))).font(theme::mono(crate::theme::ty::LABEL)).color(theme::text_2()));
-        if widgets::chip_key(ui, "+", false, theme::CYAN).on_hover_text("Zoom in (+)").clicked() {
+        if widgets::chip_key(ui, "+", false, theme::LIT).on_hover_text("Zoom in (+)").clicked() {
             app.set_zoom(app.zoom_ui * 2.0);
         }
-        if widgets::chip_key(ui, "CENTER", false, theme::CYAN).on_hover_text("Put the span back around the receiver (C)").clicked() {
+        if widgets::chip_key(ui, "CENTER", false, theme::LIT).on_hover_text("Put the span back around the receiver (C)").clicked() {
             let hz = app.inspect_hz();
             app.center_span(hz);
         }
         divider(ui);
         // Averaging, on the server, so every client sees the same.
-        ui.label(small("AVG")).on_hover_text("Average the trace over frames, to pull a weak steady carrier out of the noise. The waterfall still paints every frame as measured.");
         let avg = match s.avg.as_deref() {
             Some("slow") => 1,
             Some("deep") => 2,
             _ => 0,
         };
         let modes = ["off", "slow", "deep"];
+        let avg_tip = "Average the trace over frames, to pull a weak steady carrier out of the noise. The waterfall still paints every frame as measured.";
         // The trace only: the waterfall paints each frame as measured.
-        if let Some(i) = widgets::segmented(ui, "avg", &["OFF", "0.5 s", "2 s"], Some(avg), theme::CYAN) {
-            app.post("/api/sdr/avg", json!({ "mode": modes[i] }));
-            app.status.avg = Some(modes[i].into());
+        if compact {
+            let names = ["AVG OFF", "AVG 0.5 s", "AVG 2 s"];
+            widgets::menu_chip_lit(ui, names[avg], &names, theme::LIT, avg != 0, |ui| {
+                ui.label(small("AVERAGING"));
+                if let Some(i) = widgets::segmented(ui, "avg", &["OFF", "0.5 s", "2 s"], Some(avg), theme::LIT) {
+                    app.post("/api/sdr/avg", json!({ "mode": modes[i] }));
+                    app.status.avg = Some(modes[i].into());
+                }
+                ui.label(small("the trace only; the waterfall paints every frame"));
+            });
+        } else {
+            ui.label(small("AVG")).on_hover_text(avg_tip);
+            if let Some(i) = widgets::segmented(ui, "avg", &["OFF", "0.5 s", "2 s"], Some(avg), theme::LIT) {
+                app.post("/api/sdr/avg", json!({ "mode": modes[i] }));
+                app.status.avg = Some(modes[i].into());
+            }
         }
         divider(ui);
+        if compact {
+            widgets::menu_chip(ui, "DISPLAY", theme::LIT, |ui| {
+                ui.set_min_width(280.0);
+                overlays(app, ui);
+                ui.separator();
+                ui.label(small("RANGE"));
+                range(app, ui);
+                ui.separator();
+                ui.label(small("STYLE"));
+                style(app, ui);
+                ui.separator();
+                ui.label(small("WATERFALL"));
+                waterfall(app, ui);
+            });
+            return;
+        }
         let v = &mut app.prefs.view;
-        if widgets::chip_key(ui, "PEAK", v.peak_hold, theme::CYAN).clicked() {
+        if widgets::chip_key(ui, "PEAK", v.peak_hold, theme::LIT).clicked() {
             v.peak_hold = !v.peak_hold;
         }
-        if widgets::chip_key(ui, "FILL", v.fill, theme::AMBER).clicked() {
+        if widgets::chip_key(ui, "FILL", v.fill, theme::LIT).clicked() {
             v.fill = !v.fill;
         }
-        if widgets::chip_key(ui, "SPOTS", v.show_peaks, theme::AMBER).on_hover_text("Peak markers and decode labels").clicked() {
+        if widgets::chip_key(ui, "SPOTS", v.show_peaks, theme::LIT).on_hover_text("Peak markers and decode labels").clicked() {
             v.show_peaks = !v.show_peaks;
         }
-        if widgets::chip_key(ui, "BAND PLAN", v.band_plan, theme::OK).on_hover_text("US allocations along the axis; hover for the name").clicked() {
+        if widgets::chip_key(ui, "BAND PLAN", v.band_plan, theme::LIT).on_hover_text("US allocations along the axis; hover for the name").clicked() {
             v.band_plan = !v.band_plan;
         }
         if narrow {
-            widgets::menu_chip(ui, "DISPLAY", theme::AMBER, |ui| {
+            widgets::menu_chip(ui, "DISPLAY", theme::LIT, |ui| {
                 ui.set_min_width(280.0);
                 ui.label(small("RANGE"));
                 range(app, ui);
@@ -89,7 +129,7 @@ pub fn toolbar(app: &mut App, ui: &mut Ui) {
                 waterfall(app, ui);
             });
         } else {
-            widgets::menu_chip_fit(ui, if v.auto_range { "RANGE AUTO" } else { "RANGE" }, &["RANGE AUTO"], theme::AMBER, |ui| {
+            widgets::menu_chip_fit(ui, if v.auto_range { "RANGE AUTO" } else { "RANGE" }, &["RANGE AUTO"], theme::LIT, |ui| {
                 ui.set_min_width(260.0);
                 range(app, ui);
             });
@@ -97,13 +137,33 @@ pub fn toolbar(app: &mut App, ui: &mut Ui) {
             let label = format!("STYLE {}", app.prefs.view.style.label().to_uppercase());
             let styles: Vec<String> = crate::spectrum::Style::ALL.iter().map(|s| format!("STYLE {}", s.label().to_uppercase())).collect();
             let styles: Vec<&str> = styles.iter().map(String::as_str).collect();
-            widgets::menu_chip_fit(ui, &label, &styles, theme::AMBER, |ui| style(app, ui));
-            widgets::menu_chip(ui, "WATERFALL", theme::AMBER, |ui| {
+            widgets::menu_chip_fit(ui, &label, &styles, theme::LIT, |ui| style(app, ui));
+            widgets::menu_chip(ui, "WATERFALL", theme::LIT, |ui| {
                 ui.set_min_width(280.0);
                 waterfall(app, ui);
             });
         }
         // HOLD lives on the waterfall itself, beside the history it holds.
+    });
+}
+
+/// The overlay switches, as a row of keys in a menu.
+fn overlays(app: &mut App, ui: &mut Ui) {
+    let v = &mut app.prefs.view;
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 4.0;
+        if widgets::chip_key(ui, "PEAK", v.peak_hold, theme::LIT).clicked() {
+            v.peak_hold = !v.peak_hold;
+        }
+        if widgets::chip_key(ui, "FILL", v.fill, theme::LIT).clicked() {
+            v.fill = !v.fill;
+        }
+        if widgets::chip_key(ui, "SPOTS", v.show_peaks, theme::LIT).on_hover_text("Peak markers and decode labels").clicked() {
+            v.show_peaks = !v.show_peaks;
+        }
+        if widgets::chip_key(ui, "BAND PLAN", v.band_plan, theme::LIT).on_hover_text("US allocations along the axis; hover for the name").clicked() {
+            v.band_plan = !v.band_plan;
+        }
     });
 }
 
@@ -117,13 +177,13 @@ fn style(app: &mut App, ui: &mut Ui) {
         SpecMode::Trace => 0,
         SpecMode::Ridges => 1,
     };
-    if let Some(i) = widgets::segmented(ui, "spec-mode", &["TRACE", "RIDGES"], Some(cur), theme::AMBER) {
+    if let Some(i) = widgets::segmented(ui, "spec-mode", &["TRACE", "RIDGES"], Some(cur), theme::LIT) {
         v.spectrum = if i == 1 { SpecMode::Ridges } else { SpecMode::Trace };
     }
     if v.spectrum == SpecMode::Ridges {
         let mut secs = v.ridge_secs as f64;
         let ticks = [2.0, 6.0, 10.0].iter().map(|&s: &f64| (((s - 2.0) / 8.0) as f32, format!("{s:.0} s"))).collect();
-        let (ch, _) = Fader { value: &mut secs, min: 2.0, max: 10.0, step: 1.0, fine: 0.5, label: "DEPTH", text: |v| format!("{v:.1} s"), color: theme::AMBER, enabled: true, reset: None, ticks }.show(ui);
+        let (ch, _) = Fader { value: &mut secs, min: 2.0, max: 10.0, step: 1.0, fine: 0.5, label: "DEPTH", text: |v| format!("{v:.1} s"), color: theme::LIT, enabled: true, reset: None, ticks }.show(ui);
         if ch {
             v.ridge_secs = secs as f32;
         }
@@ -152,14 +212,14 @@ fn span_zoom(app: &mut App, ui: &mut Ui) {
                 let bits = if *r <= 8.064e6 { 12 } else if *r <= 9.216e6 { 10 } else { 8 };
                 label = format!("{label} · {bits}b");
             }
-            if widgets::chip_key(ui, &label, i == cur, theme::CYAN).clicked() && i != cur {
+            if widgets::chip_key(ui, &label, i == cur, theme::LIT).clicked() && i != cur {
                 app.post("/api/sdr/rate", json!({ "rate_hz": r }));
             }
         }
     });
     let mut z = app.zoom_ui.max(1.0).log2();
     let ticks = (0..=5).map(|i| (i as f32 / 5.0, format!("{}×", 1 << i))).collect();
-    let (ch, _) = Fader { value: &mut z, min: 0.0, max: 5.0, step: 0.25, fine: 0.05, label: "ZOOM", text: |z| format!("{:.1}×", 2f64.powf(z)), color: theme::CYAN, enabled: true, reset: Some(0.0), ticks }.show(ui);
+    let (ch, _) = Fader { value: &mut z, min: 0.0, max: 5.0, step: 0.25, fine: 0.05, label: "ZOOM", text: |z| format!("{:.1}×", 2f64.powf(z)), color: theme::LIT, enabled: true, reset: Some(0.0), ticks }.show(ui);
     if ch {
         app.set_zoom(2f64.powf(z));
     }
@@ -167,7 +227,7 @@ fn span_zoom(app: &mut App, ui: &mut Ui) {
 
 fn range(app: &mut App, ui: &mut Ui) {
     let v = &mut app.prefs.view;
-    if widgets::key(ui, "AUTO RANGE", v.auto_range, theme::OK).clicked() {
+    if widgets::key(ui, "AUTO RANGE", v.auto_range, theme::LIT).clicked() {
         v.auto_range = !v.auto_range;
         if !v.auto_range {
             let (lo, hi) = app.pan.range();
@@ -201,11 +261,11 @@ fn waterfall(app: &mut App, ui: &mut Ui) {
         });
     });
     ui.horizontal(|ui| {
-        if widgets::key(ui, "AUTO BLACK", v.wf_auto_black, theme::OK).on_hover_text("Keep the black level just under the noise floor").clicked() {
+        if widgets::key(ui, "AUTO BLACK", v.wf_auto_black, theme::LIT).on_hover_text("Keep the black level just under the noise floor").clicked() {
             v.wf_auto_black = !v.wf_auto_black;
             v.wf_black = if v.wf_auto_black { -3.0 } else { floor };
         }
-        if widgets::key(ui, "WF PEAK", v.wf_peak, theme::AMBER).on_hover_text("Paint from each frame's strongest segment, so bursts show at full level").clicked() {
+        if widgets::key(ui, "WF PEAK", v.wf_peak, theme::LIT).on_hover_text("Paint from each frame's strongest segment, so bursts show at full level").clicked() {
             v.wf_peak = !v.wf_peak;
         }
     });

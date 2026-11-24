@@ -1296,8 +1296,11 @@ impl Panafall {
         painter.add(Shape::mesh(bg));
 
         if self.span_hz <= 0.0 {
+            // Nothing to divide yet: the whole well is one empty display,
+            // out to the axes, with the word at its middle.
+            theme::vgrad(&painter, full, bg_top, bg_bottom);
             painter.text(
-                pan.center(),
+                full.center(),
                 Align2::CENTER_CENTER,
                 "waiting for the first spectrum frame",
                 theme::sans(13.0),

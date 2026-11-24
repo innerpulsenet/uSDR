@@ -389,7 +389,7 @@ fn clock(app: &App, ui: &mut Ui, rows: &[Row], filter: &mut Filter, has_call: bo
             ui.label(mono(text, theme::text_2())).on_hover_text("In the newest slot");
         }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if has_call && widgets::chip_key(ui, "TO YOU", filter.mine, theme::AMBER).on_hover_text("Only the calls sent to your callsign (Settings › Station)").clicked() {
+            if has_call && widgets::chip_key(ui, "TO YOU", filter.mine, theme::LIT).on_hover_text("Only the calls sent to your callsign (Settings › Station)").clicked() {
                 filter.mine = !filter.mine;
                 filter.cq &= !filter.mine;
             }

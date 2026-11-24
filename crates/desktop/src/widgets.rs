@@ -132,7 +132,9 @@ fn applet_opened<R>(ui: &mut Ui, id: &str, title: &str, first_open: bool, extra:
                 let pts = [vec2(-3.0, -4.0), vec2(3.0, 0.0), vec2(-3.0, 4.0)]
                     .map(|v| c + egui::emath::Rot2::from_angle(rot) * v);
                 ui.painter().add(egui::Shape::convex_polygon(pts.to_vec(), theme::text_3(), Stroke::NONE));
-                let label = theme::engraved(ui, &title.to_uppercase(), theme::mono(crate::theme::ty::LABEL), theme::text_2(), 1.2, Sense::click());
+                // A name, so set as one: the sans in sentence case. The mono
+                // capitals are kept for what is measured and for key legends.
+                let label = theme::engraved(ui, title, theme::sans_semibold(crate::theme::ty::LEDE), theme::text(), 0.2, Sense::click());
                 if resp.clicked() || label.clicked() {
                     open = !open;
                 }
@@ -244,7 +246,7 @@ pub fn menu_glyph<R>(ui: &mut Ui, glyph: &str, width: f32, add: impl FnOnce(&mut
     let (rect, resp) = ui.allocate_exact_size(vec2(width, KEY_H_SMALL), Sense::click());
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, glyph));
     let open = egui::Popup::is_id_open(ui.ctx(), egui::Popup::default_response_id(&resp));
-    let (press, c) = paint_key(ui, &resp, rect, CornerRadius::same(crate::theme::R_KEY), open, theme::AMBER);
+    let (press, c) = paint_key(ui, &resp, rect, CornerRadius::same(crate::theme::R_KEY), open, theme::LIT);
     ui.painter().galley(rect.center() - galley.size() / 2.0 + vec2(0.0, press), galley, c);
     egui::Popup::menu(&resp).show(add).map(|r| r.inner)
 }
@@ -375,6 +377,26 @@ pub fn paint_key(ui: &Ui, resp: &Response, rect: Rect, radius: CornerRadius, on:
     (k.press.max(k.on * 0.6), theme::key_text(k, enabled))
 }
 
+/// A key that is one of several places to be (a tab, a filter): when it is
+/// the one chosen its cap stays dark and a lamp lights along its foot, so a
+/// row of them shows where you are without reading as switches turned on.
+pub fn paint_mark(ui: &Ui, resp: &Response, rect: Rect, radius: CornerRadius, on: bool, lit: Color32) -> (f32, Color32) {
+    let enabled = ui.is_enabled();
+    let on_t = crate::anim::ease_bool(ui.ctx(), resp.id.with("on"), on, crate::anim::SLIDE_S);
+    let k = theme::KeyState {
+        hover: crate::anim::ease_bool(ui.ctx(), resp.id.with("hv"), enabled && resp.hovered() && !on, crate::anim::HOVER_S),
+        on: 0.0,
+        press: if enabled { pressed(ui, resp) } else { 0.0 },
+        color: theme::on_color(lit),
+        focus: resp.has_focus(),
+    };
+    theme::key_body(ui.painter(), rect, radius, k);
+    if on_t > 0.0 {
+        theme::foot_lamp(ui.painter(), rect, k.color, on_t);
+    }
+    (k.press, theme::key_text(theme::KeyState { on: on_t, ..k }, enabled))
+}
+
 /// A latching key with a tally light. Returns its response; clicked toggles.
 pub fn key(ui: &mut Ui, label: &str, on: bool, tally: Color32) -> Response {
     key_sized(ui, label, on, tally, vec2(0.0, 26.0))
@@ -411,6 +433,30 @@ pub fn chip_key_named(ui: &mut Ui, label: &str, name: &str, on: bool, tally: Col
     let (rect, resp) = ui.allocate_exact_size(vec2(w, KEY_H_SMALL), Sense::click());
     let enabled = ui.is_enabled();
     resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, enabled, on, name));
+    let (press, c) = paint_key(ui, &resp, rect, CornerRadius::same(crate::theme::R_KEY), on, tally);
+    ui.painter().galley(rect.center() - galley.size() / 2.0 + vec2(0.0, press), galley, c);
+    resp
+}
+
+/// A chip that is one of several places to be (a filter, a view), marked
+/// by the lamp along its foot when chosen, not lit like a switch.
+pub fn mark_chip(ui: &mut Ui, label: &str, on: bool, tally: Color32) -> Response {
+    let galley = ui.painter().layout_no_wrap(label.to_string(), key_font(), Color32::PLACEHOLDER);
+    let (rect, resp) = ui.allocate_exact_size(vec2(galley.size().x + 14.0, KEY_H_SMALL), Sense::click());
+    let enabled = ui.is_enabled();
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::RadioButton, enabled, on, label));
+    let (press, c) = paint_mark(ui, &resp, rect, CornerRadius::same(crate::theme::R_KEY), on, tally);
+    ui.painter().galley(rect.center() - galley.size() / 2.0 + vec2(0.0, press), galley, c);
+    resp
+}
+
+/// A chip key that is one of a pick-one row (a mode, a preset), lit like
+/// any key but announced as the radio button it is.
+pub fn radio_chip(ui: &mut Ui, label: &str, on: bool, tally: Color32) -> Response {
+    let galley = ui.painter().layout_no_wrap(label.to_string(), key_font(), Color32::PLACEHOLDER);
+    let (rect, resp) = ui.allocate_exact_size(vec2(galley.size().x + 14.0, KEY_H_SMALL), Sense::click());
+    let enabled = ui.is_enabled();
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::RadioButton, enabled, on, label));
     let (press, c) = paint_key(ui, &resp, rect, CornerRadius::same(crate::theme::R_KEY), on, tally);
     ui.painter().galley(rect.center() - galley.size() / 2.0 + vec2(0.0, press), galley, c);
     resp
@@ -530,7 +576,15 @@ impl<F: Fn(f64) -> String> Fader<'_, F> {
         let a = if self.enabled { 1.0 } else { theme::DISABLED_ALPHA };
         let value_text = (self.text)(*self.value);
         // The reading lights up while the fader is in hand.
-        let value_color = if resp.dragged() { theme::lerp(self.color, Color32::WHITE, 0.45) } else { alpha(self.color, a.max(0.7)) };
+        // A fader something else is setting reads as one: its value as dim as
+        // its label, tinted only enough to say whose it is.
+        let value_color = if resp.dragged() {
+            theme::lerp(self.color, Color32::WHITE, 0.45)
+        } else if self.enabled {
+            self.color
+        } else {
+            theme::lerp(theme::text_3(), self.color, 0.3)
+        };
         let track = if bare {
             Rect::from_min_max(pos2(rect.left() + 6.0, rect.center().y - 3.0), pos2(rect.right() - 6.0, rect.center().y + 3.0))
         } else if compact {
@@ -754,7 +808,7 @@ pub fn swatch_item(ui: &mut Ui, label: &str, palette: crate::colormap::Colormap,
     let hover = crate::anim::ease_bool(ui.ctx(), resp.id.with("hv"), resp.hovered(), crate::anim::HOVER_S);
     let p = ui.painter();
     if on || hover > 0.0 {
-        p.rect_filled(rect, CornerRadius::same(crate::theme::R_KEY), if on { alpha(theme::AMBER, 0.14 + 0.06 * hover) } else { alpha(theme::surface_4(), 0.8 * hover) });
+        p.rect_filled(rect, CornerRadius::same(crate::theme::R_KEY), if on { alpha(theme::LIT, 0.12 + 0.06 * hover) } else { alpha(theme::surface_4(), 0.8 * hover) });
     }
     let mut x = rect.left() + 6.0;
     if let Some(c) = trace {
@@ -806,12 +860,16 @@ fn menu_row(ui: &mut Ui, text: &str, check: Option<bool>) -> Response {
         p.rect_filled(rect, CornerRadius::same(theme::R_KEY), alpha(theme::surface_4(), 0.8 * hover));
     }
     if let Some(on) = check {
-        let lamp = Rect::from_center_size(pos2(rect.left() + 12.0, rect.top() + 12.0), vec2(10.0, 10.0));
+        // A box that reads as one at a glance: a tick cut into the lit box,
+        // and an empty box with an edge as strong as a label's.
+        let lamp = Rect::from_center_size(pos2(rect.left() + 12.0, rect.top() + 12.0), vec2(12.0, 12.0));
         if on {
-            p.rect_filled(lamp.expand(2.0), CornerRadius::same(theme::R_KEY), alpha(theme::AMBER, 0.18 * dim));
-            p.rect_filled(lamp, CornerRadius::same(theme::R_CAP), alpha(theme::AMBER, dim));
+            p.rect_filled(lamp.expand(2.0), CornerRadius::same(theme::R_KEY), alpha(theme::LIT, 0.16 * dim));
+            p.rect_filled(lamp, CornerRadius::same(theme::R_CAP), alpha(theme::LIT, dim));
+            let tick = [lamp.left_top() + vec2(2.8, 6.2), lamp.left_top() + vec2(5.0, 8.6), lamp.left_top() + vec2(9.4, 3.4)];
+            p.add(egui::Shape::line(tick.to_vec(), Stroke::new(1.8, alpha(theme::ink(), dim))));
         } else {
-            p.rect(lamp, CornerRadius::same(theme::R_CAP), theme::ink(), Stroke::new(1.0, alpha(theme::line_2(), dim)), egui::StrokeKind::Inside);
+            p.rect(lamp, CornerRadius::same(theme::R_CAP), theme::ink(), Stroke::new(1.0, alpha(theme::text_3(), 0.8 * dim)), egui::StrokeKind::Inside);
         }
     }
     let text_c = alpha(theme::lerp(theme::text_2(), theme::text(), hover.max(if check == Some(true) { 1.0 } else { 0.0 })), dim);
@@ -997,14 +1055,16 @@ pub fn segmented(ui: &mut Ui, id: &str, labels: &[&str], current: Option<usize>,
         let t = if reduced(ui) { 0.0 } else { 0.14 };
         let l = crate::anim::ease_value(ui.ctx(), id.with("l"), c.left(), t);
         let r = crate::anim::ease_value(ui.ctx(), id.with("r"), c.right(), t);
+        // The choice is marked by a lamp along its foot that slides to it,
+        // not a backlit cap: a lit cap reads as "on", and OFF is a choice.
         let lit = Rect::from_min_max(pos2(l, c.top()), pos2(r, c.bottom())).shrink2(vec2(0.5, 0.0));
-        theme::key_body(&p, lit, joined_corners(i, cells.len()), theme::KeyState { hover: 0.0, on: 1.0, press: 0.0, color, focus: false });
+        theme::foot_lamp(&p, lit, color, 1.0);
     }
     let mut out = None;
     for (i, ((cell, label), (resp, k))) in cells.iter().zip(labels).zip(&states).enumerate() {
         let on = current == Some(i);
         let c = theme::key_text(theme::KeyState { on: if on { 1.0 } else { 0.0 }, ..*k }, enabled);
-        p.text(cell.center() + vec2(0.0, if on { 0.6 } else { k.press }), Align2::CENTER_CENTER, *label, font.clone(), c);
+        p.text(cell.center() + vec2(0.0, if on { 0.0 } else { k.press }), Align2::CENTER_CENTER, *label, font.clone(), c);
         if resp.clicked() && !on {
             out = Some(i);
         }

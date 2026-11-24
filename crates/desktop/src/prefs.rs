@@ -76,6 +76,10 @@ pub struct Prefs {
     pub scope_rate_hz: f32,
     /// Text and control size, as egui's zoom factor (Ctrl+= / Ctrl+− / Ctrl+0).
     pub ui_scale: f32,
+    /// Let the text size follow the window: a window wider than about
+    /// 2200 px sets everything a little larger, instead of stretching a
+    /// 10 px label across a wide screen. Off once the size is set by hand.
+    pub text_auto: bool,
     /// Most frames drawn a second: 60, or 30 to spend less CPU.
     pub max_fps: u32,
     /// Keyboard tuning shortcuts; off by default so keys stay with widgets.
@@ -122,6 +126,7 @@ impl Default for Prefs {
             scope_rate_hz: 10.0,
             shortcuts: true,
             ui_scale: 1.0,
+            text_auto: true,
             max_fps: 60,
             last_voice_mode: usdr_proto::Mode::Nfm,
             hinted_shortcuts: false,
