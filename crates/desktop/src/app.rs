@@ -1558,6 +1558,15 @@ impl App {
             let small = |ui: &mut Ui, t: String, c| {
                 ui.label(egui::RichText::new(t).font(theme::mono(crate::theme::ty::LABEL)).color(c));
             };
+            // A reading with its name: the name dim and in caps like the
+            // lamps beside it, the figure a step brighter, one label.
+            let stat = |ui: &mut Ui, name: &str, value: String| {
+                let mut job = egui::text::LayoutJob::default();
+                let f = |c| egui::TextFormat { font_id: theme::mono(crate::theme::ty::LABEL), color: c, ..Default::default() };
+                job.append(name, 0.0, f(theme::text_3()));
+                job.append(&value, 5.0, f(theme::text_2()));
+                ui.label(job);
+            };
             // Each number is padded to a fixed width in the mono face, so a
             // change in its digit count (the audio queue crosses 100 ms many
             // times a second) moves nothing after it, its own unit included.
@@ -1578,22 +1587,22 @@ impl App {
                 } else if !streaming {
                     widgets::lamp_label(ui, Tone::Idle, "STREAM —");
                 } else if drops > 0 || s.lost_samples > 0 {
-                    widgets::lamp_label(ui, Tone::Warn, &format!("STREAM {drops} drop · {} gap", s.gap_events))
-                        .on_hover_text(format!("{} lost samples since start", s.lost_samples));
+                    widgets::lamp_label(ui, Tone::Warn, &format!("STREAM {drops} DROPPED"))
+                        .on_hover_text(format!("{drops} blocks dropped, {} gaps and {} lost samples since the daemon started", s.gap_events, s.lost_samples));
                 } else {
                     widgets::lamp_label(ui, Tone::Ok, "STREAM OK");
                 }
             }
             if let Some(l) = &self.link {
-                small(ui, format!("{:>3.0} fps", self.fps), theme::text_2());
-                small(ui, format!("{:>5.0} KiB/s", self.kbps), theme::text_3());
-                small(ui, format!("API {:>5.1} ms", l.stats.rtt_us.load(Ordering::Relaxed) as f32 / 1000.0), theme::text_3());
+                stat(ui, "FPS", format!("{:>2.0}", self.fps));
+                stat(ui, "NET", format!("{:>4.0} KiB/s", self.kbps));
+                stat(ui, "API", format!("{:>4.1} ms", l.stats.rtt_us.load(Ordering::Relaxed) as f32 / 1000.0));
             }
             let a = self.player.reading();
             if a.queue_ms > 0.0 {
-                small(ui, format!("audio {:>4.0} ms", a.queue_ms), theme::text_3());
+                stat(ui, "AUDIO", format!("{:>3.0} ms", a.queue_ms));
             } else {
-                small(ui, format!("audio {:>4} ms", "—"), theme::text_3());
+                stat(ui, "AUDIO", format!("{:>3} ms", "—"));
             }
             if a.underruns > 0 {
                 small(ui, format!("{:>5} underruns", a.underruns), theme::WARN);
@@ -1739,6 +1748,9 @@ impl App {
             let lift = stack + 8.0 * (1.0 - rise);
             let area = egui::Area::new(egui::Id::new(("toast", i)));
             let area = match well {
+                // Settings sits over the display: its toasts go under it,
+                // at the foot of the window, not across its rows.
+                Some(_) if self.settings_open => area.anchor(Align2::CENTER_BOTTOM, vec2(0.0, -40.0 - lift)),
                 Some(wf) => area.pivot(Align2::RIGHT_BOTTOM).fixed_pos(pos2(wf.right() - 12.0, wf.bottom() - 12.0 - lift)),
                 None => area.anchor(Align2::RIGHT_BOTTOM, vec2(-16.0, -40.0 - lift)),
             };

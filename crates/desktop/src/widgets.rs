@@ -599,7 +599,9 @@ impl<F: Fn(f64) -> String> Fader<'_, F> {
             p.text(pos2(track.right() + 8.0, rect.center().y), Align2::LEFT_CENTER, &value_text, theme::mono_bold(crate::theme::ty::SMALL), value_color);
             track
         } else {
-            p.text(rect.left_top(), Align2::LEFT_TOP, self.label, theme::mono(crate::theme::ty::LABEL), alpha(theme::text_3(), a));
+            // A fader's name in the sans, as the rows beside it are named;
+            // its reading stays in the mono.
+            p.text(rect.left_top() - vec2(0.0, 1.0), Align2::LEFT_TOP, self.label, theme::sans(crate::theme::ty::BODY), alpha(theme::text_2(), a));
             p.text(rect.right_top(), Align2::RIGHT_TOP, &value_text, theme::mono_bold(crate::theme::ty::VALUE), value_color);
             Rect::from_min_max(pos2(rect.left() + 4.0, rect.top() + 18.0), pos2(rect.right() - 4.0, rect.top() + 24.0))
         };

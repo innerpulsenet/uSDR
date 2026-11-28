@@ -707,8 +707,13 @@ impl Scope {
         // ---- right: time domain
         grid(&painter, right, 8, 4);
         self.oscilloscope(&painter, right, live, mode == Mode::Pager && sub == Sub::Disc, wave_fresh);
-        painter.text(pos2(right.left() + 4.0, text_y), Align2::LEFT_BOTTOM, &self.level_text, theme::mono(crate::theme::ty::MICRO), theme::text_2());
-        painter.text(pos2(right.right() - 4.0, text_y), Align2::RIGHT_BOTTOM, &self.time_text, theme::mono(crate::theme::ty::MICRO), theme::text_3());
+        let level = painter.text(pos2(right.left() + 4.0, text_y), Align2::LEFT_BOTTOM, &self.level_text, theme::mono(crate::theme::ty::MICRO), theme::text_2());
+        // The time base only where it clears the level: a narrow dock set
+        // the two over each other.
+        let time = painter.layout_no_wrap(self.time_text.clone(), theme::mono(crate::theme::ty::MICRO), theme::text_3());
+        if right.right() - 4.0 - time.size().x >= level.right() + 10.0 {
+            painter.galley(pos2(right.right() - 4.0 - time.size().x, text_y - time.size().y), time, theme::text_3());
+        }
     }
 
     /// The spectrum bin nearest a frequency on the span.

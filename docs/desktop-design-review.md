@@ -242,3 +242,31 @@ The type scale is otherwise sound. The 10 px floor holds, and contrast is fine o
 
 Section 3 changes how the window is operated, not just how it looks, so I'd mock it from a
 live capture before building it.
+
+## Second pass, 2026-11-28
+
+Looked at the same GPU renders again, and this time at a muted QA window on the live daemon
+(FT8 on 20 m, 8 MHz span, 1600×980), so the waterfall, the FT8 view and a full memory row
+were real. First read is right: the amber frequency draws the eye, then the trace and
+waterfall, and the purpose is clear in a glance. What was found and changed:
+
+| Finding | Severity | Change |
+|---|---|---|
+| The scope's two foot readouts ran into each other in a narrow dock ("level -14 dB.0 ms/div" at 1100 px). | Moderate | The time base is drawn only where it clears the level. |
+| Memory keys cut their own figures at 1100 px ("146.04." under the next key, the free slot over slot 3). | Moderate | A slot is never narrower than its number and frequency; fewer slots sit in a narrow row and share its width, the rest go to the +N menu. |
+| Memory names that said nothing: the frequency again ("99.1 99.1", "7.241 7.2…") or one or two letters and an ellipsis. | Minor | A name that repeats the frequency, or is cut to under three letters, is left off. The whole name stays in the hover text. |
+| The side panel still had two voices for names: fader names in mono caps (RF GAIN, IF AGC TARGET) beside sans row labels (IF filter, Noise reduction). | Minor | Stacked faders are named in the sans, sentence case, here and in the Display menus (Zoom, Floor, Ceiling, Depth, Black level, Contrast range). Readings stay mono. |
+| Sentences under controls were set in lowercase mono. | Minor | Panel notes are sans sentences ("Noise reduction, notch and AGC act on NFM, AM, USB and LSB."). Text on an LCD face stays mono. |
+| Status bar readings each had their own form: "25 fps", "834 KiB/s" with no name, "API 1.0 ms", lowercase "audio". "STREAM 26 drop · 0 gap" read as jargon. | Minor | One form, a dim name and a brighter figure: FPS, NET, API, AUDIO. The stream lamp says "STREAM 26 DROPPED"; gaps and lost samples are in its hover text. |
+| A toast lay across the Settings window's rows. | Minor | While Settings is open, toasts sit at the foot of the window. |
+
+Looked at and left alone:
+
+- **Lit steel switches** (LO, IQ CORR, IF AGC) are told from unlit ones by a brighter cap and
+  rim only. It reads on Carbon and the "3 ON" count backs it up; a tally lamp on each would
+  bring back the clutter the last pass removed.
+- **Caps mono legends and "A · B" readings** are the instrument's idiom here, chosen on
+  purpose, and they stay on keys, LCD captions and readings.
+- **The waterfall's share** (about 225 px of 980 with a 230 px dock) is the dock height the
+  user set; the dock is resizable.
+- **Night**, the grounds, Settings' layout, the HF views and the map held up.

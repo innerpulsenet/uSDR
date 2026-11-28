@@ -1567,6 +1567,9 @@ fn fixed(ui: &mut Ui, text: &str, font: egui::FontId, color: egui::Color32, wide
 /// to a menu: fixed counts, so storing or renaming one moves no other.
 pub const SLOT_W: f32 = 108.0;
 const SLOTS_SHOWN: usize = 6;
+/// The least a slot takes: its number and a seven-figure frequency. Fewer
+/// slots sit in a narrow row rather than slots that cut their figures.
+const SLOT_MIN_W: f32 = 84.0;
 
 /// A memory slot: its number (Ctrl+number recalls it), the frequency and
 /// its name in the mode's color, the name cut to the slot; the free slot
@@ -1579,9 +1582,15 @@ fn memory_pill(ui: &mut Ui, slot: usize, m: Option<&crate::prefs::Memory>, lit: 
     let parts = m.map(|m| {
         let mhz = crate::tuning::fmt_mhz(m.freq_hz, 4);
         let mhz = mhz.trim_end_matches('0').trim_end_matches('.').to_string();
-        let f = p.layout_no_wrap(mhz, font.clone(), egui::Color32::PLACEHOLDER);
+        let f = p.layout_no_wrap(mhz.clone(), font.clone(), egui::Color32::PLACEHOLDER);
         let room = slot_w - 8.0 - num.size().x - 6.0 - f.size().x - 5.0 - 8.0;
-        let name = widgets::ellipsize(&p, &m.name, theme::mono_bold(crate::theme::ty::MICRO), room);
+        // The name only where it adds to the figures: one that is the
+        // frequency again ("99.1" on 99.1) or cut to a letter or two says
+        // nothing, and the whole of it is in the hover text.
+        let digits = |t: &str| t.chars().filter(char::is_ascii_digit).collect::<String>();
+        let echo = !m.name.chars().any(char::is_alphabetic) && !digits(&m.name).is_empty() && digits(&mhz).starts_with(&digits(&m.name));
+        let name = if echo { String::new() } else { widgets::ellipsize(&p, &m.name, theme::mono_bold(crate::theme::ty::MICRO), room) };
+        let name = if name.ends_with('…') && name.chars().count() < 4 { String::new() } else { name };
         (f, p.layout_no_wrap(name, theme::mono_bold(crate::theme::ty::MICRO), egui::Color32::PLACEHOLDER))
     });
     let plus = m.is_none().then(|| p.layout_no_wrap(format!("+ {slot}"), theme::mono(crate::theme::ty::MICRO), egui::Color32::PLACEHOLDER));
@@ -1636,11 +1645,13 @@ pub fn memory_chips(app: &mut App, ui: &mut Ui, room: f32) {
         app.memory_armed = !armed;
     }
     let more_w = 40.0;
-    let slot_w = ((room - store.rect.width() - 4.0 - more_w) / SLOTS_SHOWN as f32 - 4.0).clamp(60.0, SLOT_W);
+    let slot_w = ((room - store.rect.width() - 4.0 - more_w) / SLOTS_SHOWN as f32 - 4.0).clamp(SLOT_MIN_W, SLOT_W);
     let mut store_at = None;
     // The stored slots, then the one free slot after them: memories are
     // kept in order, so that is the only empty slot a store can fill.
     let fits = (((room - store.rect.width() - 4.0 - more_w) / (slot_w + 4.0)).floor() as usize).clamp(1, SLOTS_SHOWN);
+    // Fewer than the full row: the slots that do sit share its width.
+    let slot_w = if fits < SLOTS_SHOWN { ((room - store.rect.width() - 4.0 - more_w) / fits as f32 - 4.0).clamp(SLOT_MIN_W, SLOT_W) } else { slot_w };
     let shown = list.len().min(fits);
     let free = list.len() <= fits;
     for i in 0..shown + free as usize {

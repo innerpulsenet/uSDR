@@ -14,6 +14,12 @@ fn small(t: impl Into<String>) -> RichText {
     RichText::new(t).font(theme::mono(crate::theme::ty::LABEL)).color(theme::text_3())
 }
 
+/// A sentence under a panel's controls: prose is set in the sans, the mono
+/// kept for readings and legends.
+fn prose(t: impl Into<String>) -> RichText {
+    RichText::new(t).font(theme::sans(crate::theme::ty::SMALL)).color(theme::text_3())
+}
+
 pub fn side(app: &mut App, ui: &mut Ui) {
     ui.spacing_mut().item_spacing.y = 8.0;
     let out = egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
@@ -405,7 +411,7 @@ fn gain(app: &mut App, ui: &mut Ui) {
         max: hi,
         step: 1.0,
         fine: 1.0,
-        label: "RF GAIN",
+        label: "RF gain",
         text: |v| if auto { format!("AGC sets · {shown:.0} dB") } else { format!("{v:.0} dB") },
         color: theme::AMBER,
         enabled: !auto,
@@ -429,7 +435,7 @@ fn gain(app: &mut App, ui: &mut Ui) {
             max: 0.0,
             step: 1.0,
             fine: 1.0,
-            label: "IF AGC TARGET",
+            label: "IF AGC target",
             text: |v| format!("{v:.0} dBFS"),
             color: theme::text_2(),
             enabled: active,
@@ -489,7 +495,7 @@ fn gain_staging(ui: &mut Ui, s: &usdr_proto::Status) {
     let lna_tip = if s.lna_auto {
         "LNA gain reduction, in the steps this band has. It follows the IF AGC: deeper when the IF runs out of reduction (or the radio reports overload), shallower once the IF has room again."
     } else {
-        "LNA gain reduction, in the steps this band has. Set by RF GAIN: the first 20 dB of reduction comes off the IF, then the LNA takes over."
+        "LNA gain reduction, in the steps this band has. Set by RF gain: the first 20 dB of reduction comes off the IF, then the LNA takes over."
     };
     row(ui, "LNA", lna_value, if lna_db.is_some_and(|d| d > 0.0) { theme::AMBER } else { theme::text_2() }, lna_tip, &|p, t| {
         let Some(&top) = steps.last().filter(|t| **t > 0.0) else { return };
@@ -525,7 +531,7 @@ fn gain_staging(ui: &mut Ui, s: &usdr_proto::Status) {
         }
     });
     // What it is doing, and the radio's own overload report.
-    let note = if s.lna_auto { "LNA follows the IF AGC" } else { "LNA and IF set by RF GAIN" };
+    let note = if s.lna_auto { "LNA follows the IF AGC" } else { "LNA and IF set by RF gain" };
     let past = match (s.overload, s.overload_count) {
         (Some(false), Some(n)) if n > 0 => Some(format!("{n} overload{} since open", if n == 1 { "" } else { "s" })),
         _ => None,
@@ -696,18 +702,18 @@ fn processing(app: &mut App, ui: &mut Ui) {
         app.post("/api/sdr/processing", body);
     }
     let note = if agc {
-        "applies to this mode's audio"
+        "Applies to this mode's audio."
     } else if voice {
-        "NFM: noise reduction and notch apply; AGC is AM and sideband only"
+        "NFM: noise reduction and notch apply. AGC is for AM and sideband."
     } else if mode == Mode::Wfm {
-        "WFM: broadcast audio is left as it is; only the blanker acts"
+        "WFM: broadcast audio is left as it is. Only the blanker acts."
     } else {
-        "noise reduction, notch and AGC act on NFM, AM, USB and LSB"
+        "Noise reduction, notch and AGC act on NFM, AM, USB and LSB."
     };
     // Two lines kept for it, whichever mode's note it is.
     let w = ui.available_width();
     let (rect, resp) = ui.allocate_exact_size(vec2(w, 30.0), egui::Sense::hover());
-    let mut job = egui::text::LayoutJob::simple(note.to_string(), theme::mono(crate::theme::ty::LABEL), theme::text_3(), w);
+    let mut job = egui::text::LayoutJob::simple(note.to_string(), theme::sans(crate::theme::ty::SMALL), theme::text_3(), w);
     job.wrap.max_rows = 2;
     job.wrap.overflow_character = Some('…');
     let g = ui.painter().layout_job(job);
@@ -796,7 +802,7 @@ fn recorder(app: &mut App, ui: &mut Ui) {
             crate::app::pick(app, "folder");
         }
     });
-    ui.label(small(format!("Saves to {} · or drop a .iq + .json on the window", dir.display())));
+    ui.label(prose(format!("Saves to {}, or drop a .iq and its .json on the window.", dir.display())));
 }
 
 fn radio(app: &mut App, ui: &mut Ui) {
@@ -847,7 +853,7 @@ fn radio(app: &mut App, ui: &mut Ui) {
         None if sideband => "no carrier in sideband".to_string(),
         None => "no carrier measured".to_string(),
     };
-    ui.label(small(format!("{err} · tune {}–{}", crate::tuning::fmt_hz(s.tune_min_hz), crate::tuning::fmt_hz(s.tune_max_hz))));
+    ui.label(prose(format!("{err} · tune {}–{}", crate::tuning::fmt_hz(s.tune_min_hz), crate::tuning::fmt_hz(s.tune_max_hz))));
 }
 
 fn device_label(d: &usdr_proto::Device) -> String {
